@@ -202,8 +202,6 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
   three.init(3, dims, hw.renderer, material(THREE), { targetSlots: 40, components: 4, apron: 1, compression: 'bc' });
   assert.deepEqual(three.planes.map(p => p.format).join(), 'bc5,bc4', 'three channels: BC5 + BC4');
   assert.equal(three.texelBytes, 1.5);
-  assert.throws(() => new S().init(2, dims, hw.renderer, material(THREE), { role: 'detail', components: 2, apron: 1, compression: 'bc' }),
-    (e) => e.code === 'SVR_BAD_FORMAT', 'a detail atlas is never compressed');
   console.log('four-channel compressed atlas: OK');
 }
 

@@ -32,7 +32,7 @@ function loadSVR() {
     console: { warn() {}, log() {}, error() {} }, setTimeout, clearTimeout, window: {}, navigator: {},
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, THREE: REAL_THREE
   });
-  vm.runInContext(read('js/core/svr-manager.js') + '\n;globalThis.__SVR = SVRManager; globalThis.__ROI = SVRRoi;', ctx);
+  vm.runInContext(read('js/core/svr-manager.js') + '\n;globalThis.__SVR = SVRManager;', ctx);
   return ctx.__SVR;
 }
 const SVRManager = loadSVR();
@@ -324,7 +324,7 @@ for (const scenario of [
   assert.ok(p.slots >= 100 && p.bytes === p.slots * 66 ** 3 * 4, 'bytes are slots × 66³ × components');
   const p64 = SVRManager.planAtlas(100, { max3D: 2048, components: 4 });
   assert.deepEqual([p64.dim, p64.bytes % (64 ** 3 * 4)], [256, 0], 'v2 layout unchanged');
-  assert.equal(SVRManager.planAtlas(5000, { max3D: 2048, brickSize: 66, maxPages: 4 }), null, 'a detail atlas never takes more than its pages');
+  assert.equal(SVRManager.planAtlas(5000, { max3D: 2048, brickSize: 66, maxPages: 4 }), null, 'an atlas never takes more than its pages');
   const within = SVRManager.planAtlasWithin(64 * MiB, { max3D: 2048, components: 1, brickSize: 66 });
   assert.ok(within.bytes <= 64 * MiB && SVRManager.planAtlas(within.slots + 1, { max3D: 2048, components: 1, brickSize: 66 }).bytes > 64 * MiB,
     'planAtlasWithin: the largest layout under the byte limit');

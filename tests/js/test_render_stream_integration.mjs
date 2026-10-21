@@ -177,9 +177,6 @@ function makeWorld({ max3D = 256, blurWorker = null } = {}) {
       await new Promise(r => setTimeout(r, 0));
     }
   };
-  // These scenarios test the stream itself: the region-of-interest rounds (which
-  // the framing of this 800 × 600 view would start on LOD1) have their own test.
-  ctx.__VV.setDetailMode('off');
   const world = {
     gl, canvas, listeners, renderer, events, files, ctx, rafQueue, pump,
     VV: ctx.__VV, SVR: ctx.__SVR, BL: ctx.__BL,

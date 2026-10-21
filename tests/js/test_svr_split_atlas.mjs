@@ -5,7 +5,7 @@
 //   • pages: two textures per page (svrAtlas0..3 RG8, svrAtlas4..7 R8), at most four pages,
 //     3 bytes per voxel, SVR_SPLIT defined and removed again by the next atlas;
 //   • writers keep passing RGBA voxels (components 4); the upload drops byte 3;
-//   • one, two and four channels, detail and compressed atlases are not split;
+//   • one, two and four channels, a compressed atlas is not split;
 //   • sub-box and block uploads are refused; a budget that refuses the RGBA layout accepts it.
 //
 // Run: node tests/js/test_svr_split_atlas.mjs
@@ -154,10 +154,6 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
     assert.equal(m.split, false, `${channels} channel(s) keep one texture`);
     m.dispose();
   }
-  const d = new S();
-  d.init(3, dims, hw.renderer, material(THREE), { targetSlots: 20, components: 4, apron: 1, split: true, role: 'detail' });
-  assert.equal(d.split, false, 'a detail atlas is never split');
-  d.dispose();
   const c = new S();
   c.init(3, dims, hw.renderer, material(THREE), { targetSlots: 20, components: 4, apron: 1, split: true, compression: 'bc' });
   assert.equal(c.split, false, 'a compressed atlas is not split');

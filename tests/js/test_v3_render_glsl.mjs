@@ -1,6 +1,6 @@
 // Static checks of the ray-march and slice shaders under EVERY define permutation the
-// viewer can produce (web 1.59.0: v3 bordered atlases, R8 / RG8 atlases, region-of-
-// interest detail atlas). No GLSL compiler runs under Node, so each permutation is
+// viewer can produce (v3 bordered atlases, R8 / RG8 atlases, the split RG8 + R8 atlas
+// of three channels). No GLSL compiler runs under Node, so each permutation is
 // preprocessed exactly as a GLSL ES 3.00 compiler does (three.js prepends the
 // material's defines as `#define NAME value`; an undefined identifier inside #if is an
 // error, it does not read as 0), then checked:
@@ -10,7 +10,7 @@
 //     declared BEFORE its use — so a variable or uniform used in a define branch that
 //     does not declare it is caught;
 //   • active samplers (declared AND referenced) ≤ 16 (MAX_TEXTURE_IMAGE_UNITS of
-//     WebGL 2), the eight base pages + page table + four detail pages + detail table;
+//     WebGL 2), the eight base pages + page table;
 //   • no function is defined twice, every called user function is defined.
 // v2 / v3 is not a define: it is the slotStride / brickApron uniforms (and the atlas
 // filter); both are covered by every permutation, and the address arithmetic itself
@@ -237,8 +237,7 @@ function* product(axes) {
     ENABLE_SVR: [undefined, 1],
     HAS_OCCUPANCY: [undefined, 1],
     SVR_COMPONENTS: [undefined, 1, 2],
-    ROI_DETAIL: [undefined, 1],
-    ROI_DETAIL_COMPONENTS: [undefined, 1, 2],
+    SVR_SPLIT: [undefined, 1],
     VOLUME_WARP: [undefined, 1],
     PICK_MODE: [undefined, 1],
     ENABLE_CHANNEL_0: [0, 1],
@@ -262,8 +261,8 @@ function* product(axes) {
     if (res.errors.length) failures.push(`${JSON.stringify(defines)}: ${res.errors.join('; ')}`);
   }
   assert.equal(failures.length, 0, `ray-march shader permutations failing:\n${failures.slice(0, 10).join('\n')}`);
-  assert.equal(n, 2 * 2 * 3 * 2 * 3 * 2 * 2 * 16, 'every permutation enumerated');
-  assert.equal(maxSamplers, 14, 'the busiest permutation binds 8 base pages + page table + 4 detail pages + detail table');
+  assert.equal(n, 2 * 2 * 3 * 2 * 2 * 2 * 16, 'every permutation enumerated');
+  assert.equal(maxSamplers, 9, 'the busiest permutation binds 8 base pages + page table');
   console.log(`ray-march shader: ${n} define permutations preprocess and resolve; ≤ ${maxSamplers} samplers: OK`);
 }
 
@@ -273,23 +272,17 @@ function* product(axes) {
   const { code: v2 } = pp({ ENABLE_SVR: 1 });
   assert.ok(/keepComponents\(sampleSVRAtlas\(slotCoord\(uvw \* volumeDim, cell, cachedPage\.xyz, volumeDim, slotStride, brickApron, atlasDim\), cachedPage\.w\), 4\)/.test(v2),
     'base SVR fetch: slotCoord with the slot stride and border, RGBA kept');
-  assert.ok(!/detailPageTable/.test(v2), 'no detail sampler without ROI_DETAIL');
   const { code: r8 } = pp({ ENABLE_SVR: 1, SVR_COMPONENTS: 1 });
   assert.ok(/cachedPage\.w\), 1\)/.test(r8), 'an R8 atlas keeps one component');
-  const { code: roi } = pp({ ENABLE_SVR: 1, ROI_DETAIL: 1, ROI_DETAIL_COMPONENTS: 2 });
-  const f = roi.slice(roi.indexOf('bool fetchVoxel'), roi.indexOf('vec4 channelValues'));
-  assert.ok(f.indexOf('detailPageTable') < f.indexOf('pageTable,'), 'the detail level is consulted before the base level');
-  assert.ok(/detailPage\.w\), 2\)/.test(f), 'detail components follow ROI_DETAIL_COMPONENTS');
-  assert.ok(/skip = min\(skip, brickExitIn\(uvw, dirTex, dCell, detailVolumeDim\)\)/.test(f), 'an empty base brick never skips past a detail cell');
-  assert.ok(/nu = max\(nu, length\(dirTex \* detailVolumeDim\)\)/.test(roi), 'the march samples at the detail pitch');
-  const { code: dense } = pp({ HAS_OCCUPANCY: 1, ROI_DETAIL: 1 });
-  assert.ok(/textureLod\(svrAtlas0, uvw, 0\.0\)/.test(dense) && /detailPageTable/.test(dense), 'a dense base volume takes a detail atlas too');
+  const { code: split } = pp({ ENABLE_SVR: 1, SVR_SPLIT: 1 });
+  assert.ok(/return vec4\(a\.rg, b\.r, 0\.0\);/.test(split) && /textureLod\(svrAtlas4, atlasCoord, 0\.0\)/.test(split),
+    'a split atlas reads channels 0, 1 from svrAtlas<k> and channel 2 from svrAtlas<k+4>');
   // Trilinear addressing (apron) and nearest addressing (no apron) — one function.
   const sc = VIEWER_FRAG.slice(VIEWER_FRAG.indexOf('vec3 slotCoord('), VIEWER_FRAG.indexOf('#ifdef ENABLE_SVR\n    uniform sampler3D pageTable'));
   assert.ok(/vec3 local = clamp\(pos - cell \* brickSize, vec3\(0\.0\), vec3\(brickSize\)\);\s*return \(slot \* stride \+ vec3\(apron\) \+ local\) \/ atlasSize;/.test(sc),
     'bordered: texel = slot·stride + 1 + (pos − 64·cell), local clamped to [0, 64]');
   assert.ok(/return \(slot \* stride \+ localVoxel \+ vec3\(0\.5\)\) \/ atlasSize;/.test(sc), 'unbordered: the voxel centre (nearest)');
-  console.log('define switches (components, detail first, skip, pitch, addressing): OK');
+  console.log('define switches (components, split pages, addressing): OK');
 }
 
 // ── The slice shader: every permutation ──────────────────────────────────────
@@ -314,12 +307,12 @@ function* product(axes) {
 
 // ── The checker catches what it claims to catch ──────────────────────────────
 {
-  // Using a detail uniform outside its define must be reported.
-  const leaked = VIEWER_FRAG.replace('float nu = max(length(dirTex * volumeVoxels), 1e-6);', 'float nu = max(length(dirTex * detailVolumeDim), 1e-6);');
-  const r1 = check(...Object.values(preprocess(leaked, { ENABLE_SVR: 1, ENABLE_CHANNEL_0: 1, ENABLE_CHANNEL_1: 1, ENABLE_CHANNEL_2: 1, ENABLE_CHANNEL_3: 1 })));
-  assert.ok(r1.errors.some(e => /detailVolumeDim/.test(e)), 'a uniform used outside its define is caught');
-  const r2 = check(...Object.values(preprocess(VIEWER_FRAG.replace('vec3 dCell = brickCellIn(uvw, detailVolumeDim);', ''), { ENABLE_SVR: 1, ROI_DETAIL: 1, ENABLE_CHANNEL_0: 1, ENABLE_CHANNEL_1: 1, ENABLE_CHANNEL_2: 1, ENABLE_CHANNEL_3: 1 })));
-  assert.ok(r2.errors.some(e => /dCell/.test(e)), 'a local used without its declaration is caught');
+  // Using an atlas uniform outside its define must be reported.
+  const leaked = VIEWER_FRAG.replace('float nu = max(length(dirTex * volumeVoxels), 1e-6);', 'float nu = max(length(dirTex * atlasDim), 1e-6);');
+  const r1 = check(...Object.values(preprocess(leaked, { ENABLE_CHANNEL_0: 1, ENABLE_CHANNEL_1: 1, ENABLE_CHANNEL_2: 1, ENABLE_CHANNEL_3: 1 })));
+  assert.ok(r1.errors.some(e => /atlasDim/.test(e)), 'a uniform used outside its define is caught');
+  const r2 = check(...Object.values(preprocess(VIEWER_FRAG.replace('vec3 cell = brickCell(uvw);', ''), { ENABLE_SVR: 1, ENABLE_CHANNEL_0: 1, ENABLE_CHANNEL_1: 1, ENABLE_CHANNEL_2: 1, ENABLE_CHANNEL_3: 1 })));
+  assert.ok(r2.errors.some(e => /cell/.test(e)), 'a local used without its declaration is caught');
   assert.throws(() => preprocess('#if UNDEFINED_THING\n#endif\n', {}), /undefined identifier/, 'an undefined identifier in #if is an error, as in GLSL ES');
   console.log('checker self-test: OK');
 }

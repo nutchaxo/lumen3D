@@ -1518,18 +1518,7 @@ const ViewerApp = (() => {
     legend.className = 'qm-legend';
     legend.textContent = _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.');
 
-    // A compressed quality is refined to the lossless column for what is in view once the camera rests.
-    const rest = document.createElement('label');
-    rest.className = 'qm-rest';
-    const restBox = document.createElement('input');
-    restBox.type = 'checkbox';
-    restBox.checked = VolumeViewer.getLosslessAtRest?.() !== false;
-    restBox.addEventListener('change', () => VolumeViewer.setLosslessAtRest?.(restBox.checked));
-    const restText = document.createElement('span');
-    restText.textContent = _t('viewer.qualityMatrix.losslessAtRest', 'Lossless once the view rests');
-    rest.title = _t('viewer.qualityMatrix.losslessAtRestHint', 'With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops.');
-    rest.append(restBox, restText);
-    box.replaceChildren(top, lists, legend, rest);
+    box.replaceChildren(top, lists, legend);
   }
 
   /** Opens the guide: every combination, the qualities, the GPU colour code and the advice. */
@@ -1797,39 +1786,9 @@ const ViewerApp = (() => {
       });
     }
 
-    _bindDetailControls();
     _bindGpuCompressionControls();
     _bindStabilizationControl();
     _bindViewExport();
-  }
-
-  // ── Zoom detail (the renderer's region of interest) ───────────────────────────
-  // Past the quality's resolution the renderer streams the finer bricks in view into a
-  // second atlas; the select sets its mode (auto / on / off) and the line under it says
-  // what it is doing (VolumeViewer.getDetailStatus().message, already translated).
-  const DETAIL_MODES = ['auto', 'on', 'off'];
-
-  function _renderDetailStatus(status) {
-    const line = document.getElementById('detail-status');
-    if (line) line.textContent = String(status?.message || '');
-    const select = document.getElementById('select-detail-mode');
-    if (select && DETAIL_MODES.includes(status?.mode) && select.value !== status.mode) select.value = status.mode;
-  }
-
-  function _bindDetailControls() {
-    const select = document.getElementById('select-detail-mode');
-    if (typeof VolumeViewer === 'undefined' || typeof VolumeViewer.setDetailMode !== 'function') {
-      select?.closest('label')?.classList.add('hidden');
-      return;
-    }
-    if (select) {
-      select.addEventListener('change', () => {
-        const mode = DETAIL_MODES.includes(select.value) ? select.value : 'auto';
-        _renderDetailStatus({ ...(VolumeViewer.getDetailStatus?.() || {}), mode: VolumeViewer.setDetailMode(mode) });
-      });
-    }
-    if (typeof VolumeViewer.onDetailStatus === 'function') VolumeViewer.onDetailStatus(_renderDetailStatus);
-    else _renderDetailStatus(VolumeViewer.getDetailStatus?.());
   }
 
   // ── GPU compression (the display atlas in BC4 / BC5 blocks) ──────────────────────

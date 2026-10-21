@@ -476,7 +476,8 @@
     "gpuUnknown": "carte inconnue",
     "resDowngradeHeld": "Les {held} autres Mo du budget de {total} Mo sont occupés par des volumes qui restent chargés.",
     "resDowngradeEstimate": "Ce budget est une estimation (un navigateur ne donne pas la mémoire réelle de la carte) : réglez la vôtre dans Qualité de rendu › Mémoire GPU.",
-    "gbShort": "Go"
+    "gbShort": "Go",
+    "errNoWebgl": "Ce navigateur a refusé à la page un contexte 3D (WebGL). Après un plantage du pilote graphique, un navigateur bloque WebGL pour le site jusqu'à son redémarrage complet : fermez entièrement le navigateur (sur Android : Paramètres › Applications › Chrome › Forcer l'arrêt) puis rouvrez la page. Si cela persiste, vérifiez que l'accélération matérielle est activée."
   },
   "compare": {
     "title": "Mode comparaison",

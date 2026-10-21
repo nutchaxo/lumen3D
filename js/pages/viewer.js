@@ -7054,7 +7054,12 @@ const ViewerApp = (() => {
    */
   function _showLoadingError(err) {
     console.error('[ViewerApp] Loading failed:', err);
-    const text = String(err?.message || err || _t('viewer.errUnknown', 'Unknown loading error'));
+    let text = String(err?.message || err || _t('viewer.errUnknown', 'Unknown loading error'));
+    // three.js says this when the browser gives the page no WebGL context at all: usually
+    // the browser blocking WebGL for the site after GPU crashes, not the dataset.
+    if (/creating WebGL context|WebGL.*(not supported|unavailable|disabled)/i.test(text)) {
+      text = _t('viewer.errNoWebgl', 'This browser refused to give the page a 3D (WebGL) context. After a graphics driver crash, a browser blocks WebGL for the site until it is fully restarted: close the browser completely (on Android: Settings › Apps › Chrome › Force stop) and open the page again. If it persists, check that hardware acceleration is on.');
+    }
     if (_isInitialized && _hasMountedVolume()) {
       const loader = document.getElementById('viewer-loader');
       if (loader) loader.style.display = 'none';

@@ -476,7 +476,8 @@
     "gpuUnknown": "tarjeta desconocida",
     "resDowngradeHeld": "Los otros {held} MB del presupuesto de {total} MB los ocupan volúmenes que siguen cargados.",
     "resDowngradeEstimate": "Este presupuesto es una estimación (un navegador no da la memoria real de la tarjeta): ajuste la suya en Calidad de renderizado › Memoria GPU.",
-    "gbShort": "GB"
+    "gbShort": "GB",
+    "errNoWebgl": "Este navegador negó a la página un contexto 3D (WebGL). Tras un fallo del controlador gráfico, un navegador bloquea WebGL para el sitio hasta reiniciarse por completo: cierre el navegador del todo (en Android: Ajustes › Aplicaciones › Chrome › Forzar detención) y vuelva a abrir la página. Si persiste, compruebe que la aceleración por hardware está activada."
   },
   "compare": {
     "title": "Modo de comparación",

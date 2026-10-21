@@ -52,6 +52,13 @@ class SVRManager {
    * (NVIDIA, Radeon RX/Pro, Intel Arc), 'integrated' (Intel HD/UHD/Iris, Apple,
    * AMD APU "Radeon Graphics", mobile GPUs) or 'unknown'.
    */
+  /** A phone / tablet GPU (Adreno, Mali, PowerVR, Xclipse, Immortalis, Vivante) or an Android browser. */
+  static isMobileGpu(renderer) {
+    const name = String(SVRManager.gpuInfo(renderer).renderer || '');
+    if (/adreno|mali|powervr|xclipse|immortalis|vivante|videocore/i.test(name)) return true;
+    try { return typeof navigator !== 'undefined' && /Android/i.test(String(navigator.userAgent || '')); } catch (e) { return false; }
+  }
+
   static gpuInfo(renderer) {
     let rendererName = null;
     try {
@@ -121,6 +128,11 @@ class SVRManager {
   static noteContextLost() {
     const now = Date.now();
     SVRManager._sessionLosses = (SVRManager._sessionLosses || 0) + 1;
+    // A context lost while a compressed atlas was alive: this device's driver may claim RGTC and
+    // fail to allocate it (Adreno 740 under ANGLE/GL: texStorage3D 0x500, then the context is
+    // lost on every load, and Chrome ends up refusing the page any WebGL context). Never again
+    // on this device.
+    if (SVRManager._liveCompressed.size) SVRManager.noteCompressionFailed();
     try {
       if (typeof localStorage === 'undefined') return;
       const list = SVRManager._storedLosses().filter(t => now - t < SVRManager.CONTEXT_LOSS_MEMORY_MS);
@@ -176,10 +188,22 @@ class SVRManager {
    * that (tests of the compressed path in a software browser, with tiny atlases).
    * → { bc: boolean, reason: string|null, formats: { bc4, bc5 }|null }
    */
+  /** Compression made this device lose its context once: it is never used here again. */
+  static noteCompressionFailed() {
+    SVRManager._compressionFailed = true;
+    try { if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompressionFailed', String(Date.now())); } catch (e) { /* storage blocked: this session only */ }
+  }
+
+  static compressionFailedBefore() {
+    if (SVRManager._compressionFailed) return true;
+    try { return typeof localStorage !== 'undefined' && Boolean(localStorage.getItem('lumen3d.gpuCompressionFailed')); } catch (e) { return false; }
+  }
+
   static compressionSupport(renderer) {
     let gl = null;
     try { gl = renderer?.getContext?.() || null; } catch (e) { gl = null; }
     if (!gl) return { bc: false, reason: 'no-context', formats: null };
+    if (SVRManager.compressionFailedBefore()) return { bc: false, reason: 'failed-before', formats: null };
     const cached = SVRManager._supportCache.get(gl);
     if (cached) {
       // A restored context has lost its extensions: enable this one again (a no-op
@@ -189,6 +213,14 @@ class SVRManager {
     }
     if (SVRManager.gpuInfo(renderer).gpuClass === 'software' && !SVRManager.allowSoftwareCompression) {
       const refused = { bc: false, reason: 'software-renderer', formats: null };
+      SVRManager._supportCache.set(gl, refused);
+      return refused;
+    }
+    // Mobile GPUs reach RGTC through ANGLE's emulation: a 4 × 4 probe passes and a real atlas
+    // breaks the driver (measured on an Adreno 740 tablet). Their memory is what compression
+    // saves the least on anyway.
+    if (SVRManager.isMobileGpu(renderer)) {
+      const refused = { bc: false, reason: 'mobile-gpu', formats: null };
       SVRManager._supportCache.set(gl, refused);
       return refused;
     }
@@ -478,6 +510,7 @@ class SVRManager {
       this.planes = BCCodec.planesFor(Math.min(channels, this.components === 4 ? 4 : this.components))
         .map(p => ({ ...p, glFormat: support.formats[p.format] }));
       this.texelBytes = this.planes.reduce((sum, p) => sum + p.texelBytes, 0);
+      SVRManager._liveCompressed.add(this);
     }
     this.slotPitch = SVRManager.pitchFor(this.slotStride, this.compressed);
     const pageCap = this.role === 'detail'
@@ -1280,6 +1313,7 @@ class SVRManager {
   }
 
   dispose() {
+    SVRManager._liveCompressed.delete(this);
     this._releaseGpuResources();
     this.pageData = null;
     if (this.slotData) this.slotData.clear();
@@ -1304,6 +1338,8 @@ SVRManager._failedAllocBytes = Infinity;
 SVRManager._sessionLosses = 0;
 SVRManager._sessionOverrideBytes = null;
 SVRManager._supportCache = new WeakMap();
+SVRManager._liveCompressed = new Set();     // compressed atlases not disposed yet
+SVRManager._compressionFailed = false;
 SVRManager.allowSoftwareCompression = false;
 
 window.SVRManager = SVRManager;

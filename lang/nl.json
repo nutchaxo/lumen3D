@@ -476,7 +476,8 @@
     "gpuUnknown": "onbekende kaart",
     "resDowngradeHeld": "De andere {held} MB van het budget van {total} MB worden ingenomen door volumes die geladen blijven.",
     "resDowngradeEstimate": "Dit budget is een schatting (een browser geeft het echte GPU-geheugen niet door): stel het uwe in onder Renderkwaliteit › GPU-geheugen.",
-    "gbShort": "GB"
+    "gbShort": "GB",
+    "errNoWebgl": "Deze browser weigerde de pagina een 3D-context (WebGL). Na een crash van het grafische stuurprogramma blokkeert een browser WebGL voor de site tot hij volledig opnieuw is gestart: sluit de browser helemaal (op Android: Instellingen › Apps › Chrome › Gedwongen stoppen) en open de pagina opnieuw. Blijft het probleem, controleer dan of hardwareversnelling aan staat."
   },
   "compare": {
     "title": "Vergelijkingsmodus",

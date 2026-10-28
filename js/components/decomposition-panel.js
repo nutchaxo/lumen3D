@@ -86,12 +86,35 @@ const DecompositionPanel = (() => {
     b.classList.toggle('active', on);
   }
 
+  // Red frame over the 3D view: the area the figure's main picture captures. Layouts
+  // with a main picture (main-right, horizontal) capture the whole canvas at its own aspect.
+  let _captureFrame = null;
+  function _syncCaptureFrame() {
+    const show = _isOpen && _exportLayout !== 'grid';
+    const canvas = typeof VolumeViewer !== 'undefined' && VolumeViewer.getRenderer
+      ? VolumeViewer.getRenderer()?.domElement : null;
+    const host = canvas && canvas.closest ? canvas.closest('.viewer-canvas-container') : null;
+    if (!show || !host) {
+      if (_captureFrame) _captureFrame.hidden = true;
+      return;
+    }
+    if (!_captureFrame) {
+      _captureFrame = document.createElement('div');
+      _captureFrame.setAttribute('aria-hidden', 'true');
+      _captureFrame.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;' +
+        'box-sizing:border-box;border:2px solid #ff2d2d;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.6);';
+    }
+    if (_captureFrame.parentElement !== host) host.appendChild(_captureFrame);
+    _captureFrame.hidden = false;
+  }
+
   function _openPanel() {
     const panel = document.getElementById('decomposition-panel');
     if (!panel) return;
     _isOpen = true;
     panel.classList.remove('hidden');
     _syncToolbarButton(true);
+    _syncCaptureFrame();
     _rebuildList();
     if (typeof VolumeViewer !== 'undefined' && VolumeViewer.recompileShaderForActiveChannels) {
       VolumeViewer.recompileShaderForActiveChannels();
@@ -128,6 +151,7 @@ const DecompositionPanel = (() => {
           btns.forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           _exportLayout = btn.dataset.layout;
+          _syncCaptureFrame();
         });
       });
     }
@@ -210,6 +234,7 @@ const DecompositionPanel = (() => {
     _decompDirty = false;
     panel.classList.add('hidden');
     _syncToolbarButton(false);
+    _syncCaptureFrame();
     if (_editingCustomId !== null) {
       _stopEditing();
     }
@@ -228,6 +253,7 @@ const DecompositionPanel = (() => {
     if (_offPostRender) { _offPostRender(); _offPostRender = null; }
     if (_onChannelsUpdated) { window.removeEventListener('channels-updated', _onChannelsUpdated); _onChannelsUpdated = null; }
     _canvases = [];
+    if (_captureFrame) { _captureFrame.remove(); _captureFrame = null; }
   }
 
   function _getGlobalChannels() {
@@ -784,6 +810,8 @@ const DecompositionPanel = (() => {
       const gl = renderer.getContext && renderer.getContext();
       if (gl && gl.getParameter) {
         maxSide = Math.min(maxSide, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || maxSide, gl.getParameter(gl.MAX_TEXTURE_SIZE) || maxSide);
+        const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+        if (vp && vp.length) maxSide = Math.min(maxSide, vp[0], vp[1]);
       }
     } catch (_) { /* keep the conservative default */ }
 
@@ -819,6 +847,12 @@ const DecompositionPanel = (() => {
     const origWidth = renderer.domElement.width / pixelRatio;
     const origHeight = renderer.domElement.height / pixelRatio;
     const origAspect = camera.aspect;
+
+    // setSize multiplies by the pixel ratio: at 2× a 5000 px main picture asks for a
+    // 10000 px buffer, the browser clamps the buffer while the GL viewport keeps the
+    // requested size, and drawImage then shows only a magnified corner of the scene.
+    // Export at ratio 1 so the buffer is exactly the size asked for.
+    renderer.setPixelRatio(1);
 
     // The live viewer is resized and its uniforms rewritten below; whatever goes wrong
     // in between, it must come back as it was.
@@ -878,6 +912,7 @@ const DecompositionPanel = (() => {
       }
     } finally {
       // 3. Restore Main View Screen State
+      renderer.setPixelRatio(pixelRatio);
       renderer.setSize(origWidth, origHeight, false);
       camera.aspect = origAspect;
       camera.updateProjectionMatrix();

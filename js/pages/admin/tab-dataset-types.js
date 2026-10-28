@@ -196,16 +196,25 @@ function _collect() {
   _types = next;   // a type with neither label nor title simply disappears
 }
 
+// "(HTTP 403 · Invalid or missing CSRF token)": the one detail that tells a
+// session problem from a host that refuses the write.
+function _failure(r) {
+  const code = r && r.data && typeof r.data.error === 'string' ? r.data.error : '';
+  const status = r && r.status ? `HTTP ${r.status}` : 'network';
+  return `(${status}${code ? ` · ${code}` : ''})`;
+}
+
 async function save() {
   if (!_loaded) { toast(t('dtypes.saveError', "Échec de l'enregistrement."), 'error'); load(); return; }
   _collect();
   const btn = el('dtypes-save');
   if (btn) btn.disabled = true;
 
-  const fresh = await apiFetch(`${API_SITE}?action=get&doc=instance`);
-  if (!fresh || typeof fresh !== 'object') {
+  const read = await apiFetchStatus(`${API_SITE}?action=get&doc=instance`);
+  const fresh = read.ok && read.data && typeof read.data === 'object' && !Array.isArray(read.data) ? read.data : null;
+  if (!fresh) {
     if (btn) btn.disabled = false;
-    toast(t('dtypes.saveError', "Échec de l'enregistrement."), 'error');
+    toast(`${t('dtypes.saveError', "Échec de l'enregistrement.")} ${_failure(read)}`, 'error');
     return;
   }
   fresh.datasetTypes = _types;
@@ -215,7 +224,8 @@ async function save() {
   });
   if (!r.ok) {
     if (btn) btn.disabled = false;
-    toast(t('dtypes.saveError', "Échec de l'enregistrement."), 'error');
+    console.error('dataset types save refused:', r.status, r.data);
+    toast(`${t('dtypes.saveError', "Échec de l'enregistrement.")} ${_failure(r)}`, 'error');
     return;
   }
   _mark(false);

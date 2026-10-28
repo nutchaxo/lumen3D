@@ -1799,7 +1799,7 @@ const ViewerApp = (() => {
       });
     }
 
-    _bindGpuCompressionControls();
+    _forgetGpuSettings();
     _bindStabilizationControl();
     _bindViewExport();
   }

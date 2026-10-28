@@ -2420,6 +2420,37 @@
       "import_running": "Import bezig — gecontroleerd tot wat ontvangen is.",
       "published_exists": "Er bestaat al een gepubliceerde dataset met dezelfde naam.",
       "not_staged": "Geen importjournaal gevonden voor deze dataset."
+    },
+    "recheck": "Opnieuw controleren",
+    "howToFix": "Oplossen:",
+    "fix": {
+      "check_failed": "De server kon de controle niet afronden. Noemt het detail geheugen of tijd, verhoog dan memory_limit / max_execution_time van PHP; staat er HTTP 5xx of een leeg antwoord, dan heeft de host het verzoek afgebroken: gebruik «Opnieuw controleren» alleen op deze dataset.",
+      "missing_metadata": "Importeer de dataset opnieuw of herstel metadata.json uit een back-up.",
+      "metadata_": "Open de dataset in Datasets en sla hem opnieuw op, of corrigeer metadata.json met de hand.",
+      "metadata_identity": "Datasets > bewerken en opslaan: schrijft type en id opnieuw vanuit de map.",
+      "missing_thumbnail": "Datasets > de dataset bewerken en de miniatuur genereren.",
+      "missing_image": "Importeer de foto opnieuw (image.webp / preview.webp zijn vereist).",
+      "missing_preview": "Importeer de foto opnieuw (image.webp / preview.webp zijn vereist).",
+      "not_latest_format": "Open Data updates en voer de openstaande conversie uit.",
+      "needs_repair": "Open Data updates: het herstel staat daar en draait als een conversie.",
+      "bricks_v3_invalid": "Importeer de dataset opnieuw vanuit de pipeline-uitvoer of herstel bricks/ uit een back-up.",
+      "bricks_v5_invalid": "Importeer de dataset opnieuw vanuit de pipeline-uitvoer of herstel bricks/ uit een back-up.",
+      "missing_manifest": "Importeer de dataset opnieuw: bricks/manifest.json is vereist.",
+      "manifest_": "Importeer de dataset opnieuw of herstel bricks/ uit een back-up.",
+      "missing_pack": "Importeer de dataset opnieuw (alleen ontbrekende bestanden worden opnieuw verstuurd) of herstel ze uit een back-up.",
+      "truncated_pack": "Het bestand is afgekapt: importeer de dataset opnieuw, alleen beschadigde bestanden worden opnieuw verstuurd.",
+      "missing_index": "Importeer de dataset opnieuw of herstel de indexbestanden uit een back-up.",
+      "index_": "Importeer de dataset opnieuw of herstel de indexbestanden uit een back-up.",
+      "gallery_missing": "Datasets > bewerken > Galerij: verwijder de ontbrekende items of upload de afbeeldingen opnieuw.",
+      "gallery_unlisted": "Datasets > bewerken > Galerij: sla op om de lijst af te stemmen, of verwijder de overtollige bestanden.",
+      "tracking_file_missing": "Voer de trackingimport voor deze timelapse opnieuw uit of herstel tracks.json / model.glb.",
+      "interrupted_swap": "Een update is onderbroken. Voer de conversie opnieuw uit via Data updates; verwijder de *.pre-swap-resten pas als de dataset correct opent.",
+      "previous_tree_kept": "Te verwijderen zodra de dataset in orde is: Data updates > vorige versie verwijderen.",
+      "unexpected_files": "Deze bestanden horen bij geen enkel formaat. Verwijder ze via SFTP als je ze niet bewust hebt toegevoegd.",
+      "incomplete_files": "Open het tabblad Import en hervat deze import.",
+      "stray_files": "Verwijder deze bestanden uit de import, of annuleer de import en begin opnieuw.",
+      "published_exists": "Publiceren zou de gepubliceerde dataset met dezelfde naam vervangen. Annuleer deze import als het een duplicaat is.",
+      "not_staged": "Het importjournaal is verdwenen: annuleer en importeer opnieuw."
     }
   }
 }

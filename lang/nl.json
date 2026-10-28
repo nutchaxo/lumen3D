@@ -2254,6 +2254,7 @@
     "reasonUnknown": "capaciteitscontrole niet beschikbaar",
     "toastDone": "{name} bijgewerkt naar formaat {v}",
     "toastFailed": "Update van {name} mislukt: {error}",
+    "toastAutoRetry": "{name}: {error} — herstart vanzelf over {s} s (poging {n})",
     "toastSession": "Sessie verlopen — meld u opnieuw aan en hervat.",
     "toastUnitTimeoutStuck": "Update van {name} gestopt: {error}. {hint}",
     "unitTimeoutRetry": "Probeer het opnieuw in deze browser of verwerk de dataset opnieuw met de pipeline.",

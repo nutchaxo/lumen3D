@@ -107,7 +107,7 @@ function fakePool(api, opts = {}) {
 }
 
 function makeRunner(api, pool, events) {
-  return new Runner({ api, pool: () => pool, datasetBase: (id) => `http://h/DATA_WEB/${id}/`, onEvent: (e) => events.push(e) });
+  return new Runner({ api, pool: () => pool, datasetBase: (id) => `http://h/DATA_WEB/${id}/`, onEvent: (e) => events.push(e), autoRetryDelaysMs: [] });
 }
 const until = async (fn) => { for (let i = 0; i < 2000 && !fn(); i++) await new Promise((r) => setTimeout(r, 1)); assert.ok(fn(), 'condition reached'); };
 
@@ -294,7 +294,7 @@ const until = async (fn) => { for (let i = 0; i < 2000 && !fn(); i++) await new 
 // 10. Transient API failures: bounded retries, an outage pauses (journal intact), an engine
 //     error is not retried, a stalled assembly and units that never land stop the job.
 {
-  const mk = (api, events) => new Runner({ api, pool: () => fakePool(api), datasetBase: () => 'http://h/', onEvent: (e) => events.push(e), backoffMs: [1] });
+  const mk = (api, events) => new Runner({ api, pool: () => fakePool(api), datasetBase: () => 'http://h/', onEvent: (e) => events.push(e), backoffMs: [1], autoRetryDelaysMs: [] });
   // 10a. a 502 without engine code twice, then fine → the job finishes.
   {
     const api = fakeServer({ '3d/a|m002-planes': 3 });
@@ -357,6 +357,29 @@ const until = async (fn) => { for (let i = 0; i < 2000 && !fn(); i++) await new 
     assert.equal(events.find((e) => e.type === 'job_failed').code, 'incomplete');
     assert.equal(api.calls.filter((c) => c[0] === 'plan').length, 4, 'the plan, then three passes without progress, each re-planned');
   }
+}
+
+// 11. A failed job starts again by itself and finishes from the journal; one that never
+// advances gives up after the delays are spent; a definitive refusal is never retried.
+{
+  const api = fakeServer({ '3d/a|m002-planes': 5 });
+  let crashes = 1;
+  const pool = fakePool(api, { fail: (d, m, u) => u.endsWith('x3') && crashes-- > 0 });
+  const events = [];
+  const r = new Runner({ api, pool: () => pool, datasetBase: (id) => `http://h/DATA_WEB/${id}/`, onEvent: (e) => events.push(e), autoRetryDelaysMs: [1, 1] });
+  r.enqueue([{ dataset: '3d/a', migration: 'm002-planes' }]);
+  await until(() => r.state === 'idle');
+  assert.equal(events.filter((e) => e.type === 'job_failed').length, 0, 'recovered');
+  assert.equal(events.filter((e) => e.code === 'auto_retry').length, 1);
+  assert.ok(api.journals.get('3d/a|m002-planes').finalized, 'finished after the restart');
+
+  const api2 = fakeServer({ '3d/a|m002-planes': 5 });
+  const events2 = [];
+  const r2 = new Runner({ api: api2, pool: () => fakePool(api2, { fail: (d, m, u) => u.endsWith('x3') }), datasetBase: () => 'http://h/', onEvent: (e) => events2.push(e), autoRetryDelaysMs: [1, 1] });
+  r2.enqueue([{ dataset: '3d/a', migration: 'm002-planes' }]);
+  await until(() => r2.state === 'idle');
+  assert.equal(events2.filter((e) => e.code === 'auto_retry').length, 2, 'bounded by the delays');
+  assert.equal(events2.filter((e) => e.type === 'job_failed').length, 1);
 }
 
 console.log('migration queue: OK');

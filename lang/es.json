@@ -2254,6 +2254,7 @@
     "reasonUnknown": "comprobación de capacidades no disponible",
     "toastDone": "{name} actualizado al formato {v}",
     "toastFailed": "La actualización de {name} falló: {error}",
+    "toastAutoRetry": "{name}: {error} — se reanuda solo en {s} s (intento {n})",
     "toastSession": "Sesión caducada: vuelva a iniciar sesión y reanude.",
     "toastUnitTimeoutStuck": "Actualización de {name} detenida: {error}. {hint}",
     "unitTimeoutRetry": "Vuelva a intentarlo en este navegador o reprocese el dataset con el pipeline.",

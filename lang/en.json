@@ -2254,6 +2254,7 @@
     "reasonUnknown": "capability check unavailable",
     "toastDone": "{name} updated to format {v}",
     "toastFailed": "Update of {name} failed: {error}",
+    "toastAutoRetry": "{name}: {error} — restarting by itself in {s} s (attempt {n})",
     "toastSession": "Session expired — sign in again, then resume.",
     "toastUnitTimeoutStuck": "Update of {name} stopped: {error}. {hint}",
     "unitTimeoutRetry": "Retry it in this browser, or reprocess the dataset with the pipeline.",

@@ -2254,6 +2254,7 @@
     "reasonUnknown": "vérification des capacités indisponible",
     "toastDone": "{name} mis à jour au format {v}",
     "toastFailed": "Échec de la mise à jour de {name} : {error}",
+    "toastAutoRetry": "{name} : {error} — reprise automatique dans {s} s (essai {n})",
     "toastSession": "Session expirée — reconnectez-vous puis reprenez.",
     "toastUnitTimeoutStuck": "Mise à jour de {name} arrêtée : {error}. {hint}",
     "unitTimeoutRetry": "Relancez-la dans ce navigateur, ou retraitez le dataset avec le pipeline.",

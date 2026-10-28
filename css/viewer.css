@@ -977,6 +977,8 @@ body.viewer-iframe .scientific-panel {
   margin-top: var(--space-2);
 }
 
+.qm-lists-single { grid-template-columns: minmax(0, 1fr); }
+
 .qm-head {
   margin: 0 0 var(--space-1);
   font-size: var(--text-xs);

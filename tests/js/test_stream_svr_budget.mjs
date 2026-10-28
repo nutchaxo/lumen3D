@@ -35,8 +35,11 @@ function rendererNamed(name, max3D = 2048) {
 {
   const S = load({ deviceMemory: 8 });
   const cases = [
-    ['ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 4 * GiB],
-    ['ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 4 * GiB],
+    ['ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 4.8 * GiB],
+    ['ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 7.2 * GiB],
+    ['ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 14.4 * GiB],
+    ['ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 Laptop GPU Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 7.2 * GiB],
+    ['ANGLE (NVIDIA, NVIDIA Quadro P620 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'discrete', 4 * GiB],
     ['ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)', 'integrated', 2 * GiB],
     ['ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', 'integrated', 2 * GiB],
     ['Apple M2', 'integrated', 2 * GiB],
@@ -46,18 +49,18 @@ function rendererNamed(name, max3D = 2048) {
   for (const [name, cls, bytes] of cases) {
     const b = S.vramBudget(rendererNamed(name));
     assert.equal(b.gpuClass, cls, `${name || '(masked)'} -> ${cls}`);
-    assert.equal(b.bytes, bytes, `${cls} budget`);
+    assert.ok(Math.abs(b.bytes - bytes) <= 1, `${cls} budget ${b.bytes} vs ${bytes}`);
   }
   const low = load({ deviceMemory: 4 });
   assert.equal(low.vramBudget(rendererNamed('Intel(R) Iris(R) Xe Graphics')).bytes, GiB, '4 GB laptop iGPU: 1 GiB');
-  assert.equal(low.vramBudget(rendererNamed('NVIDIA GeForce GTX 1650')).bytes, 3 * GiB, '4 GB machine dGPU: 3 GiB');
+  assert.equal(low.vramBudget(rendererNamed('NVIDIA Quadro P620')).bytes, 3 * GiB, '4 GB machine dGPU of an unknown model: 3 GiB');
 }
 
-// ── Context loss halves the budget (persisted), override replaces the heuristic ──
+// ── Context loss halves the budget (persisted), session override replaces the detection ──
 {
   const storage = new Map();
   const S = load({ deviceMemory: 8, storage });
-  const r = rendererNamed('NVIDIA GeForce RTX 3060');
+  const r = rendererNamed('NVIDIA Quadro P620');
   S.noteContextLost();
   assert.equal(S.vramBudget(r).bytes, 2 * GiB, 'one loss: half');
   const again = load({ deviceMemory: 8, storage });
@@ -65,7 +68,10 @@ function rendererNamed(name, max3D = 2048) {
   again.resetGpuBudget();
   assert.equal(again.vramBudget(r).bytes, 4 * GiB, 'reset');
   storage.set('lumen3d.vramBudgetMB', '6144');
+  const stale = load({ deviceMemory: 8, storage });
+  assert.equal(stale.vramBudget(r).bytes, 4 * GiB, 'a value stored by an earlier version is ignored');
   const big = load({ deviceMemory: 8, storage });
+  big.setVramBudget(6 * GiB);
   assert.equal(big.vramBudget(r).bytes, 6 * GiB, 'operator override');
   assert.equal(big.vramBudget(r).source, 'override');
 }
@@ -86,7 +92,7 @@ function rendererNamed(name, max3D = 2048) {
   assert.ok(S.planAtlas(6636, { max3D: 2048, maxPageBytes: GiB }).slots >= 6636, 'with 1 GiB pages (budget > 4 GiB) they do');
   assert.ok(S.planAtlas(3000, { max3D: 2048, components: 1 }).bytes < (3000 + 128) * 262144, 'R8 slots are a quarter');
 
-  const r = rendererNamed('NVIDIA GeForce RTX 3060');
+  const r = rendererNamed('NVIDIA Quadro P620');
   assert.equal(S.estimateMaxSlots(r), 4096, 'discrete 4 GiB: 4096 RGBA slots');
   assert.equal(S.estimateMaxSlots(rendererNamed('Intel(R) UHD Graphics 620')), 2048, 'iGPU 2 GiB: 2048 slots');
   assert.equal(S.maxSlotsForBudget(r, { components: 2 }), 8192, 'RG8 doubles the count');

@@ -7196,12 +7196,7 @@ const VolumeViewer = (() => {
   // state, above the IIFE's return.)
 
   function _gpuCompressionMode() {
-    if (_gpuCompressionSession) return _gpuCompressionSession;
-    try {
-      const v = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen3d.gpuCompression') : null;
-      if (GPU_COMPRESSION_MODES.includes(v)) return v;
-    } catch (e) { /* storage blocked */ }
-    return 'auto';
+    return _gpuCompressionSession || 'auto';
   }
 
   /** Should a volume of `metadata` stream into a compressed atlas on this renderer? */
@@ -7237,7 +7232,6 @@ const VolumeViewer = (() => {
     const m = mode === true ? 'on' : mode === false ? 'off' : String(mode || 'auto');
     if (!GPU_COMPRESSION_MODES.includes(m)) return getGpuCompression();
     _gpuCompressionSession = m;
-    try { if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompression', m); } catch (e) { /* storage blocked */ }
     const want = _gpuCompressionWanted(_lastDisplayRequest?.metadata || null);
     for (const [key, entry] of [..._volumeCache]) {
       if (!entry || Boolean(entry.gpuCompressed) === want) continue;

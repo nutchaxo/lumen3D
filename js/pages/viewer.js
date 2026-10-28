@@ -1496,17 +1496,11 @@ const ViewerApp = (() => {
     const lists = document.createElement('div');
     lists.className = 'qm-lists';
     if (_isV6BrickManifest()) {
-      // Format 6: one display quality; the note says what is shown and what exports read.
+      // Format 6: one display quality, so only the resolution list (and the warning when the GPU holds a coarser level than chosen).
       lists.classList.add('qm-lists-single');
       lists.append(_qmSection(_t('viewer.qualityMatrix.resolutionHead', 'Resolution'), resList));
-      const q30 = document.createElement('div');
-      q30.className = 'qm-legend qm-q30';
-      q30.textContent = _t('viewer.qualityMatrix.q30Note', 'Every volume is displayed compressed in WebP quality 30. Measurements and exports read the lossless data, at the resolution chosen here.');
-      const legend6 = document.createElement('div');
-      legend6.className = 'qm-legend';
-      legend6.textContent = _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.');
-      top.querySelector('.qm-help')?.remove();
-      box.replaceChildren(top, lists, q30, legend6);
+      const coarser = summary.querySelector('.qm-note');
+      box.replaceChildren(...(coarser ? [coarser] : []), lists);
       return;
     }
     lists.append(
@@ -1791,107 +1785,14 @@ const ViewerApp = (() => {
     _bindViewExport();
   }
 
-  // ── GPU compression (the display atlas in BC4 / BC5 blocks) ──────────────────────
-  // Half the VRAM per frame, so a timelapse's buffer holds twice the frames; the values
-  // on screen are approximate. The select sets the mode (VolumeViewer.setGpuCompression)
-  // and the volume on screen is loaded again in the new form; the line under it says
-  // which form is on screen.
-  const GPU_COMPRESSION_MODES = ['auto', 'on', 'off'];
-
-  function _renderGpuCompressionStatus() {
-    const state = VolumeViewer.getGpuCompression?.();
-    const line = document.getElementById('gpu-compression-status');
-    const select = document.getElementById('select-gpu-compression');
-    if (!state) return;
-    if (select && GPU_COMPRESSION_MODES.includes(state.mode) && select.value !== state.mode) select.value = state.mode;
-    if (!line) return;
-    line.textContent = !state.supported
-      ? _tt('viewer.gpuCompressionUnsupported', 'Not available on this GPU: shown from exact voxels.')
-      : state.active
-        ? _tt('viewer.gpuCompressionActive', 'Shown from GPU-compressed blocks: half the memory, so more frames stay loaded; voxel values are approximate.')
-        : _tt('viewer.gpuCompressionInactive', 'Shown from exact voxels.');
-  }
-
-  function _bindGpuCompressionControls() {
-    const select = document.getElementById('select-gpu-compression');
-    if (typeof VolumeViewer === 'undefined' || typeof VolumeViewer.setGpuCompression !== 'function') {
-      select?.closest('label')?.classList.add('hidden');
-      return;
-    }
-    if (select) {
-      select.addEventListener('change', () => {
-        const mode = GPU_COMPRESSION_MODES.includes(select.value) ? select.value : 'auto';
-        VolumeViewer.setGpuCompression(mode);
-        _stopPrefetch();
-        _preloadedTimepoints.clear();
-        _refreshBuffer();
-        if (!_basePath) { _renderGpuCompressionStatus(); return; }
-        _loadTimepoint(_basePath, _currentTimepoint, { force: true })
-          .then(() => { _refreshBuffer(); _kickPrefetch(200); })
-          .catch(err => console.warn('[ViewerApp] Reload after a GPU compression change failed:', err))
-          .finally(_renderGpuCompressionStatus);
-      });
-    }
-    window.addEventListener('volume-capabilities', _renderGpuCompressionStatus);
-    _renderGpuCompressionStatus();
-    _bindGpuMemoryControls();
-  }
-
-  // ── GPU memory budget ───────────────────────────────────────────────────────────
-  // A browser never tells a page how much memory the graphics card has: the budget is
-  // estimated from the GPU class (SVRManager.vramBudget: 4 GiB for a dedicated card, 1–2
-  // for an integrated one). The operator who knows better sets the real figure here; it
-  // is kept in this browser (localStorage 'lumen3d.vramBudgetMB', what SVRManager reads)
-  // and applies to the next quality loaded.
-  const GPU_MEMORY_CHOICES_MB = [2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576];
-
-  function _gpuMemoryOverrideMB() {
-    try { const v = Number(localStorage.getItem('lumen3d.vramBudgetMB')); return Number.isFinite(v) && v > 0 ? v : null; } catch (e) { return null; }
-  }
-
-  function _renderGpuMemoryStatus() {
-    const line = document.getElementById('gpu-memory-status');
-    const b = VolumeViewer.getGpuBudget?.();
-    if (!line || !b) return;
-    const gb = (bytes) => (Number(bytes) / 2 ** 30).toFixed(Number(bytes) % 2 ** 30 ? 1 : 0);
-    const losses = Number(b.contextLosses) > 0
-      ? ` ${_tf('viewer.gpuMemoryLosses', 'Halved after {n} graphics-context loss(es) this week.', { n: b.contextLosses })}` : '';
-    line.textContent = b.source === 'override'
-      ? _tf('viewer.gpuMemorySet', 'The viewer uses at most {gb} GB of GPU memory (your setting).', { gb: gb(b.bytes) }) + losses
-      : _tf('viewer.gpuMemoryEstimated', 'Estimated: {gb} GB ({kind}). A browser does not tell the real memory of the card: choose yours if you know it.', {
-        gb: gb(b.bytes),
-        kind: b.gpuClass === 'discrete' ? _tf('viewer.gpuDiscrete', 'dedicated card')
-          : b.gpuClass === 'integrated' ? _tf('viewer.gpuIntegrated', 'integrated graphics')
-            : b.gpuClass === 'software' ? _tf('viewer.gpuSoftware', 'software rendering') : _tf('viewer.gpuUnknown', 'unknown card')
-      }) + losses;
-  }
-
-  function _bindGpuMemoryControls() {
-    const select = document.getElementById('select-gpu-memory');
-    if (!select || typeof VolumeViewer.getGpuBudget !== 'function') { select?.closest('label')?.classList.add('hidden'); return; }
-    for (const mb of GPU_MEMORY_CHOICES_MB) {
-      const o = document.createElement('option');
-      o.value = String(mb);
-      o.textContent = `${mb / 1024} ${_t('viewer.gbShort', 'GB')}`;
-      select.appendChild(o);
-    }
-    const cur = _gpuMemoryOverrideMB();
-    if (cur && !GPU_MEMORY_CHOICES_MB.includes(cur)) {
-      const o = document.createElement('option');
-      o.value = String(cur);
-      o.textContent = `${(cur / 1024).toFixed(1)} ${_t('viewer.gbShort', 'GB')}`;
-      select.appendChild(o);
-    }
-    select.value = cur ? String(cur) : 'auto';
-    select.addEventListener('change', () => {
-      try {
-        if (select.value === 'auto') localStorage.removeItem('lumen3d.vramBudgetMB');
-        else localStorage.setItem('lumen3d.vramBudgetMB', String(Number(select.value)));
-      } catch (e) { /* storage blocked: the estimate stays */ }
-      _renderGpuMemoryStatus();
-      _renderQualityMatrix();
-    });
-    _renderGpuMemoryStatus();
+  // The GPU compression mode and the GPU memory budget are decided by the viewer
+  // (SVRManager.vramBudget, VolumeViewer.getGpuCompression); the manual settings of
+  // earlier versions are dropped so a stale choice never overrides the detection.
+  function _forgetGpuSettings() {
+    try {
+      localStorage.removeItem('lumen3d.vramBudgetMB');
+      localStorage.removeItem('lumen3d.gpuCompression');
+    } catch (e) { /* storage blocked: nothing was kept */ }
   }
 
   // ── 3D view export (PNG) ─────────────────────────────────────────────────────────

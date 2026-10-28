@@ -364,6 +364,11 @@ function onLaneEvent(x, e) {
     schedulePaint();
     return;
   }
+  if (e.type === 'log' && e.code === 'auto_retry') {
+    pushLog({ ok: false, retrying: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, error: e.error, code: e.code, attempt: e.attempt });
+    toast(t('dupd.toastAutoRetry', '{name}: {error} — restarting by itself in {s} s (attempt {n})', { name: nameOf(e.dataset), error: e.error, s: Math.round(e.delayMs / 1000), n: e.attempt }), 'warning');
+    return;
+  }
   if (e.type === 'job_done') {
     pushLog({ ok: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, executor: e.executor, seconds: e.seconds, units: e.units, formatVersion: e.formatVersion });
     _progress.delete(e.dataset);
@@ -720,7 +725,11 @@ function rowLive(ds) {
   const j = ds.job;
   if (!j) return '';
   if (j.state === 'failed') {
-    return `<div class="dupd-live-line"><span class="dupd-state is-bad">${escHtml(t('dupd.stFailed', 'Failed'))}</span><span>${escHtml(errorText(j.error, j.detail))}</span></div>`;
+    // The browser's own verdict (a crashed worker, a lost link) never reaches the server journal:
+    // the history keeps it.
+    const last = readLog().find((l) => l.dataset === ds.id && l.error && l.code !== 'auto_retry');
+    const why = j.error ? errorText(j.error, j.detail) : (last ? last.error : '');
+    return `<div class="dupd-live-line"><span class="dupd-state is-bad">${escHtml(t('dupd.stFailed', 'Failed'))}</span><span>${escHtml(why)}</span></div>`;
   }
   const ws = workStats(j);
   const pct = ws.pct;

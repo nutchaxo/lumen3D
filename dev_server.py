@@ -68,6 +68,7 @@ import upload_staging
 # split: the engine and its pure format functions live in dataset_migrations.py,
 # this file only authenticates and routes /api/migrations.php to it.
 import dataset_migrations
+import dataset_integrity
 # The admin "Delete" button: a dataset goes to uploads/trash/ for 60 days.
 import dataset_trash
 
@@ -6175,6 +6176,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._guarded(self._handle_upload, parsed, body=None, raw=None)
         elif parsed.path == "/api/migrations.php":
             self._guarded(self._handle_migrations, parsed, body=None, raw=None)
+        elif parsed.path == "/api/integrity.php":
+            self._guarded(self._handle_integrity, parsed)
         elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
             self._guarded(self._handle_api, parsed, body=None)
         elif _is_forbidden_static(clean_path) or _has_dot_segment(clean_path) or "\x00" in clean_path:
@@ -6795,6 +6798,17 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             body = {}
         self._handle_migrations(parsed, body=body if isinstance(body, dict) else {}, raw=None)
+
+    def _handle_integrity(self, parsed):
+        """api/integrity.php — read-only dataset check-up (dataset_integrity.py).
+        GET only, admin session; a check never writes."""
+        if not _get_session(self._token()):
+            self._json(401, {"error": "Not authenticated"})
+            return
+        _migrations_bind()
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        status, payload = dataset_integrity.handle(params.get("action", ""), params)
+        self._json_nostore(status, payload)
 
     def _handle_migrations(self, parsed, body, raw):
         """api/migrations.php — dataset format upgrades (SPEC DOCS/dataset-migrations).

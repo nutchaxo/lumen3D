@@ -36,6 +36,11 @@ const MAX_STALLED_ASSEMBLY = 5;  // finalize answers in a row without a new plan
 // Server error codes that no retry changes: `unit_timeout` = a unit that killed the request
 // twice (the server executor cannot convert it within its time limit).
 const DEFINITIVE_CODES = new Set(['unit_timeout']);
+// A job that fails (a worker out of memory, a unit that kept failing, a lost link) starts again by
+// itself, with a growing delay, until this many failures in a row without a new unit finished.
+const AUTO_RETRY_LIMIT = 5;
+const AUTO_RETRY_DELAY_MS = [10000, 30000, 60000, 120000, 300000];
+const NO_AUTO_RETRY = new Set(['unit_timeout', 'no_executor', 'prepare_failed', 'cancelled']);
 // Marker of a pool request that is a speed-test block, not a unit.
 const SPEEDTEST_JOB = '#speedtest';
 
@@ -703,6 +708,7 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
  * @param {(dataset: string, migration: string) => number|null} [o.estimateStep]  seconds
  * @param {(dataset: string, migration: string) => boolean} [o.keepPrevious]  finalize keeps the replaced tree
  * @param {() => number} [o.now]   seconds
+ * @param {number[]} [o.autoRetryDelaysMs]  delays before each automatic restart of a failed job ([] = never)
  */
 export class Runner {
   constructor(o) {
@@ -845,6 +851,11 @@ export class Runner {
         if (err && err.status === 401) { this._setState('paused', 'unauthorized'); return; }
         // The link stayed down through every retry: the journal is intact, wait for a resume.
         if (err && err.pause) { this._setState('paused', err.pause); return; }
+        if (this._autoRetry(item, err)) {
+          this._emit({ type: 'log', level: 'warn', dataset: item.dataset, migration: item.migration, code: 'auto_retry', error: String(err && err.message || err), attempt: item.autoTries, delayMs: item.autoDelayMs });
+          await this._sleep(item.autoDelayMs);
+          continue;
+        }
         this.queue.shift();
         // The rest of this dataset's chain cannot run on a dataset whose step failed.
         this.queue = this.queue.filter((q) => q.dataset !== item.dataset);
@@ -860,6 +871,24 @@ export class Runner {
       if (!this.queue.some((q) => q.dataset === item.dataset)) { this.chains.delete(item.dataset); this._release(item.dataset); }
     }
     this._setState('idle');
+  }
+
+  /**
+   * Whether a failed job is started again by itself (the journal keeps every finished unit, so a
+   * retry only redoes what was lost). Failures that a retry cannot change are final, and so is a
+   * job that fails AUTO_RETRY_LIMIT times in a row without finishing a single new unit.
+   * Sets item.autoTries / item.autoDelayMs.
+   */
+  _autoRetry(item, err) {
+    if (this._stop || !err || err.status === 401 || (err.code && NO_AUTO_RETRY.has(err.code))) return false;
+    const done = this.current ? this.current.done : 0;
+    if (item.autoDone === undefined || done > item.autoDone) item.autoTries = 0;
+    item.autoDone = done;
+    const delays = this.o.autoRetryDelaysMs || AUTO_RETRY_DELAY_MS;
+    if ((item.autoTries || 0) >= Math.min(AUTO_RETRY_LIMIT, delays.length)) return false;
+    item.autoTries = (item.autoTries || 0) + 1;
+    item.autoDelayMs = (this.o.autoRetryDelaysMs || AUTO_RETRY_DELAY_MS)[item.autoTries - 1];
+    return true;
   }
 
   _sleep(ms) {

@@ -616,3 +616,20 @@ label.pg-xfer-row .pg-xfer-note { margin-left: auto; text-align: right; }
   .pg-xfer-target .adm-field-input { flex: 1; width: auto; }
   .pg-xfer-tag { white-space: normal; }
 }
+
+/* ── Data integrity tab ────────────────────────────────────── */
+.adm-int-toolbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 12px 0 16px; }
+.adm-int-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--adm-text-sec); }
+.adm-int-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.adm-int-pill i, .adm-int-f i { width: 15px; height: 15px; flex: none; }
+.adm-int-ok { color: var(--adm-success); }
+.adm-int-warn { color: var(--adm-warning); }
+.adm-int-error { color: var(--adm-danger); }
+.adm-int-info, .adm-int-pending { color: var(--adm-text-muted); }
+.adm-int-staged { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--adm-border); color: var(--adm-text-sec); vertical-align: middle; }
+.adm-int-findings { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.adm-int-f { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--adm-text); }
+.adm-int-f > i { margin-top: 2px; }
+.adm-int-files { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 4px; }
+.adm-int-files code { font-size: 11px; color: var(--adm-text-sec); word-break: break-all; }
+.adm-int-row details > summary { cursor: pointer; font-size: 12.5px; color: var(--adm-text-sec); }

@@ -3354,7 +3354,9 @@ function lumen_mig_status(): array {
     // execution limit: rows are computed until the budget is spent, the answer says `partial`, and the
     // next call finds the finished rows in the cache and goes on.
     $limit = (int)ini_get('max_execution_time');
-    if (function_exists('set_time_limit') && @set_time_limit(60)) $limit = 60;
+    // Only a short web limit is raised (never lowered, never in the CLI, where a limit would also
+    // cut a long test run): the budget below is half of what the request really has.
+    if (PHP_SAPI !== 'cli' && $limit > 0 && $limit < 60 && function_exists('set_time_limit') && @set_time_limit(60)) $limit = 60;
     $budget = $limit > 0 ? max(4.0, min(20.0, $limit * 0.5)) : 20.0;
     $datasets = [];
     $total = 0;

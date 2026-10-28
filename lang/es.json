@@ -382,11 +382,6 @@
     "renderMode": "Modo de renderizado",
     "exposure": "Visibilidad (exposición)",
     "customColor": "Color personalizado",
-    "detailStatus": "Detalle: {count} bricks del nivel {level} visibles",
-    "detailLoading": "Detalle: cargando {loaded} de {total} bricks del nivel {level}",
-    "detailNoBudget": "Detalle no disponible: memoria GPU insuficiente",
-    "detailMode": "Detalle al ampliar",
-    "detailAuto": "Automático",
     "detailOn": "Activado",
     "detailOff": "Desactivado",
     "openStudioHd": "Abrir en el Studio (HD)",
@@ -398,7 +393,7 @@
     "qStreamingPreviewBricks": "Transmitiendo vista previa (LOD{lod}, {count} bloques) antes de {quality}...",
     "qStreamingBricks": "Transmitiendo bloques {quality} (LOD{lod}, {count} bloques)...",
     "gpuCompression": "Compresión GPU",
-    "gpuCompressionAuto": "Series temporales",
+    "gpuCompressionAuto": "Automático",
     "gpuCompressionActive": "Mostrado desde bloques comprimidos por la GPU: la mitad de memoria, así se mantienen más fotogramas; los valores de los vóxeles son aproximados (unos 1–2 niveles de 255). El pase nativo del Studio lee vóxeles exactos.",
     "gpuCompressionInactive": "Mostrado desde vóxeles exactos.",
     "stabilization": "Estabilización",
@@ -459,12 +454,9 @@
       "adviceHead": "Qué elegir",
       "advice": "Recomendado: la resolución más fina en verde, con calidad Extra. Para una medición o una figura: Max en Native.",
       "adviceRest": "Con una calidad comprimida, los bricks visibles se vuelven a cargar sin pérdida cuando la cámara se detiene (casilla bajo las listas).",
-      "losslessAtRest": "Sin pérdida al detenerse la vista",
-      "losslessAtRestHint": "Con una celda comprimida, los bricks visibles se vuelven a cargar sin pérdida poco después de que la cámara se detenga.",
       "q30Note": "Todos los volúmenes se muestran comprimidos en WebP calidad 30. Las medidas y las exportaciones leen los datos sin pérdidas, en la resolución elegida aquí.",
       "summaryQ30": "{res} · WebP Q30: {size}"
     },
-    "detailLossless": "Detalle sin pérdidas: {count} ladrillos a la vista",
     "gpuMemory": "Memoria GPU",
     "gpuMemoryAuto": "Automática",
     "gpuMemorySet": "El visor usa como máximo {gb} GB de memoria GPU (su ajuste).",
@@ -476,7 +468,8 @@
     "gpuUnknown": "tarjeta desconocida",
     "resDowngradeHeld": "Los otros {held} MB del presupuesto de {total} MB los ocupan volúmenes que siguen cargados.",
     "resDowngradeEstimate": "Este presupuesto es una estimación (un navegador no da la memoria real de la tarjeta): ajuste la suya en Calidad de renderizado › Memoria GPU.",
-    "gbShort": "GB"
+    "gbShort": "GB",
+    "errNoWebgl": "Este navegador negó a la página un contexto 3D (WebGL). Tras un fallo del controlador gráfico, un navegador bloquea WebGL para el sitio hasta reiniciarse por completo: cierre el navegador del todo (en Android: Ajustes › Aplicaciones › Chrome › Forzar detención) y vuelva a abrir la página. Si persiste, compruebe que la aceleración por hardware está activada."
   },
   "compare": {
     "title": "Modo de comparación",

@@ -1263,11 +1263,6 @@ body.viewer-iframe .scientific-panel {
   min-width: 0;
 }
 
-#detail-status:empty {
-  min-height: 0;
-  margin-top: 0;
-}
-
 .physical-status {
   margin-top: var(--space-3);
   min-height: 30px;
@@ -3053,12 +3048,3 @@ body.viewer-iframe #view-export-popover {
   pointer-events: none;
 }
 
-.qm-rest {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  cursor: pointer;
-}

@@ -131,14 +131,21 @@ export async function readDataTransfer(dataTransfer) {
 async function walkEntry(entry, path, out) {
   if (out.length >= MAX_ENTRIES) { out.skipped++; return; }
   if (entry.isFile) {
-    const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+    const file = await new Promise((resolve) => entry.file(resolve, (err) => {
+      console.warn('[import] unreadable file:', path, err && (err.name || err.message || err));
+      resolve(null);
+    }));
     if (file) out.push({ path, file }); else out.skipped++;
     return;
   }
   if (!entry.isDirectory) return;
   const reader = entry.createReader();
   for (;;) {
-    const batch = await new Promise((resolve) => reader.readEntries(resolve, () => { out.skipped++; resolve([]); }));
+    const batch = await new Promise((resolve) => reader.readEntries(resolve, (err) => {
+      console.warn('[import] unreadable folder:', path, err && (err.name || err.message || err));
+      out.skipped++;
+      resolve([]);
+    }));
     if (!batch.length) break;      // drained — a single readEntries call caps at ~100
     const files = batch.filter((c) => c.isFile);
     const dirs = batch.filter((c) => !c.isFile);

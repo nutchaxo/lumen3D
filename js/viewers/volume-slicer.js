@@ -221,6 +221,15 @@ const VolumeSlicer = (() => {
     }
     #else
     vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
+      #ifdef SVR_SPLIT
+      // svrAtlas<k> RG8 (channels 0, 1) beside svrAtlas<k+4> R8 (channel 2).
+      vec4 a; vec4 b;
+      if (atlasPage < 0.5) { a = texture(svrAtlas0, atlasCoord); b = texture(svrAtlas4, atlasCoord); }
+      else if (atlasPage < 1.5) { a = texture(svrAtlas1, atlasCoord); b = texture(svrAtlas5, atlasCoord); }
+      else if (atlasPage < 2.5) { a = texture(svrAtlas2, atlasCoord); b = texture(svrAtlas6, atlasCoord); }
+      else { a = texture(svrAtlas3, atlasCoord); b = texture(svrAtlas7, atlasCoord); }
+      return vec4(a.rg, b.r, 0.0);
+      #else
       if (atlasPage < 0.5) return texture(svrAtlas0, atlasCoord);
       if (atlasPage < 1.5) return texture(svrAtlas1, atlasCoord);
       if (atlasPage < 2.5) return texture(svrAtlas2, atlasCoord);
@@ -229,6 +238,7 @@ const VolumeSlicer = (() => {
       if (atlasPage < 5.5) return texture(svrAtlas5, atlasCoord);
       if (atlasPage < 6.5) return texture(svrAtlas6, atlasCoord);
       return texture(svrAtlas7, atlasCoord);
+      #endif
     }
     #endif
     #endif
@@ -589,7 +599,7 @@ const VolumeSlicer = (() => {
 
   // The atlas defines a material samples its pages with (svr-manager.js): sparse or
   // dense, and a compressed atlas's 2D arrays (one or two textures per page).
-  const ATLAS_DEFINES = ['ENABLE_SVR', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS'];
+  const ATLAS_DEFINES = ['ENABLE_SVR', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS', 'SVR_SPLIT'];
 
   function _copyAtlasDefines(source, defines) {
     if (!source?.defines?.ENABLE_SVR) return defines;

@@ -129,8 +129,6 @@ function makeLoader(files) {
   assert.equal(pick('512x512@b2', v6), 'q30');
   assert.equal(pick('native@ll', v6), 'll', 'an export asks for ll explicitly');
   assert.equal(pick('native', { columns: [{ id: 'll' }, { id: 'b2' }] }), 'b2', 'format 5 unchanged');
-  const refine = src.slice(src.indexOf('function _roiRefines'), src.indexOf('\n  }\n', src.indexOf('function _roiRefines')));
-  assert.match(refine, /'q30'/, 'q30 is never refined at rest');
   console.log('v6 column choice: OK');
 }
 

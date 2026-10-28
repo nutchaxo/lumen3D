@@ -22,10 +22,6 @@
    the caller picks a coarser level instead of attempting a multi-GiB texture
    the driver may accept and then page or lose.
 
-   role 'detail' (region-of-interest streaming, volume-viewer.js): the same
-   atlas published under the detail* uniforms and the ROI_DETAIL define, at
-   most DETAIL_MAX_PAGES pages (the shader's detailAtlas0..3).
-
    compression 'bc' (the display atlas of a timelapse, volume-viewer.js): the
    pages hold the GPU's RGTC blocks (bc-codec.js) — BC4 for one channel, BC5
    for two, two textures per page for three or four channels (BC5 + BC4 /
@@ -52,6 +48,13 @@ class SVRManager {
    * (NVIDIA, Radeon RX/Pro, Intel Arc), 'integrated' (Intel HD/UHD/Iris, Apple,
    * AMD APU "Radeon Graphics", mobile GPUs) or 'unknown'.
    */
+  /** A phone / tablet GPU (Adreno, Mali, PowerVR, Xclipse, Immortalis, Vivante) or an Android browser. */
+  static isMobileGpu(renderer) {
+    const name = String(SVRManager.gpuInfo(renderer).renderer || '');
+    if (/adreno|mali|powervr|xclipse|immortalis|vivante|videocore/i.test(name)) return true;
+    try { return typeof navigator !== 'undefined' && /Android/i.test(String(navigator.userAgent || '')); } catch (e) { return false; }
+  }
+
   static gpuInfo(renderer) {
     let rendererName = null;
     try {
@@ -121,6 +124,11 @@ class SVRManager {
   static noteContextLost() {
     const now = Date.now();
     SVRManager._sessionLosses = (SVRManager._sessionLosses || 0) + 1;
+    // A context lost while a compressed atlas was alive: this device's driver may claim RGTC and
+    // fail to allocate it (Adreno 740 under ANGLE/GL: texStorage3D 0x500, then the context is
+    // lost on every load, and Chrome ends up refusing the page any WebGL context). Never again
+    // on this device.
+    if (SVRManager._liveCompressed.size) SVRManager.noteCompressionFailed();
     try {
       if (typeof localStorage === 'undefined') return;
       const list = SVRManager._storedLosses().filter(t => now - t < SVRManager.CONTEXT_LOSS_MEMORY_MS);
@@ -176,10 +184,22 @@ class SVRManager {
    * that (tests of the compressed path in a software browser, with tiny atlases).
    * → { bc: boolean, reason: string|null, formats: { bc4, bc5 }|null }
    */
+  /** Compression made this device lose its context once: it is never used here again. */
+  static noteCompressionFailed() {
+    SVRManager._compressionFailed = true;
+    try { if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompressionFailed', String(Date.now())); } catch (e) { /* storage blocked: this session only */ }
+  }
+
+  static compressionFailedBefore() {
+    if (SVRManager._compressionFailed) return true;
+    try { return typeof localStorage !== 'undefined' && Boolean(localStorage.getItem('lumen3d.gpuCompressionFailed')); } catch (e) { return false; }
+  }
+
   static compressionSupport(renderer) {
     let gl = null;
     try { gl = renderer?.getContext?.() || null; } catch (e) { gl = null; }
     if (!gl) return { bc: false, reason: 'no-context', formats: null };
+    if (SVRManager.compressionFailedBefore()) return { bc: false, reason: 'failed-before', formats: null };
     const cached = SVRManager._supportCache.get(gl);
     if (cached) {
       // A restored context has lost its extensions: enable this one again (a no-op
@@ -189,6 +209,14 @@ class SVRManager {
     }
     if (SVRManager.gpuInfo(renderer).gpuClass === 'software' && !SVRManager.allowSoftwareCompression) {
       const refused = { bc: false, reason: 'software-renderer', formats: null };
+      SVRManager._supportCache.set(gl, refused);
+      return refused;
+    }
+    // Mobile GPUs reach RGTC through ANGLE's emulation: a 4 × 4 probe passes and a real atlas
+    // breaks the driver (measured on an Adreno 740 tablet). Their memory is what compression
+    // saves the least on anyway.
+    if (SVRManager.isMobileGpu(renderer)) {
+      const refused = { bc: false, reason: 'mobile-gpu', formats: null };
       SVRManager._supportCache.set(gl, refused);
       return refused;
     }
@@ -254,7 +282,24 @@ class SVRManager {
 
   /** Remove every atlas define from a material (a dense texture is bound next). */
   static clearAtlasDefines(material) {
-    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS']) SVRManager._setDefine(material, d, null);
+    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS', 'SVR_SPLIT']) SVRManager._setDefine(material, d, null);
+  }
+
+  /**
+   * The textures of a split atlas (three channels without the fourth byte an RGBA8
+   * page would spend on nothing): RG8 for channels 0 and 1, R8 for channel 2. `bytes`
+   * is the texel size of each plane; `components` the bytes per voxel over both.
+   */
+  static splitPlanes() {
+    return [
+      { channels: [0, 1], bytes: 2, internal: 'RG8', format: 'RG' },
+      { channels: [2], bytes: 1, internal: 'R8', format: 'RED' }
+    ];
+  }
+
+  /** Does an uncompressed atlas of `channels` channels save bytes as a split atlas? */
+  static canSplit(channels) {
+    return Math.round(Number(channels) || 0) === 3;
   }
 
   /** Bytes held right now by the atlases of every live manager of this page. */
@@ -378,12 +423,16 @@ class SVRManager {
     // rounded up to whole 4 × 4 blocks (pitchFor).
     this.slotPitch = 64;
     this.compressed = false;
-    // Compressed: one texture per page and plane (BCCodec.planesFor), planeAtlases[p][page];
-    // `atlases` is plane 0's. texelBytes: bytes per texel over every plane.
+    // Split (uncompressed, three channels): an RG8 and an R8 texture per page instead of
+    // one RGBA8 — `components` stays 4 (what the loader composes and every writer passes);
+    // the unused fourth byte is dropped when a brick is uploaded.
+    this.split = false;
+    // Compressed or split: one texture per page and plane (BCCodec.planesFor /
+    // splitPlanes), planeAtlases[p][page]; `atlases` is plane 0's. texelBytes: bytes per
+    // texel over every plane.
     this.planes = null;
     this.planeAtlases = [];
     this.texelBytes = null;
-    this.role = 'base';
     this.pageLimit = SVRManager.MAX_PAGES;
     this.atlasPages = 1;
     this.components = 4;
@@ -444,13 +493,15 @@ class SVRManager {
    *                 Every brick this atlas receives (writeRgbaBrick, writeBrick,
    *                 writeRgbaBrickRegion) is in that frame: stored voxel s of an axis
    *                 is volume voxel 64·b − apron + s.
-   *   role          'base' (default) or 'detail' (see the header).
-   *   maxPages      page limit (≤ 8; a detail atlas is capped at DETAIL_MAX_PAGES).
+   *   maxPages      page limit (≤ 8).
    *   compression   'bc': a compressed display atlas (see the header; only for role
    *                 'base', and only where SVRManager.compressionSupport says so — init
    *                 throws err.code 'SVR_BAD_FORMAT' otherwise). Bricks then go in
    *                 through writeEncodedBrick (or writeRgbaBrick / writeBrick, encoded
    *                 on this thread); writeRgbaBrickRegion is refused.
+   *   split         true: an uncompressed atlas of exactly three channels (components 4) is laid out as an RG8 and an R8 texture per page — 3
+   *                 bytes per voxel instead of 4, at most four pages. Ignored otherwise.
+   *                 writeRgbaBrickRegion is refused.
    */
   init(channels, volumeDim, renderer, material, options = {}) {
     this._releaseGpuResources();
@@ -465,24 +516,28 @@ class SVRManager {
     if (volumeDim?.brickStride !== undefined && Number(volumeDim.brickStride) !== this.slotStride && options.apron === undefined) {
       throw Object.assign(new Error(`SVR atlas: brick stride ${volumeDim.brickStride} does not match apron ${this.apron}`), { code: 'SVR_BAD_FORMAT' });
     }
-    this.role = options.role === 'detail' ? 'detail' : 'base';
     this.compressed = options.compression === 'bc';
     this.planes = null;
     this.texelBytes = null;
     if (this.compressed) {
       const support = SVRManager.compressionSupport(renderer);
-      if (this.role === 'detail' || !support.bc) {
+      if (!support.bc) {
         this.compressed = false;
-        throw Object.assign(new Error(`SVR atlas: compression unavailable (${this.role === 'detail' ? 'detail atlas' : support.reason})`), { code: 'SVR_BAD_FORMAT' });
+        throw Object.assign(new Error(`SVR atlas: compression unavailable (${support.reason})`), { code: 'SVR_BAD_FORMAT' });
       }
       this.planes = BCCodec.planesFor(Math.min(channels, this.components === 4 ? 4 : this.components))
         .map(p => ({ ...p, glFormat: support.formats[p.format] }));
       this.texelBytes = this.planes.reduce((sum, p) => sum + p.texelBytes, 0);
+      SVRManager._liveCompressed.add(this);
+    }
+    this.split = Boolean(options.split) && !this.compressed
+      && this.components === 4 && SVRManager.canSplit(channels);
+    if (this.split) {
+      this.planes = SVRManager.splitPlanes();
+      this.texelBytes = this.planes.reduce((sum, p) => sum + p.bytes, 0);
     }
     this.slotPitch = SVRManager.pitchFor(this.slotStride, this.compressed);
-    const pageCap = this.role === 'detail'
-      ? SVRManager.DETAIL_MAX_PAGES
-      : (this.compressed ? Math.floor(SVRManager.MAX_PAGES / this.planes.length) : SVRManager.MAX_PAGES);
+    const pageCap = this.compressed || this.split ? Math.floor(SVRManager.MAX_PAGES / this.planes.length) : SVRManager.MAX_PAGES;
     this.pageLimit = Math.max(1, Math.min(pageCap, Math.floor(Number(options.maxPages) || pageCap)));
     this.brickMap.clear();
     this._lru = new Map();
@@ -504,9 +559,11 @@ class SVRManager {
     const others = options.countLiveAtlases === false ? 0 : SVRManager.liveAtlasBytes(this);
     const available = options.ignoreBudget ? Infinity : Math.max(0, budget - others);
     const maxPageBytes = SVRManager._maxPageBytes(options.ignoreBudget ? Infinity : budget);
+    // Bytes a voxel takes in the atlas: 3 split, `components` otherwise (compressed: texelBytes).
+    const planComponents = this.split ? this.texelBytes : this.components;
     const slotBytes = this.compressed
       ? this.slotPitch * this.slotPitch * this.slotPitch * this.texelBytes
-      : SVRManager.slotBytes(this.components, this.slotStride);
+      : SVRManager.slotBytes(planComponents, this.slotStride);
     const requested = Math.ceil(Number(options.targetSlots) || 0);
     const targeted = requested > 1;
 
@@ -517,7 +574,7 @@ class SVRManager {
     let lastError = null;
     for (;;) {
       const plan = SVRManager.planAtlas(target, {
-        max3D, components: this.components, maxPageBytes, brickSize: this.slotPitch, maxPages: this.pageLimit,
+        max3D, components: planComponents, maxPageBytes, brickSize: this.slotPitch, maxPages: this.pageLimit,
         texelBytes: this.compressed ? this.texelBytes : null
       });
       if (!plan) {
@@ -579,7 +636,7 @@ class SVRManager {
     this._applyAtlasConfig(plan);
     const TextureClass = this.compressed ? THREE.DataArrayTexture : (THREE.Data3DTexture || THREE.DataTexture3D);
     const format = this.components === 1 ? THREE.RedFormat : this.components === 2 ? THREE.RGFormat : THREE.RGBAFormat;
-    const planes = this.compressed ? this.planes : [null];
+    const planes = this.compressed || this.split ? this.planes : [null];
     const byPlane = planes.map(() => []);
     try {
       for (let p = 0; p < planes.length; p++) {
@@ -587,7 +644,7 @@ class SVRManager {
           const atlas = new TextureClass(null, this.atlasDim, this.atlasDim, this.atlasDepth);
           // A compressed page's storage is made here (texStorage3D of its RGTC format);
           // three.js only binds it, so the format fields below are never uploaded from.
-          atlas.format = this.compressed ? (planes[p].channels.length === 2 ? THREE.RGFormat : THREE.RedFormat) : format;
+          atlas.format = this.compressed || this.split ? (planes[p].channels.length === 2 ? THREE.RGFormat : THREE.RedFormat) : format;
           atlas.type = THREE.UnsignedByteType;
           // Slots are packed edge to edge. Without a border, linear filtering would blend
           // the neighbouring slot's brick in at every brick face: nearest. With the 1-voxel
@@ -615,7 +672,7 @@ class SVRManager {
       }
       throw err;
     }
-    this.planeAtlases = this.compressed ? byPlane : [];
+    this.planeAtlases = this.compressed || this.split ? byPlane : [];
     this.atlases = byPlane[0];
   }
 
@@ -630,7 +687,8 @@ class SVRManager {
     this.maxSlots = this.slotsPerAtlas * this.atlasPages;
   }
 
-  _glFormats(gl) {
+  _glFormats(gl, plane = null) {
+    if (this.split && plane) return plane.channels.length === 2 ? { internal: gl.RG8, format: gl.RG } : { internal: gl.R8, format: gl.RED };
     if (this.components === 1) return { internal: gl.R8, format: gl.RED };
     if (this.components === 2) return { internal: gl.RG8, format: gl.RG };
     return { internal: gl.RGBA8, format: gl.RGBA };
@@ -664,7 +722,7 @@ class SVRManager {
       // WebGL zero-initialises new storage: an all-zero RGTC block decodes to 0.
       gl.texStorage3D(target, 1, plane.glFormat, this.atlasDim, this.atlasDim, this.atlasDepth);
     } else {
-      const { internal, format } = this._glFormats(gl);
+      const { internal, format } = this._glFormats(gl, plane);
       if (typeof gl.texStorage3D === 'function') {
         gl.texStorage3D(target, 1, internal, this.atlasDim, this.atlasDim, this.atlasDepth);
       } else {
@@ -678,7 +736,7 @@ class SVRManager {
       if (prevBinding !== null) {
         gl.bindTexture(target, prevBinding);
       }
-      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}, glError=${err})`);
+      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}${this.split ? ` ${plane.channels.length === 2 ? 'RG8' : 'R8'}` : ''}, glError=${err})`);
     }
     if (prevBinding !== null) {
       gl.bindTexture(target, prevBinding);
@@ -755,13 +813,14 @@ class SVRManager {
       console.warn('[SVRManager] updateUniforms() on a released manager — refusing to publish (atlases/page table are gone).');
       return false;
     }
-    if (this.role === 'detail') return this._publishDetail();
     this.material.defines.ENABLE_SVR = 1;
     SVRManager._setDefine(this.material, 'SVR_COMPONENTS', this.components === 4 ? null : this.components);
     // Compressed pages are 2D arrays (sampler2DArray, layers blended in the shader);
     // with two planes svrAtlas0..3 hold the first one's pages, svrAtlas4..7 the second's.
     SVRManager._setDefine(this.material, 'SVR_ARRAY', this.compressed ? 1 : null);
     SVRManager._setDefine(this.material, 'SVR_ARRAY_PAIRS', this.compressed && this.planes.length > 1 ? 1 : null);
+    // Split: ordinary 3D pages, RG8 in svrAtlas0..3 and R8 in svrAtlas4..7.
+    SVRManager._setDefine(this.material, 'SVR_SPLIT', this.split ? 1 : null);
     this.material.needsUpdate = true;
     const set = (name, value) => { if (this.material.uniforms[name]) this.material.uniforms[name].value = value; };
     // Slot addressing (the shader's slotCoord): texel = slot·slotStride + brickApron +
@@ -785,7 +844,7 @@ class SVRManager {
     this.material.uniforms.ptScale.value = new THREE.Vector3(scaleX, scaleY, scaleZ);
     this.material.uniforms.brickSize.value = this.brickSize;
 
-    if (this.compressed && this.planes.length > 1) {
+    if ((this.compressed && this.planes.length > 1) || this.split) {
       const half = SVRManager.MAX_PAGES / 2;
       for (let i = 0; i < SVRManager.MAX_PAGES; i++) {
         const pages = this.planeAtlases[i < half ? 0 : 1] || [];
@@ -802,43 +861,6 @@ class SVRManager {
     return true;
   }
 
-  /** A detail atlas: the detail* uniforms and the ROI_DETAIL define (see the header). */
-  _publishDetail() {
-    const m = this.material;
-    const set = (name, value) => { if (m.uniforms[name]) m.uniforms[name].value = value; };
-    m.defines.ROI_DETAIL = 1;
-    SVRManager._setDefine(m, 'ROI_DETAIL_COMPONENTS', this.components === 4 ? null : this.components);
-    m.needsUpdate = true;
-    set('detailPageTable', this.pageTable);
-    set('detailAtlasDim', new THREE.Vector3(this.atlasDim, this.atlasDim, this.atlasDepth));
-    set('detailVolumeDim', new THREE.Vector3(this.volumeDim.x, this.volumeDim.y, this.volumeDim.z));
-    set('detailPtDim', new THREE.Vector3(this.ptNx, this.ptNy, this.ptNz));
-    set('detailSlotStride', this.slotStride);
-    set('detailApron', this.apron);
-    set('detailPageCount', this.atlases.length);
-    for (let i = 0; i < SVRManager.DETAIL_MAX_PAGES; i++) set('detailAtlas' + i, this.atlases[i] || this.atlases[0] || null);
-    return true;
-  }
-
-  /**
-   * Take a detail atlas off `material` (or this manager's): the define goes, every
-   * detail uniform is unbound, the page count drops to 0 (a stale binding then reads as
-   * "no detail brick", never as voxels of a released texture).
-   */
-  static unpublishDetail(material) {
-    if (!material?.uniforms) return;
-    let changed = false;
-    for (const d of ['ROI_DETAIL', 'ROI_DETAIL_COMPONENTS']) {
-      if (material.defines && d in material.defines) { delete material.defines[d]; changed = true; }
-    }
-    if (material.uniforms.detailPageTable) material.uniforms.detailPageTable.value = null;
-    for (let i = 0; i < SVRManager.DETAIL_MAX_PAGES; i++) {
-      if (material.uniforms['detailAtlas' + i]) material.uniforms['detailAtlas' + i].value = null;
-    }
-    if (material.uniforms.detailPageCount) material.uniforms.detailPageCount.value = 0;
-    if (changed) material.needsUpdate = true;
-  }
-
   /** Set (value !== null) or remove (null) a define; needsUpdate only on a change. */
   static _setDefine(material, name, value) {
     if (!material) return;
@@ -851,53 +873,11 @@ class SVRManager {
     }
   }
 
-  // ── Residency (region-of-interest streaming) ────────────────────────────────
   /** Is brick (bx, by, bz) in the atlas (and pointed at by the page table)? */
   has(bx, by, bz) {
     const slot = this.brickMap.get(`${bx}_${by}_${bz}`);
     if (slot === undefined || !this.pageData) return false;
     return this.pageData[(bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4 + 3] !== 0;
-  }
-
-  /** Mark a resident brick as just used: it becomes the last one the LRU recycles. */
-  touch(bx, by, bz) {
-    const slot = this.brickMap.get(`${bx}_${by}_${bz}`);
-    if (slot === undefined) return false;
-    this._lru.delete(slot);
-    this._lru.set(slot, true);
-    return true;
-  }
-
-  /** Bricks resident now, least recently used first ("bx_by_bz" keys). */
-  residentKeys() {
-    const out = [];
-    for (const slot of this._lru.keys()) {
-      const key = this.slotToBrick[slot];
-      if (key) out.push(key);
-    }
-    return out;
-  }
-
-  /** How many bricks the atlas holds right now. */
-  residentCount() {
-    return this.brickMap.size;
-  }
-
-  /** Drop a brick: its slot goes back to the free list, its page-table entry is cleared. */
-  evict(bx, by, bz) {
-    const key = `${bx}_${by}_${bz}`;
-    const slot = this.brickMap.get(key);
-    if (slot === undefined) return false;
-    this.brickMap.delete(key);
-    this._lru.delete(slot);
-    this.slotToBrick[slot] = null;
-    this.slotData.delete(slot);
-    this.freeSlots.push(slot);
-    if (this.pageData) {
-      this.pageData[(bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4 + 3] = 0;
-      if (this.pageTable) this.pageTable.needsUpdate = true;
-    }
-    return true;
   }
 
   /** The slot of a brick (assigned on first use, least recently used recycled). */
@@ -1004,10 +984,32 @@ class SVRManager {
    *  to blocks on this thread first when the atlas is compressed. */
   _uploadSlotBox(coord, bw, bh, bd, uploadData) {
     const p = this.slotPitch;
+    if (this.split) return this._uploadSplit(coord, bw, bh, bd, uploadData);
     if (!this.compressed) return this._uploadRgbaRegion(coord.atlas, coord.x * p, coord.y * p, coord.z * p, bw, bh, bd, uploadData);
     if (!uploadData || typeof BCCodec === 'undefined') return false;
     const enc = BCCodec.encodeBox(uploadData, this.components, bw, bh, bd, this.channels);
     return this._encodedFits(enc) ? this._uploadEncoded(coord, enc) : false;
+  }
+
+  /** A box of RGBA voxels into the RG8 and R8 textures of a split atlas (byte 3 is dropped). */
+  _uploadSplit(coord, bw, bh, bd, rgba) {
+    if (!rgba) return false;
+    const n = bw * bh * bd;
+    if (rgba.length < n * 4) return false;
+    const rg = new Uint8Array(n * 2);
+    const b = new Uint8Array(n);
+    for (let i = 0, s = 0; i < n; i++, s += 4) {
+      rg[i * 2] = rgba[s];
+      rg[i * 2 + 1] = rgba[s + 1];
+      b[i] = rgba[s + 2];
+    }
+    const p = this.slotPitch;
+    const sx = coord.x * p, sy = coord.y * p, sz = coord.z * p;
+    const first = this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, rg, 0);
+    if (first === false) return false;
+    const second = this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, b, 1);
+    if (second === false) return false;
+    return first === 'unchecked' || second === 'unchecked' ? 'unchecked' : true;
   }
 
   /** compressedTexSubImage3D of each plane of an encoded box at a slot's origin. */
@@ -1034,7 +1036,7 @@ class SVRManager {
    */
   writeRgbaBrickRegion(bx, by, bz, data, rx, ry, rz, rw, rh, rd) {
     const bs = this.slotStride;
-    if (this.compressed) return false;
+    if (this.compressed || this.split) return false;
     if (!data || !(rw > 0 && rh > 0 && rd > 0)) return false;
     if (rx < 0 || ry < 0 || rz < 0 || rx + rw > bs || ry + rh > bs || rz + rd > bs) return false;
     const needed = rw * rh * rd * this.components;
@@ -1198,9 +1200,9 @@ class SVRManager {
    * 'unchecked' after a real upload (its GL error is read in flushUploadErrors), and
    * true without a renderer (headless bookkeeping, unit tests).
    */
-  _uploadRgbaRegion(atlasIndex, sx, sy, sz, bw, bh, bd, uploadData) {
+  _uploadRgbaRegion(atlasIndex, sx, sy, sz, bw, bh, bd, uploadData, plane = 0) {
     if (!this.renderer) return true;
-    const atlas = this.atlases[atlasIndex];
+    const atlas = plane ? this.planeAtlases[plane]?.[atlasIndex] : this.atlases[atlasIndex];
     if (!atlas || !uploadData) return false;
     if (
       sx < 0 || sy < 0 || sz < 0 ||
@@ -1241,7 +1243,7 @@ class SVRManager {
       gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
     }
 
-    gl.texSubImage3D(gl.TEXTURE_3D, 0, sx, sy, sz, bw, bh, bd, this._glFormats(gl).format, gl.UNSIGNED_BYTE, uploadData);
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, sx, sy, sz, bw, bh, bd, this._glFormats(gl, this.split ? this.planes[plane] : null).format, gl.UNSIGNED_BYTE, uploadData);
 
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     if (prevBinding !== null) {
@@ -1280,6 +1282,7 @@ class SVRManager {
   }
 
   dispose() {
+    SVRManager._liveCompressed.delete(this);
     this._releaseGpuResources();
     this.pageData = null;
     if (this.slotData) this.slotData.clear();
@@ -1294,7 +1297,6 @@ class SVRManager {
 }
 
 SVRManager.MAX_PAGES = 8;   // the shader's svrAtlas0..7
-SVRManager.DETAIL_MAX_PAGES = 4;   // the shader's detailAtlas0..3
 SVRManager.BRICK_INTERIOR = 64;
 // Slots per side of a page: 4, 8 or 16 (256/512/1024 texels at stride 64).
 SVRManager.SLOTS_PER_SIDE = [4, 8, 16];
@@ -1304,187 +1306,8 @@ SVRManager._failedAllocBytes = Infinity;
 SVRManager._sessionLosses = 0;
 SVRManager._sessionOverrideBytes = null;
 SVRManager._supportCache = new WeakMap();
+SVRManager._liveCompressed = new Set();     // compressed atlases not disposed yet
+SVRManager._compressionFailed = false;
 SVRManager.allowSoftwareCompression = false;
 
 window.SVRManager = SVRManager;
-
-/* ── Region-of-interest scheduling ───────────────────────────────────────────
-   Pure decisions behind the viewer's detail streaming (volume-viewer.js, "Region
-   of interest"): which finer level the view needs, which of its bricks are on
-   screen and in what order, and what one round loads, keeps and lets go. No GPU,
-   no network: everything comes in as numbers and callbacks.
-   ──────────────────────────────────────────────────────────────────────────── */
-const SVRRoi = {
-  // A level is fine enough while one of its voxels covers at most this many screen
-  // pixels; beyond it (the user zoomed past the resolution on screen) a finer level
-  // is streamed for what is in view.
-  DETAIL_PIXELS_PER_VOXEL: 2,
-  // A level once chosen is kept until the view leaves it by this factor either way
-  // (finer needed past threshold·H, coarser enough under threshold/H): a small zoom
-  // around the switch point never trades one detail atlas for another.
-  LEVEL_HYSTERESIS: 1.3,
-  // Detail bricks a view asks for: enough to cover the viewport LAYERS bricks deep at
-  // the chosen level, never fewer than MIN (a narrow view still gets its neighbours)
-  // nor more than MAX (a round's download stays a few tens of MB at most).
-  WANTED_LAYERS: 2,
-  WANTED_MIN: 48,
-  WANTED_MAX: 320,
-
-  /** Focal length in pixels of a perspective camera: H / (2·tan(fov/2)). */
-  focalPx(viewportHeightPx, fovDeg) {
-    const h = Math.max(1, Number(viewportHeightPx) || 1);
-    const t = Math.tan((Math.max(1e-3, Math.min(179, Number(fovDeg) || 45)) * Math.PI / 180) / 2);
-    return h / (2 * t);
-  },
-
-  /** Screen pixels one voxel of world length `voxelWorld` covers at `distance`. */
-  pixelsPerVoxel(focalPx, voxelWorld, distance) {
-    return (Number(focalPx) || 0) * (Number(voxelWorld) || 0) / Math.max(1e-6, Number(distance) || 0);
-  },
-
-  /**
-   * The detail level for the view, or null when the resident one is fine enough.
-   * levels: [{ level, voxelWorld }] (voxelWorld: world length of a voxel of that
-   * level along its finer XY axis), baseLevel: the level resident everywhere.
-   * Detail is needed when a base voxel covers more than `threshold` pixels; it is
-   * then the COARSEST finer level whose voxel covers at most `threshold` pixels (the
-   * fewest bytes that resolve the view), level 0 when none does.
-   * `distance` must be the depth of what is seen (depthQuantile of the content in
-   * view), not of the volume's bounding box: the box's near face is where the camera
-   * is when zoomed in, and measuring there asks for the finest level at once.
-   * `current` (the detail level held now, or null) gets the hysteresis: it stays while
-   * it is not too coarse by LEVEL_HYSTERESIS and the next coarser level (or the base,
-   * i.e. no detail) is not comfortably enough.
-   * → { level: k | null, basePixelsPerVoxel, pixelsPerVoxel (of the chosen level) }
-   */
-  chooseDetailLevel({ levels, baseLevel, focalPx, distance, threshold = SVRRoi.DETAIL_PIXELS_PER_VOXEL, current = null, hysteresis = SVRRoi.LEVEL_HYSTERESIS }) {
-    const byLevel = new Map((levels || []).map(l => [Number(l.level), Number(l.voxelWorld)]));
-    const base = Number(baseLevel);
-    const ppvOf = (k) => SVRRoi.pixelsPerVoxel(focalPx, byLevel.get(k), distance);
-    const basePpv = ppvOf(base);
-    const out = { level: null, basePixelsPerVoxel: basePpv, pixelsPerVoxel: basePpv };
-    if (!(base > 0)) return out;
-    const cur = current === null || current === undefined ? null : Number(current);
-    if (cur !== null && cur >= 0 && cur < base && byLevel.has(cur)) {
-      const h = Math.max(1, Number(hysteresis) || 1);
-      const curPpv = ppvOf(cur);
-      let coarser = cur + 1;
-      while (coarser < base && !byLevel.has(coarser)) coarser++;
-      const tooCoarse = cur > 0 && curPpv > threshold * h;
-      const coarserEnough = ppvOf(coarser) <= threshold / h;
-      if (!tooCoarse && !coarserEnough) return { ...out, level: cur, pixelsPerVoxel: curPpv };
-    }
-    if (!(basePpv > threshold)) return out;
-    for (let k = base - 1; k >= 0; k--) {
-      if (!byLevel.has(k)) continue;
-      const ppv = ppvOf(k);
-      out.level = k;
-      out.pixelsPerVoxel = ppv;
-      if (ppv <= threshold) break;
-    }
-    return out;
-  },
-
-  /** The q-quantile (0..1) of `values` (null when empty). */
-  depthQuantile(values, q = 0.5) {
-    const v = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
-    if (!v.length) return null;
-    const i = Math.min(v.length - 1, Math.max(0, Math.round((v.length - 1) * q)));
-    return v[i];
-  },
-
-  /**
-   * How many detail bricks the view can use: the viewport covered LAYERS bricks deep
-   * by bricks of `brickSize` voxels of world length `voxelWorld` seen at `depth`
-   * (side on screen = brickSize · focalPx · voxelWorld / depth), within [MIN, MAX].
-   */
-  wantedBricks({ viewportW, viewportH, focalPx, voxelWorld, depth, brickSize = 64, layers = SVRRoi.WANTED_LAYERS, min = SVRRoi.WANTED_MIN, max = SVRRoi.WANTED_MAX }) {
-    const side = Math.max(1, brickSize * SVRRoi.pixelsPerVoxel(focalPx, voxelWorld, depth));
-    const across = Math.ceil(Math.max(1, Number(viewportW) || 1) / side) + 1;
-    const down = Math.ceil(Math.max(1, Number(viewportH) || 1) / side) + 1;
-    return Math.max(min, Math.min(max, across * down * Math.max(1, layers)));
-  },
-
-  /** Is the box [min, max] entirely outside one of `planes` ([nx, ny, nz, d], the
-   *  inside being n·p + d ≥ 0)? The box's corner furthest along n decides. */
-  boxOutside(min, max, planes) {
-    for (const [nx, ny, nz, d] of planes || []) {
-      const px = nx >= 0 ? max.x : min.x;
-      const py = ny >= 0 ? max.y : min.y;
-      const pz = nz >= 0 ? max.z : min.z;
-      if (nx * px + ny * py + nz * pz + d < 0) return true;
-    }
-    return false;
-  },
-
-  /**
-   * The bricks of a level that are in view, most important first.
-   *   bricks      [{ bx, by, bz }] the bricks the level stores
-   *   dims        the level's voxel counts {x, y, z}; brick b spans
-   *               [64·b, min(64·b + 64, dim)) voxels, i.e. that range / dim in uvw
-   *   planes      the view frustum in uvw space ([nx, ny, nz, d], inside ≥ 0)
-   *   clipMin/Max the clip box in uvw (bricks wholly outside it are not shown)
-   *   worldScale  world length of one uvw unit along x, y, z (the cube's scale)
-   *   project(u, v, w) → { x, y, depth } NDC position and view depth of a uvw point
-   *   near        the smallest depth counted (the camera's near plane)
-   * priority = (world diagonal of the brick / depth of its centre) / (1 + 4·r²), r the
-   * NDC distance of its centre from the view centre: big on screen and central first.
-   * Ties keep the (bz, by, bx) order.
-   *   maxDepth    bricks whose nearest corner lies deeper are left out: there the
-   *               resident level already resolves the view (see the viewer).
-   * Each entry carries `depth`, the view depth of the brick's centre.
-   */
-  rankVisible({ bricks, dims, planes, clipMin = { x: 0, y: 0, z: 0 }, clipMax = { x: 1, y: 1, z: 1 }, worldScale = { x: 1, y: 1, z: 1 }, project, near = 1e-3, brickSize = 64, maxDepth = Infinity }) {
-    const out = [];
-    const min = { x: 0, y: 0, z: 0 };
-    const max = { x: 0, y: 0, z: 0 };
-    for (const b of bricks || []) {
-      min.x = (b.bx * brickSize) / dims.x; max.x = Math.min((b.bx + 1) * brickSize, dims.x) / dims.x;
-      min.y = (b.by * brickSize) / dims.y; max.y = Math.min((b.by + 1) * brickSize, dims.y) / dims.y;
-      min.z = (b.bz * brickSize) / dims.z; max.z = Math.min((b.bz + 1) * brickSize, dims.z) / dims.z;
-      if (max.x <= clipMin.x || min.x >= clipMax.x || max.y <= clipMin.y || min.y >= clipMax.y || max.z <= clipMin.z || min.z >= clipMax.z) continue;
-      if (SVRRoi.boxOutside(min, max, planes)) continue;
-      const p = project ? project((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2) : null;
-      const depth = Math.max(near, p ? Number(p.depth) || near : near);
-      const r = p ? Math.hypot(Number(p.x) || 0, Number(p.y) || 0) : 0;
-      const diag = Math.hypot((max.x - min.x) * worldScale.x, (max.y - min.y) * worldScale.y, (max.z - min.z) * worldScale.z);
-      // Nearest corner ≈ centre depth minus half the brick's world diagonal.
-      if (depth - diag / 2 > maxDepth) continue;
-      out.push({ bx: b.bx, by: b.by, bz: b.bz, key: `${b.bx}_${b.by}_${b.bz}`, depth, priority: (diag / depth) / (1 + 4 * r * r), order: out.length });
-    }
-    out.sort((a, b) => (b.priority - a.priority) || (a.order - b.order));
-    return out;
-  },
-
-  /**
-   * One scheduling round within `capacity` slots.
-   *   ranked       rankVisible's list
-   *   isResident(key) / inFlight (Set of keys already being fetched)
-   *   residentKeys the atlas's resident keys, least recently used first
-   * → { want: the `capacity` most important keys,
-   *     load: their bricks neither resident nor in flight (priority order),
-   *     keep: the wanted resident keys, least important first — touched in this order
-   *           the most important ends most recent, so the LRU never recycles a
-   *           wanted brick while an unwanted one is left,
-   *     evict: resident keys not wanted, least recently used first: the slots new
-   *           bricks take (recycled lazily as they land),
-   *     inView: how many bricks are in view, dropped: how many of them do not fit }
-   */
-  plan({ ranked, isResident, inFlight = new Set(), capacity, residentKeys = [] }) {
-    const cap = Math.max(0, Math.floor(Number(capacity) || 0));
-    const list = ranked || [];
-    const wanted = list.slice(0, cap);
-    const wantSet = new Set(wanted.map(r => r.key));
-    const load = [];
-    const keep = [];
-    for (const r of wanted) {
-      if (isResident(r.key)) keep.push(r.key);
-      else if (!inFlight.has(r.key)) load.push(r);
-    }
-    keep.reverse();
-    const evict = residentKeys.filter(k => !wantSet.has(k));
-    return { want: wanted.map(r => r.key), load, keep, evict, inView: list.length, dropped: Math.max(0, list.length - wanted.length) };
-  }
-};
-
-window.SVRRoi = SVRRoi;

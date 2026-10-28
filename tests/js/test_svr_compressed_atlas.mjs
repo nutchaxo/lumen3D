@@ -100,6 +100,29 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
   console.log('compression support: OK');
 }
 
+// ── mobile GPUs, and a device where compression already lost the context ───────
+{
+  const { S, THREE } = load();
+  const adreno = fakeRenderer('ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 V@0676.76.1)');
+  assert.equal(S.compressionSupport(adreno.renderer).reason, 'mobile-gpu', 'an Adreno GPU never gets RGTC atlases');
+  assert.equal(S.compressionSupport(fakeRenderer('Mali-G710').renderer).bc, false);
+  // A context lost while a compressed atlas is alive: recorded, then refused on any GPU.
+  const hw = fakeRenderer();
+  const m = new S();
+  m.init(2, dims, hw.renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' });
+  assert.equal(m.compressed, true);
+  assert.equal(S.compressionFailedBefore(), false);
+  S.noteContextLost();
+  assert.equal(S.compressionFailedBefore(), true);
+  assert.equal(S.compressionSupport(fakeRenderer('NVIDIA GeForce RTX 4070').renderer).reason, 'failed-before');
+  m.dispose();
+  // A loss with no compressed atlas alive records nothing.
+  const fresh = load();
+  fresh.S.noteContextLost();
+  assert.equal(fresh.S.compressionFailedBefore(), false);
+  console.log('mobile GPUs and failed compression: OK');
+}
+
 // ── two channels, bordered bricks ─────────────────────────────────────────────
 {
   const { S, BC, THREE } = load();
@@ -179,8 +202,6 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
   three.init(3, dims, hw.renderer, material(THREE), { targetSlots: 40, components: 4, apron: 1, compression: 'bc' });
   assert.deepEqual(three.planes.map(p => p.format).join(), 'bc5,bc4', 'three channels: BC5 + BC4');
   assert.equal(three.texelBytes, 1.5);
-  assert.throws(() => new S().init(2, dims, hw.renderer, material(THREE), { role: 'detail', components: 2, apron: 1, compression: 'bc' }),
-    (e) => e.code === 'SVR_BAD_FORMAT', 'a detail atlas is never compressed');
   console.log('four-channel compressed atlas: OK');
 }
 

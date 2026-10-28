@@ -119,7 +119,12 @@ case 'metadata':
     admin_json_out($meta ?: ['error' => 'not_staged'], $meta ? 200 : 404);
 
 case 'blob':
-    lumen_up_serve_blob($type, $folder, lumen_str($_GET['path'] ?? null) ?? '');
+    // The viewer composes `<base><rel>?v=<stamp>` with the proxy's own query as base,
+    // so the cache stamp arrives glued to `path`; it names no file.
+    $blobPath = lumen_str($_GET['path'] ?? null) ?? '';
+    $q = strpos($blobPath, '?');
+    if ($q !== false) $blobPath = substr($blobPath, 0, $q);
+    lumen_up_serve_blob($type, $folder, $blobPath);
     exit;
 
 case 'plan':

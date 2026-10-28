@@ -382,11 +382,6 @@
     "renderMode": "Weergavemodus",
     "exposure": "Zichtbaarheid (belichting)",
     "customColor": "Aangepaste kleur",
-    "detailStatus": "Detail: {count} blokken van niveau {level} in beeld",
-    "detailLoading": "Detail: {loaded} van {total} blokken van niveau {level} laden",
-    "detailNoBudget": "Detail niet beschikbaar: te weinig GPU-geheugen",
-    "detailMode": "Detail bij inzoomen",
-    "detailAuto": "Automatisch",
     "detailOn": "Aan",
     "detailOff": "Uit",
     "openStudioHd": "Openen in Studio (HD)",
@@ -398,7 +393,7 @@
     "qStreamingPreviewBricks": "Voorbeeld streamen (LOD{lod}, {count} blokken) vóór {quality}...",
     "qStreamingBricks": "{quality}-blokken streamen (LOD{lod}, {count} blokken)...",
     "gpuCompression": "GPU-compressie",
-    "gpuCompressionAuto": "Tijdreeksen",
+    "gpuCompressionAuto": "Automatisch",
     "gpuCompressionActive": "Weergegeven uit door de GPU gecomprimeerde blokken: half zoveel geheugen, dus meer frames blijven geladen; voxelwaarden zijn benaderd (ongeveer 1–2 niveaus op 255). De native pass van de Studio leest exacte voxels.",
     "gpuCompressionInactive": "Weergegeven uit exacte voxels.",
     "stabilization": "Stabilisatie",
@@ -459,12 +454,9 @@
       "adviceHead": "Welke kiezen",
       "advice": "Aanbevolen: de fijnste resolutie in groen, in kwaliteit Extra. Voor een meting of figuur: Max op Native.",
       "adviceRest": "Bij een gecomprimeerde kwaliteit worden de zichtbare bricks zonder verlies opnieuw geladen zodra de camera stilstaat (vinkje onder de lijsten).",
-      "losslessAtRest": "Zonder verlies zodra het beeld stilstaat",
-      "losslessAtRestHint": "Bij een gecomprimeerde cel worden de zichtbare bricks kort nadat de camera stilstaat zonder verlies opnieuw geladen.",
       "q30Note": "Elk volume wordt gecomprimeerd weergegeven in WebP-kwaliteit 30. Metingen en exports lezen de verliesvrije gegevens, op de hier gekozen resolutie.",
       "summaryQ30": "{res} · WebP Q30: {size}"
     },
-    "detailLossless": "Verliesvrij detail: {count} bricks in beeld",
     "gpuMemory": "GPU-geheugen",
     "gpuMemoryAuto": "Automatisch",
     "gpuMemorySet": "De viewer gebruikt hoogstens {gb} GB GPU-geheugen (uw instelling).",
@@ -476,7 +468,8 @@
     "gpuUnknown": "onbekende kaart",
     "resDowngradeHeld": "De andere {held} MB van het budget van {total} MB worden ingenomen door volumes die geladen blijven.",
     "resDowngradeEstimate": "Dit budget is een schatting (een browser geeft het echte GPU-geheugen niet door): stel het uwe in onder Renderkwaliteit › GPU-geheugen.",
-    "gbShort": "GB"
+    "gbShort": "GB",
+    "errNoWebgl": "Deze browser weigerde de pagina een 3D-context (WebGL). Na een crash van het grafische stuurprogramma blokkeert een browser WebGL voor de site tot hij volledig opnieuw is gestart: sluit de browser helemaal (op Android: Instellingen › Apps › Chrome › Gedwongen stoppen) en open de pagina opnieuw. Blijft het probleem, controleer dan of hardwareversnelling aan staat."
   },
   "compare": {
     "title": "Vergelijkingsmodus",

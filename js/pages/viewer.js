@@ -1518,18 +1518,7 @@ const ViewerApp = (() => {
     legend.className = 'qm-legend';
     legend.textContent = _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.');
 
-    // A compressed quality is refined to the lossless column for what is in view once the camera rests.
-    const rest = document.createElement('label');
-    rest.className = 'qm-rest';
-    const restBox = document.createElement('input');
-    restBox.type = 'checkbox';
-    restBox.checked = VolumeViewer.getLosslessAtRest?.() !== false;
-    restBox.addEventListener('change', () => VolumeViewer.setLosslessAtRest?.(restBox.checked));
-    const restText = document.createElement('span');
-    restText.textContent = _t('viewer.qualityMatrix.losslessAtRest', 'Lossless once the view rests');
-    rest.title = _t('viewer.qualityMatrix.losslessAtRestHint', 'With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops.');
-    rest.append(restBox, restText);
-    box.replaceChildren(top, lists, legend, rest);
+    box.replaceChildren(top, lists, legend);
   }
 
   /** Opens the guide: every combination, the qualities, the GPU colour code and the advice. */
@@ -1797,39 +1786,9 @@ const ViewerApp = (() => {
       });
     }
 
-    _bindDetailControls();
     _bindGpuCompressionControls();
     _bindStabilizationControl();
     _bindViewExport();
-  }
-
-  // ── Zoom detail (the renderer's region of interest) ───────────────────────────
-  // Past the quality's resolution the renderer streams the finer bricks in view into a
-  // second atlas; the select sets its mode (auto / on / off) and the line under it says
-  // what it is doing (VolumeViewer.getDetailStatus().message, already translated).
-  const DETAIL_MODES = ['auto', 'on', 'off'];
-
-  function _renderDetailStatus(status) {
-    const line = document.getElementById('detail-status');
-    if (line) line.textContent = String(status?.message || '');
-    const select = document.getElementById('select-detail-mode');
-    if (select && DETAIL_MODES.includes(status?.mode) && select.value !== status.mode) select.value = status.mode;
-  }
-
-  function _bindDetailControls() {
-    const select = document.getElementById('select-detail-mode');
-    if (typeof VolumeViewer === 'undefined' || typeof VolumeViewer.setDetailMode !== 'function') {
-      select?.closest('label')?.classList.add('hidden');
-      return;
-    }
-    if (select) {
-      select.addEventListener('change', () => {
-        const mode = DETAIL_MODES.includes(select.value) ? select.value : 'auto';
-        _renderDetailStatus({ ...(VolumeViewer.getDetailStatus?.() || {}), mode: VolumeViewer.setDetailMode(mode) });
-      });
-    }
-    if (typeof VolumeViewer.onDetailStatus === 'function') VolumeViewer.onDetailStatus(_renderDetailStatus);
-    else _renderDetailStatus(VolumeViewer.getDetailStatus?.());
   }
 
   // ── GPU compression (the display atlas in BC4 / BC5 blocks) ──────────────────────
@@ -7054,7 +7013,12 @@ const ViewerApp = (() => {
    */
   function _showLoadingError(err) {
     console.error('[ViewerApp] Loading failed:', err);
-    const text = String(err?.message || err || _t('viewer.errUnknown', 'Unknown loading error'));
+    let text = String(err?.message || err || _t('viewer.errUnknown', 'Unknown loading error'));
+    // three.js says this when the browser gives the page no WebGL context at all: usually
+    // the browser blocking WebGL for the site after GPU crashes, not the dataset.
+    if (/creating WebGL context|WebGL.*(not supported|unavailable|disabled)/i.test(text)) {
+      text = _t('viewer.errNoWebgl', 'This browser refused to give the page a 3D (WebGL) context. After a graphics driver crash, a browser blocks WebGL for the site until it is fully restarted: close the browser completely (on Android: Settings › Apps › Chrome › Force stop) and open the page again. If it persists, check that hardware acceleration is on.');
+    }
     if (_isInitialized && _hasMountedVolume()) {
       const loader = document.getElementById('viewer-loader');
       if (loader) loader.style.display = 'none';

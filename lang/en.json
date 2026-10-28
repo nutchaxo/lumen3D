@@ -382,6 +382,8 @@
     "renderMode": "Render mode",
     "exposure": "Visibility (exposure)",
     "customColor": "Custom colour",
+    "fastLoading": "Fast loading",
+    "fastLoadingHint": "Loads the compressed WebP Q30 resolutions. Off: loads the lossless ones (larger downloads).",
     "detailOn": "On",
     "detailOff": "Off",
     "openStudioHd": "Open in Studio (HD)",

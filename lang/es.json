@@ -382,6 +382,8 @@
     "renderMode": "Modo de renderizado",
     "exposure": "Visibilidad (exposición)",
     "customColor": "Color personalizado",
+    "fastLoading": "Carga rápida",
+    "fastLoadingHint": "Carga las resoluciones comprimidas WebP Q30. Desactivado: carga las resoluciones sin pérdida (descargas más grandes).",
     "detailOn": "Activado",
     "detailOff": "Desactivado",
     "openStudioHd": "Abrir en el Studio (HD)",

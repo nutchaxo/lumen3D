@@ -382,6 +382,8 @@
     "renderMode": "Weergavemodus",
     "exposure": "Zichtbaarheid (belichting)",
     "customColor": "Aangepaste kleur",
+    "fastLoading": "Snel laden",
+    "fastLoadingHint": "Laadt de gecomprimeerde WebP Q30-resoluties. Uit: laadt de verliesvrije (grotere downloads).",
     "detailOn": "Aan",
     "detailOff": "Uit",
     "openStudioHd": "Openen in Studio (HD)",

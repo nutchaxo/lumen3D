@@ -1063,6 +1063,12 @@ const ViewerApp = (() => {
         _pickQuality(opt.dataset.res || chosen.res, opt.dataset.col || chosen.col);
       });
     }
+    document.getElementById('toggle-fast-loading')?.addEventListener('change', (e) => {
+      try { localStorage.setItem('lumen3d.fastLoading', e.target.checked ? '1' : '0'); } catch (err) { /* storage blocked: this page only */ }
+      if (!_isV6BrickManifest()) return;
+      _setQualityMode(`${_qualityBaseOf(_qualityMode)}@${_v6DisplayColumn()}`).catch(() => {}).finally(() => _renderQualityMatrix());
+      _renderQualityMatrix();
+    });
     const guide = document.getElementById('quality-guide');
     if (guide) {
       guide.addEventListener('click', (e) => {
@@ -1139,6 +1145,15 @@ const ViewerApp = (() => {
   // format-6 tree shows its lossless column.
   let _exportingLossless = false;
 
+  // Fast loading (format 6): on, the display column is `q30` (small downloads); off, it is the
+  // lossless `ll` column of the same resolution. Kept in this browser, on by default.
+  function _fastLoading() {
+    try { return localStorage.getItem('lumen3d.fastLoading') !== '0'; } catch (e) { return true; }
+  }
+
+  /** The column a format-6 tree is displayed from. */
+  function _v6DisplayColumn() { return _fastLoading() ? 'q30' : 'll'; }
+
   /** "512x512@b2" → "512x512" (the resolution a host and the Compare ladder know). */
   function _qualityBaseOf(key) {
     const s = String(key || '');
@@ -1152,7 +1167,7 @@ const ViewerApp = (() => {
     const at = s.indexOf('@');
     const ids = (_brickManifest?.columns || []).map(c => c.id);
     const own = at > 0 ? s.slice(at + 1) : null;
-    if (_isV6BrickManifest()) return _exportingLossless && own === 'll' ? 'll' : 'q30';
+    if (_isV6BrickManifest()) return _exportingLossless && own === 'll' ? 'll' : _v6DisplayColumn();
     if (own && ids.includes(own)) return own;
     return ids.includes('b2') ? 'b2' : 'll';
   }
@@ -1428,6 +1443,10 @@ const ViewerApp = (() => {
     const select = document.getElementById('select-quality');
     if (!box) return;
     const qm = _isV5BrickManifest() ? VolumeViewer.getQualityMatrix?.() : null;
+    const fastRow = document.getElementById('fast-loading-row');
+    const fastBox = document.getElementById('toggle-fast-loading');
+    if (fastRow) fastRow.classList.toggle('hidden', !(qm && qm.levels.length && _isV6BrickManifest()));
+    if (fastBox) fastBox.checked = _fastLoading();
     if (!qm || !qm.levels.length) {
       box.classList.add('hidden');
       box.replaceChildren();
@@ -6093,7 +6112,7 @@ const ViewerApp = (() => {
       return await fn(target);
     } finally {
       _exportingLossless = false;
-      try { await _setQualityMode(_isV6BrickManifest() ? `${_qualityBaseOf(previous)}@q30` : previous); } catch (err) { /* the volume on screen stays */ }
+      try { await _setQualityMode(_isV6BrickManifest() ? `${_qualityBaseOf(previous)}@${_v6DisplayColumn()}` : previous); } catch (err) { /* the volume on screen stays */ }
     }
   }
 

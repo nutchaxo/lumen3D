@@ -1,5 +1,9 @@
 # Changelog v1.73.2 (Web Platform)
 
+## [ADDED]
+
+- **Fast loading option**: a switch under the resolution list of a format 6 dataset. On (default), the resolutions load from the compressed WebP Q30 bricks; off, the same resolutions load from the lossless bricks (larger downloads). The choice is kept in the browser and reloads the volume on screen. No new format: the server still keeps the two columns it already had.
+
 ## [CHANGED]
 
 - **GPU memory is detected, no longer chosen**: the *GPU memory* select of Render quality is gone. The viewer names the card from the renderer string the browser exposes, looks its dedicated memory up in a table of NVIDIA, AMD and Intel Arc models (laptop parts matched first, variants sold in two sizes take the smaller) and budgets 60 % of it, always leaving 2 GiB to the browser and the system, capped at 16 GiB. A card the table does not know keeps the previous class heuristic (integrated, discrete, software), and a graphics-context loss still halves the budget.

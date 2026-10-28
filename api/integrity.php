@@ -30,5 +30,20 @@ foreach (['dataset'] as $k) {
     $v = lumen_str($_GET[$k] ?? null);
     if ($v !== null) $params[$k] = $v;
 }
+// A timelapse's manifest can be large: give the check room, and if PHP still dies (memory,
+// time) answer with the reason instead of an empty 500 the page can only call "no answer".
+@ini_set('memory_limit', '1024M');
+@set_time_limit(300);
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if (!$e || !in_array($e['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) return;
+    if (($_GET['action'] ?? '') !== 'check') return;
+    while (ob_get_level() > 0) @ob_end_clean();
+    if (!headers_sent()) { http_response_code(200); header('Content-Type: application/json; charset=utf-8'); }
+    echo json_encode(['ok' => true, 'result' => ['id' => (string)($_GET['dataset'] ?? ''), 'name' => (string)($_GET['dataset'] ?? ''),
+        'status' => 'error', 'findings' => [lumen_int_finding('error', 'check_failed',
+            'PHP stopped: ' . $e['message'] . ' (memory_limit=' . ini_get('memory_limit') . ', max_execution_time=' . ini_get('max_execution_time') . 's)')]]],
+        JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+});
 [$status, $payload] = lumen_int_handle(lumen_str($_GET['action'] ?? null) ?? '', $params);
 admin_json_out($payload, $status);

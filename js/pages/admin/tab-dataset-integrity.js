@@ -34,6 +34,14 @@ function findingText(f) {
   return f.detail ? `${base} — ${f.detail}` : base;
 }
 
+// "How to fix" for a code; a family of codes (metadata_*, manifest_*, index_*) shares one hint.
+function fixText(code) {
+  const family = code.startsWith('metadata_') ? 'metadata_' : code.startsWith('manifest_') ? 'manifest_' : code.startsWith('index_') ? 'index_' : null;
+  const exact = t(`dint.fix.${code}`, '');
+  if (exact) return exact;
+  return family ? t(`dint.fix.${family}`, '') : '';
+}
+
 function fmtBytes(n) {
   n = Number(n) || 0;
   const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -58,7 +66,7 @@ function renderFindings(result) {
     const size = f.bytes ? ` <span class="adm-muted">(${escHtml(fmtBytes(f.bytes))})</span>` : '';
     return `<li class="adm-int-f adm-int-${escHtml(f.level)}">
       <i data-lucide="${LEVEL_ICON[f.level] || 'info'}"></i>
-      <div><div>${escHtml(findingText(f))}${size}</div>${files ? `<div class="adm-int-files">${files}</div>` : ''}</div>
+      <div><div>${escHtml(findingText(f))}${size}</div>${files ? `<div class="adm-int-files">${files}</div>` : ''}${fixText(f.code) ? `<div class="adm-int-fix">${escHtml(t('dint.howToFix', 'To fix:'))} ${escHtml(fixText(f.code))}</div>` : ''}</div>
     </li>`;
   }).join('')}</ul>`;
 }
@@ -86,6 +94,9 @@ function renderRow(row) {
       <td>${res && res.findings.length
         ? `<details><summary>${escHtml(t('dint.details', 'Details'))}</summary>${renderFindings(res)}</details>`
         : ''}</td>
+      <td>${['warn', 'error'].includes(st)
+        ? `<button class="adm-btn" data-int-recheck="${escHtml(dsParam(row))}" ${_running || row.busy ? 'disabled' : ''}><i data-lucide="refresh-cw"></i> ${escHtml(t('dint.recheck', 'Recheck'))}</button>`
+        : row.busy ? `<span class="adm-muted">${escHtml(t('dint.checking', 'Checking…'))}</span>` : ''}</td>
     </tr>`;
 }
 
@@ -133,15 +144,51 @@ function render() {
             <th>${escHtml(t('dint.colType', 'Type'))}</th>
             <th>${escHtml(t('dint.colFormat', 'Format'))}</th>
             <th>${escHtml(t('dint.colFindings', 'Findings'))}</th>
+            <th></th>
           </tr></thead>
-          <tbody>${shown.map(renderRow).join('') || `<tr><td colspan="5" class="adm-muted">${escHtml(t('dint.nothingShown', 'No dataset to show.'))}</td></tr>`}</tbody>
+          <tbody>${shown.map(renderRow).join('') || `<tr><td colspan="6" class="adm-muted">${escHtml(t('dint.nothingShown', 'No dataset to show.'))}</td></tr>`}</tbody>
         </table>
       </div>
     </div>` : ''}`;
 
   el('int-run')?.addEventListener('click', run);
+  root.querySelectorAll('[data-int-recheck]').forEach((b) => b.addEventListener('click', () => recheck(b.getAttribute('data-int-recheck'))));
   el('int-problems')?.addEventListener('change', (e) => { _filter = e.target.checked ? 'problems' : 'all'; render(); });
   refreshIcons(root);
+}
+
+/** One dataset's verdict; a failed request keeps what the server said (status + start of the body). */
+async function fetchCheck(row) {
+  const failed = (detail) => ({
+    id: row.id, name: row.folder, staged: row.staged, status: 'error',
+    findings: [{ level: 'error', code: 'check_failed', detail }],
+  });
+  try {
+    const res = await fetch(`${API_INTEGRITY}?action=check&dataset=${encodeURIComponent(dsParam(row))}`, { credentials: 'same-origin' });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch { /* not JSON */ }
+    if (data && data.result) return data.result;
+    if (res.status === 401) return failed('HTTP 401: session expired, sign in again');
+    const body = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    return failed(`HTTP ${res.status}${body ? ': ' + body : ' with an empty answer (a gateway or PHP timeout, or PHP ran out of memory)'}`);
+  } catch (err) {
+    return failed(`network error: ${err && err.message ? err.message : err}`);
+  }
+}
+
+/** Re-run the check of ONE dataset, in place; the rest of the table is left as it is. */
+async function recheck(param) {
+  const row = _rows.find((r) => dsParam(r) === param);
+  if (!row || row.busy || _running) return;
+  row.busy = true;
+  render();
+  try {
+    row.result = await fetchCheck(row);
+  } finally {
+    row.busy = false;
+    render();
+  }
 }
 
 async function run() {
@@ -161,11 +208,8 @@ async function run() {
     const worker = async () => {
       while (token === _runToken && next < _rows.length) {
         const row = _rows[next++];
-        const r = await apiFetch(`${API_INTEGRITY}?action=check&dataset=${encodeURIComponent(dsParam(row))}`);
-        row.result = r && r.result ? r.result : {
-          id: row.id, name: row.folder, status: 'error',
-          findings: [{ level: 'error', code: 'check_failed', detail: 'no answer' }],
-        };
+        const r = await fetchCheck(row);
+        row.result = r;
         _done++;
         if (token === _runToken) render();
       }

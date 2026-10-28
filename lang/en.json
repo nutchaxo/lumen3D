@@ -2420,6 +2420,37 @@
       "import_running": "Import in progress — checked as far as received.",
       "published_exists": "A published dataset of the same name already exists.",
       "not_staged": "No import journal found for this dataset."
+    },
+    "recheck": "Recheck",
+    "howToFix": "To fix:",
+    "fix": {
+      "check_failed": "The server could not finish the check. If the detail names memory or time, raise PHP memory_limit / max_execution_time; if it says HTTP 5xx or an empty answer, the host cut the request — press Recheck on this dataset alone.",
+      "missing_metadata": "Re-import the dataset, or restore its metadata.json from a backup.",
+      "metadata_": "Open the dataset in Datasets and save it again, or fix metadata.json by hand.",
+      "metadata_identity": "Datasets > edit and save it again, which rewrites type and id from the folder.",
+      "missing_thumbnail": "Datasets > edit the dataset and generate its thumbnail.",
+      "missing_image": "Re-import the photograph (image.webp / preview.webp are required).",
+      "missing_preview": "Re-import the photograph (image.webp / preview.webp are required).",
+      "not_latest_format": "Open Data updates and run the pending conversion.",
+      "needs_repair": "Open Data updates: the repair is listed there and runs like a conversion.",
+      "bricks_v3_invalid": "Re-import the dataset from the pipeline output, or restore bricks/ from a backup.",
+      "bricks_v5_invalid": "Re-import the dataset from the pipeline output, or restore bricks/ from a backup.",
+      "missing_manifest": "Re-import the dataset: bricks/manifest.json is required.",
+      "manifest_": "Re-import the dataset, or restore bricks/ from a backup.",
+      "missing_pack": "Re-import the dataset (only the missing files are sent again), or restore them from a backup.",
+      "truncated_pack": "The file was cut short: re-import the dataset, only the damaged files are sent again.",
+      "missing_index": "Re-import the dataset, or restore the index files from a backup.",
+      "index_": "Re-import the dataset, or restore the index files from a backup.",
+      "gallery_missing": "Datasets > edit the dataset > Gallery: remove the missing entries or upload the images again.",
+      "gallery_unlisted": "Datasets > edit the dataset > Gallery: save it to reconcile the list, or delete the extra files.",
+      "tracking_file_missing": "Re-run the tracking import for this timelapse, or restore tracks.json / model.glb.",
+      "interrupted_swap": "An update was interrupted. Run the conversion again from Data updates; delete the *.pre-swap leftovers only once the dataset opens correctly.",
+      "previous_tree_kept": "Safe to drop once the dataset looks right: Data updates > drop the previous version.",
+      "unexpected_files": "These files are not part of any format. Delete them over SFTP if you did not add them on purpose.",
+      "incomplete_files": "Open the Import tab and resume this import.",
+      "stray_files": "Delete these files from the import, or discard the import and start it again.",
+      "published_exists": "Publishing would replace the published dataset of the same name. Discard this import if it is a duplicate.",
+      "not_staged": "The import journal is gone: discard and re-import."
     }
   }
 }

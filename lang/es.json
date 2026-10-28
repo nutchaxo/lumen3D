@@ -2420,6 +2420,37 @@
       "import_running": "Importación en curso — comprobado hasta lo recibido.",
       "published_exists": "Ya existe un dataset publicado con el mismo nombre.",
       "not_staged": "No hay diario de importación para este dataset."
+    },
+    "recheck": "Volver a comprobar",
+    "howToFix": "Para corregir:",
+    "fix": {
+      "check_failed": "El servidor no pudo terminar la comprobación. Si el detalle habla de memoria o tiempo, sube memory_limit / max_execution_time de PHP; si indica HTTP 5xx o respuesta vacía, el alojamiento cortó la petición: usa «Volver a comprobar» solo en este dataset.",
+      "missing_metadata": "Reimporta el dataset o restaura su metadata.json desde una copia.",
+      "metadata_": "Abre el dataset en Datasets y guárdalo de nuevo, o corrige metadata.json a mano.",
+      "metadata_identity": "Datasets > editar y guardar: reescribe type e id a partir de la carpeta.",
+      "missing_thumbnail": "Datasets > editar el dataset y generar su miniatura.",
+      "missing_image": "Reimporta la fotografía (image.webp / preview.webp son obligatorios).",
+      "missing_preview": "Reimporta la fotografía (image.webp / preview.webp son obligatorios).",
+      "not_latest_format": "Abre Data updates y ejecuta la conversión pendiente.",
+      "needs_repair": "Abre Data updates: la reparación aparece allí y se ejecuta como una conversión.",
+      "bricks_v3_invalid": "Reimporta el dataset desde la salida del pipeline o restaura bricks/ desde una copia.",
+      "bricks_v5_invalid": "Reimporta el dataset desde la salida del pipeline o restaura bricks/ desde una copia.",
+      "missing_manifest": "Reimporta el dataset: bricks/manifest.json es obligatorio.",
+      "manifest_": "Reimporta el dataset o restaura bricks/ desde una copia.",
+      "missing_pack": "Reimporta el dataset (solo se reenvían los archivos que faltan) o restáuralos desde una copia.",
+      "truncated_pack": "El archivo quedó cortado: reimporta el dataset, solo se reenvían los dañados.",
+      "missing_index": "Reimporta el dataset o restaura los archivos de índice desde una copia.",
+      "index_": "Reimporta el dataset o restaura los archivos de índice desde una copia.",
+      "gallery_missing": "Datasets > editar > Galería: quita las entradas que faltan o vuelve a subir las imágenes.",
+      "gallery_unlisted": "Datasets > editar > Galería: guarda para reconciliar la lista, o borra los archivos sobrantes.",
+      "tracking_file_missing": "Repite la importación del seguimiento de este timelapse o restaura tracks.json / model.glb.",
+      "interrupted_swap": "Una actualización se interrumpió. Repite la conversión desde Data updates; borra los restos *.pre-swap solo cuando el dataset abra correctamente.",
+      "previous_tree_kept": "Se puede borrar cuando el dataset esté correcto: Data updates > eliminar la versión anterior.",
+      "unexpected_files": "Estos archivos no forman parte de ningún formato. Bórralos por SFTP si no los añadiste a propósito.",
+      "incomplete_files": "Abre la pestaña Import y reanuda esta importación.",
+      "stray_files": "Elimina estos archivos de la importación, o descarta la importación y empieza de nuevo.",
+      "published_exists": "Publicar reemplazaría el dataset publicado del mismo nombre. Descarta esta importación si es un duplicado.",
+      "not_staged": "Se perdió el diario de importación: descarta y reimporta."
     }
   }
 }

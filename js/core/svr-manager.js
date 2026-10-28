@@ -74,32 +74,75 @@ class SVRManager {
   }
 
   /**
+   * Dedicated memory of the card named by a WebGL renderer string, in GiB, or null when
+   * the model is not known. A browser never reports VRAM, but the unmasked renderer
+   * names the card ("ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Ti Direct3D11 ...)"), and
+   * the memory of a model is a fixed fact. Variants sold with two sizes take the smaller
+   * one; mobile parts are matched first (a laptop RTX 4080 has 12 GiB, not 16).
+   */
+  static vramForModel(name) {
+    const n = String(name || '').toLowerCase();
+    if (!n) return null;
+    const laptop = /laptop|mobile|max-q|mx\d/.test(n);
+    const table = laptop ? [
+      [/rtx 5090/, 24], [/rtx 5080/, 16], [/rtx 5070 ti/, 12], [/rtx 5070/, 8], [/rtx 5060/, 8], [/rtx 5050/, 8],
+      [/rtx 4090/, 16], [/rtx 4080/, 12], [/rtx 4070/, 8], [/rtx 4060/, 8], [/rtx 4050/, 6],
+      [/rtx 3080 ti/, 16], [/rtx 3080/, 8], [/rtx 3070 ti/, 8], [/rtx 3070/, 8], [/rtx 3060/, 6], [/rtx 3050 ti/, 4], [/rtx 3050/, 4],
+      [/rtx 2080/, 8], [/rtx 2070/, 8], [/rtx 2060/, 6], [/gtx 1660/, 6], [/gtx 1650/, 4],
+      [/gtx 1080/, 8], [/gtx 1070/, 8], [/gtx 1060/, 6], [/gtx 1050 ti/, 4], [/gtx 1050/, 2]
+    ] : [];
+    const common = [
+      [/rtx 5090/, 32], [/rtx 5080/, 16], [/rtx 5070 ti/, 16], [/rtx 5070/, 12], [/rtx 5060 ti/, 8], [/rtx 5060/, 8], [/rtx 5050/, 8],
+      [/rtx 4090/, 24], [/rtx 4080/, 16], [/rtx 4070 ti super/, 16], [/rtx 4070 ti/, 12], [/rtx 4070/, 12], [/rtx 4060 ti/, 8], [/rtx 4060/, 8], [/rtx 4050/, 6],
+      [/rtx 3090/, 24], [/rtx 3080 ti/, 12], [/rtx 3080/, 10], [/rtx 3070/, 8], [/rtx 3060 ti/, 8], [/rtx 3060/, 8], [/rtx 3050/, 6],
+      [/titan rtx/, 24], [/titan v/, 12], [/titan x/, 12],
+      [/rtx 2080 ti/, 11], [/rtx 2080/, 8], [/rtx 2070/, 8], [/rtx 2060 super/, 8], [/rtx 2060/, 6],
+      [/gtx 1660/, 6], [/gtx 1650/, 4], [/gtx 1080 ti/, 11], [/gtx 1080/, 8], [/gtx 1070/, 8], [/gtx 1060/, 3], [/gtx 1050 ti/, 4], [/gtx 1050/, 2],
+      [/rtx 6000 ada/, 48], [/rtx 5000 ada/, 32], [/rtx 4500 ada/, 24], [/rtx 4000 ada/, 20],
+      [/rtx a6000/, 48], [/rtx a5000/, 24], [/rtx a4500/, 20], [/rtx a4000/, 16], [/rtx a2000/, 6],
+      [/rx 9070/, 16], [/rx 9060/, 8],
+      [/rx 7900 xtx/, 24], [/rx 7900 xt/, 20], [/rx 7900 gre/, 16], [/rx 7800/, 16], [/rx 7700/, 12], [/rx 7600/, 8],
+      [/rx 69\d0/, 16], [/rx 68\d0/, 16], [/rx 67\d0 xt/, 12], [/rx 6700/, 10], [/rx 66\d0/, 8], [/rx 65\d0/, 4], [/rx 64\d0/, 4],
+      [/rx 5700/, 8], [/rx 5600/, 6], [/rx 5500/, 4], [/radeon vii/, 16], [/rx vega 64|vega frontier/, 8], [/rx 590|rx 580|rx 480/, 8], [/rx 570|rx 470/, 4],
+      [/arc.*b580/, 12], [/arc.*b570/, 10], [/arc.*a770/, 16], [/arc.*a750/, 8], [/arc.*a580/, 8], [/arc.*a380/, 6], [/arc.*a310/, 4]
+    ];
+    for (const [rx, gb] of [...table, ...common]) if (rx.test(n)) return gb;
+    return null;
+  }
+
+  /**
    * The VRAM the atlases of this page may take, in bytes, and where it comes from.
-   * Heuristic (no browser API reports VRAM): software 256 MiB; integrated / unified
-   * memory 2 GiB with ≥ 8 GB of device memory, 1 GiB with ≥ 4 GB or unknown, else
+   * The card is read from the renderer string (vramForModel): the budget is 60 % of its
+   * dedicated memory, never leaving the browser and the rest of the page less than
+   * 2 GiB, capped at 16 GiB. A card the table does not know falls back to the class
+   * heuristic (no browser API reports VRAM): software 256 MiB; integrated / unified
+   * memory 2 GiB with >= 8 GB of device memory, 1 GiB with >= 4 GB or unknown, else
    * 512 MiB; discrete 4 GiB (3 GiB on a machine reporting < 8 GB); unknown 2 GiB with
-   * ≥ 8 GB, else 1 GiB. Each WebGL context loss noted in the last week halves it (floor
+   * >= 8 GB, else 1 GiB. Each WebGL context loss noted in the last week halves it (floor
    * 256 MiB), and an allocation that failed in this session caps it below that size.
-   * An operator override (SVRManager.setVramBudget, or localStorage
-   * 'lumen3d.vramBudgetMB') replaces the heuristic, still under the failure cap.
+   * SVRManager.setVramBudget replaces all of it for the session (tests, tooling).
    */
   static vramBudget(renderer) {
     const info = SVRManager.gpuInfo(renderer);
     const GiB = 1024 * 1024 * 1024;
     const MiBb = 1024 * 1024;
     const dm = info.deviceMemoryGB;
+    const modelGB = info.gpuClass === 'software' || info.gpuClass === 'integrated' ? null : SVRManager.vramForModel(info.renderer);
     let bytes;
-    if (info.gpuClass === 'software') bytes = 256 * MiBb;
+    let source = 'heuristic';
+    if (modelGB) {
+      bytes = Math.min(16 * GiB, Math.max(1 * GiB, Math.min(0.6 * modelGB * GiB, (modelGB - 2) * GiB)));
+      source = 'model';
+    } else if (info.gpuClass === 'software') bytes = 256 * MiBb;
     else if (info.gpuClass === 'integrated') bytes = dm === null ? GiB : dm >= 8 ? 2 * GiB : dm >= 4 ? GiB : 512 * MiBb;
     else if (info.gpuClass === 'discrete') bytes = (dm === null || dm >= 8) ? 4 * GiB : 3 * GiB;
     else bytes = (dm !== null && dm >= 8) ? 2 * GiB : GiB;
-    let source = 'heuristic';
     const override = SVRManager._overrideBytes();
     if (override) { bytes = override; source = 'override'; }
     const losses = SVRManager._recentContextLosses();
     if (losses > 0 && source !== 'override') bytes = Math.max(256 * MiBb, bytes / Math.pow(2, losses));
     if (Number.isFinite(SVRManager._failedAllocBytes)) bytes = Math.min(bytes, SVRManager._failedAllocBytes - 1);
-    return { bytes: Math.max(0, Math.floor(bytes)), source, contextLosses: losses, ...info };
+    return { bytes: Math.max(0, Math.floor(bytes)), source, contextLosses: losses, vramGB: modelGB, ...info };
   }
 
   /** Session override of the budget, in bytes (null clears it). */
@@ -108,12 +151,7 @@ class SVRManager {
   }
 
   static _overrideBytes() {
-    if (SVRManager._sessionOverrideBytes) return SVRManager._sessionOverrideBytes;
-    try {
-      const mb = Number(typeof localStorage !== 'undefined' ? localStorage.getItem('lumen3d.vramBudgetMB') : null);
-      if (Number.isFinite(mb) && mb > 0) return mb * 1024 * 1024;
-    } catch (e) { /* storage blocked */ }
-    return null;
+    return SVRManager._sessionOverrideBytes || null;
   }
 
   /**

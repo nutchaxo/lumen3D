@@ -981,7 +981,16 @@ const VolumeViewer = (() => {
       // delta > rayLength the jittered first sample fell past the exit on most pixels
       // and the slab flickered as speckle while dragging.
       delta = min(delta, rayLength);
-      float jitter = hash(gl_FragCoord.xy + fragCoordOffset) * delta;
+      // Start of the sample lattice. The accumulating modes hide the banding of a
+      // regular lattice behind a per-pixel random phase. A maximum projection cannot:
+      // the max of a noisy confocal signal sampled at one random phase per pixel flips
+      // between neighbours, which shows as black pinholes inside bright structures.
+      // There the lattice is anchored at an absolute distance from the camera
+      // (t0 + t = k·delta), so adjacent rays sample the same depth shell and the
+      // result stays spatially coherent.
+      float jitter = renderMode == 1
+        ? ceil(bounds.x / delta) * delta - bounds.x
+        : hash(gl_FragCoord.xy + fragCoordOffset) * delta;
       float t = jitter;
 
       // Slab normalisation. A clipped segment is displayed as if it were optically
@@ -7196,12 +7205,7 @@ const VolumeViewer = (() => {
   // state, above the IIFE's return.)
 
   function _gpuCompressionMode() {
-    if (_gpuCompressionSession) return _gpuCompressionSession;
-    try {
-      const v = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen3d.gpuCompression') : null;
-      if (GPU_COMPRESSION_MODES.includes(v)) return v;
-    } catch (e) { /* storage blocked */ }
-    return 'auto';
+    return _gpuCompressionSession || 'auto';
   }
 
   /** Should a volume of `metadata` stream into a compressed atlas on this renderer? */
@@ -7237,7 +7241,6 @@ const VolumeViewer = (() => {
     const m = mode === true ? 'on' : mode === false ? 'off' : String(mode || 'auto');
     if (!GPU_COMPRESSION_MODES.includes(m)) return getGpuCompression();
     _gpuCompressionSession = m;
-    try { if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompression', m); } catch (e) { /* storage blocked */ }
     const want = _gpuCompressionWanted(_lastDisplayRequest?.metadata || null);
     for (const [key, entry] of [..._volumeCache]) {
       if (!entry || Boolean(entry.gpuCompressed) === want) continue;

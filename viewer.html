@@ -174,24 +174,12 @@
               <option value="native">Native</option>
             </select>
             <div id="quality-matrix" class="quality-matrix hidden"></div>
-            <div class="quality-status" id="quality-status" role="status" data-i18n="viewer.qualityDefault">512x512 by default, 256x256 when unavailable.</div>
+            <label class="detail-mode-row text-xs text-muted hidden" id="fast-loading-row" for="toggle-fast-loading" data-i18n-title="viewer.fastLoadingHint" title="Loads the compressed WebP Q30 resolutions. Off: loads the lossless ones (larger downloads).">
+              <span data-i18n="viewer.fastLoading">Fast loading</span>
+              <input type="checkbox" id="toggle-fast-loading" checked>
+            </label>
+            <div class="quality-status hidden" id="quality-status" role="status" data-i18n="viewer.qualityDefault">512x512 by default, 256x256 when unavailable.</div>
             <div class="quality-status" id="buffer-status"></div>
-            <label class="detail-mode-row text-xs text-muted" for="select-gpu-compression">
-              <span data-i18n="viewer.gpuCompression">GPU compression</span>
-              <select id="select-gpu-compression" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
-                <option value="auto" selected data-i18n="viewer.gpuCompressionAuto">Automatic</option>
-                <option value="on" data-i18n="viewer.detailOn">On</option>
-                <option value="off" data-i18n="viewer.detailOff">Off</option>
-              </select>
-            </label>
-            <div class="quality-status" id="gpu-compression-status" role="status" aria-live="polite"></div>
-            <label class="detail-mode-row text-xs text-muted" for="select-gpu-memory">
-              <span data-i18n="viewer.gpuMemory">GPU memory</span>
-              <select id="select-gpu-memory" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
-                <option value="auto" selected data-i18n="viewer.gpuMemoryAuto">Automatic</option>
-              </select>
-            </label>
-            <div class="quality-status" id="gpu-memory-status" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Physical Scale Panel -->

@@ -936,13 +936,20 @@ async function load() {
   if (_loading) return;
   _loading = true;
   try {
-    const r = await api.status();
-    if (r.ok && r.data && Array.isArray(r.data.datasets)) {
-      _status = r.data;
-      _loadError = null;
-      probeBrowser();
-    } else {
-      _loadError = t('dupd.loadFailed', 'Could not read the update status ({status}).', { status: r.status || t('dupd.network', 'network') });
+    // A PHP host with a cold row cache answers `partial` (rows finished so far); asking again
+    // continues from the cached rows, so the list fills in instead of timing out.
+    for (let pass = 0; pass < 40; pass++) {
+      const r = await api.status();
+      if (r.ok && r.data && Array.isArray(r.data.datasets)) {
+        _status = r.data;
+        _loadError = null;
+        if (pass === 0) probeBrowser();
+        if (!r.data.partial) break;
+        paint();
+      } else {
+        _loadError = t('dupd.loadFailed', 'Could not read the update status ({status}).', { status: r.status || t('dupd.network', 'network') });
+        break;
+      }
     }
   } finally {
     _loading = false;

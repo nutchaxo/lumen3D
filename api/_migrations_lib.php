@@ -3218,9 +3218,9 @@ function lumen_mig_estimate_for(array $plan, array $m, ?array $j): array {
 function lumen_mig_status_sig(string $type, string $folder, string $dir): string {
     $parts = ['status-row-v2', LUMEN_MIG_LATEST, (string)@filemtime(__DIR__ . '/_migrations_m005.php'), (string)@filemtime(__DIR__ . '/_migrations_m006.php')];
     $stat = function (string $p) use (&$parts): void {
-        $mt = @filemtime($p);
-        // The inode too: an atomic rewrite (journal, metadata) is a new file even within the same second.
-        $parts[] = $p . '|' . ($mt === false ? '-' : $mt . '|' . @fileinode($p) . '|' . (is_dir($p) ? 'd' : (string)@filesize($p)));
+        // One stat() per path; the inode too: an atomic rewrite (journal, metadata) is a new file even within the same second.
+        $st = @stat($p);
+        $parts[] = $st === false ? $p . '|-' : $p . '|' . $st['mtime'] . '|' . $st['ino'] . '|' . (($st['mode'] & 0170000) === 0040000 ? 'd' : $st['size']);
     };
     clearstatcache();
     $stat(__FILE__);
@@ -3349,7 +3349,16 @@ function lumen_mig_status_server_timing(float $totalMs): string {
 
 function lumen_mig_status(): array {
     $GLOBALS['lumen_mig_status_ms'] = [];
+    $t0 = microtime(true);
+    // A cold row cache (every update changes the signature of every row) must not outlast the host's
+    // execution limit: rows are computed until the budget is spent, the answer says `partial`, and the
+    // next call finds the finished rows in the cache and goes on.
+    $limit = (int)ini_get('max_execution_time');
+    if (function_exists('set_time_limit') && @set_time_limit(60)) $limit = 60;
+    $budget = $limit > 0 ? max(4.0, min(20.0, $limit * 0.5)) : 20.0;
     $datasets = [];
+    $total = 0;
+    $partial = false;
     foreach (['3d', '2d', 'live'] as $type) {
         $base = data_web() . '/' . $type;
         if (!is_dir($base)) continue;
@@ -3357,13 +3366,25 @@ function lumen_mig_status(): array {
             && preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $n) && is_dir("$base/$n")));
         usort($names, fn($a, $b) => strcmp(strtolower($a), strtolower($b)));
         foreach ($names as $folder) {
-            $t0 = microtime(true);
-            $datasets[] = lumen_mig_dataset_status($type, $folder, "$base/$folder");
-            $GLOBALS['lumen_mig_status_ms']["$type/$folder"] = (microtime(true) - $t0) * 1000;
+            $total++;
+            if ($partial || microtime(true) - $t0 > $budget) { $partial = true; continue; }
+            $t1 = microtime(true);
+            try {
+                $datasets[] = lumen_mig_dataset_status($type, $folder, "$base/$folder");
+            } catch (Throwable $e) {
+                // One unreadable dataset must not take the whole tab down with a 500.
+                $datasets[] = ['id' => "$type/$folder", 'type' => $type, 'folder' => $folder, 'name' => $folder,
+                               'formatVersion' => 1, 'pending' => [], 'repair' => false, 'trees' => 0, 'job' => null, 'jobs' => [],
+                               'estimate' => ['units' => 0, 'bytes' => 0], 'problem' => 'status_failed',
+                               'problemDetail' => substr(get_class($e) . ': ' . $e->getMessage(), 0, 300)];
+            }
+            $GLOBALS['lumen_mig_status_ms']["$type/$folder"] = (microtime(true) - $t1) * 1000;
         }
     }
-    return ['ok' => true, 'latest' => LUMEN_MIG_LATEST, 'migrations' => LUMEN_MIGRATIONS,
+    $out = ['ok' => true, 'latest' => LUMEN_MIG_LATEST, 'migrations' => LUMEN_MIGRATIONS,
             'datasets' => $datasets, 'server' => lumen_mig_capabilities()];
+    if ($partial) $out += ['partial' => true, 'total' => $total];
+    return $out;
 }
 
 // ── Dispatch (api/migrations.php) ────────────────────────────────────────────

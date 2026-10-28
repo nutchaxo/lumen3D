@@ -6939,7 +6939,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         elif action == "validate":
             self._json_nostore(200, upload_staging.validate_dataset(type_dir, folder))
         elif action == "blob":
-            self._serve_staged_blob(type_dir, folder, params.get("path", ""))
+            # The viewer glues its `?v=<stamp>` cache stamp onto `path` (the proxy's
+            # own query is the base URL); the stamp names no file.
+            self._serve_staged_blob(type_dir, folder, params.get("path", "").split("?", 1)[0])
         elif action == "metadata":
             meta = upload_staging.read_staged_metadata(type_dir, folder)
             self._json_nostore(200 if meta else 404, meta or {"error": "not_staged"})

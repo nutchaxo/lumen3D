@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "serial": 6,
-  "issuedAt": "2026-10-09T08:39:15Z",
+  "serial": 7,
+  "issuedAt": "2026-10-29T13:26:28Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -232,13 +232,13 @@
       "description": "Axes d'orientation (rouge 1/2, vert 1/2, bleu 1/2) : gizmo calibrable, axes masquables/renommables, et vue par défaut appliquée à l'ouverture du dataset.",
       "creator": "IRIBHM",
       "icon": "compass",
-      "platformCompat": ">=1.55.8",
+      "platformCompat": ">=1.73.12",
       "sandboxCapabilities": null,
-      "latestVersion": "1.3.3",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.3.3.zip",
+      "latestVersion": "1.3.4",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.3.4.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS.sig",
-      "sha256": "09a5a425d425bac240943ce0bd2f7640d5d80f841a9dbefe0a4ddf97a85b304f",
+      "sha256": "854b494df6616bed94305f64a2d3c63c96c946e0251a0cdf3a59dfc9369e3913",
       "recommended": true
     },
     {

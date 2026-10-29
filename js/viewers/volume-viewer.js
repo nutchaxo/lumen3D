@@ -5175,6 +5175,19 @@ const VolumeViewer = (() => {
     };
   }
 
+  /**
+   * Centre of gravity of the stored bricks as a cube-local offset in world units:
+   * o = n − ½ in object space (n = normalized centroid), scaled by the cube —
+   * the same convention as the axes gizmos (R·(S·o) + T). Null until a brick tree
+   * is mounted; the caller then keeps the box centre.
+   */
+  function _massCenterLocal() {
+    const n = (typeof BrickLoader !== 'undefined' && BrickLoader.getOccupancyCentroid)
+      ? BrickLoader.getOccupancyCentroid() : null;
+    if (!n || !cube) return null;
+    return new THREE.Vector3((n.x - 0.5) * cube.scale.x, (n.y - 0.5) * cube.scale.y, (n.z - 0.5) * cube.scale.z);
+  }
+
   function getPhysicalSize() {
     return _physicalSizeUm
       ? { ..._physicalSizeUm, zDisplayScale: _zDisplayScale, mode: _scaleMode }
@@ -5312,7 +5325,8 @@ const VolumeViewer = (() => {
       projVertexShader,
       fragmentShader,
       onDirty: _scheduleFrame,
-      getPhysicalSize
+      getPhysicalSize,
+      getCenterLocal: _massCenterLocal
     });
     // LEAK-001/ELE-30 (Rule 1.2): VolumeGrid.dispose() releases the grid/axes
     // groups' GPU resources (geometries, materials, sprite CanvasTextures). In a
@@ -6204,6 +6218,7 @@ const VolumeViewer = (() => {
      *  tab hidden). Cooperative: the batch stops at its next brick boundary. */
     cancelPreload: () => _cancelStream(_preloadStreamAbort),
     getVolumeObject: () => cube,
+    getMassCenterLocal: _massCenterLocal,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
     getAcquisitionSpace: () => (_acqExtent
       ? { min: _acqExtent.min.clone(), max: _acqExtent.max.clone(), size: _acqExtent.size.clone() }

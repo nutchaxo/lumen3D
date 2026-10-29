@@ -1,0 +1,2 @@
+## [FIXED]
+- **Concentric rings in the maximum projection**: the sample lattice anchored in v1.73.1 lay on spheres around the camera, which showed as rings centred on the view when zooming into a coarse volume (most visible in the admin dataset preview). It now lies on planes perpendicular to the view axis; adjacent rays still sample the same depth shell, so there is still no grain or pinholes. Rays at an angle θ to the axis step δ / cos θ so the planes stay δ apart.

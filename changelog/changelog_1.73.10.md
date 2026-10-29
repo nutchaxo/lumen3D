@@ -1,0 +1,2 @@
+## [FIXED]
+- **Data update stuck on its last units (`bad_blob`)**: a unit whose result is larger than 32 MiB (a YZ plane pack of a very large volume, 33.8 MB here) is sent in pieces, but the piece protocol refused any unit whose total exceeded the single-request limit, so the same few units failed again and again at 99.98 %. The total of a unit assembled from pieces may now reach 256 MiB (PHP and Python twins); a single request still carries at most the host limit.

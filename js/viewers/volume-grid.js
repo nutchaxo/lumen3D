@@ -240,6 +240,10 @@ const VolumeGrid = (() => {
 
             const projMesh = new THREE.Mesh(projGeom, projMat);
             projMesh.userData.isProjMesh = true;
+            // Transparent objects are sorted by distance, so a wall nearer the camera than the
+            // cube was drawn after it, over the specimen. A projection lies on the grid, behind
+            // the volume: draw it first (the cube is renderOrder 0).
+            projMesh.renderOrder = -1;
             _gridGroup.add(projMesh);
           }
         }

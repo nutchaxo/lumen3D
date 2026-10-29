@@ -181,8 +181,8 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   assert.equal(zs.version, '1.2.2');
   assert.equal(zs.platformCompat, '>=1.55.9', 'the browser needs the core that knows spin tilt');
   const ori = JSON.parse(read('js/modules/tools/orientation-axes/plugin.json'));
-  assert.equal(ori.version, '1.3.3');
-  assert.equal(ori.platformCompat, '>=1.55.8', 'getRawPoseQuaternion(flag) exists since 1.55.8');
+  assert.equal(ori.version, '1.3.4');
+  assert.equal(ori.platformCompat, '>=1.73.12', 'the gizmo centre needs the core that reports the mass centre');
 }
 
 console.log('sample side (upside-down flag, turned-over calibration, z-stack opening pose + spin slider): OK');

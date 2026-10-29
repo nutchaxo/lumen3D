@@ -867,6 +867,39 @@ const BrickLoader = (() => {
     return g.bits[(bz * g.ny + by) * g.nx + bx] === 1;
   }
 
+  /**
+   * Centre of gravity of the non-empty bricks of the coarsest level, in normalized
+   * [0,1] volume coordinates ({x,y,z}), or null without a mount / any brick. Each
+   * brick weighs the same, its position is the centre of the voxels it covers
+   * (an edge brick is partial). One pass over the occupancy bitmap, cached per mount.
+   */
+  function getOccupancyCentroid() {
+    if (!_mount) return null;
+    if (_mount._centroid !== undefined) return _mount._centroid;
+    let lod = -1;
+    for (const k of _mount.grids.keys()) if (k > lod) lod = k;
+    const g = _grid(lod);
+    let out = null;
+    if (g && g.count > 0) {
+      const bs = BRICK_SIZE;
+      let sx = 0, sy = 0, sz = 0, n = 0, i = 0;
+      for (let bz = 0; bz < g.nz; bz++) {
+        const cz = (bz * bs + Math.min(bs, g.dims.z - bz * bs) / 2) / g.dims.z;
+        for (let by = 0; by < g.ny; by++) {
+          const cy = (by * bs + Math.min(bs, g.dims.y - by * bs) / 2) / g.dims.y;
+          for (let bx = 0; bx < g.nx; bx++, i++) {
+            if (!g.bits[i]) continue;
+            sx += (bx * bs + Math.min(bs, g.dims.x - bx * bs) / 2) / g.dims.x;
+            sy += cy; sz += cz; n++;
+          }
+        }
+      }
+      if (n > 0) out = { x: sx / n, y: sy / n, z: sz / n };
+    }
+    _mount._centroid = out;
+    return out;
+  }
+
   /** The non-empty bricks of a level, z-major then y then x. */
   function activeBricks(lod = 0) {
     const g = _grid(lod);
@@ -2952,6 +2985,7 @@ const BrickLoader = (() => {
     getDimensions,
     getFormat,
     getLevelInfo,
+    getOccupancyCentroid,
     configure,
     bricksForRegion,
     hasBrick,

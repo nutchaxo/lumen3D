@@ -24,7 +24,11 @@ const VolumeGrid = (() => {
   let _gridMode = 0; // 0: none, 1: normal, 2: fine
   let _axesVisible = false;
   let _gridSizes = { xy: 1.5, xz: 1.5, yz: 1.5 };
-  let _axesLocalPos = new THREE.Vector3(-0.75, -0.75, -0.75);
+  let _axesLocalPos = new THREE.Vector3(0, 0, 0);
+  // False until the user drags the axes: they then sit on the centre of gravity of
+  // the stored bricks (box centre while no brick tree is mounted).
+  let _axesCustom = false;
+  let _getCenterLocal = null;
   // Scratch objects of the per-frame sync (syncTransforms, _updateScaleBar): nothing
   // is allocated per frame.
   const _scaleDir = new THREE.Vector3();
@@ -49,6 +53,13 @@ const VolumeGrid = (() => {
     _fragmentShader = deps.fragmentShader || '';
     _onDirty = deps.onDirty || (() => {});
     _getPhysicalSize = typeof deps.getPhysicalSize === 'function' ? deps.getPhysicalSize : null;
+    _getCenterLocal = typeof deps.getCenterLocal === 'function' ? deps.getCenterLocal : null;
+  }
+
+  function _followCenter() {
+    if (_axesCustom) return;
+    const c = _getCenterLocal ? _getCenterLocal() : null;
+    if (c) _axesLocalPos.copy(c); else _axesLocalPos.set(0, 0, 0);
   }
 
   /** Update live references when cube/camera change (e.g. after reload) */
@@ -106,11 +117,12 @@ const VolumeGrid = (() => {
   }
 
   function resetAxesPos() {
-    _axesLocalPos.set(-0.75, -0.75, -0.75);
+    _axesCustom = false;
     rebuild();
   }
 
   function setAxesLocalPos(x, y, z) {
+    _axesCustom = true;
     _axesLocalPos.set(x, y, z);
     rebuild();
   }
@@ -240,6 +252,10 @@ const VolumeGrid = (() => {
 
             const projMesh = new THREE.Mesh(projGeom, projMat);
             projMesh.userData.isProjMesh = true;
+            // Transparent objects are sorted by distance, so a wall nearer the camera than the
+            // cube was drawn after it, over the specimen. A projection lies on the grid, behind
+            // the volume: draw it first (the cube is renderOrder 0).
+            projMesh.renderOrder = -1;
             _gridGroup.add(projMesh);
           }
         }
@@ -285,6 +301,7 @@ const VolumeGrid = (() => {
       sphere.userData = { isAxesSphere: true };
       _axesGroup.add(sphere);
 
+      _followCenter();
       if (_cube) {
         const worldPos = _axesLocalPos.clone().applyQuaternion(_cube.quaternion).add(_cube.position);
         _axesGroup.position.copy(worldPos);
@@ -357,6 +374,7 @@ const VolumeGrid = (() => {
       }
     }
     if (_axesGroup) {
+      _followCenter();
       const worldPos = _axesWorld.copy(_axesLocalPos).applyQuaternion(_cube.quaternion).add(_cube.position);
       _axesGroup.position.copy(worldPos);
       _axesGroup.quaternion.copy(_cube.quaternion);
@@ -440,6 +458,7 @@ const VolumeGrid = (() => {
     const target = new THREE.Vector3();
     if (raycaster.ray.intersectPlane(plane, target)) {
       _axesGroup.position.copy(target);
+      _axesCustom = true;
       if (_cube) {
         _axesLocalPos = target.clone().sub(_cube.position)
           .applyQuaternion(_cube.quaternion.clone().invert());

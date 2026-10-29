@@ -124,7 +124,7 @@ assert.ok(/\n  function syncTransforms\(\) \{[\s\S]*?_updateScaleBar\(\);/.test(
 assert.ok(!/200 µm/.test(src), 'no fixed label left');
 assert.ok(/_getPhysicalSize = typeof deps\.getPhysicalSize === 'function'/.test(src), 'the calibration is an injected dependency');
 const vv = read('js/viewers/volume-viewer.js');
-assert.ok(/VolumeGrid\.init\(\{[\s\S]*?getPhysicalSize\s*\n\s*\}\)/.test(vv), 'VolumeViewer hands its calibration to the grid');
+assert.ok(/VolumeGrid\.init\(\{[\s\S]*?getPhysicalSize,\s*getCenterLocal: _massCenterLocal\s*\}\)/.test(vv), 'VolumeViewer hands its calibration to the grid');
 const viewer = read('js/pages/viewer.js');
 const stage = viewer.slice(viewer.indexOf('function _updateSliceStageScale'), viewer.indexOf('function _updateSliceStageScale') + 1800);
 assert.ok(/Utils\.niceScaleLength\(/.test(stage) && /Utils\.formatMicrons\(/.test(stage), 'the staged slice bar shares the helpers');

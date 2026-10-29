@@ -6188,6 +6188,15 @@ const ViewerApp = (() => {
 
   function _handleQualityProgress(state) {
     _sampleDownloadRate();
+    // The tree is known from the moment it is mounted: offer its menus then, not once the
+    // first volume has finished (a dataset whose load stalls or fails keeps them too).
+    if (!_brickManifest) {
+      const mounted = typeof BrickLoader !== 'undefined' ? BrickLoader.getManifest?.() : null;
+      if (mounted && Array.isArray(mounted.levels)) {
+        _brickManifest = mounted;
+        _updateQualityOptionLabels();
+      }
+    }
     const panel = document.getElementById('quality-stream-progress');
     const fill = document.getElementById('quality-stream-progress-fill');
     const text = document.getElementById('quality-stream-progress-text');

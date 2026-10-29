@@ -120,7 +120,8 @@ PluginRegistry.implement('orientation-axes', {
   _labels: {},
   _hidden: null,           // Set of hidden axis codes
   _isDragging: false,
-  _localPos: new THREE.Vector3(-0.75, -0.75, -0.75),
+  _localPos: new THREE.Vector3(0, 0, 0),
+  _customPos: false,       // true once dragged or restored: stops following the centre of gravity
 
   /**
    * Pre-load hook (PluginRegistry.prepareAll) — runs between VolumeViewer.init()
@@ -351,10 +352,21 @@ PluginRegistry.implement('orientation-axes', {
       return;
     }
 
+    if (!this._customPos) {
+      // Centre of gravity of the stored bricks (box centre before any brick tree).
+      const c = (typeof VolumeViewer !== 'undefined' && VolumeViewer.getMassCenterLocal)
+        ? VolumeViewer.getMassCenterLocal() : null;
+      if (c) this._localPos.copy(c); else this._localPos.set(0, 0, 0);
+    }
+
     if (this._calibrationMode) {
       // In calibration mode, axes are fixed at world identity
       this._group.quaternion.identity();
-      this._group.position.copy(this._localPos);
+      if (this._customPos) {
+        this._group.position.copy(this._localPos);
+      } else {
+        this._group.position.copy(this._localPos).applyQuaternion(cube.quaternion).add(cube.position);
+      }
     } else {
       // Normal mode: axes follow the embryo but are offset by the calibration base
       // The embryo is at cube.quaternion.
@@ -455,6 +467,7 @@ PluginRegistry.implement('orientation-axes', {
 
       const target = new THREE.Vector3();
       if (raycaster.ray.intersectPlane(plane, target)) {
+        this._customPos = true;
         if (this._calibrationMode) {
           this._localPos.copy(target);
         } else {
@@ -525,14 +538,16 @@ PluginRegistry.implement('orientation-axes', {
   getState() {
     return {
       visible: this._visible,
-      localPos: { x: this._localPos.x, y: this._localPos.y, z: this._localPos.z }
+      localPos: { x: this._localPos.x, y: this._localPos.y, z: this._localPos.z },
+      custom: this._customPos
     };
   },
 
   setState(s) {
     const lp = s?.localPos;
-    if (lp && typeof lp === 'object' && [lp.x, lp.y, lp.z].every(Number.isFinite)) {
+    if (s?.custom === true && lp && typeof lp === 'object' && [lp.x, lp.y, lp.z].every(Number.isFinite)) {
       this._localPos.set(lp.x, lp.y, lp.z);
+      this._customPos = true;
     }
     if (typeof s?.visible === 'boolean' && s.visible !== this._visible) {
       this.activate();
@@ -548,7 +563,7 @@ PluginRegistry.implement('orientation-axes', {
   reset() {
     this._calibrationMode = false;
     this._isDragging = false;
-    this._localPos.set(-0.75, -0.75, -0.75);
+    this._customPos = false;
     if (this._visible) this.activate();
     PluginRegistry.syncToolbarButton('orientation-axes', { active: this._visible });
   },

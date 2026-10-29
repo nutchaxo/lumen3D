@@ -407,11 +407,15 @@ const VolumeViewer = (() => {
     out vec3 vUv;
     out vec3 vOrigin;
     out vec3 vDirection;
+    out vec3 vViewFwd;
     void main() {
       vUv = position;
       vec4 worldPosition = modelMatrix * vec4(position, 1.0);
       vOrigin = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
       vDirection = position - vOrigin;
+      // Normal, in object space, of the planes perpendicular to the view axis:
+      // n = Mᵀ·f for the world forward f (a plane's normal transforms by the transpose).
+      vViewFwd = transpose(mat3(modelMatrix)) * -vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]);
       gl_Position = projectionMatrix * viewMatrix * worldPosition;
     }
   `;
@@ -425,8 +429,10 @@ const VolumeViewer = (() => {
     uniform vec3 invCubeScale; // 1.0 / cube.scale, converts grid space → cube local
     out vec3 vOrigin;
     out vec3 vDirection;
+    out vec3 vViewFwd;
     void main() {
       vec3 cubeLocal = position * invCubeScale;
+      vViewFwd = vec3(projAxis == 0 ? 1.0 : 0.0, projAxis == 1 ? 1.0 : 0.0, projAxis == 2 ? 1.0 : 0.0);
       if (projAxis == 0) {
          vOrigin    = vec3(-0.5, cubeLocal.y, cubeLocal.z);
          vDirection = vec3(1.0, 0.0, 0.0);
@@ -469,6 +475,7 @@ const VolumeViewer = (() => {
     in vec3 vUv;
     in vec3 vOrigin;
     in vec3 vDirection;
+    in vec3 vViewFwd;
 
     #ifdef SVR_ARRAY
     // A compressed display atlas (svr-manager.js, compression 'bc'): RGTC pages, which
@@ -980,13 +987,18 @@ const VolumeViewer = (() => {
       // interactive rate) still gets its one sample, weighted by its real length; with
       // delta > rayLength the jittered first sample fell past the exit on most pixels
       // and the slab flickered as speckle while dragging.
+      // The maximum projection anchors its lattice on planes perpendicular to the view
+      // axis (spheres about the camera drew concentric rings on a coarse volume). A ray
+      // at angle θ to the axis crosses planes δ apart every δ/cos θ along itself:
+      //   c = cos θ = rayDir · n̂,  step = δ / c
+      if (renderMode == 1) delta /= max(dot(rayDir, normalize(vViewFwd)), 0.05);
       delta = min(delta, rayLength);
       // Start of the sample lattice. The accumulating modes hide the banding of a
       // regular lattice behind a per-pixel random phase. A maximum projection cannot:
       // the max of a noisy confocal signal sampled at one random phase per pixel flips
       // between neighbours, which shows as black pinholes inside bright structures.
       // There the lattice is anchored at an absolute distance from the camera
-      // (t0 + t = k·delta), so adjacent rays sample the same depth shell and the
+      // (t0 + t = k·delta, on view-perpendicular planes), so adjacent rays sample the same depth shell and the
       // result stays spatially coherent.
       float jitter = renderMode == 1
         ? ceil(bounds.x / delta) * delta - bounds.x
@@ -5163,6 +5175,19 @@ const VolumeViewer = (() => {
     };
   }
 
+  /**
+   * Centre of gravity of the stored bricks as a cube-local offset in world units:
+   * o = n − ½ in object space (n = normalized centroid), scaled by the cube —
+   * the same convention as the axes gizmos (R·(S·o) + T). Null until a brick tree
+   * is mounted; the caller then keeps the box centre.
+   */
+  function _massCenterLocal() {
+    const n = (typeof BrickLoader !== 'undefined' && BrickLoader.getOccupancyCentroid)
+      ? BrickLoader.getOccupancyCentroid() : null;
+    if (!n || !cube) return null;
+    return new THREE.Vector3((n.x - 0.5) * cube.scale.x, (n.y - 0.5) * cube.scale.y, (n.z - 0.5) * cube.scale.z);
+  }
+
   function getPhysicalSize() {
     return _physicalSizeUm
       ? { ..._physicalSizeUm, zDisplayScale: _zDisplayScale, mode: _scaleMode }
@@ -5300,7 +5325,8 @@ const VolumeViewer = (() => {
       projVertexShader,
       fragmentShader,
       onDirty: _scheduleFrame,
-      getPhysicalSize
+      getPhysicalSize,
+      getCenterLocal: _massCenterLocal
     });
     // LEAK-001/ELE-30 (Rule 1.2): VolumeGrid.dispose() releases the grid/axes
     // groups' GPU resources (geometries, materials, sprite CanvasTextures). In a
@@ -6192,6 +6218,7 @@ const VolumeViewer = (() => {
      *  tab hidden). Cooperative: the batch stops at its next brick boundary. */
     cancelPreload: () => _cancelStream(_preloadStreamAbort),
     getVolumeObject: () => cube,
+    getMassCenterLocal: _massCenterLocal,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
     getAcquisitionSpace: () => (_acqExtent
       ? { min: _acqExtent.min.clone(), max: _acqExtent.max.clone(), size: _acqExtent.size.clone() }

@@ -2199,7 +2199,8 @@
     "done": "Hecho",
     "resetOriginal": "Restablecer original",
     "clickToEdit": "Clic para editar esta vista",
-    "exportTooLarge": "Demasiadas vistas para una sola imagen. Quite algunas e inténtelo de nuevo."
+    "exportTooLarge": "Demasiadas vistas para una sola imagen. Quite algunas e inténtelo de nuevo.",
+    "exportMainFailed": "No se pudo renderizar la vista principal."
   },
   "annotations": {
     "enterLabel": "Introduzca la etiqueta de la anotación:",

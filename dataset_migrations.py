@@ -169,6 +169,7 @@ PACK_ENTRY_BYTES = 12
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_ZLIB_LEVEL = 6
 MAX_UNIT_BODY = 32 * 1024 * 1024
+MAX_UNIT_TOTAL = 256 * 1024 * 1024   # one unit's result assembled from pieces; a request still carries at most MAX_UNIT_BODY
 MAX_RUN_SECONDS = 20
 MAX_BENCH_UNITS = 8
 # Disk budget of a new job. The PNG planes weigh about 1.3x the native WebP bricks
@@ -4873,7 +4874,7 @@ def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
         offset, total = int(offset), int(total)
     except (TypeError, ValueError):
         raise MigrationError("bad_blob", 400, "offset / total")
-    if total < 1 or total > MAX_UNIT_BODY or offset < 0 or offset + len(body) > total or not body:
+    if total < 1 or total > MAX_UNIT_TOTAL or offset < 0 or offset + len(body) > total or not body:
         raise MigrationError("bad_blob", 400, "piece outside the unit")
     (_m005_parse if m["id"] == M005 else _m006_parse)(key)
     p = _part_path(plan, str(key), m["id"])

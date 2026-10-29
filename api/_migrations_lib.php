@@ -37,6 +37,7 @@ const LUMEN_MIG_LATEST          = 6;
 const LUMEN_MIG_BRICK           = 64;
 const LUMEN_MIG_TILE            = 512;
 const LUMEN_MIG_BRICKS_PER_TILE = 8;            // LUMEN_MIG_TILE / LUMEN_MIG_BRICK
+const LUMEN_MIG_MAX_UNIT_TOTAL  = 268435456;    // 256 MiB: one unit's result assembled from pieces (a request still carries at most LUMEN_MIG_MAX_BODY)
 const LUMEN_MIG_MAX_BODY        = 33554432;     // 32 MiB unit blob (a real one tops out near 17 MB; PHP holds the body and a copy within memory_limit)
 const LUMEN_MIG_MAX_RUN_S       = 20;
 const LUMEN_MIG_MAX_BENCH_UNITS = 8;

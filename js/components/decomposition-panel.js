@@ -782,10 +782,10 @@ const DecompositionPanel = (() => {
     const choice = app && app.askExportQuality ? await app.askExportQuality() : 'current';
     if (!choice) return;
     if (choice === 'lossless' && app.withLosslessQuality) await app.withLosslessQuality(() => _exportImage());
-    else _exportImage();
+    else await _exportImage();
   }
 
-  function _exportImage() {
+  async function _exportImage() {
     if (typeof VolumeViewer === 'undefined') return;
     const renderer = VolumeViewer.getRenderer();
     const scene = VolumeViewer.getScene();
@@ -793,7 +793,10 @@ const DecompositionPanel = (() => {
     const material = VolumeViewer.getMaterial();
     if (!renderer || !scene || !camera || !material) return;
 
-    const mainAspect = camera.aspect;
+    // The main picture is the view as displayed: the canvas's own aspect, not whatever
+    // aspect the camera was last given by a vignette render.
+    const shown = renderer.domElement.getBoundingClientRect();
+    const mainAspect = shown.width > 0 && shown.height > 0 ? shown.width / shown.height : camera.aspect;
 
     // Get active volume resolution or default to 1024
     const activeVol = VolumeViewer.getSamplingVolume?.();
@@ -843,6 +846,27 @@ const DecompositionPanel = (() => {
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, totalWidth, totalHeight);
 
+    // Main picture: the viewer's own tiled export (the screen's pose and framing at the
+    // figure's size, no single GL buffer that could be clamped). Channels are the live ones.
+    if (layout !== 'grid') {
+      _applyStateToMaterial(_getGlobalChannels(), material);
+      let mainImage;
+      try {
+        mainImage = await VolumeViewer.renderViewImage({ width: exportMainWidth, height: exportMainHeight, background: '#000000' });
+      } catch (err) {
+        console.warn('[DecompositionPanel] Export stopped: the main view could not be rendered.', err);
+        if (typeof ExportManager !== 'undefined' && ExportManager.toast) {
+          ExportManager.toast(_tr('decomposition.exportMainFailed', 'The main view could not be rendered.'));
+        }
+        return;
+      }
+      const mainX = layout === 'horizontal' ? padding : 0;
+      const mainY = layout === 'horizontal' ? padding : 0;
+      ctx.drawImage(mainImage, mainX, mainY, exportMainWidth, exportMainHeight);
+      _drawMarkersForState(ctx, _getGlobalChannels(), mainX, mainY, exportMainWidth, exportMainHeight, true);
+      mainImage.width = 0; mainImage.height = 0;
+    }
+
     const pixelRatio = renderer.getPixelRatio() || 1;
     const origWidth = renderer.domElement.width / pixelRatio;
     const origHeight = renderer.domElement.height / pixelRatio;
@@ -857,26 +881,7 @@ const DecompositionPanel = (() => {
     // The live viewer is resized and its uniforms rewritten below; whatever goes wrong
     // in between, it must come back as it was.
     try {
-      // 1. Draw the Main View at High-Res if layout requires it
-      if (layout === 'main-right') {
-        renderer.setSize(exportMainWidth, exportMainHeight, false);
-        camera.aspect = mainAspect;
-        camera.updateProjectionMatrix();
-        _applyStateToMaterial(_getGlobalChannels(), material);
-        renderer.render(scene, camera);
-        ctx.drawImage(renderer.domElement, 0, 0, exportMainWidth, exportMainHeight);
-        _drawMarkersForState(ctx, _getGlobalChannels(), 0, 0, exportMainWidth, exportMainHeight, true);
-      } else if (layout === 'horizontal') {
-        renderer.setSize(exportMainWidth, exportMainHeight, false);
-        camera.aspect = mainAspect;
-        camera.updateProjectionMatrix();
-        _applyStateToMaterial(_getGlobalChannels(), material);
-        renderer.render(scene, camera);
-        ctx.drawImage(renderer.domElement, padding, padding, exportMainWidth, exportMainHeight);
-        _drawMarkersForState(ctx, _getGlobalChannels(), padding, padding, exportMainWidth, exportMainHeight, true);
-      }
-
-      // 2. Draw Decompositions at High-Res
+      // Draw Decompositions at High-Res
       renderer.setSize(itemSize, itemSize, false);
       camera.aspect = 1;
       camera.updateProjectionMatrix();

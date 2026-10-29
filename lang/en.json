@@ -2199,7 +2199,8 @@
     "done": "Done",
     "resetOriginal": "Reset to original",
     "clickToEdit": "Click to edit this view",
-    "exportTooLarge": "Too many views to export as one image. Remove some and try again."
+    "exportTooLarge": "Too many views to export as one image. Remove some and try again.",
+    "exportMainFailed": "The main view could not be rendered."
   },
   "annotations": {
     "enterLabel": "Enter annotation label:",

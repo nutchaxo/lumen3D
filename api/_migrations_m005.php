@@ -1004,7 +1004,7 @@ function lumen_m005_unit_put_many(array $plan, array $m, string $path, string $b
 function lumen_m005_unit_put_part(array $plan, array $m, string $path, $key, $offset, $total, string $body): array {
     if (!is_numeric($offset) || !is_numeric($total)) throw new LumenMigError('bad_blob', 400, 'offset / total');
     $offset = (int)$offset; $total = (int)$total;
-    if ($total < 1 || $total > LUMEN_MIG_MAX_BODY || $offset < 0 || $offset + strlen($body) > $total || $body === '') throw new LumenMigError('bad_blob', 400, 'piece outside the unit');
+    if ($total < 1 || $total > LUMEN_MIG_MAX_UNIT_TOTAL || $offset < 0 || $offset + strlen($body) > $total || $body === '') throw new LumenMigError('bad_blob', 400, 'piece outside the unit');
     $mid = $m['id'];
     if ($mid === LUMEN_M005) lumen_m005_parse($key); else lumen_m006_parse($key);
     // In the job's own store, so a cancel of that job drops its pieces too.

@@ -2199,7 +2199,8 @@
     "done": "Klaar",
     "resetOriginal": "Terug naar origineel",
     "clickToEdit": "Klik om deze weergave te bewerken",
-    "exportTooLarge": "Te veel weergaven voor één afbeelding. Verwijder er enkele en probeer opnieuw."
+    "exportTooLarge": "Te veel weergaven voor één afbeelding. Verwijder er enkele en probeer opnieuw.",
+    "exportMainFailed": "De hoofdweergave kon niet worden gerenderd."
   },
   "annotations": {
     "enterLabel": "Voer het label van de annotatie in:",

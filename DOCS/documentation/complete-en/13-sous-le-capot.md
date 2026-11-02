@@ -296,6 +296,12 @@ A volume of several gigabytes has no full-resolution slice "within reach". The S
 1. **The preview**: the slice the graphics card already holds, rendered at 2048 px at most, with no network bytes at all. The Studio opens instantly.
 2. **The native pass**: the viewer works out which bricks the plane crosses, fetches them at maximum resolution (level 0), and re-renders the slice in raw values **at regular intervals**.
 
+On a **format 6** dataset the second step does not run when the Studio opens: the preview is the WebP Q30 picture and the Studio stays on it. When you export a PNG, the viewer runs the lossless pass at the resolution on screen, waits for it, then writes the file. The export therefore never mixes a preview with a lossless figure.
+
+::: tech
+The page registers its native provider with the Studio together with an `alwaysLossless` policy that is true on a format 6 tree. In that case the export dialog is skipped: the Studio calls the provider, then exports only if the lossless picture is in place (the message "nothing was exported" otherwise).
+:::
+
 The pass's image is framed like the preview (same region of the plane). Wherever a brick is still missing, the **preview fills the hole**: what you see is always a complete image, getting sharper and sharper. The render size is roughly **one pixel per voxel of the longest axis**, extended to the slice frame (× 1.5): from 512 to 16,384 px.
 
 ::: example
@@ -720,7 +726,7 @@ The viewer has **no** Save / Restore buttons: the address does that. They exist 
 | `iribhm.viewer.zScale.<dataset>` | Z stretch of that dataset |
 | `iribhm.workspace.<scope>.<dataset>` | a saved workspace |
 | `iribhm-gallery-dock` | gallery dock state (open, wide, chip) |
-| `lumen3d.vramBudgetMB` | imposed video-memory budget (operator) |
+| `lumen3d.fastLoading` | the [Fast loading]{.ui} switch of a format 6 dataset: `0` = off (lossless bricks), absent or `1` = on (WebP Q30). Shared by every dataset of the browser |
 | `lumen3d.gpuContextLosses` | the last 8 graphics-context losses (one week) |
 | `sessionStorage` `lumen_view_<dataset>` | a single view counted per session |
 
@@ -728,12 +734,12 @@ The viewer has **no** Save / Restore buttons: the address does that. They exist 
 **Measurements** are not in this list: they live in the page's memory (`MeasurementStore`, a `Map` per scope and per dataset) and travel **in the link**. The administration has its own keys (`adm-theme`, `adm-upload-dock-size`, `lumen-dupd-*`), described in chapter 14.
 :::
 
-The graphics budget is worth knowing about (§ 10.4): it is **halved for each graphics-context loss** of the past week (floor 256 MiB), on that browser profile. Clearing the site data resets it.
+The graphics budget is worth knowing about (§ 10.4): it is **halved for each graphics-context loss** of the past week (floor 256 MiB), on that browser profile. Clearing the site data resets it. There is no GPU memory or GPU compression setting any more: the viewer detects the card, and it removes the manual `lumen3d.vramBudgetMB` and `lumen3d.gpuCompression` keys left by earlier versions as soon as a viewer loads.
 
 ## 13.8 Measurement and pose algorithms
 
 ::: tldr
-- A measurement click reads the **depth on the GPU** in two one-pixel passes, with 16-bit precision.
+- A measurement click reads the **depth on the GPU** in two one-pixel passes. The position is encoded on **16 bits per axis**; the real precision is of the order of **half a voxel** along the ray.
 - Laying a stack flat is **two rotations about the screen axes**: the stack never tumbles.
 - Exporting a large image **starts over** if the volume or the settings change while it renders.
 :::
@@ -904,6 +910,6 @@ This chapter on one page:
 - **2D**: three frames of reference, a pixel worker, an importer that guesses nothing.
 - **Timeline**: clock capped at 250 ms, held back during loading.
 - **State**: the link is the backup; the browser only keeps preferences.
-- **Measurement**: depth read on the GPU in two 16-bit passes; poses by two rotations.
+- **Measurement**: depth read on the GPU in two one-pixel passes (position encoded on 16 bits per axis); poses by two rotations.
 - **Orientation**: Q_base, Q_anat, Q_cube; the sample side is a half-turn about the vertical.
 :::

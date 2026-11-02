@@ -48,7 +48,7 @@ Il n'y a **aucun compte utilisateur**. Seule l'administration est protégée par
 Prenons le plus gros jeu de référence du pipeline : un embryon de **3789 × 3789 × 178 voxels** sur **4 canaux**. Le fichier Imaris d'origine pèse **14,4 Go**.
 
 ::: example
-**Le calcul.** 3789 × 3789 × 178 = 2 555 460 738 voxels par canal. À 1 octet par voxel : **≈ 2,56 Go par canal**, donc **≈ 10,2 Go** pour 4 canaux. La carte graphique, elle, n'offre à la plateforme que 0,25 à 4 Go selon sa classe.
+**Le calcul.** 3789 × 3789 × 178 = 2 555 460 738 voxels par canal. À 1 octet par voxel : **≈ 2,56 Go par canal**, donc **≈ 10,2 Go** pour 4 canaux. La carte graphique, elle, n'offre à la plateforme qu'un budget estimé : de 256 Mio (rendu logiciel) à 16 Gio (carte haut de gamme reconnue), voir chapitre 10.
 :::
 
 ![Même en le réduisant à 1 octet par voxel, la pile dépasse la mémoire de la plupart des cartes graphiques.](img/ch01/pourquoi.svg){width=95%}
@@ -121,7 +121,7 @@ types de données : 3D, Live, 2D
 :::
 ::: keynum
 **64³**
-voxels par brique (66³ avec bord, formats 4 et 5)
+voxels par brique (66³ avec bord, formats 4 à 6)
 :::
 ::: keynum
 **4**
@@ -136,23 +136,23 @@ langues : anglais, français, espagnol, néerlandais
 plugins au catalogue signé
 :::
 ::: keynum
-**≈ 126 000**
-lignes de code, hors tests
+**≈ 77 000**
+lignes de JavaScript, hors bibliothèques et tests
 :::
 ::: keynum
 **512 · 1024 · natif**
-les trois qualités de rendu
+les repères de résolution du menu
 :::
 ::: keynum
-**201**
+**239**
 fichiers de tests automatiques
 :::
 ::::
 
 Quelques repères de version, valables à la date de ce document :
 
-- plateforme web **1.65.0** ; pipeline de préparation **0.22.0** ;
-- format de données courant : [format 5]{.pill .green} (les formats 1 à 4 sont convertis en place, voir chapitre 17) ;
+- plateforme web **1.76.0** ; pipeline de préparation **0.23.0** ;
+- format de données courant : [format 6]{.pill .green} (les formats 1 à 5 sont convertis en place, voir chapitre 17) ;
 - chaque version est vérifiée par les tests automatiques avant d'être publiée.
 
 ## 1.6 Carte de la documentation

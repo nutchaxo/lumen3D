@@ -3,7 +3,7 @@
 ::: chapter-intro
 - Lumen3D protège le panneau d'administration, le code exécuté dans les pages et les fichiers déposés. Chaque protection a une **raison simple**.
 - Aucune donnée d'étude n'est envoyée à un tiers et la plateforme fonctionne **hors ligne**.
-- La fiabilité repose sur des publications **tout ou rien** et sur une suite d'environ **200 fichiers de tests** qui bloque toute version défectueuse.
+- La fiabilité repose sur des publications **tout ou rien** et sur une suite de **239 fichiers de tests** qui bloque toute version défectueuse.
 - Un tableau unique, « **Que se passe-t-il si… ?** » (sections 19.8 à 19.12), liste chaque panne prévue et le repli qui l'attend.
 :::
 
@@ -17,7 +17,7 @@ Il n'existe **aucun mot de passe par défaut** : le premier visiteur du panneau 
 **Une empreinte digitale.** Le serveur garde l'empreinte de votre mot de passe, pas le mot de passe. Avec une empreinte on peut reconnaître la bonne personne, mais on ne peut pas refabriquer le doigt.
 :::
 
-- L'empreinte est calculée par **PBKDF2-HMAC-SHA256**, avec un sel propre au compte et 600 000 tours : volontairement lent pour décourager les essais en masse.
+- L'empreinte est calculée par **PBKDF2-HMAC-SHA256**, avec un sel propre au compte. Le nombre de tours est fixé par le serveur et écrit dans chaque empreinte, ce qui permet de vérifier le même mot de passe sur l'un ou l'autre serveur. Ce calcul est volontairement lent pour décourager les essais en masse.
 - Après **10 échecs** en 15 minutes depuis une même adresse, l'accès est bloqué 15 minutes. Les échecs sont comptés **avant** la vérification, et un mauvais identifiant coûte le même temps qu'un mauvais mot de passe.
 - Une session dure **8 heures**. Changer le mot de passe ferme toutes les autres sessions.
 - Toute modification passe aussi par un jeton anti-falsification (CSRF).
@@ -79,7 +79,7 @@ Un plugin est du code. Le laisser entrer sans contrôle serait comme donner un d
 | Une publication s'interrompt | **tout ou rien** : le pipeline construit tout à l'écart et publie par un renommage ; une interruption est rattrapée au lancement suivant |
 | Une coupure réseau pendant un import | reprise au bloc près |
 | Une brique corrompue | signalée et ignorée, jamais envoyée à la carte graphique |
-| Une régression dans le code | environ **200 fichiers de tests** doivent passer avant chaque version |
+| Une régression dans le code | les **239 fichiers de tests** doivent passer avant chaque version |
 
 ::: remember
 Chaque version est **testée en entier** avant d'être signée et publiée. Une version qui échoue aux tests ne peut tout simplement pas sortir.
@@ -158,7 +158,7 @@ La mémoire de la carte graphique est le seul vrai plafond dur. Lumen3D la **pla
 | Le contexte est **rendu** | Le dernier affichage est rechargé avec le budget réduit | Un message d'état : contexte restauré, rechargement avec un budget plus bas |
 | **3 pertes en moins de 120 s** | Le rechargement automatique **s'arrête** (sinon la boucle bloquerait le GPU) | Choisissez une qualité plus basse ou rechargez la page |
 | Une image au repos est **trop longue** (plus de 200 ms) | Le plafond d'échantillons par rayon est réduit (chapitre 9) ; une perte de contexte le divise par deux | L'image est un peu moins fine, la vue reste fluide |
-| Vous voulez **forcer un budget** | Réglage de l'opérateur : la clé `lumen3d.vramBudgetMB` du navigateur remplace l'estimation | Annexe B |
+| Vous voulez **régler le budget** de mémoire à la main | Ce n'est plus possible : le réglage *Mémoire GPU* a disparu, et la valeur qu'une version antérieure avait enregistrée (`lumen3d.vramBudgetMB`) est effacée au chargement (v1.73.2). Le budget est **détecté** d'après la carte (60 % de sa mémoire dédiée, 2 Gio laissés au système) | Rien à régler ; le budget réduit après une perte de contexte reste automatique |
 
 ::: why
 **Pourquoi diviser le budget ?** Une perte de contexte vient souvent d'un pilote qui coupe une image trop longue ou d'une mémoire saturée. Recharger avec la même demande referait la même erreur : on demande donc **moins** la fois suivante.

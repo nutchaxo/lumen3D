@@ -3,7 +3,7 @@
 ::: chapter-intro
 - Lumen3D can be served by **three kinds of server** (Python, PHP, or plain files). This chapter says what each can do, how it answers the browser and why the pages stay fast.
 - An **update** is a **signed** package: the platform refuses anything it cannot prove authentic, then switches over while keeping a way back (on Python).
-- Every release is **fully tested** (201 test files), signed, then published in one go. The platform works **without Internet**.
+- Every release is **fully tested** (239 test files), signed, then published in one go. The platform works **without Internet**.
 :::
 
 This chapter is for the person who **installs and maintains** the site: the administrator, or the IT person who helps them. Chapters 9 to 12 explain what the visitor sees; this one explains **the machine behind it**.
@@ -11,7 +11,7 @@ This chapter is for the person who **installs and maintains** the site: the admi
 Nothing here requires writing code. But understanding these mechanisms lets you **diagnose** a slow site, a refused update or a temperamental host.
 
 ::: note
-The version numbers quoted are those of this document: web platform **1.65.0**, pipeline **0.22.0**, data format **5**. The administration panel in brief is in chapter 14; security in general is in chapter 19.
+The version numbers quoted are those of this document: web platform **1.76.0**, pipeline **0.23.0**, data format **6**. The administration panel in brief is in chapter 14; security in general is in chapter 19.
 :::
 
 ## 18.1 Three ways to serve Lumen3D
@@ -263,9 +263,9 @@ An update is started from [System › Updates]{.ui}. The administrator sees the 
 
 ![The version numbers you will come across.](img-en/ch18/versions.svg){width=100%}
 
-- The **platform** has **no** version constant: it is the **name of the most recent changelog file** (`changelog_1.65.0.md`). Releasing = creating that file.
+- The **platform** has **no** version constant: it is the **name of the most recent changelog file** (`changelog_1.76.0.md`). Releasing = creating that file.
 - The **Python server** has its own version (`0.16.0`), which **deliberately drifts**: it tracks the server tool, not the platform.
-- The **pipeline** (0.22.0) is another piece of software, installed on the processing computer.
+- The **pipeline** (0.23.0) is another piece of software, installed on the processing computer.
 
 ### How the platform learns that a version exists
 
@@ -487,23 +487,23 @@ Platform plugins do **not** ship with the release: they are published in the **s
 
 A release is signed **only if** the test suite is entirely green. This suite is launched by **a single command**.
 
-![201 test files, three languages.](img-en/ch18/tests.svg){width=100%}
+![The test files, by language: Python, PHP and JavaScript.](img-en/ch18/tests.svg){width=100%}
 
 ::::: keynums
 ::: keynum
-**201**
+**239**
 test files
 :::
 ::: keynum
-**124**
+**142**
 Node (viewer, workers, protocols)
 :::
 ::: keynum
-**55**
+**73**
 Python (server, pipeline, import)
 :::
 ::: keynum
-**22**
+**24**
 PHP (twin server)
 :::
 :::::
@@ -513,7 +513,7 @@ PHP (twin server)
 - **`--check-clean`**: a test that **dirties the repository** (a file created or modified) fails. Everything must happen in temporary folders.
 
 ::: why
-**Why test the "twins" with the same vectors?** Several rules exist in **two or three languages** (version compatibility, trust fingerprint, import, release notes). The same file of cases is played by Python, PHP and JavaScript: if they diverge, a test fails. For example, `tests/compat-vector.json` contains 42 cases.
+**Why test the "twins" with the same vectors?** Several rules exist in **two or three languages** (version compatibility, trust fingerprint, import, release notes). The same file of cases is played by Python, PHP and JavaScript: if they diverge, a test fails. For example, `tests/compat-vector.json` contains 44 cases.
 :::
 
 ### Continuous integration, at every change
@@ -568,7 +568,7 @@ Lumen3D was designed for a **closed network**. Everything the **visitor** needs 
 ::: remember
 - Three servers: **Python** (everything), **PHP** (everything, no automatic rollback), **files** (read-only).
 - A **`?v=`** tells the browser "this address never changes": packs 1 year, scripts 7 days; everything else is **revalidated** (304).
-- A release is **proven** (pinned Ed25519 signature + SHA-256), **tested** (201 files) and **switched** with a safety net.
+- A release is **proven** (pinned Ed25519 signature + SHA-256), **tested** (239 files) and **switched** with a safety net.
 - Your **data, passwords and customisations** are never touched by an update.
 :::
 

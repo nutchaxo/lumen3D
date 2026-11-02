@@ -128,6 +128,10 @@ Le jeu de démonstration a des voxels de 1,2 × 1,2 × 3,0 µm. Compter les voxe
 
 **Où sont gardées les mesures ?** Uniquement **en mémoire de la page** : fermer l'onglet les efface. Pour les conserver, copiez l'adresse de la page (elles voyagent dans le lien, § 12.11) ou téléchargez [Mesures CSV]{.ui} dans le Centre de téléchargement.
 
+::: note
+**Sur un jeu au format 6**, le point est trouvé dans l'image **affichée**, donc dans les briques WebP Q30 par défaut. Pour mesurer sur les données sans perte, décochez [Chargement rapide]{.ui} (chapitre 11, § 11.9) avant de poser vos points.
+:::
+
 ### La barre d'échelle de la vue 3D
 
 Allumez la grille (bouton 7) : une barre d'échelle apparaît en bas à droite, avec une longueur « ronde » (règle **1-2-5** : 1, 2, 5, 10, 20, 50, 100 µm…). Elle vise environ 20 % de la largeur de la vue, entre 60 et 200 pixels.
@@ -283,7 +287,8 @@ L'**export de la vue 3D** (bouton 20) refait le rendu **à n'importe quelle tail
 - [Taille]{.ui} : [Écran]{.ui}, 2×, 4×, [Personnalisé]{.ui} (largeur de 16 à 16 384 px).
 - [Arrière-plan]{.ui} : comme affiché, [Transparent]{.ui}, noir, blanc.
 - [Barre d'échelle]{.ui} : désactivée sans calibration (elle compterait des voxels, pas des µm).
-- [Qualité]{.ui} : [Actuelle]{.ui} (la case affichée) ou [Sans perte]{.ui}. *Sans perte* charge la colonne sans perte du niveau natif, ou du niveau le plus fin que la carte graphique peut contenir (la fenêtre dit lequel), rend l'image, puis remet la qualité précédente.
+- [Qualité]{.ui} (jeu d'un format antérieur au 6) : [Actuelle]{.ui} (la case affichée) ou [Sans perte]{.ui}. *Sans perte* charge la colonne sans perte du niveau natif, ou du niveau le plus fin que la carte graphique peut contenir (la fenêtre dit lequel), rend l'image, puis remet la qualité précédente.
+- Jeu au **format 6** : la case [Qualité]{.ui} disparaît. L'image est **toujours sans perte**, au niveau affiché (la fenêtre l'indique). La qualité à l'écran ne change pas.
 - Fichier : `<jeu>_3d_<L>x<H>.png`.
 :::::
 ::::::
@@ -302,6 +307,13 @@ Le bouton 12 masque l'interface pour que le volume remplisse l'écran : utile po
 
 Dans le viewer, il affiche une **liste de fichiers** : le fichier Imaris d'origine, le TIFF calibré, les projections par canal (PNG), l'archive web, un fichier README. Ils n'existent que si le pipeline a été lancé avec les téléchargements (chapitre 8). Ces fichiers sont toujours servis en **pièce jointe**. S'il y a des mesures, un bouton [Mesures CSV]{.ui} apparaît (colonnes : étiquette, type, distance, unité, point A, point B…).
 
+Deux exports s'ajoutent sous la liste, **dans le viewer seulement** (pas sur la page Comparer) :
+
+- **Export OME-Zarr** (« Export OME-Zarr (napari, Fiji, Python) ») : les voxels **sans perte** des niveaux que vous cochez, dans un seul fichier `.ome.zarr.zip` calibré en µm. Bouton [Exporter .ome.zarr.zip]{.ui}. Il se construit dans votre navigateur.
+- **Briques d'affichage (WebP Q30)** : seulement sur un jeu au **format 6**. Ce sont les briques affichées, telles quelles, pour les niveaux cochés (le niveau natif est coché par défaut), dans un `.q30.zip`. Ce format se lit avec les outils Lumen3D seulement. Bouton [Télécharger le .q30.zip]{.ui}.
+
+Sur une série temporelle, ces deux exports portent sur l'instant affiché.
+
 ### Décomposer par canal
 
 ::::::: cols-wide-left
@@ -313,6 +325,12 @@ Chaque canal allumé reçoit sa **vignette** (le même volume, avec ce canal seu
 ::::::
 :::::::
 
+::: note
+- Un **cadre rouge** sur la vue 3D montre la zone que capture l'image principale. Il disparaît en disposition grille.
+- L'export reprend le **cadrage de l'écran**.
+- Sur un jeu d'un format antérieur au 6, l'export propose d'abord la version sans perte, comme le Studio. Sur le format 6, il est toujours sans perte.
+:::
+
 ### Débogage des chunks
 
 ![Les briques de 64³ voxels dessinées en jaune ; survol de l'une d'elles.](img/ch12/chunk-debug.png){.shot width=84%}
@@ -323,7 +341,8 @@ L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque 
 
 ::: tldr
 - **À quoi ça sert** : fabriquer une figure de publication à partir d'une coupe (barre d'échelle, flèches, mesures, texte).
-- Il s'ouvre **tout de suite** sur un aperçu, puis recharge la coupe à la **résolution native**.
+- Il s'ouvre **tout de suite** sur un aperçu. Sauf sur le format 6, il recharge ensuite la coupe à la **résolution native**.
+- Sur le format 6, la version sans perte n'est calculée qu'**à l'export**.
 - Les canaux se **recolorient** dans le Studio sans refaire le rendu du volume.
 :::
 
@@ -370,11 +389,15 @@ L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque 
 
 L'aperçu (au plus 2048 px) vient de la carte graphique. La passe native va chercher les **voxels de la résolution maximale** pour ce plan précis, et remplace l'image pendant qu'elle arrive. Une barre indique octets, chunks et temps restant, avec [S'arrêter ici]{.ui}.
 
-- Une coupe **XY** d'un jeu de format 2 ou plus lit le dossier `planes/` : uniquement les voxels du plan.
-- Un plan **oblique** ou un volume ancien passe par les briques (lectures d'octets ciblées, chapitre 10).
+- Une coupe **XY** lit le dossier `planes/` quand il existe : uniquement les voxels du plan.
+- Une coupe **XZ** ou **YZ** d'un jeu au **format 5 ou 6** lit une ligne du paquet `xz/` ou `yz/` de chaque canal. Une coupe **oblique** ne lit que les petites briques de 32 × 32 × *bz* que le plan traverse (section 7.11). Si une copie manque ou échoue, la passe retombe sur les briques. Les images sont identiques, voxel pour voxel.
+- Un plan **oblique** sur un volume ancien passe par les briques (lectures d'octets ciblées, chapitre 10).
 - Une brique absente parce que vide est comptée comme **zéro**, jamais comme « manquante ».
-- Si une figure demande plus de 256 Mo, une boîte propose natif, résolution réduite ou aperçu.
-- Sur un jeu au **format 5**, la passe native lit les **copies de coupe** (section 7.11) : une coupe XZ ou YZ = une ligne du paquet `xz/` ou `yz/`, trois petites lectures par canal ; une coupe oblique = seulement les petites briques de 32 × 32 × *bz* que le plan traverse. Si une copie manque ou échoue, la passe retombe sur les briques. Les images obtenues sont identiques, voxel pour voxel.
+- Pour une **figure de pile Z** (plusieurs coupes) qui demanderait plus de 256 Mo, une boîte propose le natif, un niveau inférieur ou l'aperçu.
+
+::: note
+Sur le **format 6**, la passe native se fait au **niveau affiché** et seulement pour l'export (voir ci-dessous). Les lectures sont les mêmes ; elles sont lancées plus tard.
+:::
 
 ::: note
 Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'aperçu : la barre de progression n'a presque rien à charger. Elle prend tout son sens sur un volume de plusieurs gigaoctets.
@@ -382,8 +405,9 @@ Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'ape
 
 ### Exports et limites
 
-- **PNG** : taille native, fond noir, avec une **ligne de légende toujours incrustée** en haut à gauche (jeu | plan | taille | pixel). Refusé au-delà de 16 384 px de côté ou 2²⁸ pixels.
-- Avant l'export PNG, une question : [Native sans perte]{.ui} ou [Cette image]{.ui}. *Native sans perte* attend la passe native (ou la relance si vous l'aviez arrêtée) ; les calques sont remis à l'échelle de la nouvelle image et **gardent leur place**. *Décomposer par canal* pose la même question.
+- **PNG** : taille native, fond noir, avec une **ligne de légende toujours incrustée** en haut à gauche (jeu | plan | taille | pixel µm). Une figure qui réunit plusieurs images n'écrit que le jeu et la taille. Refusé au-delà de 16 384 px de côté ou 2²⁸ pixels.
+- Sur un jeu d'un **format antérieur au 6**, l'export PNG pose une question : [Native sans perte]{.ui} ou [Cette image]{.ui}. *Native sans perte* attend la passe native (ou la relance si vous l'aviez arrêtée) ; les calques sont remis à l'échelle de la nouvelle image et **gardent leur place**.
+- Sur le **format 6**, aucune question : l'export est **toujours sans perte**, au niveau affiché.
 - **JSON** (`<jeu>_studio.json`) : calques, repères, canaux, plan, calibration. **Jamais de pixels.** À l'import, un fichier de plus de **5 Mo**, 2 000 calques ou 10 000 points est refusé ; un fichier d'une autre figure n'applique que les calques.
 - Au-delà de 4 canaux, seuls les 4 premiers sont montrés. Sans calibration : pas de barre d'échelle, mesures en pixels.
 
@@ -447,7 +471,7 @@ Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à 
 
 - **Décomposer** n'apparaît que s'il y a **un seul** panneau volumique de plusieurs canaux : il le clone en panneaux (4 au plus), un canal chacun, en gardant temps et caméra synchrones.
 - **Studio** : une figure avec tous les panneaux, en [Taille Visuelle]{.ui} ou en [Échelle Physique]{.ui} (une seule échelle en µm/px pour tous, jamais sur-échantillonnée).
-- **Exporter** compose la grille visible (4096 px de côté au plus).
+- **Exporter** compose la grille visible (4096 px de côté au plus). Ce sont les images **affichées** : sur un jeu au format 6, elles sont en WebP Q30, pas sans perte.
 - **Sauvegarder** garde l'espace de travail dans le navigateur ; **Restaurer** le recharge. L'adresse de la page contient aussi l'état (`#state=…`).
 
 ## 12.9 La frise temporelle et le suivi cellulaire
@@ -676,13 +700,14 @@ La planche assemble plusieurs photographies en un PNG : **même échelle physiqu
 La page écrit toutes les secondes son état dans l'adresse (`#state=…`, compressé) : caméra, canaux, outil actif, plan de coupe, **mesures**, image de la série, qualité, réglages des outils. Copiez simplement l'adresse.
 
 - Celui qui ouvre le lien voit : [Ce lien contient une vue enregistrée]{.ui} avec [Ouvrir la vue enregistrée]{.ui} ou [Ouvrir le jeu de données à neuf]{.ui}.
-- [Réinitialiser l'espace de travail]{.ui} (bouton 21) remet vue, outils, canaux et mesures à l'état d'ouverture ; la **qualité** n'est pas modifiée.
+- [Réinitialiser l'espace de travail]{.ui} (bouton 21) remet la vue, les outils, les canaux, les mesures, le mode de rendu, l'exposition et le fond à leur état d'ouverture ; la **qualité** n'est pas modifiée.
 - Le viewer n'a pas de bouton « Sauvegarder » : c'est l'adresse qui sert de sauvegarde. La page Comparer, elle, a [Sauvegarder]{.ui} / [Restaurer]{.ui} (§ 12.8).
 
 ::: remember
 - Une mesure est calculée en **µm** sur ce que **vous voyez** ; un clic dans le vide est refusé.
 - Coupe oblique et Z-stack s'excluent l'un l'autre.
-- Le Studio exporte au natif ; son JSON ne contient jamais de pixels.
+- Le Studio exporte sans perte (au niveau affiché sur le format 6) ; son JSON ne contient jamais de pixels.
+- Sur le format 6, l'affichage est en WebP Q30. Les **exports** sont sans perte ; les **mesures** suivent l'affichage (case [Chargement rapide]{.ui}).
 - Comparer = les vraies pages dans des cadres, avec un budget mémoire partagé.
 - « Isoler le marquage » est une aide visuelle, pas une mesure.
 :::

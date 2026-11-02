@@ -4,7 +4,7 @@
 - Un volume de plusieurs gigaoctets ne peut pas être chargé d'un bloc : on le découpe en **briques** (des petits cubes de 64 × 64 × 64 voxels) que le navigateur va chercher une par une.
 - Chaque brique devient **une seule image WebP** (sans perte) ; les briques sont rangées dans des **paquets**, retrouvées grâce à un **index** de quelques kilo-octets.
 - Deux structures annexes, `planes/` et `mips/`, rendent les coupes et les projections rapides ; le tout forme le **format de données 4**.
-- Le **format 5** (section 7.11) range le même volume en une **matrice** : plusieurs résolutions × cinq compressions, plus trois copies pour couper vite.
+- Les **formats 5 et 6** (section 7.11) rangent le même volume en une **matrice** : plusieurs résolutions × des compressions, plus trois copies pour couper vite. Le **format 6**, le plus récent, ne garde que deux colonnes : sans perte, et WebP qualité 30 pour l'affichage.
 :::
 
 Dans ce chapitre, les images de données (mosaïque, couture, paquets…) viennent toutes du **jeu de démonstration** : l'embryon synthétique `Embryo-E95-Em2-Pecam1-Sox2` (768 × 576 × 112 voxels, 3 canaux), publié par le vrai pipeline. Ce n'est pas une donnée du laboratoire.
@@ -220,7 +220,7 @@ Pour une épaisseur quelconque, le Studio combine : les **MIP des couches entiè
 
 ## 7.10 Les formats de données 1 à 5
 
-Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de données porte un numéro, `formatVersion`, dans son `metadata.json`. Le format **5** est le format actuel (plateforme 1.65).
+Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de données porte un numéro, `formatVersion`, dans son `metadata.json`. Le format **6** est le format actuel (plateforme 1.76).
 
 | format | ce qu'il ajoute | migration |
 |---|---|---|
@@ -229,8 +229,9 @@ Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de donn�
 | 3 | `mips/` : MIP par couche de 64 plans | `m003-layer-mips` |
 | 4 | briques v3 : bordure 66³, mosaïque 9 × 8, paquets en super-blocs, `index.bin` | `m004-bricks-v3` |
 | 5 | la **matrice** : des niveaux à 256 · 2^k^ qui gardent toutes les tranches, **cinq compressions** par niveau, trois copies pour couper vite (section 7.11) | `m005-matrix` |
+| 6 | la matrice réduite à **deux colonnes** : `ll` (sans perte) et `q30` (WebP qualité 30 pour l'affichage) ; les trois copies de coupe restent (section 7.11) | `m006-q30` |
 
-Le pipeline (version 0.22.0) écrit **le format 4 par défaut**, et le format 5 sur demande (`--format 5`). Un jeu publié en format 4, ou plus ancien, n'est pas perdu : la plateforme sait le mettre à niveau, jusqu'au 5.
+Le pipeline (version 0.23.0) écrit **le format 6 par défaut** (l'option `--format` accepte 4, 5 ou 6). Un jeu publié en format 5, ou plus ancien, n'est pas perdu : la plateforme sait le mettre à niveau, jusqu'au 6.
 
 ### « Mises à jour des données »
 
@@ -240,12 +241,12 @@ Comme une mise à jour de logiciel, l'onglet [Mises à jour des données]{.ui} d
 ::: card
 #### Dans ce navigateur
 
-Votre navigateur fait le travail (décodage et encodage WebP) et envoie les fichiers au serveur. Sur un hébergement PHP, c'est **la seule** façon de passer au format 5.
+Votre navigateur fait le travail (décodage et encodage WebP) et envoie les fichiers au serveur. Sur un hébergement PHP, c'est **la seule** façon de passer aux formats 5 et 6.
 :::
 ::: card
 #### Sur le serveur
 
-Le serveur convertit lui-même, si son hébergement sait le faire (serveur Python pour le format 5).
+Le serveur convertit lui-même, si son hébergement sait le faire (serveur Python, pour les formats 5 et 6).
 :::
 ::: card
 #### Pause et reprise
@@ -254,19 +255,19 @@ Le travail est découpé en petites unités notées dans un journal : on peut me
 :::
 ::::
 
-## 7.11 Le format 5 : une matrice résolution × compression
+## 7.11 Les formats 5 et 6 : la matrice et le format actuel
 
 ::: tldr
-- Le même volume est rangé **plusieurs fois** : à plusieurs **résolutions** (les lignes) et dans **cinq compressions** (les colonnes). Le visiteur choisit sa case.
+- Le même volume est rangé **plusieurs fois** : à plusieurs **résolutions** (les lignes) et dans plusieurs **compressions** (les colonnes) : cinq au format 5, deux au format 6. Le visiteur choisit sa case.
 - Les niveaux réduits **gardent toutes les tranches** ; leur grand côté vaut exactement 4096, 2048, 1024, 512 ou 256.
-- Trois **copies recoupées** (XY, XZ / YZ, oblique) rendent les coupes du Studio rapides, et tout ce qui **mesure** lit toujours les voxels **sans perte**.
+- Trois **copies recoupées** (XY, XZ / YZ, oblique) rendent les coupes du Studio rapides, et les exports lisent les voxels **sans perte** au niveau affiché ; une distance se mesure sur l'image affichée.
 :::
 
 ::: analogy
-Une **photothèque** garde chaque photo en plusieurs tailles et plusieurs qualités : la vignette pour feuilleter, l'original pour imprimer. Le format 5 fait de même avec un volume : on **regarde** dans une version légère, on **mesure** et on **exporte** dans l'original.
+Une **photothèque** garde chaque photo en plusieurs tailles et plusieurs qualités : la vignette pour feuilleter, l'original pour imprimer. Le format 5 fait de même avec un volume : on **regarde** dans une version légère, on **exporte** dans l'original.
 :::
 
-Le principe : **le disque est dépensé, le réseau et la carte graphique ne le sont pas.** Ce qui s'affiche peut être compressé avec perte, tant que l'image n'est pas visiblement altérée ; ce qui mesure lit l'original.
+Le principe : **le disque est dépensé, le réseau et la carte graphique ne le sont pas.** Ce qui s'affiche peut être compressé avec perte, tant que l'image n'est pas visiblement altérée ; les exports lisent l'original, et une distance se mesure sur l'image affichée.
 
 ### Les lignes : des niveaux qui gardent toutes les tranches
 
@@ -281,22 +282,24 @@ Le principe : **le disque est dépensé, le réseau et la carte graphique ne le 
 Pour passer de 768 à 512 voxels, un voxel réduit recouvre 1,5 voxel natif. Le pipeline découpe la ligne en morceaux entiers (768 × 512 unités), compte combien chaque voxel natif recouvre de chaque voxel réduit, et fait la moyenne pondérée : le voxel réduit 0 prend tout le voxel natif 0 et la moitié du voxel 1. Aucun voxel n'est oublié ni compté deux fois.
 :::
 
-### Les colonnes : cinq compressions
+### Les colonnes du format 5 : cinq compressions
 
-| colonne | à l'écran | ce qui est garanti | taille (par rapport à « sans perte ») |
+Le menu du viewer affiche chaque colonne sous un nom court, suivi de son réglage entre parenthèses.
+
+| colonne | nom affiché | ce qui est garanti | taille (par rapport à « sans perte ») |
 |---|---|---|---|
-| **Sans perte** (`ll`) | [Sans perte]{.ui} | chaque voxel exact (comme le format 4) | 1 |
-| **±2** (`b2`) | [±2]{.ui} | aucun voxel ne bouge de plus de **2** sur 255 | 0,62 à 0,82 |
-| **±4** (`b4`) | [±4]{.ui} | aucun voxel ne bouge de plus de **4** | 0,50 à 0,69 |
-| **Légère** (`q80`) | [Légère]{.ui} | WebP avec perte, qualité 80 (pas de borne ; ≈ 36 dB) | 0,35 à 0,61 |
-| **Très légère** (`q50`) | [Très légère]{.ui} | WebP avec perte, qualité 50 (≈ 31–33 dB) | 0,22 à 0,40 |
+| `ll` | **Max** (« Exacte ») | chaque voxel exact (comme le format 4) | 1 |
+| `b2` | **Extra** (« ±2 niveaux ») | aucun voxel ne bouge de plus de **2** sur 255 | 0,62 à 0,82 |
+| `b4` | **High** (« ±4 niveaux ») | aucun voxel ne bouge de plus de **4** | 0,50 à 0,69 |
+| `q80` | **Medium** (« WebP 80 ») | WebP avec perte, qualité 80 (pas de borne ; ≈ 36 dB) | 0,35 à 0,61 |
+| `q50` | **Low** (« WebP 50 ») | WebP avec perte, qualité 50 (≈ 31–33 dB) | 0,22 à 0,40 |
 
 Tailles mesurées sur 1 673 briques natives de trois embryons du laboratoire (spécification, § 14.11).
 
 ![La même vraie brique dans les cinq compressions : en haut la tranche du milieu, en bas l'écart avec l'original, multiplié par 16 pour être visible.](img/f5/colonnes.png){width=100%}
 
 ::: example
-**Lisez la figure.** Sur cette brique dense (164 Ko sans perte), ±2 pèse 102 Ko et ne change aucun voxel de plus de 2 ; « Très légère » pèse 37 Ko (4,4 fois moins) mais un voxel peut s'écarter de 35. À l'œil, les cinq tranches du haut sont presque identiques : c'est la promesse des colonnes légères. Pour mesurer, la plateforme ne les utilise **jamais** (section « Ce qui mesure lit l'original »).
+**Lisez la figure.** Sur cette brique dense (164 Ko sans perte), ±2 pèse 102 Ko et ne change aucun voxel de plus de 2 ; « Low » (WebP 50) pèse 37 Ko (4,4 fois moins) mais un voxel peut s'écarter de 35. À l'œil, les cinq tranches du haut sont presque identiques : c'est la promesse des colonnes légères. Une distance se mesure sur l'image affichée : pour des voxels exacts, choisissez la colonne **Max** du niveau natif (section « Ce que lisent les exports »).
 :::
 
 #### ±2 et ±4 : des « casiers » de valeurs
@@ -307,7 +310,7 @@ Tailles mesurées sur 1 673 briques natives de trois embryons du laboratoire (sp
 - Les autres valeurs sont groupées par 5 (±2) ou par 9 (±4) ; on stocke **le numéro du casier**, sans perte. Moins de valeurs différentes → l'image se compresse mieux.
 - Le manifeste porte la table « casier → valeur » ; le viewer l'applique **en même temps** que son réglage d'affichage, sans calcul en plus.
 
-#### Légère et Très légère : du WebP avec perte, mais surveillé
+#### Medium et Low : du WebP avec perte, mais surveillé
 
 1. **Une zone morte.** Une compression avec perte « bave » : quelques voxels du fond noir prennent de petites valeurs. L'encodeur, qui connaît l'original, choisit un seuil τ (de 0 à 12) sous lequel tout redevient 0, et l'écrit dans **un octet** à la fin de la brique.
 2. **Jamais plus lourde qu'une colonne fidèle.** Sur une brique presque vide, l'image avec perte peut peser plus que l'image sans perte. L'encodeur garde alors la plus petite des trois : l'image avec perte, l'image ±4 ou l'image sans perte. L'octet final dit laquelle (0 à 12 = τ ; 254 = ±4 ; 255 = sans perte).
@@ -316,11 +319,24 @@ Tailles mesurées sur 1 673 briques natives de trois embryons du laboratoire (sp
 ![Pourquoi les colonnes avec perte rangent les tranches tous les 80 pixels.](img/f5/grille80.svg){width=100%}
 
 ::: example
-**Mesuré sur le canal DAPI du jeu de démonstration** (100 briques natives, colonne Très légère) : sans zone morte, 3,9 % des voxels noirs deviennent non nuls ; avec elle, 1,8 %. Et 12 briques sur 100 sont rangées en ±4 plutôt qu'en WebP avec perte, parce que c'était plus petit.
+**Mesuré sur le canal DAPI du jeu de démonstration** (100 briques natives, colonne Low) : sans zone morte, 3,9 % des voxels noirs deviennent non nuls ; avec elle, 1,8 %. Et 12 briques sur 100 sont rangées en ±4 plutôt qu'en WebP avec perte, parce que c'était plus petit.
 :::
 
 ::: why
 **Pourquoi pas AVIF ou JPEG XL ?** AVIF donne le même compromis taille / qualité que WebP à quelques pour cent près, encode deux fois plus lentement et n'a pas d'encodeur dans les navigateurs, qui ne pourraient donc pas faire la conversion. JPEG XL n'est pas décodé par Chrome ni Firefox par défaut (octobre 2026). Mesures : spécification § 14.3.
+:::
+
+### Le format 6 : sans perte et WebP qualité 30
+
+Le format 6 ne garde que **deux colonnes** :
+
+- `ll` : sans perte, comme dans les formats précédents ;
+- `q30` : WebP avec perte, qualité 30, avec une zone morte. Si cette image ne pèse pas moins que l'image sans perte, la brique reste **sans perte** (la plus petite des deux est gardée).
+
+Le viewer affiche `q30` par défaut ([Chargement rapide]{.ui} coché, chapitre 10) ; décocher la case affiche `ll` à la même résolution. **Les exports lisent `ll`**, à la résolution affichée ; une distance se mesure sur l'image affichée (`q30` par défaut).
+
+::: example
+**Mesuré sur le jeu E8.5 Em1, au natif** (changelog 1.70.0) : la colonne `q30` pèse **26 Mo**, contre **89 Mo** sans perte, et l'erreur moyenne est de **1,5 niveau de gris** sur 255.
 :::
 
 ### Trois copies pour couper vite
@@ -341,11 +357,11 @@ Une coupe tirée des briques de 64³ télécharge bien plus qu'elle n'affiche : 
 **Mesuré sur un embryon de 1946² × 72 voxels** (plateforme 1.64) : une coupe oblique native a téléchargé **23 Mo en 15 requêtes** au lieu de 60 Mo en 30 par les briques, et chaque image est identique voxel pour voxel.
 :::
 
-### Ce qui mesure lit l'original
+### Ce que lisent les exports
 
-Toute mesure, tout plugin qui rend un nombre, et tout export « natif » lit la colonne **sans perte du niveau natif**, quelle que soit la case affichée (chapitre 12 et 15). Un réglage d'affichage léger ne fausse donc jamais un chiffre.
+Les exports « natifs » et les figures lisent la version **sans perte** du niveau affiché (format 6) ou l'option *Sans perte* de l'export (format 5, chapitres 12 et 15). Les plugins qui calculent un nombre passent par `ctx.data` et lisent le sans perte. Une distance, elle, se mesure sur l'image affichée : sa précision est celle du voxel de ce niveau.
 
-### L'arbre d'un jeu au format 5
+### L'arbre d'un jeu au format 5 ou 6
 
 ![Le dossier `bricks/` du jeu de démonstration après conversion, avec les tailles réelles.](img/f5/arbre.svg){width=100%}
 
@@ -362,5 +378,6 @@ Toute mesure, tout plugin qui rend un nombre, et tout export « natif » lit la 
 - Une brique = 64³ voxels utiles + 1 voxel de bordure = **66³**, stockée en **une image WebP sans perte** de 594 × 528 pixels (9 × 8 coupes).
 - Les briques sont dans des **paquets** (super-blocs de 4 × 4 × 4) ; `index.bin` donne paquet, début et longueur de chacune (10 octets par brique).
 - `planes/` accélère les coupes XY, `mips/` les projections.
-- Format actuel = **5** : des niveaux à 256 · 2^k^ qui gardent toutes les tranches, cinq compressions par niveau (sans perte, ±2, ±4, légère, très légère), trois copies recoupées pour les coupes ; tout ce qui mesure lit la colonne sans perte du natif.
+- Format actuel = **6** : les niveaux du format 5 (grand côté à 256 · 2^k^, toutes les tranches gardées), deux colonnes par niveau (`ll` sans perte, `q30` WebP qualité 30 pour l'affichage) et trois copies recoupées pour les coupes ; les exports lisent la colonne sans perte ; une distance se mesure sur l'image affichée.
+- Le format 5 garde ses cinq compressions (Max, Extra, High, Medium, Low) tant que le jeu n'est pas converti.
 :::

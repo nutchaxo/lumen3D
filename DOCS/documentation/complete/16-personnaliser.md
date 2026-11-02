@@ -2,7 +2,7 @@
 
 ::: chapter-intro
 - Lumen3D se **repeint à vos couleurs sans une ligne de code** : nom, vocabulaire, thème, pages, mentions légales. Tout tient dans quelques petits fichiers JSON du dossier `config/`.
-- Le site parle **quatre langues** (anglais, français, espagnol, néerlandais) avec **1 943 textes** par langue ; ajouter une cinquième langue, c'est déposer un fichier.
+- Le site parle **quatre langues** (anglais, français, espagnol, néerlandais) avec **2 275 textes** par langue ; ajouter une cinquième langue, c'est déposer un fichier.
 - Le site respecte aussi les visiteurs : **thème clair ou sombre** sans clignotement, **simulation de daltonisme**, usage sur téléphone, et des **statistiques sans donnée personnelle**.
 :::
 
@@ -213,7 +213,7 @@ Ce n'est pas une panne, c'est le repli qui fonctionne : la solution est de rempl
 | 2 | Carte **Terminologie** : le mot qui désigne vos objets d'étude, au singulier et au pluriel. |
 | 3 | Carte **Accroche & SEO** : accroche, description et mots-clés, par langue. |
 | 4 | Carte **Pied de page** : copyright (par langue) et liens, affichés dans le pied de page public (voir 16.2). |
-| 5 | Carte **Navigation** : une case par entrée du menu public. [Mentions légales]{.ui} est décochée par défaut. |
+| 5 | Carte **Navigation** : une case par entrée du menu public. [Mentions légales]{.ui} est cochée sur une installation neuve. |
 | 6 | [Enregistrer]{.ui} : actif seulement quand un champ a changé. |
 | 7 | Un champ **multilingue** : une ligne par langue disponible. Ici la ligne **NL** est vide. |
 :::
@@ -527,7 +527,7 @@ Un site public a besoin d'un **éditeur**, d'un **hébergeur**, d'une politique 
 
 - Tant que vous n'avez rien publié, la page montre le **modèle neutre** livré (éditeur, protection des données, cookies et stockage local, propriété intellectuelle, avertissement, contact). Il est écrit en **anglais, français, espagnol et néerlandais**.
 - Le texte est affiché par `textContent` : aucun HTML, aucune mise en forme, une section par bloc.
-- Le lien n'apparaît dans le pied de page que si la case [Afficher « Mentions légales »]{.ui} est cochée (décochée par défaut).
+- Le lien n'apparaît dans le pied de page que si la case [Afficher « Mentions légales »]{.ui} est cochée : elle l'est sur une installation neuve, où le lien est donc visible dès l'installation et la page affiche les six sections du modèle, dont les `[crochets]` restent à remplacer.
 
 ::: warning
 Ces textes sont des **points de départ**, pas des conseils juridiques. Faites-les relire pour votre pays. N'oubliez pas qu'un serveur web garde généralement un **journal d'accès** (adresses IP) selon sa configuration : c'est l'affaire de votre hébergeur, et elle se déclare ici (voir 16.11).
@@ -586,20 +586,21 @@ Le site public, le viewer, l'administration et même les mots de chaque outil so
 | | |
 |---|---|
 | langues livrées | **4** : anglais, français, espagnol, néerlandais |
-| textes par langue | **1 943** (mesuré sur les quatre fichiers `lang/*.json`) |
-| dictionnaires d'outils | **28**, soit 240 textes en anglais |
+| textes par langue | **2 275** (mesuré sur les quatre fichiers `lang/*.json`, identiques en nombre de clés) |
+| dictionnaires d'outils | **28**, soit 248 textes en anglais |
 | langues de secours | l'**anglais**, toujours |
 
-Les 1 943 textes se répartissent ainsi :
+Les 2 275 textes se répartissent ainsi :
 
 | Famille de clés | Textes | Ce qu'elle contient |
 |--------|---|------------|
-| `pages` | 485 | l'éditeur de pages |
-| `admin` | 365 | le panneau d'administration |
-| `viewer` | 182 | le viewer |
-| `dupd` | 119 | l'onglet Mises à jour des données |
-| `upl` + `upload` | 104 | l'import |
-| `compare`, `about`, `studio`, `tips`… | 688 | le reste |
+| `pages` | 569 | l'éditeur de pages |
+| `admin` | 393 | le panneau d'administration |
+| `viewer` | 235 | le viewer |
+| `dupd` | 139 | l'onglet Mises à jour des données |
+| `dint` | 92 | l'onglet Intégrité des données |
+| `upl` + `upload` | 107 | l'import |
+| `compare`, `about`, `studio`, `tips`… | 740 | le reste |
 
 ::: remember
 Une clé d'une langue **existe dans les quatre**, avec les **mêmes jetons** `{…}`. Un test automatique le vérifie à chaque version (`tests/js/test_build_lang_parity.mjs`) : une clé manquante, vide ou dont les jetons changent fait échouer la livraison.
@@ -706,7 +707,7 @@ Un petit script bloquant (`theme-boot.js`, quelques lignes) est placé dans l'`<
 - Les boutons d'icônes portent un nom (`aria-label`, ou une infobulle traduite) ; le texte vient des fichiers de langue.
 - Les fenêtres modales (`Dialog`) sont déclarées `aria-modal` ; quand elles offrent une issue « annuler », <kbd>Échap</kbd> ou un clic sur le fond la choisit. Leur texte est écrit par `textContent`.
 - Les outils du viewer ont des raccourcis (V, C, M, I, D…) : voir le chapitre 12.
-- Les feuilles de style contiennent 25 occurrences de `:focus-visible` : l'élément qui a le focus clavier est entouré.
+- Les feuilles de style contiennent 31 occurrences de `:focus-visible` : l'élément qui a le focus clavier est entouré.
 
 ### Mouvement réduit
 
@@ -868,7 +869,7 @@ Changer le **nom** d'un type de données ne change aucun de ces chiffres. Lors d
 | `volume.load.bricks` | le chargement des briques d'une qualité |
 | `texture.upload.prepare` | la préparation de la texture avant envoi à la carte graphique |
 | `viewer.frame_time` | la fluidité : durée moyenne, médiane et 95ᵉ centile des images (toutes les 4 secondes, après 45 images) |
-| `viewer.context_lost` / `restored` | une perte et une reprise du contexte graphique |
+| `viewer.context_lost` / `viewer.context_restored` | une perte et une reprise du contexte graphique |
 
 ### Le lire
 
@@ -900,7 +901,7 @@ Seule la page du viewer charge `PerfTelemetry`. La ligne de progression que vous
 | Constat | Explication |
 |-----------|-------------|
 | « Mon changement d'Apparence n'apparaît pas » | il n'est appliqué qu'après [Enregistrer]{.ui} ; videz le cache si le navigateur garde l'ancienne `theme.css` |
-| « Le lien Mentions légales a disparu » | la case est décochée par défaut dans [Identité]{.ui} |
+| « Le lien Mentions légales a disparu » | la case a pu être décochée dans [Identité]{.ui} (elle est cochée sur une installation neuve) |
 | « Le néerlandais parle d'embryos » | la ligne **NL** de *Terminologie* est vide |
 | « Ma page est sauvée mais invisible » | le brouillon est enregistré ; il faut [Publier]{.ui} |
 | « L'éditeur dit que la page est ouverte ailleurs » | un autre onglet l'édite : reprenez la main ou fermez l'autre |

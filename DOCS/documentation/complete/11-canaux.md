@@ -8,7 +8,11 @@
 
 ## 11.1 La chaîne de traitement d'un canal
 
-Chaque voxel est stocké sous la forme d'un **octet** (un nombre de 0 à 255). Avant de devenir un pixel coloré, il traverse sept étapes. Cinq d'entre elles sont à votre portée ; une seule est cachée.
+Chaque voxel est stocké sous la forme d'un **octet** (un nombre de 0 à 255). Avant de devenir un pixel coloré, il traverse **sept étapes**.
+
+- Une seule est **cachée** : le plancher (étape 2).
+- La combinaison (étape 7) suit le **mode de rendu**, commun à tous les canaux.
+- Les autres se règlent canal par canal, sauf l'exposition, qui est globale.
 
 ![Le trajet d'une valeur : de l'octet stocké à la couleur du pixel.](img/ch11/chaine.svg){width=100%}
 
@@ -20,6 +24,7 @@ Chaque voxel est stocké sous la forme d'un **octet** (un nombre de 0 à 255). A
 | Opacité | vous | bouton goutte (3 valeurs) |
 | Couleur | vous | pastille de couleur |
 | Exposition | vous | curseur [Visibilité (exposition)]{.ui}, global |
+| Combinaison | vous, une fois | menu [Mode de rendu]{.ui}, commun à tous les canaux |
 
 ## 11.2 L'étape cachée : le plancher du fond
 
@@ -28,7 +33,7 @@ Avant même que vous touchiez à un réglage, le viewer **écrase le fond** : to
 ![L'effet d'un plancher de 26 (valeur réelle estimée pour le canal DAPI du jeu E9.5).](img/ch11/plancher.png){width=60%}
 
 ::: tech
-Le plancher `f` est estimé à partir de l'histogramme du jeu de données : on cherche le premier niveau où le cumul atteint **la case 0 + 20 % des voxels non nuls**, on prend le bord supérieur de cette case, on ajoute 2 et on borne le résultat entre **6 et 48**. Ensuite : `valeur' = 0` si `valeur ≤ f`, sinon `arrondi((valeur − f) × 255 / (255 − f))`.
+Le plancher `f` est estimé à partir de l'histogramme du jeu de données : on cherche le premier niveau où le cumul atteint **la case 0 + 20 % des voxels non nuls**, on prend le bord supérieur de cette case, on ajoute 2 et on borne le résultat entre **6 et 48** (`_floorsFromManifest`, `js/viewers/volume-viewer.js`). Si le manifeste porte un plancher explicite (`backgroundFloor` > 0), il est pris à la place ; le pipeline écrit 0, donc l'estimation s'applique. Ensuite : `valeur' = 0` si `valeur ≤ f`, sinon `arrondi((valeur − f) × 255 / (255 − f))` (`_floorLuts`).
 :::
 
 ::: example
@@ -101,7 +106,7 @@ Un **histogramme** compte combien de voxels ont chaque valeur. Celui du panneau 
 Une colonne géante au niveau 0 écraserait tout le reste. Le panneau applique donc trois règles :
 
 - échelle **linéaire**, normalisée par la colonne la plus haute ;
-- les **4 % de colonnes les plus basses** (les 3 premières sur 64) sont **plafonnées à 1,35 fois** la plus haute colonne qui les suit ;
+- les **4 % de colonnes les plus basses** (les 3 premières sur 64) sont **plafonnées à 1,35 fois** la plus haute des colonnes restantes ;
 - les « trous en peigne » (une colonne sous 20 % de ses deux voisines) sont comblés par la moyenne de ses voisines, pour masquer un artefact de décodage du WebP.
 
 ::: note
@@ -163,7 +168,7 @@ Le curseur [Flou gaussien σ]{.ui} (de 0 à 5, par pas de 0,1) lisse le bruit **
 ::: remember
 - **2D dans le plan** : chaque plan Z est flouté séparément, jamais d'un plan à l'autre.
 - σ est en **voxels du niveau affiché**.
-- Calcul par un groupe de **jusqu'à 4 ouvriers**, hors de la page ; une bulle indique que le calcul est en cours.
+- Calcul par un groupe de **jusqu'à 4 ouvriers**, hors de la page (la page reste utilisable).
 :::
 
 :::: cols
@@ -176,7 +181,7 @@ Le curseur [Flou gaussien σ]{.ui} (de 0 à 5, par pas de 0,1) lisse le bruit **
 ::::
 
 ::: warning
-Le flou n'est disponible que si le niveau affiché tient dans **une seule texture dense**. Pour un gros niveau stocké en atlas, le curseur est grisé avec le message : « Indisponible à cette qualité (atlas de briques creux) : choisissez une qualité inférieure pour utiliser le flou. » Utiliser le flou désactive aussi le mode [Détail au zoom]{.ui} (chapitre 10).
+Le flou n'est disponible que si le niveau affiché tient dans **une seule texture dense**. Pour un gros niveau stocké en atlas, le curseur est grisé avec le message : « Indisponible à cette qualité (atlas de briques creux) : choisissez une qualité inférieure pour utiliser le flou. »
 :::
 
 ## 11.9 Garde-fou : ce que les niveaux de gris veulent dire
@@ -189,3 +194,7 @@ Le flou n'est disponible que si le niveau affiché tient dans **une seule textur
 - Comparer **deux jeux de données** par leurs niveaux de gris n'est pas valable, même avec les mêmes réglages.
 - Dans une **série temporelle**, la même fenêtre est partagée par tous les pas de temps d'un canal : les variations d'intensité dans le temps restent comparables entre elles.
 - Pour une **mesure quantitative**, retournez aux données d'origine (fichier Imaris).
+
+::: note
+**Sur un jeu au format 6, l'affichage est compressé.** Il lit par défaut les briques WebP qualité 30 (une compression avec une légère perte). La case [Chargement rapide]{.ui} les remplace par les données sans perte, plus lourdes à charger. Les exports (image 3D, Studio, Décomposer) sont toujours sans perte. Les **mesures** lisent ce qui est affiché (§ 12.2).
+:::

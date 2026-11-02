@@ -2,8 +2,8 @@
 title: "Guide de l'administrateur"
 subtitle: "Le panneau d'administration de Lumen3D, onglet par onglet"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plateforme Web 1.65.0"
-date: "Octobre 2026"
+version: "Plateforme Web 1.76.0"
+date: "Novembre 2026"
 abstract: "Tout ce qu'on peut faire depuis le panneau d'administration du site : gérer et importer les jeux de données, les mettre au format courant, personnaliser le site public, installer des fonctions, mettre la plateforme à jour. Écrit pour quelqu'un qui n'a jamais vu ce panneau et qui ne sait pas coder."
 lang: fr
 toc-class: compact
@@ -27,12 +27,12 @@ Il est écrit pour quelqu'un qui **n'a jamais vu ce panneau** et qui **ne sait p
 
 ## Le panneau en quatre groupes
 
-Le menu de gauche range les 15 onglets en **quatre groupes**, selon ce que vous êtes en train de faire. Ce guide suit le même ordre.
+Le menu de gauche range les 17 onglets en **quatre groupes**, selon ce que vous êtes en train de faire. Ce guide suit le même ordre.
 
 | Groupe | Onglets | Chapitres |
 |---|---|---|
 | **Prise en main** | Connexion, tour du panneau | 1 – 2 |
-| **Données** | Datasets · Import · Mises à jour des données · Types de données · Statistiques | 3 – 7 |
+| **Données** | Datasets · Import · Mises à jour des données · Intégrité des données · Types de données · Statistiques · Stockage | 3 – 7 |
 | **Site public** | Identité · Apparence · Pages · Mentions légales | 8 – 11 |
 | **Extensions** | Plugins · Catalogue | 12 – 13 |
 | **Système** | Mises à jour (et page *Notes de version*) · Pipeline · Sécurité · Documentation | 14 – 17 |
@@ -145,7 +145,7 @@ Une fois connecté, l'écran se divise en trois zones qui ne changent jamais : l
 ::: legend
 | n | ce que c'est |
 |-|----------------------|
-| 1 | Groupe **Données** : Datasets, Import, Mises à jour des données, Types de données, Statistiques. |
+| 1 | Groupe **Données** : Datasets, Import, Mises à jour des données, Intégrité des données, Types de données, Statistiques, Stockage. |
 | 2 | Groupe **Site public** : Identité, Apparence, Pages, Mentions légales. |
 | 3 | Groupe **Extensions** : Plugins, Catalogue. |
 | 4 | Groupe **Système** : Mises à jour, Pipeline, Sécurité, Documentation. |
@@ -197,8 +197,10 @@ Quand un **import est en cours**, la déconnexion et les liens qui quittent le p
 | **Datasets** | Nommer, décrire, orienter, afficher ou masquer chaque jeu de données | Courant |
 | **Import** | Envoyer le dossier produit par le pipeline, depuis le navigateur | Courant |
 | **Mises à jour des données** | Mettre les jeux de données publiés au format de données courant | Occasionnel |
+| **Intégrité des données** | Vérifier que chaque jeu de données est complet et au format courant | Occasionnel |
 | **Types de données** | Le nom public des trois catégories (3D, 2D, Live) | Rare |
 | **Statistiques** | Voir la fréquentation du site | Occasionnel |
+| **Stockage** | Voir la place occupée sur le disque, par type et par jeu de données | Occasionnel |
 | **Identité** | Nom du site, vocabulaire, pied de page, menu | Rare |
 | **Apparence** | Couleurs, police et arrondis du site public | Rare |
 | **Pages** | Modifier le contenu des pages (accueil, à propos…) | Courant |
@@ -276,7 +278,7 @@ Un dataset **publié par l'Import** arrive **masqué** de l'explorateur public. 
 
 - Les noms des filtres de type sont **ceux que vous avez choisis** dans l'onglet Types de données (chapitre 6). Il y a **trois** types : le suivi de cellules est une couche d'un dataset *Live*, pas un type à part.
 - Le filtre [Import]{.ui} montre les datasets dont le transfert n'est pas publié (§3.10).
-- Le **point coloré n'est pas un contrôle d'intégrité** : vert veut dire que le dataset a déjà été enregistré au moins une fois depuis ce panneau (ou possède une vignette) ; ambre qu'il ne l'a jamais été.
+- Le **point coloré n'est pas un contrôle d'intégrité** : vert veut dire que le dataset a déjà été enregistré au moins une fois depuis ce panneau (ou possède une vignette) ; ambre qu'il ne l'a jamais été. Pour un vrai contrôle, voir [Intégrité des données]{.ui} (§7.3).
 
 ::: note
 L'œil change la visibilité **tout de suite** (toast « Dataset masqué de l'explorer. » ou « Dataset visible dans l'explorer. »). C'est la seule modification d'un dataset qui ne passe pas par [Sauvegarder]{.ui}.
@@ -320,6 +322,34 @@ Certains réglages faits dans l'aperçu sont **récupérés par le panneau** et 
 - l'**orientation** si vous êtes en train de la définir (§3.8).
 
 Tout le reste — position de la caméra, mode de rendu, qualité, fond, plan de coupe — sert à regarder et **n'est pas conservé**.
+
+### La qualité de rendu
+
+La section **Qualité de Rendu** de la barre latérale de l'aperçu est celle du visiteur. Ce qu'elle propose dépend du **format** du jeu de données (chapitre 5) :
+
+| Format | Ce que vous voyez |
+|---|---|
+| 1 à 4 | Une liste **256x256 / 512x512 / 1024x1024 / Native**. |
+| 5 | Deux listes, **Résolution** et **Qualité**, et le bouton [Comment choisir ?]{.ui}, qui explique le choix. |
+| 6 | La liste des **résolutions** et la case [Chargement rapide]{.ui}, cochée par défaut. |
+
+![La section Qualité de Rendu d'un jeu de données au format 6.](../documentation/img/ch09/quality-format6.png){.shot width=70%}
+
+::: legend
+| n | ce que c'est |
+|-|----------------------|
+| 1 | Une **résolution** de la liste (Natif, 1024, 512, 256), avec sa taille en voxels et en mémoire graphique. |
+| 2 | La **résolution affichée** (ici 512). |
+| 3 | La case [Chargement rapide]{.ui}, cochée. |
+:::
+
+- **[Chargement rapide]{.ui}** (format 6) : coché, le volume se charge en WebP **qualité 30**, plus léger ; décoché, il se charge **sans perte**, avec des téléchargements plus gros. Ce choix se mémorise dans **ce seul navigateur**. Les **exports** restent toujours sans perte, quel que soit le réglage.
+- **Mémoire graphique** : il n'y a plus de réglage à faire. La plateforme prend seule **60 % de la mémoire vidéo dédiée** de la carte, sans dépasser **16 Gio**. Sur une carte de moins de 5 Gio, elle garde 2 Gio libres pour le reste du système, sans descendre sous 1 Gio. Si le navigateur ne déclare pas la carte, une valeur forfaitaire est utilisée (selon le type de carte et la mémoire déclarée). Une valeur réglée à la main est **effacée** au premier chargement du visualiseur.
+- **Pendant une rotation**, la qualité **ne baisse plus** : le même rendu est gardé, au repos comme en mouvement. En mode **Fluorescence (type Imaris)**, le rendu s'affiche **tout de suite** après un changement de réglage.
+
+::: note
+Il n'y a plus de réglage de « détail par zone » : la qualité affichée est celle que vous choisissez, et le volume entier reste chargé.
+:::
 
 ## 3.4. La colonne de droite : les réglages
 
@@ -557,11 +587,29 @@ Un dataset en cours d'envoi apparaît **dans cette liste** (filtre [Import]{.ui}
 
 Le bandeau et le formulaire se **mettent à jour tout seuls** quand l'état change. Le bouton [Éditer]{.ui} de l'onglet Import ouvre directement le bon dataset, ici.
 
+Tant qu'un import n'est pas **éditable**, son **aperçu reste vide** : la colonne centrale affiche le message d'accueil de l'onglet. L'aperçu s'ouvre tout seul dès que le dataset devient éditable.
+
 ## 3.11. Quand aucun jeu de données n'est sélectionné
 
 ![Datasets, rien de sélectionné.](img/tab-datasets-empty.png){.shot width=80%}
 
-C'est l'écran d'accueil de l'onglet : « Aucun dataset sélectionné — Cliquez sur un dataset dans la liste pour le prévisualiser ici. ». Il n'existe **pas** de bouton de suppression de dataset ni de « régénération du catalogue » : supprimer est une opération sur les fichiers du serveur, voulue ainsi, et la liste est recalculée à chaque affichage.
+C'est l'écran d'accueil de l'onglet : « Aucun dataset sélectionné — Cliquez sur un dataset dans la liste pour le prévisualiser ici. ». Il n'existe **pas** de bouton de « régénération du catalogue » : la liste est recalculée à chaque affichage. Pour supprimer un dataset, voir le § 3.12.
+
+## 3.12. Supprimer un jeu de données
+
+Supprimer un dataset publié **ne l'efface pas tout de suite**. L'icône de corbeille de sa ligne, libellée « Supprimer (corbeille, 60 jours) », déplace son dossier dans la **corbeille**. Le dataset quitte alors les listes. Le bouton [Corbeille]{.ui} de l'onglet, avec le compteur d'entrées, ouvre la corbeille.
+
+::: note
+**La corbeille conserve chaque suppression pendant 60 jours**, puis l'efface définitivement. Chaque entrée affiche sa date de suppression et les jours restants. Pour chaque entrée, vous pouvez :
+
+- [Restaurer]{.ui} : la remet en place. Si un dataset portant le même nom existe, le panneau demande un autre nom.
+- [Supprimer définitivement]{.ui} : l'efface immédiatement, après confirmation (« Cette action est irréversible. »).
+- [Vider la corbeille]{.ui} : efface toutes les entrées, après confirmation.
+:::
+
+::: tip
+Un dataset **encore en cours d'import** n'a pas d'icône de corbeille : abandonnez-le depuis l'onglet [Import]{.ui} (chapitre 4).
+:::
 
 # 4. Import — envoyer des données depuis le navigateur
 
@@ -674,6 +722,8 @@ Seuls les fichiers que produit le pipeline sont acceptés. **Tout le reste est r
 
 Ce sont des **avertissements**, pas des blocages : le reste de l'import continue.
 
+Les éléments **illisibles** (permissions locales) sont nommés dans la **console du navigateur** (touche <kbd>F12</kbd>, onglet Console) : `[import] unreadable file:` pour un fichier, `[import] unreadable folder:` pour un dossier, suivi du chemin.
+
 ## 4.6. Le dock flottant
 
 Dès qu'un import est à signaler, un petit **dock** s'ancre en bas à droite, **dans tous les onglets** : vous pouvez travailler ailleurs pendant que ça envoie. Il a trois tailles, mémorisées dans le navigateur.
@@ -730,7 +780,7 @@ Ce message apparaît quand vous cliquez la **déconnexion** ou un lien qui quitt
 - Le transfert tourne dans un **Web Worker** : l'interface reste fluide. Blocs bruts de **8 Mio** (réduits sur un hôte PHP aux limites strictes : « Taille de bloc réduite à {n} — relancez le dossier pour reprendre. »), **4 blocs en parallèle**.
 - Chaque bloc porte une **empreinte SHA-256** vérifiée **avant** écriture. Un **journal serveur** retient les blocs reçus : reglisser le même dossier reprend **au bloc près** ; un fichier déjà complet n'est pas renvoyé.
 - Le journal est le même sous les deux serveurs (Python ou PHP) : un import commencé sous l'un peut reprendre sous l'autre.
-- Formats acceptés : les **formats 2 à 5** (`planes/`, `mips/`, briques v3 et `index.bin`, matrice du format 5 avec ses index par compression et ses copies de coupe `xy/`, `xz/`, `yz/`, `cuts/`, envoyées en dernier).
+- Formats acceptés : les **formats 2 à 6** (`planes/`, `mips/`, briques v3 et `index.bin`, matrice du format 5 avec ses index par compression et ses copies de coupe `xy/`, `xz/`, `yz/`, `cuts/`, envoyées en dernier). Le **format 6** (`iribhm-bricks-v6`) ne garde que les colonnes `ll` (sans perte) et `q30` (WebP qualité 30) : une colonne d'une autre compression est **refusée à la validation**, avant toute publication.
 :::
 
 ## 4.9. Si quelque chose se passe mal
@@ -748,11 +798,12 @@ Ce message apparaît quand vous cliquez la **déconnexion** ou un lien qui quitt
 | Échec sur {chemin} / {n} fichier(s) n'ont pas pu être envoyés. | [Réessayer]{.ui}, ou reglissez le dossier. |
 | Le serveur ne répond pas… / Le moteur de transfert n'a pas pu démarrer. | Vérifiez la connexion, rechargez la page, reglissez. |
 | Tout est déjà envoyé — rien à transférer. | Information : le dataset est déjà complet. |
+| Validation échouée : `foreign_column:…` | Le dossier contient un fichier d'une colonne qui n'appartient pas à son format (par exemple une compression du format 5 dans un arbre de format 6). Le message reste en anglais dans cette version. Retraitez le dataset au bon format, puis reglissez-le. |
 
 # 5. Mises à jour des données — le format des jeux de données
 
 ::: chapter-intro
-- Un jeu de données publié a un **format** (1 à 5). Le format courant est le **5**.
+- Un jeu de données publié a un **format** (1 à 6). Le format courant est le **6**.
 - Cet onglet les met à niveau **sur place**, comme une mise à jour de logiciel.
 - Vous choisissez **qui travaille** : ce navigateur ou le serveur. Rien n'est obligatoire.
 :::
@@ -763,29 +814,30 @@ Ce message apparaît quand vous cliquez la **déconnexion** ou un lien qui quitt
 
 ## 5.1. Pourquoi et pour qui
 
-Chaque dataset volumique (`3d`, `live`) porte un **format de données** (`formatVersion`, absent = format 1). Un dataset sorti du pipeline **0.22.0** arrive au **format 4** : il ne lui reste que l'étape **4 → 5** (le pipeline écrit directement le format 5 avec l'option `--format 5`). Les **photographies 2D** ne sont jamais concernées.
+Chaque dataset volumique (`3d`, `live`) porte un **format de données** (`formatVersion`, absent = format 1). Un dataset sorti du pipeline **0.23.0** arrive au **format 6**, qui est le format par défaut de ce pipeline. Un dataset plus ancien suit les étapes qui lui manquent : un dataset resté au format 4 doit passer par **4 → 5**, puis **5 → 6**. Les **photographies 2D** ne sont jamais concernées.
 
 ::: note
-**Les mises à jour de données ne sont pas nécessaires pour que le site fonctionne.** Le visualiseur lit toujours les formats 1 à 5 ; le Studio retombe sur les briques si `planes/` manque. Elles **accélèrent** certaines opérations du Studio et **améliorent** la qualité d'affichage.
+**Les mises à jour de données ne sont pas nécessaires pour que le site fonctionne.** Le visualiseur lit toujours les formats 1 à 6 ; le Studio retombe sur les briques si `planes/` manque. Elles **accélèrent** certaines opérations du Studio et **améliorent** la qualité d'affichage.
 :::
 
-## 5.2. Les quatre étapes
+## 5.2. Les cinq étapes
 
-Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les quatre.
+Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les cinq.
 
 | Étape | Titre à l'écran | Ce qu'elle crée | Ce que ça apporte |
 |---|---|---|---|
 | **1 → 2** | Copie par plans du niveau natif (coupes XY rapides dans le Studio) | `planes/` : un fichier par plan z, tuiles PNG 512² sans perte (≈ 1,3× le niveau natif en place disque). Les briques ne sont pas touchées. | Une coupe XY native lit **un plan** au lieu d'une couche de 64 plans : des dizaines de fois moins d'octets, résultat identique au pixel. |
 | **2 → 3** | Projections maximales de chaque couche de briques (figures z-stack de toute la pile rapides) | `mips/` : une projection maximale par couche de 64 plans. | Une figure z-stack sur toute la pile lit ~3 paquets au lieu d'environ 150. |
-| **3 → 4** | Pyramide de briques v3 : réduite aussi en Z, bordure d'un voxel, index binaire | **Reconstruit** `bricks/` : briques 66³ avec bordure, niveaux réduits aussi en Z, `index.bin`. | Filtrage sans couture, détail local (« Zoom detail »), atlas plus légers pour 1 à 2 canaux. |
+| **3 → 4** | Pyramide de briques v3 : réduite aussi en Z, bordure d'un voxel, index binaire | **Reconstruit** `bricks/` : briques 66³ avec bordure, niveaux réduits aussi en Z, `index.bin`. | Filtrage sans couture, atlas plus légers pour 1 à 2 canaux. |
 | **4 → 5** | Matrice résolution × compression : niveaux à 256·2ᵏ avec toutes les tranches, cinq compressions, coupes rapides | **Reconstruit** `bricks/` : niveaux de 4096, 2048… 256 voxels de côté qui gardent toutes les tranches ; chacun en cinq compressions (sans perte, ±2, ±4, légère, très légère) ; copies pour les coupes XY, XZ / YZ et obliques. | Le visiteur choisit sa case dans un **tableau de qualité** ; téléchargements plus légers ; coupes natives rapides dans toutes les directions ; mesures et exports toujours sans perte. |
+| **5 → 6** | Une seule qualité d'affichage : WebP **Q30** à chaque niveau ; le sans-perte reste pour les exports | Ajoute la colonne `q30` et son index `q30.bin` ; une fois la nouvelle version validée, retire les colonnes `b2`, `b4`, `q80` et `q50`. Le niveau sans perte (`ll`) n'est pas touché. | Deux colonnes au lieu de cinq : le jeu de données est plus léger. Affichage rapide, exports toujours sans perte. |
 
 ::: warning
-**Les étapes 3 → 4 et 4 → 5 reconstruisent l'arbre `bricks/`.** Le **niveau natif est conservé voxel pour voxel** ; les niveaux plus grossiers sont recalculés. L'ancien arbre est supprimé **après** le changement de version, sauf si la case [Conserver la version précédente]{.ui} est cochée (il est alors gardé à côté, en `bricks.previous/`, pour comparer avec l'outil *Chunk debug* ; il prend une seconde fois la place des briques, supprimez-le une fois la comparaison faite). Pour des données précieuses, gardez une copie de sauvegarde, comme pour toute opération sur des fichiers.
+**Les étapes 3 → 4 et 4 → 5 reconstruisent l'arbre `bricks/`, et 5 → 6 en retire des colonnes.** Le **niveau natif est conservé voxel pour voxel** ; les niveaux plus grossiers sont recalculés. L'ancien arbre est supprimé **après** le changement de version, sauf si la case [Conserver la version précédente]{.ui} est cochée (il est alors gardé à côté, en `bricks.previous/`, pour comparer avec l'outil *Chunk debug* ; il prend une seconde fois la place des briques, supprimez-le une fois la comparaison faite). Pour des données précieuses, gardez une copie de sauvegarde, comme pour toute opération sur des fichiers.
 :::
 
 ::: note
-**Le format 5 prend beaucoup plus de place sur le disque** : il range le même volume plusieurs fois. Sur le jeu de démonstration, 9 Mo de briques deviennent environ 80 Mo. Le panneau refuse de démarrer si le résultat ne tient pas (§ 5.9).
+**Le format 5 prend beaucoup plus de place sur le disque** : il range le même volume plusieurs fois. Sur le jeu de démonstration, 9 Mo de briques deviennent environ 80 Mo. Le format 6, qui garde moins de colonnes, pèse moins que le 5. Le panneau refuse de démarrer si le résultat ne tient pas (§ 5.9).
 :::
 
 ## 5.3. Vue d'ensemble de l'onglet
@@ -799,11 +851,15 @@ Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les quatre.
 | 2 | La **bande des deux files** : une pastille par exécutant, avec son état. |
 | 3 | La **carte d'un dataset** : nom, type, « format 1 → 5 », unités et taille estimées, **étapes** numérotées. |
 | 4 | Le **sélecteur d'exécutant** : [Ce navigateur]{.ui} ou [Le serveur]{.ui}. |
-| 5 | La zone de **progression** : « étape i sur n », barre, pourcentage, unités faites, **temps restant**, unités par minute. |
+| 5 | La zone de **progression** : « étape i sur n », barre, pourcentage, unités faites, **temps restant**, unités par minute. La barre part de **0 %** et ne compte que les unités qui ont des données ; les autres sont indiquées à part : « N sans données, déjà terminées ». |
 | 6 | La croix : **annuler** : « Abandonner la progression de cette mise à jour ? Le jeu de données reste tel quel. » |
 :::
 
-De haut en bas : l'en-tête et ses boutons, la carte **Test de vitesse**, la carte **Datasets à mettre à jour**, puis trois volets repliables : **À jour**, **Formats de données**, **Historique**. [Tout mettre à jour]{.ui} traite tous les datasets prêts, un par exécutant à la fois.
+De haut en bas : l'en-tête et ses boutons, la carte **Test de vitesse**, la carte **Datasets à mettre à jour**, puis trois volets repliables : **À jour**, **Formats de données**, **Historique**. [Tout mettre à jour]{.ui} traite tous les datasets prêts, un par exécutant à la fois. Il laisse de côté les datasets **Dans un autre onglet** (voir §5.7).
+
+::: note
+La taille estimée d'un dataset reste affichée sur sa ligne pendant la conversion ; elle n'est recalculée qu'à la lecture suivante de l'état.
+:::
 
 Tout à jour : « Tous les datasets sont au dernier format. ». Aucun volume publié : « Aucun jeu de données volumique publié. ».
 
@@ -814,9 +870,10 @@ Deux « exécutants » peuvent faire le travail :
 | Exécutant | Qui calcule | Ce qu'il faut |
 |---|---|---|
 | **Ce navigateur** | Votre navigateur télécharge les briques, les recompose (Web Workers) et renvoie le résultat **unité par unité**. | Un navigateur qui sait compresser, relire les PNG à l'identique et encoder du WebP sans perte. |
-| **Le serveur** | Le serveur convertit lui-même, par petites requêtes bornées dans le temps. Adapté aux hébergements mutualisés. | Décodage (et, pour l'étape 3 → 4, encodage) du WebP sans perte (GD de PHP ou Pillow de Python), zlib, NumPy côté Python, au moins 128 Mio par requête et 10 s d'exécution. **Étape 4 → 5 : serveur Python seulement.** |
+| **Le serveur** | Le serveur convertit lui-même, par petites requêtes bornées dans le temps. Adapté aux hébergements mutualisés. | Décodage (et, pour l'étape 3 → 4, encodage) du WebP sans perte (GD de PHP ou Pillow de Python), zlib, NumPy côté Python, au moins 128 Mio par requête et 10 s d'exécution. **Étapes 4 → 5 et 5 → 6 : serveur Python seulement.** |
 
 - Le choix se fait **par dataset**, **avant** de démarrer ; il est **verrouillé pendant l'exécution**, modifiable entre deux exécutions.
+- **Ce navigateur** lance jusqu'à **quatre** travailleurs, **deux** si la mémoire déclarée par le navigateur est inférieure à 8 Go, et jamais plus de la **moitié des cœurs** du processeur.
 - Un exécutant incapable est **grisé**, avec une info-bulle qui dit pourquoi (par exemple « le serveur ne sait pas décoder les images WebP sans perte »).
 - Chaque exécutant a **sa propre file** : un dataset sur le navigateur et un autre sur le serveur se convertissent **en même temps**.
 - Une étape que l'exécutant choisi ne sait pas faire est confiée à l'autre. Si aucun ne peut : « aucun exécuteur » en rouge.
@@ -828,7 +885,7 @@ Sur un hébergement mutualisé où l'option [Le serveur]{.ui} est grisée, **[Ce
 :::
 
 ::: note
-**Étape 4 → 5 sur un hébergement PHP.** Le serveur PHP ne sait pas faire cette étape lui-même : l'info-bulle de [Le serveur]{.ui} dit « sur ce serveur, cette mise à jour s'exécute dans le navigateur ». Le navigateur demande au serveur quoi lire, calcule et renvoie chaque unité ; le serveur vérifie tout et assemble le résultat. Il faut un navigateur qui sait encoder du WebP **avec** perte (sinon : « ce navigateur ne sait pas encoder d'images WebP avec perte »). Mesuré sur le jeu de démonstration E8 (un ancien format 1) : l'étape 4 → 5 a pris **339 unités et 4 minutes** dans le navigateur.
+**Étapes 4 → 5 et 5 → 6 sur un hébergement PHP.** Le serveur PHP ne sait pas faire ces étapes lui-même : l'info-bulle de [Le serveur]{.ui} dit « sur ce serveur, cette mise à jour s'exécute dans le navigateur ». Le navigateur demande au serveur quoi lire, calcule et renvoie chaque unité ; le serveur vérifie tout et assemble le résultat. Il faut un navigateur qui sait encoder du WebP **avec** perte (sinon : « ce navigateur ne sait pas encoder d'images WebP avec perte »). Mesuré sur le jeu de démonstration E8 (un ancien format 1) : l'étape 4 → 5 a pris **339 unités et 4 minutes** dans le navigateur.
 :::
 
 ## 5.5. Le test de vitesse
@@ -871,6 +928,32 @@ Le bouton principal s'appelle [Réparer]{.ui} si le dataset se dit à jour mais 
 **Ne lancez pas la même mise à jour dans plusieurs onglets**, et ne relancez pas en boucle. En version 1.59.1, un afflux de requêtes avait conduit un hébergeur à **bannir l'adresse** d'un opérateur. Depuis la 1.59.2, **toutes** les requêtes de l'onglet passent par un **régulateur** (6 en vol au plus ; depuis la 1.59.3, 4 à 6 par seconde, car chaque unité lit toutes ses données d'entrée en une seule requête ; il ralentit et marque une pause quand l'hôte répond lentement ou renvoie 429 / 503). Vous pouvez voir : « L'hébergeur répond lentement : les requêtes sont ralenties pour qu'il ne bloque pas cette adresse. » ou « Connexion perdue — en attente du réseau, rien n'est perdu. ». **Laissez faire.**
 :::
 
+### Dans un autre onglet, et le quota partagé
+
+- **Une seule fois par dataset.** Si un autre onglet de ce navigateur convertit déjà un dataset, sa ligne affiche **« Dans un autre onglet »** avec la phrase : « Un autre onglet de ce navigateur met ce dataset à jour ; suivez-le là-bas. » Cette ligne n'a **aucun bouton** : elle n'est pas comptée dans [Tout mettre à jour]{.ui}, mais elle reste dans le compteur « à mettre à jour ».
+- **Le quota partagé.** Quand plusieurs onglets convertissent en même temps, la bande des files affiche : « n onglets de ce navigateur mettent des datasets à jour : ils se partagent un seul quota de requêtes. ».
+
+### Reprise automatique après un échec
+
+Une panne **passagère** (coupure, hébergeur qui répond lentement) ne vous oblige pas à tout relancer : le panneau reprend **seul** après un délai qui s'allonge.
+
+| Tentative | Délai avant la reprise |
+|---|---|
+| 1re | 10 secondes |
+| 2e | 30 secondes |
+| 3e | 1 minute |
+| 4e | 2 minutes |
+| 5e | 5 minutes |
+
+- Pendant l'attente, le toast indique : « {nom} : {erreur} — reprise automatique dans {s} s (essai {n}) ».
+- Après **cinq reprises automatiques** qui n'ont donné **aucune unité nouvelle**, la sixième panne est **définitive** : cliquez [Réessayer]{.ui}.
+- Sont **définitives tout de suite** : une unité que le serveur ne peut pas convertir dans son délai, l'absence d'exécuteur capable, une préparation impossible, une annulation, une **session expirée**.
+- Une **coupure du réseau** n'est pas une panne définitive : la mise à jour se met en pause « hors ligne » et reprend dès que le réseau revient.
+
+::: tech
+Un serveur qui dépasse le délai d'une unité bascule le dataset **une fois** vers ce navigateur avant de déclarer l'échec. Le réseau est sondé avec des attentes de 2 s à 30 s avant la pause « hors ligne ».
+:::
+
 ## 5.8. Les volets du bas
 
 ![Les volets « Formats de données » et « Historique » dépliés.](img/dupd-folds.png){.shot width=88%}
@@ -891,6 +974,8 @@ Une ligne d'historique indique « format {v} · {n} unités · {durée} · {exé
 - **Données d'origine** : jamais modifiées avant la bascule finale ; l'étape finale est **reprenable** et se fait sous le même verrou que l'éditeur de dataset.
 - **Dataset retraité entre-temps** : « le jeu de données a été retraité depuis le début de la mise à jour » → [Réessayer]{.ui} repart de zéro. Un dataset supprimé n'est **jamais recréé**.
 - **Serveur trop lent pour une unité** (hébergement mutualisé) : l'étape bascule seule **dans le navigateur** après deux requêtes mortes.
+- **Taille des envois (hébergement PHP)** : une requête ne dépasse jamais la plus petite de **32 Mio** et de `post_max_size` − 64 Kio (au moins 1 Mio). Un résultat plus gros est envoyé **par morceaux** et reconstitué par le serveur ; une unité assemblée peut peser jusqu'à **256 Mio**.
+- **État des datasets sur PHP** : il se calcule **par morceaux**. Le serveur s'arrête avant sa limite de temps et l'onglet poursuit : la liste ne tombe plus en erreur 500 (corrigé depuis la 1.73.3).
 
 | Message | Que faire |
 |---|---|
@@ -899,6 +984,7 @@ Une ligne d'historique indique « format {v} · {n} unités · {durée} · {exé
 | Aucun exécuteur ne peut réaliser toutes les étapes de : … | Essayez [Ce navigateur]{.ui}, ou retraitez avec le pipeline. |
 | Mise à jour de {nom} arrêtée : le serveur ne peut pas convertir une unité dans son délai. | Relancez-la dans ce navigateur. |
 | Impossible de lire l'état des mises à jour. | [Actualiser]{.ui}. |
+| {nom} : {erreur} — reprise automatique dans {s} s (essai {n}) | Rien à faire : attendez. Après cinq reprises sans nouvelle unité, cliquez [Réessayer]{.ui}. |
 
 ## 5.10. Convertir sur un ordinateur, puis importer
 
@@ -908,7 +994,7 @@ Pour un très gros dataset, ou un hébergement trop lent, la conversion peut se 
 1. Copiez le dossier du dataset (par exemple `DATA_WEB/3d/<dossier>`) sur l'ordinateur, dans une copie de la plateforme.
 2. Lancez `python tools/convert_dataset.py DATA_WEB/3d/<dossier>`. `--list` montre seulement les étapes en attente ; `--keep-previous` garde l'ancien arbre.
 3. Une conversion interrompue **reprend** au même endroit si vous relancez la commande.
-4. Glissez le dossier converti dans l'onglet **Import** (chapitre 4) : il accepte un dataset au format 5 et le vérifie en entier avant de le laisser publier.
+4. Glissez le dossier converti dans l'onglet **Import** (chapitre 4) : il accepte un dataset au format 5 ou 6 et le vérifie en entier avant de le laisser publier.
 :::
 
 # 6. Types de données — le nom public de chaque catégorie
@@ -949,7 +1035,15 @@ Pour un très gros dataset, ou un hébergement trop lent, la conversion peut se 
 
 Les variables de page `{type3d}`, `{type2d}` et `{typeLive}` (chapitre 10) reprennent ces noms. L'onglet n'écrit que le bloc `datasetTypes` de la configuration : il n'écrase pas ce que vous avez fait dans Identité. Il vous prévient si vous le quittez avec des modifications.
 
-# 7. Statistiques — qui consulte quoi
+# 7. Statistiques, stockage et intégrité
+
+::: chapter-intro
+- Trois onglets du groupe **Données** pour **savoir ce qui se passe** : qui consulte, combien de place, et si chaque jeu de données est complet.
+- Ces trois pages **ne modifient rien** : elles lisent et affichent.
+- Le stockage et l'intégrité se rafraîchissent à la demande ; les chiffres de fréquentation sont cumulés.
+:::
+
+## 7.1. Qui consulte quoi
 
 ![L'onglet Statistiques.](img/tab-stats.png){.shot width=88%}
 
@@ -971,6 +1065,108 @@ Le tableau « Par dataset » donne vues, téléchargements et dernière consulta
 ::: note
 **Aucune donnée personnelle n'est collectée.** Ce sont de simples compteurs : ni cookie de suivi, ni adresse IP enregistrée, ni service externe. Rien ne sort du serveur. Le serveur limite en outre le débit des balises de statistiques.
 :::
+
+## 7.2. Stockage — où part la place
+
+Cet onglet répond à une question : **où part la place du disque ?** Il ne modifie aucun fichier.
+
+Les textes de cet onglet apparaissent pour l'instant en français, dans toutes les langues de l'interface, faute de traduction.
+
+::: tldr
+**En 30 secondes**
+- Une barre découpe la place du volume en **cinq** parts, et des cartes détaillent chacune.
+- Les calculs sont faits par le serveur et **gardés 10 minutes** ; [Recalculer]{.ui} relance le calcul.
+- La place libre est celle du **disque** : un quota plus strict de l'hébergeur n'apparaît pas.
+:::
+
+### Les cinq parts de la barre
+
+| Part | Ce qu'elle compte |
+|---|---|
+| **Données publiées** | Les dossiers `DATA_WEB/3d`, `2d` et `live` : tous les jeux de données publiés |
+| **Imports & corbeille** | Le dossier `uploads/` : imports en cours, corbeille, migrations, journaux |
+| **Plateforme & code** | Le reste de l'installation : le code du site, les plugins, les pages |
+| **Autres sur le volume** | Ce qui occupe le même disque sans appartenir à la plateforme |
+| **Disponible** | La place libre du volume, lue à chaque affichage |
+
+Les cartes reprennent ces parts : **Volume** (capacité totale, occupé, disponible), **Données publiées**, **Imports & corbeille** (imports en cours, corbeille sur 60 jours, migrations, journaux), **Plateforme & code**, puis **Par dataset**.
+
+### Le tableau « Par dataset »
+
+| Colonne | Contenu |
+|---|---|
+| **Dataset** et **Type** | Le nom du jeu de données et son type |
+| **Taille** et **Fichiers** | Le poids total et le nombre de fichiers |
+| **Part** | Une barre, relative au **plus gros** jeu de données (pas au total du disque) |
+| **Détail par dossier** | Les **quatre plus gros dossiers** du jeu de données, avec leur taille |
+
+::: tip
+Pour trouver ce qui pèse, regardez d'abord **Détail par dossier** : c'est là qu'on voit si ce sont les briques, les plans ou la corbeille.
+:::
+
+### Recalculer
+
+Le calcul est gardé **10 minutes**. La carte indique l'âge du résultat (« il y a N min »). [Recalculer]{.ui} relance un calcul complet, qui peut prendre du temps sur un gros dossier.
+
+::: note
+**L'espace libre est celui du disque, pas un quota.** Le volume est celui qui héberge l'installation. S'il est partagé avec d'autres services, ils sont regroupés dans « Autres sur le volume ». Les fichiers liés en dur ne sont comptés qu'une fois.
+:::
+
+::: note
+Cet onglet est affiché **en français**, quelle que soit la langue du panneau.
+:::
+
+## 7.3. Intégrité des données — le contrôle, sans rien changer
+
+Cet onglet vérifie que **chaque jeu de données**, publié ou en cours d'import, contient ce qu'il doit contenir, et qu'il est au **format courant (6)**.
+
+::: tldr
+**En 30 secondes**
+- Un diagnostic **par dataset**, avec des constats écrits en clair et une correction proposée.
+- Trois compteurs : **Sains**, **Avertissements**, **Erreurs**.
+- [Revérifier]{.ui} relance le contrôle d'un seul dataset.
+:::
+
+### Ce qui est vérifié
+
+| Contrôle | Si ça ne va pas |
+|---|---|
+| `metadata.json` présent et valide | Erreur |
+| Galerie et fichiers de suivi | Erreur |
+| Manifeste, index et paquets des briques | Selon le constat (détaillé dans la ligne) |
+| Vignette (`thumbnail.webp`) | Avertissement |
+| Fichiers inattendus dans le dossier | Avertissement |
+| Image de galerie absente de `metadata.json` | Avertissement |
+| Mise à jour de version interrompue | Avertissement |
+| Ancien arbre de briques conservé | Information |
+| Format plus ancien que le 6 | Avertissement : à mettre à jour |
+
+Un dataset qui ne contient qu'une **information** est affiché OK.
+
+::: note
+Les niveaux s'affichent en **icône**, sans mot. Le détail, la correction et les mots sont dans la ligne ouverte par [Détails]{.ui}.
+:::
+
+Pour un jeu de données en format plus ancien, le contrôle signale qu'il faut le mettre à jour : c'est [Mises à jour des données]{.ui} (§5) qui s'en charge.
+
+### Lire le résultat
+
+- **Sains**, **Avertissements**, **Erreurs** : le nombre de datasets dans chaque cas. **Dernier format** indique le format courant, 6.
+- Chaque ligne a une pastille : **OK**, ou **N constat(s)** (les avertissements et erreurs seulement).
+- La case [Seulement les datasets avec des constats]{.ui} masque le reste.
+- Le bouton [Revérifier]{.ui} n'apparaît que sur les lignes en avertissement ou en erreur.
+
+### Lecture seule ?
+
+::: warning
+**Sur un serveur Python, le diagnostic ne modifie aucun fichier.** Sur un hébergement **PHP**, il commence par une réparation : si le `type` ou l'`id` d'un `metadata.json` ne correspond plus au nom du dossier, il est remis en accord. Seuls ces deux champs sont réécrits. L'introduction de l'onglet dit « Lecture seule : rien n'est modifié » : cela est exact sur le serveur Python, pas sur PHP.
+:::
+
+### Si le contrôle échoue
+
+- Une erreur réseau ou serveur s'affiche comme un constat : le message donne le **code HTTP** et le début de la réponse (« HTTP 500: … »). Ce message technique est en anglais.
+- Une erreur fatale de PHP s'affiche « PHP stopped: … » ; lisez la fin du message et transmettez-le à l'hébergeur.
+- Une **session expirée** (HTTP 401) affiche un message en anglais : reconnectez-vous, puis relancez le diagnostic.
 
 # 8. Identité — le nom et le vocabulaire du site
 
@@ -1041,7 +1237,7 @@ Ce mot est ensuite repris **automatiquement** dans toute l'interface publique : 
 - **Navigation** — les cases « Afficher « Explorer » », « Afficher « Comparer » », « Afficher « À propos » », « Afficher « Mentions légales » ». Décocher retire l'entrée du menu **sans supprimer la page**.
 
 ::: warning
-**« Mentions légales » est décochée par défaut.** Si vous rédigez vos mentions (chapitre 11), revenez ici pour la cocher : la page reste invisible sinon.
+**« Mentions légales » est cochée sur une installation neuve.** Si elle a été décochée, la page reste invisible : cochez de nouveau la case, une fois vos mentions rédigées (chapitre 11).
 :::
 
 ::: note
@@ -1079,7 +1275,7 @@ Réinitialiser demande « Réinitialiser l'identité aux valeurs par défaut ? �
 | **Couleur d'accent** | La secondaire, pour les mises en valeur |
 | **Succès** | Les confirmations (vert par défaut) |
 | **Erreur** | Les messages d'erreur (rouge par défaut) |
-| **Avertissement** | Les alertes (orange par défaut) |
+| **Avertissement** | Les alertes (jaune-orangé par défaut, `#FECA57`) |
 
 Cliquez sur un carré de couleur pour ouvrir le sélecteur : **l'aperçu se met à jour instantanément**. Les boutons principaux sont dérivés de la couleur de l'instance et atteignent toujours le contraste **WCAG AA** : le serveur assombrit leur couleur juste assez pour qu'un texte blanc y soit lisible (4,5 : 1), même sur un orange ou un turquoise vif, ce que l'aperçu montre déjà ; le thème enregistré s'applique avant le premier affichage.
 
@@ -1348,7 +1544,7 @@ Des variables existent déjà : `{brand}` (nom du site), `{specimen}` (votre obj
 4. Cliquez **Publier**.
 :::
 
-Toast : « Page créée. Elle apparaîtra dans le menu après publication. ». La page est ajoutée au menu **masquée** ; elle devient **visible à la première publication** : **rien à cocher dans Identité**. Elle est alors à l'adresse `https://<votre-site>/page.html?slug=protocoles` (pour l'identifiant `protocoles`).
+Toast : « Page créée. ». La page est ajoutée au menu **masquée** ; elle devient **visible à la première publication** : **rien à cocher dans Identité**. Elle est alors à l'adresse `https://<votre-site>/page.html?slug=protocoles` (pour l'identifiant `protocoles`).
 
 Erreurs : « Identifiant invalide. », « Cette page existe déjà. ». Supprimer demande « Supprimer cette page ? » et efface vraiment le fichier de configuration.
 
@@ -1377,10 +1573,12 @@ Erreurs : « Identifiant invalide. », « Cette page existe déjà. ». Supprime
 
 Un éditeur simple, à mise en page fixe, pour le texte légal. Les sections s'affichent dans l'ordre où vous les créez ; chacune a un « Titre de section », un « Texte… » et un bouton [Supprimer]{.ui}. Sans section : « Aucune section. Ajoutez-en une. ». Résultat : « Mentions légales enregistrées. ». <kbd>Ctrl</kbd> + <kbd>S</kbd> enregistre.
 
+**Ce que voit une installation neuve.** Aucune section n'est enregistrée au départ : l'onglet et la page publique affichent alors les **six modèles neutres** fournis avec la plateforme (Éditeur du site, Protection des données & vie privée, Cookies & stockage local, Propriété intellectuelle, Avertissement & responsabilité, Contact). Ils contiennent des **[crochets]** à remplacer, et ne sont pas des conseils juridiques. Dès que vous enregistrez, vos sections remplacent les modèles ; [Réinitialiser]{.ui} les rétablit.
+
 **Sections habituelles :** éditeur du site, hébergeur, propriété intellectuelle, données personnelles, contact.
 
 ::: warning
-**Deux choses à ne pas oublier.** (1) La page reste invisible tant que la case « Afficher « Mentions légales » » n'est pas cochée dans **Identité › Navigation**. (2) Le contenu juridique dépend de votre pays et de votre institution : rapprochez-vous du service compétent plutôt que de recopier un modèle trouvé en ligne.
+**Deux choses à ne pas oublier.** (1) La case « Afficher « Mentions légales » » (**Identité › Navigation**) ne contrôle que le **lien du pied de page** : la page `legal.html` reste accessible à son adresse. Sur une installation neuve la case est **cochée** par défaut, donc le lien apparaît. (2) Le contenu juridique dépend de votre pays et de votre institution : rapprochez-vous du service compétent plutôt que de recopier un modèle trouvé en ligne.
 :::
 
 # 12. Plugins — les fonctions du visualiseur
@@ -1405,7 +1603,7 @@ Chaque plugin occupe l'un des **trois emplacements** :
 |---|---|---|
 | **Outils** (barre d'outils) | Les boutons en haut du visualiseur | Mesure de distance, capture d'écran, mode présentation |
 | **Canaux** (par canal) | Les réglages sous chaque canal de fluorescence | Histogramme, flou gaussien |
-| **Modes de rendu** (shaders) | Le menu déroulant qui choisit comment le volume est dessiné | Fluorescence, Natural Fluorescence, Structure (DVR) |
+| **Modes de rendu** (shaders) | Le menu déroulant qui choisit comment le volume est dessiné | Fluorescence (type Imaris), Fluorescence naturelle (profondeur), Structure (DVR) |
 
 ## 12.2. L'écran
 
@@ -1414,7 +1612,7 @@ Chaque plugin occupe l'un des **trois emplacements** :
 ::: legend
 | n | ce que c'est |
 |-|----------------------|
-| 1 | Une **carte par emplacement** (Outils, Canaux, Modes de rendu). |
+| 1 | Une **carte par emplacement** : « Outils (barre d'outils) », « Canaux (par-canal) », « Modes de rendu (shaders) ». |
 | 2 | Le compteur `actifs / total` de la carte. |
 | 3 | Une **ligne par plugin**. |
 | 4 | Le **nom** et le **niveau de confiance**. |
@@ -1454,7 +1652,7 @@ Un plugin est du **vrai code** qui s'exécute dans le navigateur des visiteurs. 
 
 | Étiquette | Signification | Ce que ça implique |
 |---|---|---|
-| **`intégré`** | Livré avec la version officielle du site, code identique à celui publié | De confiance. Rien à faire. |
+| **`intégré`** | Le contenu des fichiers correspond exactement à celui de la version officielle publiée (manifeste de la release) | De confiance. Rien à faire. |
 | **`approuvé`** | Vous l'avez autorisé à s'exécuter dans la page | De confiance parce que **vous** l'avez décidé. |
 | **`sandbox`** | Autorisé, mais **enfermé dans un bac à sable** : isolé du reste de la page et du panneau | Le mode le plus sûr. |
 | **`dev`** | Plugin local d'une machine de développement lancée avec le drapeau `--dev-trust-local` | N'existe pas sur un site en production. Sans ce drapeau, un clone n'a **aucun** plugin local de confiance. |
@@ -1516,20 +1714,20 @@ La copie qui fonctionne est **mise de côté, pas supprimée** : si quoi que ce 
 
 Un plugin doit déclarer qu'il sait **être piloté de l'extérieur** pour se charger quand la page est **embarquée** : aperçu de l'onglet Datasets, panneaux de la page *Comparer*, volets de la vue divisée. Sinon il n'est chargé que sur la page complète.
 
-Les plugins **« page seulement »** — Presentation Mode, Download Center, Decompose by Channel, Screenshot, Chunk Debug, Split View, Figure Panel Builder, Tracking Charts, Cell Distance — n'apparaissent donc pas dans l'aperçu. **Ce n'est pas un bug.**
+Les plugins **« page seulement »** — Presentation Mode, Download Center, Decompose by Channel, Screenshot, Screenshot (sandboxed), Chunk Debug, Split View, Figure Panel Builder, Tracking Charts, Cell Distance — n'apparaissent donc pas dans l'aperçu. **Ce n'est pas un bug.**
 
 Un plugin peut aussi être **limité à des types** de données : les cinq plugins 2D ne se chargent que sur une photographie ; les cinq plugins de suivi, uniquement sur un dataset Live qui possède un suivi.
 
 ## 12.8. Les 28 plugins du catalogue
 
-Ces plugins ne sont **pas** livrés avec le site : ils s'installent à la demande (assistant de première installation, étape 5, ou onglet Catalogue). Une installation neuve dont on aurait tout décoché n'en aurait aucun.
+Le catalogue en compte **28**. Une installation neuve n'en contient **aucun** : ils s'installent à la demande, par l'assistant (étape 5) ou par l'onglet Catalogue. L'assistant coche d'office les **21** plugins marqués « recommandés » ; les **7** autres (Calibrated Grid, Chunk Debug, Display Adjustments, Figure Panel Builder, Orientation 2D, Screenshot (sandboxed), Split View) se cochent à la main.
 
 **Modes de rendu**
 
 | Plugin | Ce que ça fait pour le visiteur |
 |---|---|
-| **Fluorescence** | Le rendu par défaut : chaque canal émet sa couleur, comme sur un microscope à fluorescence |
-| **Natural Fluorescence** | Chaque fluorophore brille de sa couleur ; les structures denses masquent ce qui est derrière |
+| **Fluorescence (type Imaris)** | Le rendu par défaut : chaque canal émet sa couleur, comme sur un microscope à fluorescence |
+| **Fluorescence naturelle (profondeur)** | Chaque fluorophore brille de sa couleur ; les structures denses masquent ce qui est derrière |
 | **Structure (DVR)** | Rendu volumique avec profondeur et ombrage, qui fait ressortir les formes |
 
 **Canaux**
@@ -1605,7 +1803,7 @@ Les plugins sont répartis en sections : **À mettre à jour** (en premier, s'il
 
 ::: steps
 1. Trouvez la carte du plugin dans **Disponibles**.
-2. Cliquez [⬇ Installer]{.ui}.
+2. Cliquez [Installer]{.ui} (bouton à icône de téléchargement).
 3. « Installer ce plugin ? Confirmez avec votre mot de passe administrateur : ».
 4. « Installation en cours (téléchargement + vérification)… » puis « Plugin installé et approuvé ✓ ».
 :::
@@ -1634,7 +1832,7 @@ Un plugin installé dont une version plus récente **et** compatible existe pass
 | **`incompatible`** | N'apparaît que sur un plugin **non installé** : il demande une autre version de la plateforme. Le bouton d'installation est grisé : mettez la plateforme à jour (chapitre 14). |
 
 ::: note
-Un plugin **déjà installé** ne porte jamais l'étiquette `incompatible` : celui qui tourne chez vous fonctionne ; seule sa version suivante peut attendre. Un paquet qui déclare un type de données exige une plateforme **récente** (1.51 à 1.53) : un site non mis à jour verra « incompatible » sur les plugins récents.
+Un plugin **déjà installé** ne porte jamais l'étiquette `incompatible` : celui qui tourne chez vous fonctionne ; seule sa version suivante peut attendre. La compatibilité d'un paquet se lit dans son champ `platformCompat` (une plage de versions de la plateforme) : un site hors de cette plage voit « incompatible » sur ce paquet.
 :::
 
 États du catalogue : « Catalogue indisponible : … », « Catalogue inaccessible. », « Aucun plugin dans le catalogue. », « Aucune source de catalogue configurée… ».
@@ -1760,7 +1958,7 @@ Une carte **Mises à jour des plugins** répond à la même question pour les mo
 
 ## 14.5. Le pack de traitement
 
-La carte **Pack de traitement** compare le pack Pipeline **installé ici** et celui joint à la **dernière release GitHub**. États : « Le pack de traitement est à jour. (v0.21.0) » ou « Nouveau pack de traitement : vX (ici : vY) » avec [Télécharger le pack]{.ui}.
+La carte **Pack de traitement** compare le pack Pipeline **installé ici** et celui joint à la **dernière release GitHub**. États : « Le pack de traitement est à jour. (v0.23.0) » ou « Nouveau pack de traitement : vX (ici : vY) » avec [Télécharger le pack]{.ui}.
 
 Il s'installe **sur le poste de traitement, pas sur ce serveur** : téléchargez-le et remplacez le dossier utilisé là-bas. **La plateforme n'a pas besoin d'être mise à jour** pour obtenir un pack plus récent. Si GitHub est injoignable : « Impossible de joindre GitHub pour vérifier le pack de traitement. ».
 
@@ -1784,7 +1982,7 @@ Il s'installe **sur le poste de traitement, pas sur ce serveur** : téléchargez
 | 5 | [Télécharger]{.ui}. |
 :::
 
-**Pourquoi séparer ?** Convertir un volume demande énormément de mémoire vive : comptez environ **32 Go de RAM** pour un volume de 3789 × 3789 × 178. Aucun serveur web mutualisé ne peut faire ça.
+**Pourquoi séparer ?** Convertir un volume demande énormément de mémoire vive. Le panneau indique environ **32 Go de RAM** pour un volume de 3789 × 3789 × 178 ; un essai mesuré a échoué (fichier d'échange trop petit, Windows) sur 3789 × 3789 × 125 × 4 canaux, sur une machine de 63,5 Gio. Un hébergement mutualisé n'est pas prévu pour ce traitement.
 
 ## 15.1. Le principe
 
@@ -1798,7 +1996,7 @@ Il s'installe **sur le poste de traitement, pas sur ce serveur** : téléchargez
 Le pack contient **deux pipelines** (volumes avec tracking, analyse de tracking), l'**import de photographies 2D**, des exemples d'entrée (utilisable tout de suite pour se faire la main), et un lanceur qui **vérifie sa propre intégrité** (SHA-256).
 
 ::: note
-**Deux numéros, et c'est normal.** L'en-tête affiche `pipeline v0.21.0` : la version **du pack**, pas celle du site. Le pipeline 0.22.0 écrit **le format 4** (il ne reste que l'étape 4 → 5 dans **Mises à jour des données**), ou le format 5 avec l'option `--format 5`, **conserve la curation** faite dans le panneau quand on retraite un dataset (masqué, nom, orientation…) et **publie tout ou rien**.
+**Deux numéros, et c'est normal.** La pastille de l'onglet affiche `pipeline v0.23.0` et le lanceur `pack v0.23.0` : c'est la version **du pack**, pas celle du site. Le pipeline 0.23.0 écrit **le format 6** par défaut (les options `--format 4` et `--format 5` restent disponibles), **conserve la curation** faite dans le panneau quand on retraite un dataset (masqué, nom, orientation…) et **publie tout ou rien**.
 :::
 
 Quand une version plus récente du pack est publiée, un **bandeau** apparaît en tête : « Nouvelle version du pack : v… — Ce serveur propose la v…. Téléchargez la nouvelle ci-dessous — la plateforme n'a pas besoin d'être mise à jour pour ça. » avec [Télécharger la v…]{.ui} ; pour l'édition légère, [Version installée]{.ui} garde accessible le pack du serveur.
@@ -1810,7 +2008,7 @@ Une seule question : **le poste de traitement a-t-il accès à internet ?**
 | | **Édition légère** *(recommandée)* | **Édition complète** *(hors-ligne)* |
 |---|---|---|
 | Pour qui | Poste connecté à internet | Poste isolé du réseau, ou environnement à figer |
-| Taille | ~3 Mo | ~70 Mo (≈ 200 Mo décompressé) |
+| Taille | ~3 Mo | ~70 Mo (≈ 200 Mo décompressé) — ordres de grandeur ; le panneau affiche la taille réelle du fichier |
 | Internet | **une seule fois**, au premier lancement | **jamais** |
 | Python | installé par le pack, à part du système | embarqué, versions figées |
 
@@ -1880,7 +2078,7 @@ Visez **12 caractères ou plus**. Une phrase facile à retenir vaut mieux qu'un 
 
 ## 16.2. Comment le mot de passe est stocké
 
-- **Jamais en clair.** Le serveur n'en garde qu'une empreinte irréversible (PBKDF2 avec sel). Depuis l'empreinte, on ne remonte pas au mot de passe.
+- **Jamais en clair.** Le serveur n'en garde qu'une empreinte irréversible (PBKDF2-HMAC-SHA256 avec sel). Depuis l'empreinte, on ne remonte pas au mot de passe.
 - **Le fichier d'identifiants n'est jamais servi.** Même en tapant son adresse exacte, on obtient une erreur.
 - **Si le fichier est supprimé**, le panneau repropose la création d'un mot de passe : c'est la porte de secours (annexe B).
 - **La création initiale ne peut jamais écraser** un mot de passe existant.
@@ -1940,7 +2138,7 @@ Réservé à la personne qui gère le dépôt, mais bon à savoir pour demander 
   └──────────────────────── la date AAMMJJ : c'est le numéro de version
 ```
 
-- **La date** classe les versions : la plus récente est proposée, les autres restent accessibles. Ce guide, daté du **7 octobre 2026**, devient « la plus récente » face aux éditions d'août 2026.
+- **La date** classe les versions : la plus récente est proposée, les autres restent accessibles. Par exemple, « 261102 » (2 novembre 2026) l'emporte sur « 261007 » (7 octobre 2026).
 - **L'identifiant** doit rester **identique** d'une version à l'autre, sinon le panneau y voit deux documents différents.
 - Un fichier qui ne suit pas la règle est **signalé comme ignoré** (« Fichiers ignorés (nom non conforme) ») en bas de l'onglet : une faute de frappe se voit.
 
@@ -1953,6 +2151,8 @@ Réservé à la personne qui gère le dépôt, mais bon à savoir pour demander 
 :::
 
 Quand aucun compte administrateur n'existe, l'ouverture de `admpan.html` déclenche l'**Installation guidée**. Une barre de 5 segments montre l'avancement ; en bas : [Retour]{.ui}, [Passer]{.ui}, [Suivant]{.ui} (puis [Terminer]{.ui}). Si vous cliquez [Passer]{.ui}, l'assistant se termine tout de suite : les valeurs déjà saisies sont gardées, **les étapes suivantes ne sont pas faites** (donc **aucun plugin n'est installé** si vous passez avant l'étape 5 : faites-le dans Catalogue).
+
+**Ce que montre une installation neuve, avant l'assistant.** Le nom de l'instance est « Lumen3D », l'accroche « 3D Imaging Data Viewer », le pied de page « © Lumen3D », l'objet « sample » / « samples », et la couleur de marque est le vert par défaut. Les liens **Explorer**, **Comparer** et **À propos** sont affichés dans la navigation ; le lien **Mentions légales** figure dans le pied de page. Les noms des types sont les noms par défaut (chapitre 6). Aucun plugin n'est installé.
 
 ## Étape 1 — Compte administrateur
 
@@ -1978,7 +2178,7 @@ C'est **la seule étape obligatoire**. La création est **exclusive** : elle ne 
 | n | ce que c'est |
 |-|----------------------|
 | 1 | **Nom de l'instance**. |
-| 2 | **Organisation** (optionnelle). |
+| 2 | **Organisation** (option.). |
 | 3 | **Objet (singulier)** et **(pluriel)** : le mot qui désigne vos objets d'étude. |
 | 4 | [Passer]{.ui}. |
 :::
@@ -2006,7 +2206,7 @@ La liste, groupée **Rendu / Canaux / Outils**, vient du catalogue signé (« Ch
 [Terminer]{.ui} installe la sélection (« Installation des plugins… (i/n) », « {n} plugin(s) installé(s). ») et ouvre le panneau. **Le mot de passe de l'étape 1 autorise ces installations** : rien n'est demandé deux fois.
 
 ::: note
-L'assistant n'écrit que la marque, l'objet, l'organisation, le pied de page et le thème choisi.
+L'assistant n'écrit que le nom de l'instance, l'objet, l'organisation, l'accroche, le pied de page et la couleur de marque choisie. [Retour]{.ui} ne revient pas à l'étape 1 : le compte est déjà créé.
 :::
 
 # Annexe B — En cas de problème
@@ -2029,9 +2229,11 @@ Il est **impossible** de le retrouver : le serveur n'en garde qu'une empreinte i
 
 **Rien d'autre n'est perdu** : ni datasets, ni pages, ni réglages. Pendant ce court laps de temps, n'importe qui ouvrant la page pourrait créer le compte à votre place : faites-le d'une traite.
 
+Si vous avez accès à la ligne de commande du serveur Python, `python dev_server.py --set-password` réécrit le mot de passe sans demander l'ancien (opération réservée à l'opérateur).
+
 ### « Trop de tentatives. Réessayez dans N min. »
 
-Après 10 échecs en 15 minutes, l'accès est bloqué 15 minutes ; le message indique l'attente restante en minutes. Attendez, puis reprenez avec le bon mot de passe. Derrière un proxy, voir §1.4.
+Après 10 échecs en 15 minutes, l'accès est bloqué 15 minutes ; le message indique l'attente restante en minutes. Attendez, puis reprenez avec le bon mot de passe. Un plafond général (200 tentatives par 15 min, toutes adresses confondues) existe aussi. Derrière un proxy, voir §1.4.
 
 ### « J'ai modifié quelque chose et le site est cassé »
 
@@ -2043,12 +2245,12 @@ Après 10 échecs en 15 minutes, l'accès est bloqué 15 minutes ; le message in
 | **Mentions légales** | [Réinitialiser]{.ui} |
 | **Types de données** | [Noms par défaut]{.ui}, puis [Enregistrer]{.ui} |
 | **Datasets** | [↺ Reset]{.ui} (avant d'avoir sauvegardé) ; l'œil se rebascule |
-| **Mises à jour des données** | La croix **annuler** : le dataset reste tel quel |
+| **Mises à jour des données** | Le bouton [Annuler]{.ui} du volet : le dataset reste tel quel tant que la mise à jour n'est pas finalisée |
 | **Import** | [Supprimer]{.ui} efface les fichiers envoyés (jamais un dataset publié) |
 
 ### « Un jeu de données n'apparaît pas dans la liste »
 
-1. Regardez les filtres : [Masqués]{.ui} et [Import]{.ui} cachent des lignes ; revenez sur [Tous]{.ui}.
+1. Regardez le filtre : [Masqués]{.ui} n'affiche que les datasets masqués, [Import]{.ui} que les imports en attente ; revenez sur [Tous]{.ui}.
 2. S'il vient d'un **import** : [Publier]{.ui}, puis **activez la visibilité** (un dataset publié par l'Import est masqué par défaut).
 3. Vérifiez qu'il est bien dans `DATA_WEB/3d/`, `DATA_WEB/2d/` ou `DATA_WEB/live/` (noms de dossiers imposés ; renommer un *type* ne change que l'affichage) et que son dossier contient un `metadata.json`.
 4. Rechargez la page. Il n'y a **aucun catalogue à régénérer**.
@@ -2070,13 +2272,41 @@ L'hébergement ne sait pas décoder (ou encoder) le WebP sans perte, n'a pas Num
 
 Laissez **un seul onglet** ouvert, ne relancez pas en boucle, attendez : le régulateur réseau ralentit tout seul (6 requêtes en vol au plus) et reprend. Si le blocage persiste, contactez l'hébergeur.
 
+### « Une image est moins nette qu'attendu » (Chargement rapide)
+
+**Cause :** sur un jeu de données au format 6, la case [Chargement rapide]{.ui} est **cochée par défaut** : le volume s'affiche en WebP qualité 30, plus léger. **Solution :** décochez-la dans la section Qualité de Rendu de l'aperçu : les résolutions sans perte se chargent (téléchargements plus gros). Ce choix ne vaut que pour ce navigateur.
+
+### « Qualité {quality} indisponible » ou une case absente
+
+**Cause :** la case [Chargement rapide]{.ui} n'existe que pour un jeu de données au **format 6** ; un format 5 affiche le tableau Résolution / Qualité. Le message signale que la qualité demandée n'existe pas pour ce volume. **Solution :** choisissez une autre résolution dans la liste.
+
+### « Ce navigateur a refusé à la page un contexte 3D (WebGL) »
+
+**Cause :** après un plantage du pilote graphique, le navigateur bloque WebGL pour le site jusqu'à son redémarrage complet. **Solution :** fermez **entièrement** le navigateur (sur Android : Paramètres › Applications › Chrome › Forcer l'arrêt), puis rouvrez la page. Si cela persiste, vérifiez que l'accélération matérielle est activée.
+
+### « Dans un autre onglet » ou « … se partagent un seul quota de requêtes »
+
+**Cause :** un autre onglet de ce même navigateur convertit déjà ce dataset (« Dans un autre onglet »), ou plusieurs onglets convertissent en même temps et se partagent un seul quota de requêtes. **Solution :** rien à faire ; suivez la mise à jour dans l'autre onglet, ou fermez-le si vous ne voulez plus qu'il travaille.
+
+### « Reprise automatique dans N s » qui ne s'arrête pas
+
+**Cause :** l'hébergeur ou le réseau est instable : les pannes se répètent. **Solution :** attendez. Après cinq reprises sans nouvelle unité, la mise à jour s'arrête : cliquez [Réessayer]{.ui}, ou passez sur [Ce navigateur]{.ui} si l'exécutant serveur échoue.
+
+### « HTTP 500 » ou une réponse vide dans Intégrité des données
+
+**Cause :** le contrôle a reçu HTTP 500, ou une réponse vide : le texte affiché donne le détail (délai de la passerelle, ou PHP à court de mémoire sur un hébergement PHP). **Solution :** transmettez le message à la personne qui gère le serveur (le journal d'erreurs PHP le détaille), puis cliquez [Revérifier]{.ui}.
+
+### La place ne se met pas à jour dans Stockage
+
+**Cause :** le résultat est **gardé 10 minutes**. **Solution :** cliquez [Recalculer]{.ui}.
+
 ### « Une fonction a disparu du visualiseur »
 
 Regardez l'onglet **Plugins** : le plugin est probablement désactivé, ou passé en **non fiable** après une modification de ses fichiers (§12.5). Dans l'aperçu de Datasets, les plugins « page seulement » sont absents : c'est normal (§12.7).
 
 ### « Un enregistrement échoue sans message clair »
 
-Essayez **Sécurité › [Réparer les permissions]{.ui}** (§16.3) : c'est la cause la plus fréquente sur les hébergements mutualisés.
+Essayez **Sécurité › [Réparer les permissions]{.ui}** (§16.3) : c'est une cause possible sur les hébergements mutualisés.
 
 ### « La mise à jour a échoué »
 
@@ -2101,14 +2331,22 @@ Un onglet qui ne charge pas affiche « Impossible de charger cet onglet. Recharg
 |---|---|
 | **Canal** | Un marquage fluorescent (DAPI, GFP, Pecam1…). Un jeu de données en contient souvent plusieurs, superposés. |
 | **Voxel** | L'équivalent d'un pixel en trois dimensions. Sa taille réelle est donnée par la calibration (§3.6). |
-| **Brique** | Un petit cube de volume (64×64×64 voxels, ou 66³ avec bordure aux formats 4 et 5). Le site les charge à la demande pour afficher des volumes de plusieurs gigaoctets sans tout télécharger. |
+| **Brique** | Un petit cube de volume (64×64×64 voxels, ou 66³ avec bordure aux formats 4 à 6). Le site les charge à la demande pour afficher des volumes de plusieurs gigaoctets sans tout télécharger. |
 | **LOD** | *Level of Detail* : plusieurs résolutions du même volume. Le site affiche d'abord une version grossière, puis affine. |
 | **Type de jeu de données** | L'une des trois catégories : `3d` (volume figé), `2d` (photographie calibrée), `live` (série temporelle 4D, avec éventuellement le suivi de ses cellules). Ce sont les dossiers du serveur ; le nom vu du public se règle dans **Types de données** (chapitre 6). |
-| **Format de données** (`formatVersion`) | Le « niveau d'aménagement » d'un dataset publié, de 1 à 4 (courant : 4). Se met à niveau dans **Mises à jour des données**. |
+| **Format de données** (`formatVersion`) | Le « niveau d'aménagement » d'un dataset publié, de 1 à 6 (courant : 6). Se met à niveau dans **Mises à jour des données**. |
+| **Format 6** (`iribhm-bricks-v6`) | Le format courant : deux colonnes seulement, `ll` (sans perte) et `q30` (WebP qualité 30). Atteint par la mise à jour 5 → 6. |
+| **Q30** | WebP à **qualité 30**, la version affichée par défaut pour un jeu de données au format 6. Plus légère que le sans-perte ; les exports restent sans perte. |
+| **Niveau sans perte** | La colonne `ll` : chaque voxel est exact. C'est elle que lisent les exports ; la case [Chargement rapide]{.ui} décide si l'aperçu la charge. |
+| **Chargement rapide** | Case de la section Qualité de Rendu, pour un jeu de données au format 6. Cochée : WebP Q30 ; décochée : sans perte. Mémorisée dans ce navigateur (§3.3). |
+| **Budget GPU** | La part de la mémoire vidéo que le visualiseur accepte d'utiliser. Calculée seule : 60 % de la mémoire dédiée, 16 Gio au plus (§3.3). |
+| **Stockage** | Onglet qui montre la place occupée sur le disque, par type de données et par jeu de données (§7.2). |
+| **Intégrité des données** | Onglet qui vérifie que chaque jeu de données est complet et au format courant (§7.3). |
+| **Dans un autre onglet** | État d'un jeu de données déjà converti par un autre onglet du même navigateur. La ligne n'a pas de boutons (§5.7). |
 | **Plans** (`planes/`) | Format 2 : une copie du niveau natif **plan par plan** (PNG sans perte), pour des coupes XY rapides dans le Studio. |
 | **Projections de couche** (`mips/`) | Format 3 : la projection maximale de chaque couche de 64 plans, pour des figures z-stack rapides. |
-| **Pyramide de briques v3** | Format 4 : briques 66³ avec bordure d'un voxel, niveaux réduits aussi en Z, `index.bin`. Apporte le filtrage sans couture et le « Zoom detail ». |
-| **Matrice (format 5)** | Format 5 : le même volume à plusieurs résolutions (toutes les tranches gardées) et en cinq compressions (sans perte, ±2, ±4, légère, très légère), plus des copies pour les coupes rapides. Le visiteur choisit sa case dans un tableau ; mesures et exports restent sans perte. |
+| **Pyramide de briques v3** | Format 4 : briques 66³ avec bordure d'un voxel, niveaux réduits aussi en Z, `index.bin`. Apporte le filtrage sans couture. |
+| **Matrice (format 5)** | Format 5 : le même volume à plusieurs résolutions (toutes les tranches gardées) et en cinq compressions (sans perte, ±2, ±4, légère, très légère), plus des copies pour les coupes rapides. Le visiteur choisit sa case dans un tableau ; les exports restent sans perte ; les mesures se prennent sur l'image affichée. |
 | **Sens de l'échantillon** | Réglage qui dit si le fichier montre l'échantillon vu de dessus (« à l'endroit ») ou de dessous (« à l'envers »). |
 | **Vue par défaut** | La pose dans laquelle un dataset s'ouvre, enregistrée depuis l'aperçu. |
 
@@ -2135,4 +2373,4 @@ Un onglet qui ne charge pas affiche « Impossible de charger cet onglet. Recharg
 
 ---
 
-*Document écrit pour la version **1.65.0** de la plateforme (pipeline 0.22.0, format de données 5). Les captures d'écran montrent un jeu de démonstration (embryons synthétiques) ; les couleurs peuvent différer si le thème a été modifié.*
+*Document écrit pour la version **1.76.0** de la plateforme (pipeline 0.23.0, format de données 6). Les captures d'écran montrent un jeu de démonstration (embryons synthétiques) ; les couleurs peuvent différer si le thème a été modifié.*

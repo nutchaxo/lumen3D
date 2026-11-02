@@ -33,7 +33,7 @@ Makes things move: a click on a button, downloading bricks, computing measuremen
 
 The "client" is your browser. It receives the HTML, CSS and JavaScript files, then does all the visible work.
 
-- **"Vanilla" JavaScript**: plain JavaScript, organised in small modules, with no framework. About **68,400 lines**.
+- **"Vanilla" JavaScript**: plain JavaScript, organised in small modules, with no framework. About **77,000 lines**, the vendored libraries not counted.
 - **Web Workers**: the browser's "behind-the-scenes employees". They decode the WebP images and do the heavy calculations so that the screen never freezes.
 - **Libraries**: Three.js (3D scene), Lucide (icons), Plotly (tracking charts). They are copied into the `js/vendor/` folder.
 
@@ -53,11 +53,11 @@ The graphics card is built for this: it runs them in parallel. The small program
 **A shader is one recipe handed to a million cooks.** Each cook prepares a single pixel, all at the same time, with the same recipe. An ordinary processor would be one very fast cook: it would lose the race.
 :::
 
-- About **1,800 lines** of GLSL, written inside JavaScript files (volume rendering, the oblique slice, the recolouring of slices).
+- The shaders are GLSL programs written inside JavaScript files: volume rendering, the oblique slice, the recolouring of slices.
 - The browser hands them to **WebGL2**, the standard interface for talking to the graphics card.
 
 ::: tech
-The volume is stored in the graphics card as **3D textures**, divided into slots of 64³ voxels (66³ in formats 4 and 5). The shader reads these slots; empty ones are skipped. The details are in chapters 9 and 10.
+The volume is stored in the graphics card as **3D textures**, divided into slots of 64³ voxels (66³ with a border in formats 4 to 6). The shader reads these slots; empty ones are skipped. The details are in chapters 9 and 10.
 :::
 
 ## 2.4 The server: a counter, not a brain
@@ -163,14 +163,19 @@ Three.js, Lucide and Plotly are not loaded from the Internet: their files are **
 - a graphics card: the more memory it has, the higher the quality that can be reached;
 - the light/dark theme, the language and a colour-blind filter are in the header of every page.
 
-The platform **measures** the available memory and adapts to it:
+No browser reports how much graphics memory a card has. The platform **estimates** it, and there is no setting to change: the budget is automatic.
 
-| Graphics card class | Memory budget used |
+| Graphics card | Budget used |
 |---|---|
+| a model the platform knows (NVIDIA, Radeon, Intel Arc) | 60 % of its memory, at most 2 GiB less than the card, between 1 and 16 GiB |
 | no card (software rendering) | 256 MiB |
-| integrated (laptop) | 0.5 to 2 GiB |
-| dedicated | 3 to 4 GiB |
-| unknown | 1 to 2 GiB |
+| integrated (Intel, Apple, phones) | 2 GiB with 8 GB or more of device memory, 1 GiB from 4 GB, otherwise 512 MiB |
+| dedicated, model not known | 4 GiB (3 GiB if the device reports less than 8 GB) |
+| unknown | 2 GiB with 8 GB or more, otherwise 1 GiB |
+
+::: tech
+The model is read from the card's name (`WEBGL_debug_renderer_info`), then matched with a table of memory sizes. A GeForce RTX 4070 desktop (12 GiB) gets min(0.6 × 12, 12 − 2) = **7.2 GiB**; the laptop version (8 GiB) gets **4.8 GiB**. Each graphics context loss in the last seven days halves the budget, to a floor of 256 MiB.
+:::
 
 ::: remember
 If the requested quality exceeds the budget, the platform picks the smaller level and tells you: it does not crash (chapter 10).

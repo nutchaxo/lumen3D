@@ -23,7 +23,7 @@ Boîte englobante (bounding box)
 : Parallélépipède qui entoure tout le volume. Un clic qui n'atteint que cette boîte, sans structure visible dessous, n'est pas une mesure valable. → chapitre 12
 
 Bordure (apron)
-: Voxel supplémentaire autour d'une brique, copié depuis ses voisines, pour que le filtrage ne laisse pas de couture entre deux briques. Les briques des formats 4 et 5 font 66³ pour 64³ utiles. → chapitre 7
+: Voxel supplémentaire autour d'une brique, copié depuis ses voisines, pour que le filtrage ne laisse pas de couture entre deux briques. Les briques des formats 4 à 6 font 66³ pour 64³ utiles. → chapitre 7
 
 Brique
 : Petit cube de 64×64×64 voxels : l'unité de découpage et de chargement d'un volume. → chapitre 7
@@ -33,6 +33,9 @@ Bruit de fond
 
 Bruit de Poisson
 : Variation aléatoire d'un signal faible, due au nombre limité de photons reçus : plus le signal est faible, plus il paraît granuleux. S'y ajoute le bruit de la caméra. → chapitre 5
+
+Budget GPU
+: Quantité de mémoire de la carte graphique que le viewer s'autorise pour ses atlas (affichée par [Budget GPU actuel]{.ui}). Il est détecté d'après la carte, sans réglage à la main, et divisé par deux après une perte de contexte. → chapitre 10
 
 Cache
 : Mémoire où l'on garde ce qui a déjà été téléchargé pour ne pas le redemander. → chapitre 10
@@ -46,11 +49,17 @@ Canal
 Catalogue
 : Deux sens à distinguer : la liste des jeux de données du site, générée à la demande à partir des fichiers, et le catalogue de plugins signé, d'où l'on installe les outils. → chapitres 3 et 15
 
+Centre de téléchargement
+: Panneau de chaque jeu qui propose les fichiers à emporter : espace de travail, mesures, exports d'images et, au format 6, le `.q30.zip` et l'export OME-Zarr sans perte. → chapitres 12 et 17
+
+Chargement rapide
+: Réglage de la liste des résolutions d'un jeu au format 6. Activé (par défaut), les résolutions se chargent depuis les briques compressées WebP Q30 ; désactivé, depuis les briques sans perte, plus lourdes à télécharger. → chapitre 10
+
 Compression avec perte, sans perte
-: Avec perte, le fichier est plus petit mais les valeurs sont légèrement modifiées ; sans perte, on retrouve exactement les valeurs d'origine. Les briques sont stockées sans perte ; le format 5 ajoute, pour l'affichage seulement, des colonnes ±2, ±4 et avec perte. → chapitres 6 et 7
+: Avec perte, le fichier est plus petit mais les valeurs sont légèrement modifiées ; sans perte, on retrouve exactement les valeurs d'origine. Les briques sont stockées sans perte (colonne `ll`) ; l'affichage du format 6 est en WebP Q30, avec perte, et les exports lisent la colonne sans perte. → chapitres 6, 7 et 12
 
 Colonne (de compression)
-: En format 5, l'une des cinq façons de stocker un même niveau : sans perte, ±2, ±4, légère (WebP 80), très légère (WebP 50). Choisie dans la matrice de qualité. → chapitres 7 et 10
+: En format 5, l'une des cinq façons de stocker un même niveau : sans perte, ±2, ±4, légère (WebP 80), très légère (WebP 50). Au format 6, il n'en reste que deux : sans perte (`ll`) et Q30. Choisie dans la matrice de qualité. → chapitres 7, 10 et 17
 
 Copies de coupe
 : En format 5, trois copies du volume recoupées (plans XY, lignes XZ / YZ, petites briques obliques) qui rendent les coupes natives du Studio rapides. → chapitre 7
@@ -92,7 +101,7 @@ Empreinte (hachage, SHA-256)
 : Court code calculé à partir du contenu d'un fichier : si un seul octet change, l'empreinte change. Elle sert à vérifier un téléchargement, un plugin, un morceau d'import. → chapitres 15 et 19
 
 ESS (Empty Space Skipping, saut de l'espace vide)
-: Les briques dont tous les voxels valent 0 ne sont ni stockées ni parcourues, ce qui économise octets et calcul. Aux formats 4 et 5 la règle est exacte (un seul voxel non nul suffit à garder la brique) ; avant, un seuil d'occupation de 0,05 % écartait aussi les briques presque vides. → chapitres 7 et 9
+: Les briques dont tous les voxels valent 0 ne sont ni stockées ni parcourues, ce qui économise octets et calcul. Aux formats 4 à 6 la règle est exacte (un seul voxel non nul suffit à garder la brique) ; avant, un seuil d'occupation de 0,05 % écartait aussi les briques presque vides. → chapitres 7 et 9
 
 Exécutant
 : Celui qui fait le travail d'une conversion de données : le navigateur ou le serveur. Il peut changer en cours de route, le journal est commun. → chapitre 17
@@ -116,7 +125,11 @@ Fonction de transfert
 : Règle qui convertit une valeur du volume en couleur et en opacité. Dans Lumen3D, c'est la chaîne fenêtre, gamma, opacité et couleur du panneau des canaux ; le chapitre 11 la décrit sans employer ce terme. → chapitre 11
 
 Format de données
-: Façon dont un dataset est rangé sur le disque ; numéroté de 1 à 5. Le format courant est le 5. → chapitres 7 et 17
+: Façon dont un dataset est rangé sur le disque ; numéroté de 1 à 6. Le format courant est le 6. → chapitres 7 et 17
+
+Décomposer
+: Bouton du viewer qui sépare les canaux en panneaux distincts, chacun avec un seul canal ([Décomposer par canal]{.ui}). Son export respecte le cadre à l'écran. → chapitre 12
+
 
 Gamma
 : Réglage qui éclaircit ou assombrit les tons moyens sans toucher aux extrêmes. → chapitre 11
@@ -140,7 +153,10 @@ Idempotent
 : Fichier Imaris : un conteneur HDF5 qui contient les canaux, les niveaux de résolution et les métadonnées d'une acquisition. → chapitre 4
 
 index.bin
-: Fichier binaire des formats 4 et 5 (un par colonne en format 5) qui dit dans quel pack se trouve chaque brique ; il remplace le gros manifeste JSON. → chapitre 7
+: Fichier binaire des formats 4 à 6 (un par colonne aux formats 5 et 6) qui dit dans quel pack se trouve chaque brique ; il remplace le gros manifeste JSON. → chapitre 7
+
+Intégrité des données
+: Onglet d'administration qui contrôle chaque jeu, publié ou en import, sans rien modifier : fichiers manquants ou en trop, format non à jour. Chaque constat dit comment le corriger. → chapitres 14 et 17
 
 Intensité
 : Valeur d'un voxel : combien de lumière a été mesurée à cet endroit. Dans le viewer elle est relative (0 à 255), pas calibrée. → chapitres 4 et 11
@@ -191,10 +207,16 @@ MIP (projection d'intensité maximale)
 : Image où chaque pixel prend la valeur la plus forte rencontrée le long d'un axe. → chapitres 7 et 12
 
 Matrice (de qualité)
-: Le tableau « résolution × compression » du panneau de qualité d'un jeu au format 5 : une ligne par niveau, une colonne par compression ; chaque case affiche son poids et sa mémoire graphique. → chapitre 10
+: Au format 5, le tableau « résolution × compression » du panneau de qualité : une ligne par niveau, une colonne par compression ; chaque case affiche son poids et sa mémoire graphique. Au format 6, il n'a plus qu'une liste de résolutions. → chapitre 10
+
+Mises à jour des données
+: Onglet d'administration qui convertit les jeux publiés vers le dernier format, sur place, avec reprise automatique après un échec. → chapitres 14 et 17
 
 Mosaïque
 : Plusieurs petites images collées en une grande ; une brique est stockée comme une mosaïque de ses coupes. → chapitre 7
+
+Niveau sans perte
+: Copie d'une résolution du jeu avec les valeurs exactes des voxels (colonne `ll`). Au format 6, elle sert aux exports et aux téléchargements ; l'affichage passe par la copie WebP Q30. → chapitres 7 et 17
 
 Nonce
 : Code aléatoire à usage unique, tiré à chaque chargement de page, qui autorise les scripts du site. → chapitre 19
@@ -212,7 +234,7 @@ Palier (tier)
 : Groupe de priorité d'un import : les fichiers qui rendent un jeu ouvrable (métadonnées, niveau le plus grossier) partent d'abord. → chapitre 17
 
 PBKDF2
-: Méthode qui transforme un mot de passe en empreinte volontairement lente à calculer (600 000 tours), pour décourager les essais en masse. → chapitre 19
+: Méthode qui transforme un mot de passe en empreinte volontairement lente à calculer (le nombre de tours est fixé par le serveur), pour décourager les essais en masse. → chapitre 19
 
 Percentile
 : Valeur sous laquelle se trouve un pourcentage donné des mesures : le 99e percentile est dépassé par 1 % des valeurs. → chapitre 5
@@ -247,6 +269,9 @@ PSF (fonction d'étalement du point)
 Pyramide
 : Ensemble de versions du volume à des résolutions de plus en plus grossières, empilées comme les étages d'une pyramide. → chapitre 6
 
+Q30
+: Compression WebP de qualité 30, avec zone morte : c'est l'image que voit le visiteur d'un jeu au format 6. Elle est beaucoup plus légère que la copie sans perte, avec une erreur moyenne de 1,5 niveau de gris sur 255. → chapitres 7, 10 et 17
+
 Quaternion
 : Quatre nombres qui décrivent une rotation 3D sans blocage ; ils servent à mémoriser l'orientation d'un embryon. → chapitre 12
 
@@ -279,6 +304,9 @@ Staging
 
 Stéréomicroscope
 : Microscope à faible grossissement qui donne une image en couleur de l'embryon entier ; il produit les photographies du type 2D. → chapitre 12
+
+Stockage
+: Onglet d'administration (groupe Données) qui répartit la place du volume entre les données publiées, les imports et la corbeille, la plateforme et le reste ; le calcul est gardé 10 minutes. → chapitres 14 et 17
 
 Streaming
 : Chargement progressif : on affiche ce qui est arrivé et on complète en continu, sans attendre tout le fichier. → chapitre 10
@@ -326,5 +354,5 @@ X-gal
 : Coloration qui rend bleues les cellules exprimant un gène rapporteur ; le viewer 2D sait isoler cette coloration. → chapitre 12
 
 Zone morte
-: En format 5, seuil (de 0 à 12) sous lequel une brique compressée avec perte remet les petites valeurs à 0, pour que le fond reste noir ; écrit dans un octet à la fin de la brique. → chapitre 7
+: Aux formats 5 et 6, seuil sous lequel une brique compressée avec perte remet les petites valeurs à 0, pour que le fond reste noir ; écrit dans un octet à la fin de la brique. → chapitre 7
 :::

@@ -2,8 +2,8 @@
 title: "Lumen3D — the essentials"
 subtitle: "What happens to your Imaris file, from the microscope to the screen — and how to make good use of it"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.65.0 · Pipeline 0.22.0 · Data format 5"
-date: "October 2026"
+version: "Web platform 1.76.0 · Pipeline 0.23.0 · Data format 6"
+date: "November 2026"
 abstract: "The biologist's guide: prepare an acquisition, have it processed, put it online, explore it in 3D, measure, build figures, and know how to interpret what you see. Each section points to the chapter of the full documentation (“Lumen3D, from A to Z”) that gives every detail."
 lang: en
 toc-title: "Contents"
@@ -206,10 +206,10 @@ tried and then **removed** in version 0.12.0: they created artificial coloured "
 
 ![The four levels of the demonstration dataset, to scale. Each level is the average of 2 × 2 blocks (× 2 in Z when the voxels are fine enough in Z) of the level below.](img-en/ch06/pyramide.png){width=85%}
 
-- X and Y are halved at each level; **Z only as long as** the Z voxel does not become more than 1.5 times larger than in XY.
+- In format 4, X and Y are halved at each level; **Z only as long as** the Z voxel does not become more than 1.5 times larger than in XY.
 - The average is an **integer, rounded to the nearest**. The pyramid stops when the longest side is 128 voxels or less.
 - Level 0 is the cleaned image as it is, **never resampled**. → ch. 6
-- This is the rule of **format 4**, the one the pipeline writes. **Format 5** keeps every slice and aims at exact sizes (512, 256…): see § 6.1.
+- This is the rule of **format 4**. **Formats 5 and 6** (the pipeline writes **6**) keep every slice and use sizes of 256 · 2ᵏ voxels: see § 6.1 and § 6.2.
 
 ## 5.2 Lossless compression
 
@@ -255,26 +255,47 @@ On the demonstration dataset: **358 bricks stored out of 777** possible.
 
 - **The border** copies the neighbouring voxel: the image can be smoothed with no visible seam between two bricks. → ch. 7
 - **The planes** (`planes/`): a full-resolution XY slice reads **94 KB instead of 5,078 KB** on the demonstration dataset.
-- **The formats**: a dataset carries a format number (1 to 5, the latest is **5**). Pipeline 0.22.0 writes
-  format 4 (5 with `--format 5`); the *Data updates* tab brings a dataset to format 5, without reprocessing. → ch. 17
+- **The formats**: a dataset carries a format number (1 to 6, the latest is **6**). Pipeline 0.23.0 writes
+  format 6 by default; the *Data updates* tab brings an older dataset to format 6, without reprocessing. → ch. 17
 
-## 6.1 Format 5: a resolution × compression matrix
+## 6.1 Format 6: lossless for measuring, WebP Q30 for looking
+
+::: tldr
+- Every resolution is stored **twice**: **lossless** (for exports, downloads and the Studio's figures) and **WebP quality 30** (for the screen).
+- The screen shows the Q30 copy: a mean error of **1.5 grey levels out of 255**, and a file about **3.4 times smaller** (26 MB against 89 MB, E8.5 Em1 at native resolution).
+- **Fast loading** (§ 9.1) can switch the screen back to the lossless copies.
+:::
+
+| Copy | Used for | Size (E8.5 Em1, native) |
+|---|---|---|
+| **Lossless** | exports, downloads, the Studio's figures | 89 MB |
+| **WebP Q30** | what you see on screen, by default | 26 MB |
+
+- The **fast cut stores** (XY, XZ and YZ planes, oblique cut bricks) stay lossless in every format.
+- A format-5 dataset becomes format 6 through the *Data updates* tab, one block of bricks at a time. The coarsest levels come first, so they are usable early.
+
+::: note
+**Why two copies?** A display can be lossy without anyone noticing, but an export cannot. The Q30 copy is
+what the screen draws, and distances are picked on that picture; the lossless copy is what every exported file is computed from. → ch. 6
+:::
+
+## 6.2 Format 5: a resolution × compression matrix (older datasets)
 
 ::: tldr
 - The same volume is stored at **several resolutions** (the rows) and in **five compressions** (the columns). You pick your cell.
 - The reduced levels **keep every slice** (Z is no longer reduced).
-- Everything that **measures** or **exports at native quality** reads the **lossless** version, whatever cell is displayed.
+- **Distances** are picked on the cell on screen, so they follow it. **Exports** offer a **lossless** version (*Max*), whatever cell is displayed.
 :::
 
 ![The levels of the demonstration dataset in format 4 and in format 5 (real dimensions).](img-en/f5/niveaux.svg){width=80%}
 
 | Column | What is guaranteed | Size (vs lossless) |
 |---|---|---|
-| **Lossless** | every voxel exact | 1 |
-| **±2** | no voxel moves by more than 2 grey levels (out of 255) | 0.62 – 0.82 |
-| **±4** | no voxel moves by more than 4 | 0.50 – 0.69 |
-| **Light** | lossy WebP (quality 80): small visual changes | 0.35 – 0.61 |
-| **Very light** | lossy WebP (quality 50): visible smoothing | 0.22 – 0.40 |
+| **Max** (lossless) | every voxel exact | 1 |
+| **Extra** (±2) | no voxel moves by more than 2 grey levels (out of 255) | 0.62 – 0.82 |
+| **High** (±4) | no voxel moves by more than 4 | 0.50 – 0.69 |
+| **Medium** (WebP 80) | lossy WebP (quality 80): small visual changes | 0.35 – 0.61 |
+| **Low** (WebP 50) | lossy WebP (quality 50): visible smoothing | 0.22 – 0.40 |
 
 ![The same real brick in the five compressions: top, the middle slice; bottom, the difference from the original (× 16).](img-en/f5/colonnes.png){width=100%}
 
@@ -328,6 +349,7 @@ cells). The viewer applies this displacement **to the view**, not to the voxels:
 - The upload order is designed for you: the record, the thumbnail and the **coarsest level** go first,
   so the dataset can be **set up within minutes**, while the rest arrives.
 - Only files produced by the pipeline are accepted. → Administrator guide, ch. 4
+- The *Data integrity* tab checks the files of every dataset (missing or extra), and the *Storage* tab shows where the disk space goes. → Administrator guide
 
 ## 8.1 The settings that matter to you
 
@@ -358,38 +380,92 @@ cells). The viewer applies this displacement **to the view**, not to the voxels:
 
 ![The real pyramid of the demonstration dataset and the rule of the three qualities.](img-en/ch10/pyramide.svg){width=72%}
 
-| Quality | Level loaded |
+::: tldr
+- A **format 6** dataset (the current format) lists its **resolutions**. The screen shows the **Q30** copies.
+- **Fast loading**, on by default, keeps that Q30 display. Switch it off to see the lossless copies (larger downloads).
+- The viewer **detects** the graphics memory of your card. Nothing to set.
+:::
+
+| Dataset | Quality menu | What the screen shows |
+|---|---|---|
+| **Format 6** | the resolution list + *Fast loading* | WebP Q30 (on) or lossless (off) |
+| **Format 5** | two lists: *Resolution* and *Quality* | the quality you pick |
+| **Format 4** (older) | the three presets below | exact voxels |
+
+**Format 6: resolutions and Fast loading**
+
+Each resolution shows its name, its size in voxels, and the graphics memory it takes once loaded.
+
+| Resolution (format 4 presets) | Level loaded |
 |---|---|
 | **512** (default) | the finest level whose longest XY side is at most **768** px |
 | **1024** | the finest level whose longest side is at most **1,536** px |
 | **Native** | level 0, full resolution |
 
-On a **format-5** dataset, the menu becomes a **table**: one row per level, one column per compression. Each cell gives its download size, the estimated time and the graphics memory; a click loads it. It opens on **512 · ±2**.
+::: note
+**Fast loading** (the checkbox under the list, on by default, kept in your browser):
+- **On**: the screen uses the WebP Q30 copies. Smaller downloads, mean error 1.5 grey levels out of 255.
+- **Off**: the same resolutions load from the lossless copies. Larger downloads, exact voxels on screen.
+
+The volume reloads when you change it. Exports read the lossless data in both positions; distances are picked on the picture on screen, so they follow this switch.
+:::
+
+::: tip
+**When to switch Fast loading off.** When you compare the screen with the raw values of a faint structure,
+or when a picture must match a number exactly. For the overview, leave it on.
+:::
+
+**Format 5: the quality matrix and "How to choose?"**
+
+On a format 5 dataset, the menu has two lists: **Resolution** (the rows) and **Quality** (the columns).
+Each quality shows its download size on this dataset.
+
+| Quality | Meaning |
+|---|---|
+| **Max** | lossless: every voxel as acquired, for measurements and figures |
+| **Extra** | ±2 grey levels (out of 255): visually lossless, the default for exploring |
+| **High** | ±4 grey levels: near lossless |
+| **Medium** | WebP quality 80: smaller files, faint texture smoothed |
+| **Low** | WebP quality 50: the lightest, visible smoothing |
 
 ![The quality matrix of the demonstration dataset (sidebar widened for the capture; on screen, scroll the table to the right).](img-en/f5/matrice.png){.shot width=80%}
 
-| Colour | Meaning |
-|---|---|
-| green | fits comfortably in graphics memory |
-| amber | tight |
-| red | too large: the overview stays coarser, zoom detail loads the cell around the view |
+The **How to choose?** button opens a guide. For each resolution and quality it gives the **download size**, the
+**download time** at 5, 20 or 100 Mb/s (and at the speed measured in your browser, once measured), and the
+**graphics memory**.
 
-If the graphics card does not have enough memory, the viewer takes **the next lighter level** and says so
-in a message. A progress line shows the quality, the percentage and the current step. → ch. 10
+| Colour (GPU memory) | Meaning |
+|---|---|
+| green | fits comfortably: under 75 % of the budget |
+| amber | close to the budget: 75 to 100 % |
+| red | more than the budget: the viewer shows the next coarser level |
+
+::: tip
+**Recommended**: the finest resolution shown in green, at *Extra*. For a measurement or a figure: *Max* at the native resolution.
+:::
+
+**Graphics memory: detected, not chosen**
+
+The browser does not say how much memory the card has. The viewer reads the card's name, looks its memory up in
+a table of NVIDIA, AMD and Intel Arc models, and allows **60 %** of it. It always keeps **2 GiB** free for the
+browser and the system, and never allows more than **16 GiB**. An unknown card falls back to an estimate by class.
+
+If the card cannot hold the level you chose, the viewer shows the next coarser one and a warning says so.
+A progress line shows the quality, the percentage and the current step. → ch. 10
 
 ## 9.2 How the image is computed
 
 ![One ray per pixel: it enters the volume, takes one sample per voxel crossed, and combines these values.](img-en/ch09/lancer-de-rayons.svg){width=85%}
 
-The image is not a photo: it is **recomputed** at every movement by the graphics card, thousands
-of pixels in parallel (Three.js + WebGL2). While you rotate, the definition drops a little to
-stay smooth; at rest, it returns to the maximum (one sample per voxel). Empty bricks are skipped. → ch. 9
+The image is not a photo: it is **recomputed** by the graphics card, thousands of pixels in parallel (Three.js + WebGL2).
+The definition **does not change** while you move: a drag and a still view draw the same picture, at full
+resolution, with one sample per voxel. Empty space is skipped in cells of 8 × 8 × 8 voxels. → ch. 9
 
 ## 9.3 The three render modes
 
 :::: cols3
 ::: col
-![Fluorescence (default).](img-en/ch09/mode-fluorescence.png){width=100%}
+![Fluorescence (Imaris-like), the default.](img-en/ch09/mode-fluorescence.png){width=100%}
 :::
 ::: col
 ![Natural fluorescence.](img-en/ch09/mode-naturelle.png){width=100%}
@@ -401,9 +477,14 @@ stay smooth; at rest, it returns to the maximum (one sample per voxel). Empty br
 
 | Mode | What you see | Good for… |
 |---|---|---|
-| **Fluorescence** | the **maximum** of each channel along the ray, colours added, no depth | seeing all the signal, like a MIP |
+| **Fluorescence (Imaris-like)** | the **maximum** of each channel along the ray, colours added, no depth | seeing all the signal, like a MIP |
 | **Natural fluorescence** | each fluorophore glows; what is dense **hides** what lies behind | perceiving shape and depth |
 | **Structure (DVR)** | an opacity accumulated from front to back | surfaces and solid volumes |
+
+::: tip
+**Fluorescence responds at once.** Changing min, max, gamma, opacity or a colour, or switching a channel
+on or off, redraws the picture without recomputing the volume. The two other modes recompute it at each change.
+:::
 
 # 10. Adjusting how a channel is displayed
 
@@ -442,7 +523,7 @@ noise disappears on screen. → ch. 11
 # 11. Measuring and exploring the inside
 
 ::: tldr
-- **Measurements** are in **µm**, with the true voxel size, on the first visible structure under the click.
+- **Measurements** are in **µm**, picked on the first visible structure under the click, on the picture on screen; their precision is the voxel size of the level displayed.
 - **Oblique slice** and **Z-stack browser** show the inside, with an exact scale bar.
 - The scale bar of the **3D view** is exact only at the depth of the sample's centre.
 :::
@@ -481,6 +562,8 @@ the page address (they travel in the link) or by downloading the **measurements 
 - **Z-stack browser**: it lays the stack flat (top face toward you), an adjustable thickness bar,
   handles to trim the top and bottom, a rotation from 0 to 360°. It is exclusive with the oblique slice.
 - **Orientation axes**: the red / green / blue compass (R1/R2, G1/G2, B1/B2) defined by the administrator.
+  They **start at the centre of gravity** of the specimen (the centre of its stored bricks, not of the empty box).
+  Dragging them moves them; the reset action brings them back to the centre.
 
 ![Same length, three depths: the 3D view's bar is valid for the plane through the sample's centre.](img-en/ch12/perspective.svg){width=65%}
 
@@ -488,16 +571,21 @@ the page address (they travel in the link) or by downloading the **measurements 
 
 ::: tldr
 - The **Studio** composes an annotated figure at **full resolution** (arrows, text, distances, scale bar).
-- The 3D view exports **at any size**, with a transparent background if needed.
+- On **format 6**, every export is **lossless at the resolution on screen**; the 3D view exports **at any size**, with a transparent background if needed.
 - **Compare** puts up to 4 datasets side by side, synchronised.
 :::
 
 ![The Studio: rotated rectangle, arrow, distance, scale bar and text, on a slice of the demonstration dataset.](img-en/ch12/studio.png){.shot width=70%}
 
-- Opening a slice in the Studio reloads it **at native level** (XY planes or byte ranges), with a progress bar.
+- On **format 6**, the Studio shows the Q30 picture; the **lossless** native pass runs when you export the figure.
+  On **format 5**, opening a slice reloads it at native level (XY planes or byte ranges), with a progress bar.
 - **Channel colours** can be adjusted in the Studio without touching the annotations.
 - Export as **PNG** (the figure) or **JSON** (to resume it later); above 5 MB, the export is refused with a message.
-- **Every export offers "lossless"**: the 3D view ([Quality]{.ui}: [Current]{.ui} or [Lossless]{.ui}), the Studio ([Native lossless]{.ui} or [This picture]{.ui}) and *Decompose by channel*. Your annotations keep their place.
+- **On format 6, exports are lossless at the resolution on screen:** the 3D view image, the Studio figure and
+  *Decompose by channel* read the lossless copy with no question asked. On **format 5** the 3D view
+  ([Quality]{.ui}: [Current]{.ui} or [Lossless]{.ui}) and the Studio still offer the choice. Your annotations keep their place.
+- **Channel Split** (*Decompose by channel*): while the panel is open, a **red frame** on the 3D view shows exactly
+  what the main picture of the figure captures.
 
 ![Compare: two volumes and a photograph, shared tools and synchronisation (camera, time, slices, channels).](img-en/ch12/comparer.png){.shot width=70%}
 
@@ -506,6 +594,8 @@ the page address (they travel in the link) or by downloading the **measurements 
 | get a large, sharp image of the 3D view | **Export view** (rendered in 2,048 px tiles, transparent background possible) |
 | take a quick capture | **Screenshot** |
 | get the original files (`.ims`, TIFF, MIP) | **Download Center** (if the `download/` folder exists) |
+| get the lossless voxels for napari, Fiji or Neuroglancer | **Download Center**: the OME-Zarr export |
+| get the display files as stored (WebP Q30) | **Download Center**: *Download .q30.zip* (format 6 only) |
 | compare embryos or channels | **Compare** and **Decompose by channel** |
 | share exactly what you see | the **page address**, or the workspace saved in Compare |
 
@@ -562,7 +652,8 @@ pixel exact, useful if you want to quantify the blue / red ratio. The calibratio
 - **Bricks that are not stored** are areas that really are 0 after cleaning, not lost data.
 - **The display floor** (6 to 48) hides the faintest values on screen: lowering *min* will not bring them back.
 - **At most 4 channels** are displayed at the same time.
-- **A light cell skews no measurement**: in format 5, the ±2, ±4, Light and Very light columns change what you **see**, never what is **measured** or **exported losslessly**.
+- **What you see is what you measure**: on format 6 the screen shows WebP Q30 (mean error 1.5 grey levels out of 255);
+  distances are picked on the picture on screen, so turn *Fast loading* off to measure on the lossless copy. Exports of format 6 always read the lossless copy. On format 5, the chosen column changes the picture and the distances; exports offer the lossless choice.
 - **Without calibration** in the file, no measurement in µm is offered.
 - **The 3D view is in perspective**: measure with the measuring tool or on a slice, not with the 3D scale bar.
 :::
@@ -586,6 +677,7 @@ pixel exact, useful if you want to quantify the blue / red ratio. The calibratio
 | The image is blurry at first | the coarse level arrives first, the detail follows | wait for the progress to finish |
 | “Native” shows another level | not enough graphics memory: lighter level + message | choose 1024, close other 3D tabs |
 | The graphics card “crashes” | the viewer reloads the view with reduced memory (at most 3 times in 2 minutes) | lower the quality, reload the page |
+| The 3D view is refused (“no WebGL”) | the browser blocks 3D for the site after a driver crash | close the browser fully (on Android: force-stop Chrome), reopen the page |
 | A brick is corrupt | it is shown empty and counted, never shown wrong | tell the administrator |
 | The import transfer stops | it resumes as soon as the network is back | drag the same folder again if needed |
 | The dataset is not in the explorer | it is hidden, or still being imported | ask the administrator to publish / show it |
@@ -618,11 +710,17 @@ Brick
 Lossless WebP
 : The image format that stores the bricks while keeping every value exact. → ch. 6
 
+WebP Q30
+: The lossy copy of format 6 that the screen shows (quality 30). Format 6 exports never read it; distances are picked on the picture on screen, which uses it by default. → ch. 6
+
+Fast loading
+: The switch that shows the Q30 copies (on) or the lossless copies (off) of a format 6 dataset. → ch. 10
+
 MIP
 : Maximum intensity projection: the strongest value along an axis is kept. → ch. 7 and 9
 
 Ray casting
-: The drawing method: one ray per pixel crosses the volume and combines the values it meets. → ch. 9
+: The GPU method that draws the 3D view. For each screen pixel, a ray is walked through the volume in regular steps (about one sample per voxel); each sample is read from the 3D texture and accumulated front to back, until the ray leaves the volume or, in the default Fluorescence mode, is almost opaque. → ch. 9
 
 Gamma
 : The exponent that brightens (< 1) or darkens (> 1) the mid-tones. → ch. 11
@@ -637,7 +735,7 @@ Studio
 : The workshop for annotated figures at full resolution. → ch. 12 and 13
 
 Data format
-: The version number of how a dataset's files are organised (1 to 5). → ch. 17
+: The version number of how a dataset's files are organised (1 to 6). → ch. 17
 
 Matrix (quality)
 : In format 5, the "resolution × compression" table of the quality panel: each cell is a way of displaying the volume. → ch. 10

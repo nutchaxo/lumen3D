@@ -2,8 +2,8 @@
 
 ::: chapter-intro
 - An embryo of several gigabytes cannot travel over the Internet as it is: the pipeline **shrinks** it in four moves — 16 → 8 bits, a pyramid of resolutions, removal of empty bricks, **lossless** compression.
-- **Format 5** adds, for display only, four lighter compressions (two of them lossy); what measures always reads the lossless version (section 7.11).
-- None of these moves changes an intensity at the finest level: what you see at full resolution is **exactly** the result of the cleaning in chapter 5.
+- **Format 6**, the default since pipeline 0.23.0, keeps two copies of each level: a **lossless** one for exports and downloads, and a **WebP Q30** one, which is what the viewer displays and what distance picks are read from (section 7.11).
+- The lossless copy changes no intensity after chapter 5: at full resolution it is **exactly** the result of the cleaning. The displayed Q30 copy is lossy (a mean error of 1.5 grey levels out of 255, measured on one native dataset).
 - On the demonstration dataset: **297 MB of raw voxels → 9.3 MB of bricks**, about 32 times less.
 :::
 
@@ -47,7 +47,7 @@ The pyramid **adds** bytes (+14% here): it is the price of fast display. The gai
 This is the window of chapter 5: a 2-byte voxel becomes a 1-byte voxel. We lose the fineness of the 65,536 levels, but the browser only shows 256: the screen cannot show more.
 
 ::: warning
-This is **the only step that loses information** (the nuances above 256 levels), and it takes place in chapter 5, not here. Everything that follows in this chapter is **lossless**.
+This is **the only step that loses information** in the lossless data (the nuances above 256 levels), and it takes place in chapter 5, not here. Everything that follows in this chapter is **lossless**. The display copy of format 6 is a separate, lossy copy (section 7.11).
 :::
 
 ## 6.3 The resolution pyramid
@@ -104,18 +104,18 @@ We stop at level 3: 96 ≤ 128.
 I rebuilt this pyramid with the pipeline's functions from the result of chapter 5, then compared it with the published bricks: **358 bricks out of 358 identical**, voxel for voxel.
 :::
 
-### And in format 5?
+### And in formats 5 and 6?
 
-Format 5 (section 7.11) changes the pyramid rule:
+Formats 5 and 6 (section 7.11) change the pyramid rule. Both use the same levels:
 
-| | format 4 | format 5 |
+| | format 4 | formats 5 and 6 |
 |---|---|---|
 | level sizes | halved each time | long side **exactly** 4096, 2048, 1024, 512, 256 |
 | slices (Z) | halved while the voxel stays ≈ cubic | **all kept** at every level |
 | computation | average of 2 × 2 (× 2) voxels of the previous level | **exact area average** of the native voxels, from level 0 |
 | demonstration dataset | 768, 384, 192, 96 (and 112, 56, 28, 14 slices) | 768 (native), 512, 256, always 112 slices |
 
-In both cases, level 0 stays the cleaned image as it is.
+In all three cases, level 0 stays the cleaned image as it is.
 
 ## 6.4 Compressing without losing anything
 
@@ -136,6 +136,10 @@ Real compressors are subtler: they predict a voxel from several neighbours (left
 ### Bricks are lossless WebP images
 
 A 3D brick is not a 2D image. The pipeline therefore lays its 66 slices side by side in a **594 × 528 pixel mosaic** (9 columns × 8 rows; chapter 7), and saves the mosaic as **lossless WebP**.
+
+::: note
+Format 6 keeps these lossless bricks for exports and downloads, and adds a second copy of each brick in lossy WebP quality 30 for display (section 7.11). The rest of this chapter describes the lossless copy.
+:::
 
 ### The measurement: four ways of saving the same brick
 
@@ -219,7 +223,7 @@ The `download/` folder (original file, TIFF, projections…) is not counted: it 
 :::
 
 ::: remember
-- 16 → 8 bits is the **only** loss, decided in chapter 5; everything else is exact.
+- 16 → 8 bits is the **only** loss of the lossless data, decided in chapter 5; everything else is exact. Format 6's Q30 copy is a display-only exception.
 - The pyramid: X, Y ÷ 2 at each level, Z ÷ 2 only while its voxel ≤ 1.5 × the XY voxel; integer mean rounded up; stop at 128 voxels.
 - **Lossless WebP** compression: JPEG is smaller but damages the values and the "exact 0".
 - A brick is stored only if its interior contains a voxel ≥ 1: 358 bricks stored out of 777 possible.

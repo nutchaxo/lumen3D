@@ -2,8 +2,8 @@
 title: "Lumen3D — l'essentiel"
 subtitle: "Ce que devient votre fichier Imaris, du microscope à l'écran — et comment bien s'en servir"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plateforme Web 1.65.0 · Pipeline 0.22.0 · Format de données 5"
-date: "Octobre 2026"
+version: "Plateforme Web 1.76.0 · Pipeline 0.23.0 · Format de données 6"
+date: "Novembre 2026"
 abstract: "Le guide du biologiste : préparer son acquisition, la faire traiter, la mettre en ligne, l'explorer en 3D, mesurer, faire des figures, et savoir interpréter ce que l'on voit. Chaque section renvoie au chapitre de la documentation complète (« Lumen3D, de A à Z ») qui donne tous les détails."
 lang: fr
 toc-title: "Sommaire"
@@ -209,7 +209,7 @@ essayés puis **retirés** en version 0.12.0 : ils créaient des « taches » co
 - X et Y sont divisés par 2 à chaque niveau ; **Z seulement tant que** le voxel en Z ne devient pas plus de 1,5 fois plus grand qu'en XY.
 - La moyenne est **entière, arrondie au plus proche**. On s'arrête quand le plus grand côté fait 128 voxels ou moins.
 - Le niveau 0 est l'image nettoyée telle quelle, **jamais rééchantillonnée**. → ch. 6
-- C'est la règle du **format 4**, celle qu'écrit le pipeline. Le **format 5** garde toutes les tranches et vise des tailles exactes (512, 256…) : voir § 6.1.
+- C'est la règle du **format 4**, celle qu'écrivait le pipeline jusqu'à la version 0.22. Les **formats 5 et 6** gardent toutes les tranches et visent des tailles exactes (512, 256…) : voir § 6.1.
 
 ## 5.2 Compression sans perte
 
@@ -255,26 +255,47 @@ Sur le jeu de démonstration : **358 briques stockées sur 777** possibles.
 
 - **La bordure** copie le voxel voisin : l'image peut être lissée sans couture visible entre deux briques. → ch. 7
 - **Les plans** (`planes/`) : une coupe XY à pleine résolution lit **94 Ko au lieu de 5 078 Ko** sur le jeu de démonstration.
-- **Les formats** : un dataset porte un numéro de format (1 à 5, le plus récent est **5**). Le pipeline 0.22.0 écrit
-  le format 4 (le 5 avec `--format 5`) ; l'onglet *Mises à jour des données* monte un dataset au format 5, sans retraitement. → ch. 17
+- Les **formats** : un dataset porte un numéro de format (1 à 6, le plus récent est **6**). Le pipeline 0.23.0 écrit
+  le format 6 par défaut. Un jeu plus ancien se met à niveau **sans retraitement**, dans l'onglet *Mises à jour des données* de l'administration. → ch. 17
 
-## 6.1 Le format 5 : une matrice résolution × compression
+## 6.1 Format 6 : une copie pour voir, une copie pour exporter
 
 ::: tldr
-- Le même volume est rangé à **plusieurs résolutions** (les lignes) et dans **cinq compressions** (les colonnes). Vous choisissez votre case.
-- Les niveaux réduits **gardent toutes les tranches** (Z n'est plus réduit).
-- Tout ce qui **mesure** ou **exporte en natif** lit la version **sans perte**, quelle que soit la case affichée.
+- Chaque niveau est rangé en **deux copies** : **WebP qualité 30** (Q30) pour l'écran, **sans perte** pour les exports et les téléchargements.
+- Vous ne choisissez que la **résolution**. Une mesure se prend sur l'image affichée (donc sur la copie Q30 par défaut) ; les exports lisent toujours la copie sans perte, au niveau affiché.
+- Un jeu au **format 5** propose cinq compressions à choisir. Une mise à jour des données le convertit en format 6.
 :::
+
+| Usage | Copie lue |
+|---|---|
+| **Affichage 3D** (par défaut) | WebP Q30 |
+| **Mesures** | l'image affichée : Q30 par défaut, sans perte si [Chargement rapide]{.ui} est décoché |
+| **Figures, exports** | sans perte, au niveau affiché |
+| **Téléchargement** | sans perte (OME-Zarr) ou Q30 (`.q30.zip`) |
+
+::: example
+Sur E8.5 Em1 à pleine résolution : **26 Mo** en Q30 contre **89 Mo** sans perte, avec une erreur moyenne de **1,5 niveau de gris sur 255**. La conversion d'un jeu de format 5 en format 6 a ramené ses briques de **834 Mo à 588 Mo**.
+:::
+
+## 6.2 Format 5 : une matrice résolution × compression (anciens jeux)
+
+::: tldr
+- Le même volume est rangé à **plusieurs résolutions** (les lignes) et en **cinq compressions** (les colonnes). Vous choisissez votre case.
+- Les niveaux réduits **gardent chaque tranche** (Z n'est jamais réduit).
+- Les **distances** se prennent sur la case affichée, donc elles la suivent. Les **exports** proposent une version **sans perte** (*Max*), quelle que soit la case affichée.
+:::
+
+Sur les jeux au **format 5** (encore présents sur les anciens jeux), la qualité se choisit dans une seconde liste, à cinq colonnes :
 
 ![Les niveaux du jeu de démonstration en format 4 et en format 5 (dimensions réelles).](img/f5/niveaux.svg){width=80%}
 
 | Colonne | Ce qui est garanti | Poids (vs sans perte) |
 |---|---|---|
-| **Sans perte** | chaque voxel exact | 1 |
-| **±2** | aucun voxel ne bouge de plus de 2 niveaux de gris (sur 255) | 0,62 – 0,82 |
-| **±4** | aucun voxel ne bouge de plus de 4 | 0,50 – 0,69 |
-| **Légère** | WebP avec perte (qualité 80) : petits changements visuels | 0,35 – 0,61 |
-| **Très légère** | WebP avec perte (qualité 50) : lissage visible | 0,22 – 0,40 |
+| **Max** (sans perte) | chaque voxel exact | 1 |
+| **Extra** (±2) | aucun voxel ne bouge de plus de 2 niveaux de gris (sur 255) | 0,62 – 0,82 |
+| **High** (±4) | aucun voxel ne bouge de plus de 4 | 0,50 – 0,69 |
+| **Medium** (WebP 80) | WebP avec perte (qualité 80) : petits changements visuels | 0,35 – 0,61 |
+| **Low** (WebP 50) | WebP avec perte (qualité 50) : lissage visible | 0,22 – 0,40 |
 
 ![La même vraie brique dans les cinq compressions : en haut la tranche du milieu, en bas l'écart avec l'original (× 16).](img/f5/colonnes.png){width=100%}
 
@@ -328,6 +349,7 @@ référence). Le viewer applique ce déplacement **au regard**, pas aux voxels :
 - L'ordre d'envoi est pensé pour vous : la fiche, la vignette et le **niveau le plus grossier** partent en premier,
   si bien que le dataset est **réglable en quelques minutes**, pendant que le reste arrive.
 - Seuls les fichiers produits par le pipeline sont acceptés. → Guide de l'administrateur, ch. 4
+- Deux onglets surveillent le serveur : [Stockage]{.ui} (la place prise sur le disque) et [Intégrité des données]{.ui} (un contrôle de chaque dataset). Les textes de l'onglet Stockage apparaissent pour l'instant en français, dans toutes les langues de l'interface, faute de traduction.
 
 ## 8.1 Les réglages qui comptent pour vous
 
@@ -356,23 +378,59 @@ référence). Le viewer applique ce déplacement **au regard**, pas aux voxels :
 
 ## 9.1 Qualité et chargement
 
+::: tldr
+- Sur un jeu de **format 6** (le plus récent), vous choisissez une **résolution** ; l'image est affichée en **WebP Q30**.
+- [Chargement rapide]{.ui} est **coché par défaut**. Le décocher affiche les résolutions **sans perte**, avec des téléchargements plus gros.
+- La **mémoire graphique** est détectée toute seule : une résolution trop lourde pour la carte affiche le niveau plus grossier, avec un message.
+:::
+
 ![La pyramide réelle du jeu de démonstration et la règle des trois qualités.](img/ch10/pyramide.svg){width=72%}
 
-| Qualité | Niveau chargé |
+Ouvrez [Qualité de Rendu]{.ui} dans le panneau latéral. Les noms des résolutions :
+
+| Résolution | Niveau chargé |
 |---|---|
 | **512** (par défaut) | le niveau le plus fin dont le grand côté XY ne dépasse pas **768** px |
 | **1024** | le niveau le plus fin dont le grand côté ne dépasse pas **1 536** px |
-| **Natif** | le niveau 0, pleine résolution |
+| **Native** | le niveau 0, pleine résolution |
 
-Sur un jeu au **format 5**, le menu devient un **tableau** : une ligne par niveau, une colonne par compression. Chaque case donne son poids à télécharger, le temps estimé et la mémoire graphique ; un clic la charge. Elle s'ouvre sur **512 · ±2**.
-
-![La matrice de qualité du jeu de démonstration (barre latérale élargie pour la capture ; à l'écran, faites défiler le tableau vers la droite).](img/f5/matrice.png){.shot width=80%}
+Sur un jeu de **format 6**, la liste ne contient que les **résolutions**. Chaque ligne indique la **mémoire graphique** que prend le niveau une fois chargé :
 
 | Couleur | Signification |
 |---|---|
-| vert | tient largement dans la mémoire graphique |
-| orange | juste |
-| rouge | trop grand : l'ensemble reste plus grossier, le détail au zoom charge la case autour de la vue |
+| vert | la carte tient le niveau à l'aise (moins de 75 % du budget) |
+| orange | proche du budget (75 à 100 %) |
+| rouge | au-delà du budget : le viewer affiche le niveau plus grossier suivant |
+
+![La liste de qualité d'un jeu de format 6 : les résolutions, leur mémoire graphique et Chargement rapide.](img/ch09/quality-format6.png){.shot width=60%}
+
+::: legend
+| n | ce que c'est |
+|---|---|
+| [1]{.callout-num} | la liste des résolutions, avec la mémoire graphique que prend chaque niveau |
+| [2]{.callout-num} | la résolution affichée (ici 512 : 512 × 512 × 72 voxels) |
+| [3]{.callout-num} | [Chargement rapide]{.ui}, coché par défaut |
+:::
+
+::: note
+**Chargement rapide** (case sous la liste, cochée par défaut). **Coché** : l'image vient des briques WebP Q30, les plus légères.
+**Décoché** : les mêmes résolutions viennent des briques sans perte, plus lourdes à télécharger. Ce choix est gardé dans
+ce navigateur. Décochez-le si vous voulez afficher les données exactes, sans compression d'affichage.
+Les exports restent sans perte dans les deux cas ; les mesures suivent l'image affichée.
+:::
+
+Sur un jeu de **format 5**, une seconde liste, [Qualité]{.ui}, propose les cinq compressions du § 6.1 (Max, Extra, High, Medium, Low).
+Le bouton [Comment choisir ?]{.ui} ouvre un guide : la taille à télécharger de chaque case, le temps à 5, 20 ou 100 Mb/s,
+et la mémoire graphique. Son conseil : **la résolution la plus fine affichée en vert, en qualité Extra** ; pour une mesure
+ou une figure, **Max en Native**.
+
+::: tech
+La mémoire graphique est cherchée d'après le nom du GPU fourni par le navigateur, dans une table des cartes NVIDIA, AMD et Intel Arc.
+Le viewer en prend **60 %**, laisse **2 Gio** au navigateur et au système, et plafonne à **16 Gio** (plancher : 1 Gio).
+Une carte absente de la table reçoit une estimation par catégorie. Chaque perte de contexte graphique de la semaine écoulée
+réduit le budget de moitié. Sur les GPU de téléphone et de tablette (Adreno, Mali…) et dans les navigateurs Android, la
+compression n'est pas utilisée : les voxels exacts sont affichés.
+:::
 
 Si la carte graphique n'a pas assez de mémoire, le viewer prend **le niveau suivant plus léger** et le dit
 dans un message. Une ligne de progression indique la qualité, le pourcentage et l'étape en cours. → ch. 10
@@ -381,15 +439,15 @@ dans un message. Une ligne de progression indique la qualité, le pourcentage et
 
 ![Un rayon par pixel : il entre dans le volume, prend un échantillon par voxel traversé, et combine ces valeurs.](img/ch09/lancer-de-rayons.svg){width=85%}
 
-L'image n'est pas une photo : elle est **recalculée** à chaque mouvement par la carte graphique, des milliers
-de pixels en parallèle (Three.js + WebGL2). Pendant que vous faites tourner, la définition baisse un peu pour
-rester fluide ; à l'arrêt, elle revient au maximum (un échantillon par voxel). Les briques vides sont sautées. → ch. 9
+L'image n'est pas une photo : la carte graphique la **recalcule** à chaque affichage, des milliers de pixels en parallèle
+(Three.js + WebGL2). Elle est **la même en mouvement et à l'arrêt** : pleine résolution, un échantillon par voxel.
+Les cellules vides sont sautées. En mode *Fluorescence (type Imaris)*, les réglages de couleur et de fenêtre se recalculent instantanément (§ 10). → ch. 9
 
 ## 9.3 Les trois modes de rendu
 
 :::: cols3
 ::: col
-![Fluorescence (par défaut).](img/ch09/mode-fluorescence.png){width=100%}
+![Fluorescence (type Imaris), mode par défaut.](img/ch09/mode-fluorescence.png){width=100%}
 :::
 ::: col
 ![Fluorescence naturelle.](img/ch09/mode-naturelle.png){width=100%}
@@ -401,7 +459,7 @@ rester fluide ; à l'arrêt, elle revient au maximum (un échantillon par voxel)
 
 | Mode | Ce que vous voyez | Bon pour… |
 |---|---|---|
-| **Fluorescence** | le **maximum** de chaque canal le long du rayon, couleurs additionnées, sans profondeur | voir tout le signal, comme une MIP |
+| **Fluorescence (type Imaris)** | le **maximum** de chaque canal le long du rayon, couleurs additionnées, sans profondeur | voir tout le signal, comme une MIP |
 | **Fluorescence naturelle** | chaque fluorophore brille ; ce qui est dense **cache** ce qui est derrière | percevoir la forme et la profondeur |
 | **Structure (DVR)** | une opacité accumulée de l'avant vers l'arrière | des surfaces et des volumes pleins |
 
@@ -428,6 +486,7 @@ rester fluide ; à l'arrêt, elle revient au maximum (un échantillon par voxel)
 - **Poignée du milieu** : le niveau affiché à 50 % ; elle règle le gamma (gamma = ln 0,5 ÷ ln *m*).
 - **Auto** coupe les 0,5 % les plus sombres et les plus clairs ; **Doux**, **Contraste** et **Réinit.** sont des préréglages.
 - **Opacité** : 70 %, 42 % ou 100 % ; **Exposition** : de 0,2× à 5× pour tous les canaux ; **Solo** isole un canal.
+- **Instantané** : en mode *Fluorescence (type Imaris)*, changer min, max, gamma, opacité ou couleur, allumer ou éteindre un canal, et les solos, répondent sans recalculer l'image.
 - **Flou gaussien** : lissage plan par plan (σ en voxels), disponible aux qualités qui tiennent en une seule texture.
 - Un **filtre de simulation des daltonismes** vérifie qu'une figure reste lisible.
 
@@ -442,7 +501,7 @@ disparaît à l'écran. → ch. 11
 # 11. Mesurer et explorer l'intérieur
 
 ::: tldr
-- La **mesure** se fait en **µm**, avec la vraie taille des voxels, sur la première structure visible sous le clic.
+- La **mesure** se fait en **µm**, avec la vraie taille des voxels, sur la première structure visible sous le clic, **dans l'image affichée**. Sa précision est celle du voxel du niveau affiché.
 - **Coupe oblique** et **navigateur Z-stack** montrent l'intérieur, avec une barre d'échelle exacte.
 - La barre d'échelle de la **vue 3D** n'est exacte qu'à la profondeur du centre de l'échantillon.
 :::
@@ -481,6 +540,7 @@ l'adresse de la page (elles voyagent dans le lien) ou en téléchargeant le **CS
 - **Navigateur Z-stack** : il couche la pile à plat (face du dessus vers vous), une barre d'épaisseur réglable,
   des poignées pour rogner le haut et le bas, une rotation de 0 à 360°. Il est exclusif avec la coupe oblique.
 - **Axes d'orientation** : la boussole rouge / vert / bleu (R1/R2, G1/G2, B1/B2) définie par l'administrateur.
+  Les axes et la boussole démarrent au **centre de gravité** du spécimen ; un double-clic sur la sphère centrale des axes les recentre.
 
 ![Même longueur, trois profondeurs : la barre de la vue 3D vaut pour le plan du centre de l'échantillon.](img/ch12/perspective.svg){width=65%}
 
@@ -497,7 +557,9 @@ l'adresse de la page (elles voyagent dans le lien) ou en téléchargeant le **CS
 - Ouvrir une coupe dans le Studio la recharge **au niveau natif** (plans XY ou plages d'octets), avec une progression.
 - Les **couleurs des canaux** se règlent dans le Studio sans toucher aux annotations.
 - Export **PNG** (la figure) ou **JSON** (pour la reprendre plus tard) ; au-delà de 5 Mo, l'export est refusé avec un message.
-- **Chaque export propose « sans perte »** : la vue 3D ([Qualité]{.ui} : [Actuelle]{.ui} ou [Sans perte]{.ui}), le Studio ([Native sans perte]{.ui} ou [Cette image]{.ui}) et *Décomposer par canal*. Vos annotations gardent leur place.
+- **Sur un jeu de format 6, les exports sont sans perte, à la résolution affichée, sans question** : la vue 3D, la figure du Studio et *Décomposer par canal*.
+- **Sur un jeu de format 5**, l'export demande encore : la vue 3D ([Qualité]{.ui} : [Actuelle]{.ui} ou [Sans perte]{.ui}), le Studio ([Native sans perte]{.ui} ou [Cette image]{.ui}). Vos annotations gardent leur place.
+- **Décomposer par canal** : un **cadre rouge** sur la vue 3D montre ce que capture l'image principale, dans les dispositions qui en ont une.
 
 ![Comparer : deux volumes et une photographie, outils communs et synchronisation (caméra, temps, coupes, canaux).](img/ch12/comparer.png){.shot width=70%}
 
@@ -562,7 +624,7 @@ pixel exact, utile si l'on veut quantifier le rapport bleu / rouge. La calibrati
 - **Les briques non stockées** sont des zones réellement à 0 après nettoyage, pas des données perdues.
 - **Le plancher d'affichage** (6 à 48) masque les valeurs les plus faibles à l'écran : baissez *min* ne les fera pas revenir.
 - **Au plus 4 canaux** sont affichés en même temps.
-- **Une case légère ne fausse aucune mesure** : en format 5, les colonnes ±2, ±4, Légère et Très légère changent ce que vous **voyez**, jamais ce qui est **mesuré** ou **exporté sans perte**.
+- **Une mesure porte sur ce que vous voyez** : la copie Q30 (format 6) et les colonnes avec perte (format 5) changent les valeurs que vous mesurez ; seuls les **exports** lisent toujours les données sans perte, au niveau affiché.
 - **Sans calibration** dans le fichier, aucune mesure en µm n'est proposée.
 - **La vue 3D est en perspective** : mesurez avec l'outil de mesure ou sur une coupe, pas avec la barre d'échelle 3D.
 :::
@@ -584,7 +646,8 @@ pixel exact, utile si l'on veut quantifier le rapport bleu / rouge. La calibrati
 | Situation | Ce que fait la plateforme | Ce que vous pouvez faire |
 |---|---|---|
 | L'image est floue au début | le niveau grossier arrive d'abord, le détail suit | attendre la fin de la progression |
-| « Natif » affiche un autre niveau | mémoire graphique insuffisante : niveau plus léger + message | choisir 1024, fermer d'autres onglets 3D |
+| Une résolution affiche un autre niveau | mémoire graphique insuffisante : niveau plus grossier + message | choisir une résolution plus petite, fermer d'autres onglets 3D |
+| La page dit « Ce navigateur a refusé à la page un contexte 3D (WebGL) » | le navigateur bloque WebGL après un plantage du pilote graphique | fermer complètement le navigateur (sur Android : forcer l'arrêt de Chrome), puis rouvrir la page |
 | La carte graphique « plante » | le viewer recharge la vue à mémoire réduite (3 fois en 2 minutes au plus) | baisser la qualité, recharger la page |
 | Une brique est corrompue | elle est affichée vide et comptée, jamais montrée fausse | prévenir l'administrateur |
 | Le transfert d'import s'arrête | il reprend dès que le réseau revient | reglisser le même dossier si besoin |
@@ -618,11 +681,14 @@ Brique
 WebP sans perte
 : Le format d'image qui stocke les briques en gardant chaque valeur exacte. → ch. 6
 
+Q30
+: Le WebP à qualité 30 : la copie que l'écran affiche au format 6. Erreur moyenne mesurée : 1,5 niveau de gris sur 255. → ch. 6 et 9
+
 MIP
 : Projection d'intensité maximale : on garde la valeur la plus forte le long d'un axe. → ch. 7 et 9
 
 Lancer de rayons
-: La méthode de dessin : un rayon par pixel traverse le volume et combine les valeurs rencontrées. → ch. 9
+: La méthode de dessin de la vue 3D, exécutée par la carte graphique. Pour chaque pixel de l'écran, un rayon traverse le volume par pas réguliers (environ un échantillon par voxel) ; chaque échantillon est lu dans la texture 3D et cumulé avec les précédents, d'avant en arrière, jusqu'à la sortie du volume ou, dans le mode Fluorescence par défaut, jusqu'à une opacité presque totale. → ch. 9
 
 Gamma
 : L'exposant qui éclaircit (< 1) ou assombrit (> 1) les tons moyens. → ch. 11
@@ -637,7 +703,7 @@ Studio
 : L'atelier de figures annotées à pleine résolution. → ch. 12 et 13
 
 Format de données
-: Le numéro de version de l'organisation des fichiers d'un dataset (1 à 5). → ch. 17
+: Le numéro de version de l'organisation des fichiers d'un dataset (1 à 6). → ch. 17
 
 Matrice (de qualité)
 : En format 5, le tableau « résolution × compression » du panneau de qualité : chaque case est une façon d'afficher le volume. → ch. 10

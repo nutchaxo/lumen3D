@@ -2,8 +2,8 @@
 title: "Guía del administrador"
 subtitle: "El panel de administración de Lumen3D, pestaña por pestaña"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plataforma web 1.65.0"
-date: "Octubre de 2026"
+version: "Plataforma web 1.76.0"
+date: "Noviembre de 2026"
 abstract: "Todo lo que se puede hacer desde el panel de administración del sitio: gestionar e importar los conjuntos de datos, llevarlos al formato actual, personalizar el sitio público, instalar funciones y actualizar la plataforma. Escrita para quien nunca ha visto este panel y no sabe programar."
 lang: es
 toc-class: compact
@@ -27,12 +27,12 @@ Está escrito para alguien que **nunca ha visto este panel** y que **no sabe pro
 
 ## El panel en cuatro grupos
 
-El menú de la izquierda reparte las 15 pestañas en **cuatro grupos**, según lo que esté haciendo. Esta guía sigue el mismo orden.
+El menú de la izquierda reparte las 17 pestañas en **cuatro grupos**, según lo que esté haciendo. Esta guía sigue el mismo orden.
 
 | Grupo | Pestañas | Capítulos |
 |---|---|---|
 | **Primeros pasos** | Conexión, recorrido del panel | 1 – 2 |
-| **Datos** | Datasets · Importar · Actualizaciones de datos · Tipos de datos · Estadísticas | 3 – 7 |
+| **Datos** | Datasets · Importar · Actualizaciones de datos · Integridad de datos · Tipos de datos · Estadísticas · «Stockage» | 3 – 7 |
 | **Sitio público** | Identidad · Apariencia · Páginas · Aviso legal | 8 – 11 |
 | **Extensiones** | Plugins · Catálogo | 12 – 13 |
 | **Sistema** | Actualizaciones (y página *Notas de versión*) · Pipeline · Seguridad · Documentación | 14 – 17 |
@@ -145,7 +145,7 @@ Una vez conectado, la pantalla se divide en tres zonas que nunca cambian: el **m
 ::: legend
 | n | qué es |
 |-|----------------------|
-| 1 | Grupo **Datos**: Datasets, Importar, Actualizaciones de datos, Tipos de datos, Estadísticas. |
+| 1 | Grupo **Datos**: Datasets, Importar, Actualizaciones de datos, Integridad de datos, Tipos de datos, Estadísticas, «Stockage». |
 | 2 | Grupo **Sitio público**: Identidad, Apariencia, Páginas, Aviso legal. |
 | 3 | Grupo **Extensiones**: Plugins, Catálogo. |
 | 4 | Grupo **Sistema**: Actualizaciones, Pipeline, Seguridad, Documentación. |
@@ -197,8 +197,10 @@ Cuando hay una **importación en curso**, cerrar la sesión y los enlaces que sa
 | **Datasets** | Nombrar, describir, orientar, mostrar u ocultar cada conjunto de datos | Habitual |
 | **Importar** | Enviar la carpeta producida por el pipeline, desde el navegador | Habitual |
 | **Actualizaciones de datos** | Llevar los conjuntos de datos publicados al formato de datos actual | Ocasional |
+| **Integridad de datos** | Comprobar que cada conjunto de datos está completo y en el último formato (solo lectura) | Ocasional |
 | **Tipos de datos** | El nombre público de las tres categorías (3D, 2D, Live) | Raro |
 | **Estadísticas** | Ver la frecuentación del sitio | Ocasional |
+| **«Stockage»** | Ver qué ocupa el disco del sitio y cuánto queda libre (solo lectura) | Ocasional |
 | **Identidad** | Nombre del sitio, vocabulario, pie de página, menú | Raro |
 | **Apariencia** | Colores, fuente y esquinas redondeadas del sitio público | Raro |
 | **Páginas** | Modificar el contenido de las páginas (inicio, acerca de…) | Habitual |
@@ -321,6 +323,46 @@ El panel **recupera** algunos ajustes hechos en la vista previa y los guarda cua
 
 Todo lo demás —posición de la cámara, modo de renderizado, calidad, fondo, plano de corte— sirve para mirar y **no se conserva**.
 
+### La calidad de renderizado
+
+El panel **Calidad de Renderizado**, en la barra lateral del visor, decide con qué resolución y con qué calidad se muestra el volumen. Lo que elige ahí es lo que se ve.
+
+| Formato del dataset | Lo que muestra el panel |
+|---|---|
+| **6** (actual) | Una lista **Resolución**, a todo lo ancho, de la más fina a la más gruesa, con su tamaño de descarga y su memoria GPU. Debajo, la casilla **Carga rápida**. |
+| **5** | Dos listas, **Resolución** y **Calidad** (Exacta, ±2 niveles, ±4 niveles, WebP 80, WebP 50), y el botón **¿Cómo elegir?**. |
+
+**Formato 6: la casilla Carga rápida** (activada por defecto)
+
+- **Activada**: los niveles se cargan en WebP calidad 30, más ligeros.
+- **Desactivada**: los mismos niveles se cargan **sin pérdida** (descargas más grandes).
+- La elección se guarda en el navegador y recarga el volumen en pantalla.
+- Las **exportaciones** son sin pérdida, en la resolución que se ve. Las **medidas** se toman sobre la imagen que se muestra: su precisión es la del tamaño del vóxel del nivel mostrado, no la de los datos sin compresión.
+
+**Formato 5: el botón ¿Cómo elegir?**
+
+Abre la ventana **Elegir resolución y calidad**: una tabla con todas las combinaciones (tamaño a descargar, tiempo de descarga, memoria GPU), el código de colores de la memoria y el **presupuesto GPU actual**. Las calidades: **Exacta** es sin pérdida; **±2 niveles** y **±4 niveles** son casi indistinguibles del original; **WebP 80** y **WebP 50** son las más ligeras.
+
+**La memoria GPU**
+
+- Es la memoria que ocupa un nivel una vez cargado: la misma para todas las calidades.
+- **Verde**: cabe cómodamente (menos del 75 % del presupuesto). **Naranja**: cerca del presupuesto (75 a 100 %). **Rojo**: por encima; el visor muestra entonces el nivel más grueso siguiente.
+
+::: tech
+El presupuesto lo calcula el visor, sin ningún ajuste manual:
+
+- Tarjeta reconocida (tabla de modelos NVIDIA, AMD e Intel Arc): **60 %** de su memoria dedicada, sin dejar nunca menos de **2 GiB** libres para el navegador y el sistema, y **16 GiB** como máximo.
+- Tarjeta no reconocida: una estimación por clase (integrada, dedicada o por software) según la memoria que declara el navegador.
+- Tras una pérdida del contexto gráfico, el presupuesto se reduce a la mitad durante la semana.
+:::
+
+**Lo que ha cambiado**
+
+- Han desaparecido los menús **Memoria GPU** y **Compresión GPU**. Los valores que guardaba a mano una versión anterior se borran al cargar el visor. La compresión en GPU es **automática**: cuando la tarjeta la admite, el volumen se guarda comprimido en ella.
+- Han desaparecido **«Zoom detail»** y **«Sin pérdida al detenerse la vista»**: la calidad elegida es la que se muestra en todo momento.
+- **Al girar el volumen, la imagen no baja de calidad.**
+- Con el modo **Fluorescence** (el modo por defecto, proyección máxima), la ventana, la gamma, la opacidad, los colores y el encendido de los canales responden **al instante**, sin volver a recorrer el volumen.
+
 ## 3.4. La columna de la derecha: los ajustes
 
 :::::: cols-wide-right
@@ -358,6 +400,27 @@ Encabezado de la columna: el nombre del dataset y, debajo, «tipo · identificad
 :::
 
 Un dataset mal formado se **rechaza** en lugar de montarse torcido: aviso «Dataset mal formado, montaje rechazado (motivo)», con un motivo entre: respuesta vacía, identificador faltante, tipo no válido, dimensiones faltantes o no válidas, canales faltantes, falta el bloque de imagen o bloque de imagen no válido.
+
+### Eliminar un dataset: la papelera
+
+::: note
+Eliminar **no borra nada de inmediato**: el dataset se mueve a la **papelera** y se conserva **60 días**. Durante ese plazo puede restaurarlo.
+:::
+
+| Dónde | Qué hace |
+|---|---|
+| Icono de papelera de la fila de un dataset publicado | Lo envía a la papelera, tras confirmar («¿Eliminar «nombre»?») |
+| Icono de papelera de la cabecera del editor | Lo mismo, para el dataset abierto |
+| Botón [Papelera]{.ui}, con su contador | Abre la lista de datasets eliminados |
+
+- Cada eliminación es una **entrada propia**: un mismo nombre puede aparecer varias veces.
+- [Restaurar]{.ui} devuelve el dataset. Si ya existe otro con ese nombre, el panel propone restaurarlo con otro nombre («Ya existe un dataset «X» (quizá se volvió a subir). ¿Restaurar el de la papelera como «Y»?»).
+- [Eliminar definitivamente]{.ui} y [Vaciar la papelera]{.ui} son las que borran definitivamente los archivos del dataset eliminado; piden confirmación («No se puede deshacer.»).
+- Cada entrada indica la fecha de borrado y los días que le quedan («{d} d restantes»). Pasados 60 días, la papelera se vacía sola: se comprueba cada vez que se abre la lista, sin ninguna tarea programada.
+
+::: warning
+Un dataset **en importación** no pasa por la papelera: se descarta desde la pestaña **Importar**. Y si otro proceso está usando la carpeta (por ejemplo, una conversión en curso), la eliminación se rechaza («la carpeta está en uso por otro proceso (¿conversión en curso?)»): vuelva a intentarlo cuando termine.
+:::
 
 ## 3.5. La galería de imágenes
 
@@ -548,6 +611,8 @@ Un dataset que se está enviando aparece **en esta lista** (filtro [Importar]{.u
 :::::
 ::::::
 
+Un dataset en importación se puede **previsualizar** en la columna central, como uno publicado.
+
 | Estado | Lo que puede hacer en la pestaña Datasets |
 |---|---|
 | **Enviando — no editable** | Nada: formulario bloqueado, vista previa sustituida por un mensaje. |
@@ -561,7 +626,23 @@ El banner y el formulario se **actualizan solos** cuando cambia el estado. El bo
 
 ![Datasets, nada seleccionado.](img-es/tab-datasets-empty.png){.shot width=80%}
 
-Es la pantalla de inicio de la pestaña: «Ningún dataset seleccionado — Haga clic en un dataset de la lista para previsualizarlo aquí.». **No** existe botón para eliminar un dataset ni para «regenerar el catálogo»: eliminar es una operación sobre los archivos del servidor, a propósito, y la lista se recalcula cada vez que se muestra.
+Es la pantalla de inicio de la pestaña: «Ningún dataset seleccionado — Haga clic en un dataset de la lista para previsualizarlo aquí.». No hay ningún botón para «regenerar el catálogo»: la lista se recalcula cada vez que se muestra. Para eliminar un dataset publicado, véase el §3.12 (papelera).
+
+## 3.12. Eliminar un conjunto de datos
+
+Eliminar un dataset publicado **no lo borra de inmediato**. El icono de papelera de su fila, con la etiqueta «Eliminar (papelera, 60 días)», mueve su carpeta a la **papelera**. El dataset sale de las listas. El botón [Papelera]{.ui} de la pestaña, con un contador de entradas, abre la papelera.
+
+::: note
+**La papelera conserva cada eliminación durante 60 días**, y luego la borra para siempre. Cada entrada muestra su fecha de eliminación y los días que le quedan. Para cada entrada puede:
+
+- [Restaurar]{.ui}: la devuelve. Si existe un dataset con el mismo nombre, el panel pide otro nombre.
+- [Eliminar definitivamente]{.ui}: la borra de inmediato, tras confirmar («No se puede deshacer.»).
+- [Vaciar la papelera]{.ui}: borra todas las entradas, tras confirmar.
+:::
+
+::: tip
+Un dataset **todavía en importación** no tiene icono de papelera: descártelo desde la pestaña [Importar]{.ui} (capítulo 4).
+:::
 
 # 4. Importar — enviar datos desde el navegador
 
@@ -730,7 +811,7 @@ Este mensaje aparece cuando hace clic en **cerrar sesión** o en un enlace que s
 - La transferencia corre en un **Web Worker**: la interfaz sigue fluida. Bloques brutos de **8 MiB** (reducidos en un alojamiento PHP con límites estrictos: «Tamaño de bloque reducido a {n}: vuelva a soltar la carpeta para reanudar.»), **4 bloques en paralelo**.
 - Cada bloque lleva una **huella SHA-256** verificada **antes** de escribir. Un **registro del servidor** recuerda los bloques recibidos: volver a arrastrar la misma carpeta reanuda **al bloque exacto**; un archivo ya completo no se reenvía.
 - El registro es el mismo con los dos servidores (Python o PHP): una importación empezada con uno puede reanudarse con el otro.
-- Formatos aceptados: los **formatos 2 a 5** (`planes/`, `mips/`, ladrillos v3 e `index.bin`, la matriz del formato 5 con sus índices por compresión y sus copias de corte `xy/`, `xz/`, `yz/`, `cuts/`, enviadas al final).
+- Formatos aceptados: los **formatos 2 a 6** (`planes/`, `mips/`, ladrillos v3 e `index.bin`, la matriz de los formatos 5 y 6 con sus índices por columna —`ll` y `q30` en el formato 6— y sus copias de corte `xy/`, `xz/`, `yz/`, `cuts/`, enviadas al final).
 :::
 
 ## 4.9. Si algo sale mal
@@ -752,7 +833,7 @@ Este mensaje aparece cuando hace clic en **cerrar sesión** o en un enlace que s
 # 5. Actualizaciones de datos — el formato de los conjuntos de datos
 
 ::: chapter-intro
-- Un conjunto de datos publicado tiene un **formato** (1 a 5). El formato actual es el **5**.
+- Un conjunto de datos publicado tiene un **formato** (1 a 6). El formato actual es el **6**.
 - Esta pestaña los lleva al día **en el sitio**, como una actualización de software.
 - Usted elige **quién trabaja**: este navegador o el servidor. Nada es obligatorio.
 :::
@@ -763,29 +844,30 @@ Este mensaje aparece cuando hace clic en **cerrar sesión** o en un enlace que s
 
 ## 5.1. Por qué y para quién
 
-Cada dataset volumétrico (`3d`, `live`) lleva un **formato de datos** (`formatVersion`; ausente = formato 1). Un dataset salido del pipeline **0.22.0** llega en **formato 4**: solo le queda el paso **4 → 5** (el pipeline escribe directamente el formato 5 con la opción `--format 5`). Las **fotografías 2D** nunca están afectadas.
+Cada dataset volumétrico (`3d`, `live`) lleva un **formato de datos** (`formatVersion`; ausente = formato 1). Un dataset producido por el pipeline **0.23.0** llega ya en **formato 6**, que es el valor por defecto del pipeline (`--format 6`). Un dataset de una versión anterior recibe los pasos que le faltan, hasta el 6. Las **fotografías 2D** nunca están afectadas.
 
 ::: note
-**Las actualizaciones de datos no son necesarias para que el sitio funcione.** El visor siempre lee los formatos 1 a 5; el Studio recurre a los ladrillos (bricks) si falta `planes/`. **Aceleran** algunas operaciones del Studio y **mejoran** la calidad de visualización.
+**Las actualizaciones de datos no son necesarias para que el sitio funcione.** El visor siempre lee los formatos 1 a 6; el Studio recurre a los ladrillos (bricks) si falta `planes/`. **Aceleran** algunas operaciones del Studio y **mejoran** la calidad de visualización.
 :::
 
-## 5.2. Los cuatro pasos
+## 5.2. Los cinco pasos
 
-Se encadenan en orden: un dataset en formato 1 recibe los cuatro.
+Se encadenan en orden: un dataset en formato 1 recibe los cinco.
 
 | Paso | Título en pantalla | Qué crea | Qué aporta |
 |---|---|---|---|
 | **1 → 2** | Copia por planos del nivel nativo (cortes XY rápidos en el Studio) | `planes/`: un archivo por plano z, teselas PNG de 512² sin pérdida (≈ 1,3× el nivel nativo en espacio de disco). Los ladrillos no se tocan. | Un corte XY nativo lee **un plano** en lugar de una capa de 64 planos: decenas de veces menos bytes, resultado idéntico al píxel. |
 | **2 → 3** | Proyecciones máximas de cada capa de ladrillos (figuras z-stack de toda la pila rápidas) | `mips/`: una proyección máxima por capa de 64 planos. | Una figura z-stack sobre toda la pila lee ~3 paquetes en lugar de unos 150. |
-| **3 → 4** | Pirámide de ladrillos v3: reducida también en Z, borde de un vóxel, índice binario | **Reconstruye** `bricks/`: ladrillos 66³ con borde, niveles reducidos también en Z, `index.bin`. | Filtrado sin costuras, detalle local («Zoom detail»), atlas más ligeros para 1 a 2 canales. |
-| **4 → 5** | Matriz resolución × compresión: niveles a 256·2ᵏ con todos los cortes, cinco compresiones, cortes rápidos | **Reconstruye** `bricks/`: niveles de 4096, 2048… 256 vóxeles de lado que conservan todos los cortes; cada uno en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera); copias para los cortes XY, XZ / YZ y oblicuos. | El visitante elige su casilla en una **tabla de calidad**; descargas más ligeras; cortes nativos rápidos en todas las direcciones; medidas y exportaciones siempre sin pérdidas. |
+| **3 → 4** | Pirámide de ladrillos v3: reducida también en Z, borde de un vóxel, índice binario | **Reconstruye** `bricks/`: ladrillos 66³ con borde, niveles reducidos también en Z, `index.bin`. | Filtrado sin costuras, atlas más ligeros para 1 a 2 canales. |
+| **4 → 5** | Matriz resolución × compresión: niveles a 256·2ᵏ con todos los cortes, cinco compresiones, cortes rápidos | **Reconstruye** `bricks/`: niveles de 4096, 2048… 256 vóxeles de lado que conservan todos los cortes; cada uno en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera); copias para los cortes XY, XZ / YZ y oblicuos. | El visitante elige su casilla en una **tabla de calidad**; descargas más ligeras; cortes nativos rápidos en todas las direcciones; exportaciones siempre sin pérdidas; las medidas se toman sobre la imagen mostrada. |
+| **5 → 6** | Una sola calidad de visualización: WebP Q30 en cada nivel, sin pérdidas para las exportaciones | **Añade** a `bricks/` la columna WebP Q30 de cada nivel, en su lugar, y **borra** las copias ±2, ±4, ligera y muy ligera del formato 5. Los ladrillos sin pérdidas y las copias de corte se conservan. | Una sola calidad a la vista y menos bytes; las exportaciones y las descargas siguen leyendo los datos exactos; las medidas se toman sobre la imagen mostrada. |
 
 ::: warning
-**Los pasos 3 → 4 y 4 → 5 reconstruyen el árbol `bricks/`.** El **nivel nativo se conserva vóxel a vóxel**; los niveles más gruesos se recalculan. El árbol antiguo se elimina **después** del cambio de versión, salvo si la casilla [Conservar la versión anterior]{.ui} está marcada (se guarda entonces al lado, como `bricks.previous/`, para comparar con la herramienta *Chunk debug*; ocupa por segunda vez el espacio de los ladrillos, bórrelo una vez hecha la comparación). Para datos valiosos, guarde una copia de seguridad, como en cualquier operación sobre archivos.
+**Los pasos 3 → 4 y 4 → 5 reconstruyen el árbol `bricks/`.** El **nivel nativo se conserva vóxel a vóxel**; los niveles más gruesos se recalculan. El árbol antiguo se elimina **después** del cambio de versión, salvo si la casilla [Conservar la versión anterior]{.ui} está marcada (se guarda entonces al lado, como `bricks.previous/`, para comparar con la herramienta *Chunk debug*; ocupa por segunda vez el espacio de los ladrillos, bórrelo una vez hecha la comparación). Para datos valiosos, guarde una copia de seguridad, como en cualquier operación sobre archivos. El paso 5 → 6 no deja copia de la versión anterior: sus copias ±2, ±4, ligera y muy ligera se borran y no se recuperan sin volver a generar el dataset con el pipeline. La casilla [Conservar la versión anterior]{.ui} no cubre este paso.
 :::
 
 ::: note
-**El formato 5 ocupa mucho más espacio en disco**: guarda el mismo volumen varias veces. En el dataset de demostración, 9 MB de ladrillos pasan a unos 80 MB. El panel se niega a empezar si el resultado no cabe (§ 5.9).
+**El formato 5 ocupa mucho más espacio en disco**: guarda el mismo volumen varias veces. En el dataset de demostración, 9 MB de ladrillos pasan a unos 80 MB. El panel se niega a empezar si el resultado no cabe (§5.9). El formato 6 ocupa menos que el 5: sustituye sus cuatro copias comprimidas por una sola (WebP Q30).
 :::
 
 ## 5.3. Vista general de la pestaña
@@ -814,13 +896,14 @@ Dos «ejecutores» pueden hacer el trabajo:
 | Ejecutor | Quién calcula | Qué hace falta |
 |---|---|---|
 | **Este navegador** | Su navegador descarga los ladrillos, los recompone (Web Workers) y devuelve el resultado **unidad por unidad**. | Un navegador que sepa comprimir, releer los PNG de forma idéntica y codificar WebP sin pérdida. |
-| **El servidor** | El servidor convierte por sí mismo, con pequeñas peticiones limitadas en el tiempo. Adaptado a los alojamientos compartidos. | Decodificación (y, para el paso 3 → 4, codificación) de WebP sin pérdida (GD de PHP o Pillow de Python), zlib, NumPy en el lado de Python, al menos 128 MiB por petición y 10 s de ejecución. **Paso 4 → 5: solo servidor Python.** |
+| **El servidor** | El servidor convierte por sí mismo, con pequeñas peticiones limitadas en el tiempo. Adaptado a los alojamientos compartidos. | Decodificación (y, para el paso 3 → 4, codificación) de WebP sin pérdida (GD de PHP o Pillow de Python), zlib, NumPy en el lado de Python, al menos 128 MiB por petición y 10 s de ejecución. **Pasos 4 → 5 y 5 → 6: solo servidor Python.** |
 
 - La elección se hace **por dataset**, **antes** de empezar; queda **bloqueada durante la ejecución** y se puede modificar entre dos ejecuciones.
 - Un ejecutor incapaz aparece **en gris**, con una información emergente que dice por qué (por ejemplo «el servidor no puede decodificar imágenes WebP sin pérdida»).
 - Cada ejecutor tiene **su propia cola**: un dataset en el navegador y otro en el servidor se convierten **al mismo tiempo**.
 - Un paso que el ejecutor elegido no sabe hacer se confía al otro. Si ninguno puede: «sin ejecutor» en rojo.
 - La pastilla **★** marca el ejecutor **más rápido en la prueba de velocidad**.
+- En **este navegador**, la actualización usa **hasta cuatro trabajadores** (Web Workers) en paralelo: dos si el equipo tiene menos de 8 GB de memoria, y nunca más de la mitad de sus núcleos de procesador.
 - Ambos escriben en **el mismo registro** del servidor: se puede cambiar de ejecutor y reanudar.
 
 ::: tip
@@ -828,7 +911,7 @@ En un alojamiento compartido donde la opción [El servidor]{.ui} aparece en gris
 :::
 
 ::: note
-**El paso 4 → 5 en un alojamiento PHP.** Un servidor PHP no puede hacer este paso por sí mismo: la información emergente de [El servidor]{.ui} dice «en este servidor, esta actualización se ejecuta en el navegador». El navegador pregunta al servidor qué leer, calcula y devuelve cada unidad; el servidor lo comprueba todo y ensambla el resultado. Hace falta un navegador que sepa codificar WebP **con** pérdida (si no: «este navegador no puede codificar imágenes WebP con pérdida»). Medido en el dataset de demostración E8 (un antiguo formato 1): el paso 4 → 5 tardó **339 unidades y 4 minutos** en el navegador.
+**Los pasos 4 → 5 y 5 → 6 en un alojamiento PHP.** Un servidor PHP no puede hacer estos pasos por sí mismo: la información emergente de [El servidor]{.ui} dice «en este servidor, esta actualización se ejecuta en el navegador». El navegador pregunta al servidor qué leer, calcula y devuelve cada unidad; el servidor lo comprueba todo y ensambla el resultado. Hace falta un navegador que sepa codificar WebP **con** pérdida (si no: «este navegador no puede codificar imágenes WebP con pérdida»). Medido en el dataset de demostración E8 (un antiguo formato 1): el paso 4 → 5 tardó **339 unidades y 4 minutos** en el navegador.
 :::
 
 ## 5.5. La prueba de velocidad
@@ -862,10 +945,14 @@ El botón principal se llama [Reparar]{.ui} si el dataset se declara al día per
 
 ## 5.7. Durante la conversión
 
-Estados mostrados: **Esperando su turno** («siguiente en el servidor»), **En curso**, **Pausando…**, **En pausa** (con la causa: pestaña abandonada, página cerrada, sesión caducada, servidor inalcanzable), **Ensamblando** («Ensamblando planos x/y», «ensamblando y publicando…»), **Error** (con la causa).
+Estados mostrados: **Esperando su turno** («siguiente en el servidor»), **En curso**, **Pausando…**, **En pausa** (con la causa: pestaña abandonada, página cerrada, sesión caducada, servidor inalcanzable), **Ensamblando** («Ensamblando planos x/y», «ensamblando y publicando…»), **Error** (con la causa) y **En otra pestaña** (otra pestaña de este navegador actualiza el dataset).
 
 - **[Pausa]{.ui}** pone en pausa todas las colas; **[Reanudar]{.ui}** retoma donde se habían detenido.
 - **Abandonar la pestaña**: «Hay una actualización en curso. Salir de esta pestaña la pausa (podrá reanudarla después). ¿Salir?». **No se pierde nada**: el registro del servidor permite reanudar tras una recarga, un corte o un cambio de ejecutor.
+- **La barra empieza en 0 %** y solo cuenta el trabajo real: las unidades sin datos (el fondo alrededor de la muestra, las regiones sin señal) no tienen nada que calcular. Se dan por hechas desde el principio y aparecen aparte («n sin datos, ya terminadas»).
+- **Reinicio automático**: si la actualización falla por una causa pasajera (un trabajador caído, un enlace perdido, una unidad que no avanza), se reanuda sola a los 10 s, 30 s, 1 min, 2 min y 5 min. Cada reinicio se anota en el historial («{nombre}: {error} — se reanuda solo en {s} s (intento {n})»). Tras **cinco fallos seguidos sin una sola unidad nueva**, la tarea queda en **Error**: entonces, [Reintentar]{.ui}. No se reintenta si el servidor agota su tiempo con una unidad, si no hay ningún ejecutor o si la sesión ha caducado.
+- **Una pestaña por dataset**: un dataset solo lo actualiza **una pestaña** de este navegador. Las demás lo muestran como **En otra pestaña** y siguen la actualización allí. Cuando varias pestañas del navegador actualizan datasets, el aviso «N pestañas de este navegador actualizan datasets: comparten una sola cuota de peticiones.» indica que comparten la cuota de peticiones.
+- **Tamaño**: la fila conserva el tamaño del dataset mientras dura la actualización («quedan N MB»).
 
 ::: warning
 **No lance la misma actualización en varias pestañas**, y no la relance en bucle. En la versión 1.59.1, una avalancha de peticiones llevó a un proveedor de alojamiento a **bloquear la dirección** de un operador. Desde la 1.59.2, **todas** las peticiones de la pestaña pasan por un **regulador** (6 en vuelo como máximo; desde la 1.59.3, de 4 a 6 por segundo, porque cada unidad lee todos sus datos de entrada en una sola petición; reduce el ritmo y hace una pausa cuando el host responde con lentitud o devuelve 429 / 503). Puede ver: «El servidor responde con lentitud: las solicitudes se ralentizan para que no bloquee esta dirección.» o «Conexión perdida: esperando la red, no se pierde nada.». **Deje que actúe.**
@@ -878,8 +965,8 @@ Estados mostrados: **Esperando su turno** («siguiente en el servidor»), **En c
 ::: legend
 | n | qué es |
 |-|----------------------|
-| 1 | **Formatos de datos**: el formato más reciente (5) y la lista de las cuatro actualizaciones («1 → 2»…). |
-| 2 | **Historial**: las 20 últimas operaciones, guardadas en este navegador. |
+| 1 | **Formatos de datos**: el formato más reciente (6) y la lista de las cinco actualizaciones («1 → 2»…). |
+| 2 | **Historial**: las últimas operaciones (hasta 1000), guardadas en este navegador. |
 | 3 | [Borrar]{.ui}: vacía el historial. |
 :::
 
@@ -891,6 +978,7 @@ Una línea del historial indica «formato {v} · {n} unidades · {duración} · 
 - **Datos de origen**: nunca se modifican antes del cambio final; el paso final es **reanudable** y se hace bajo el mismo bloqueo que el editor de datasets.
 - **Dataset reprocesado entretanto**: «el conjunto de datos se reprocesó desde que empezó la actualización» → [Reintentar]{.ui} parte de cero. Un dataset eliminado **nunca se vuelve a crear**.
 - **Servidor demasiado lento para una unidad** (alojamiento compartido): el paso pasa solo **al navegador** tras dos peticiones fallidas.
+- **Límite de tamaño por petición**: una unidad más grande de lo que admite una petición de ese alojamiento (`post_max_size` en PHP) se envía en trozos; el panel lee ese límite del propio servidor.
 
 | Mensaje | Qué hacer |
 |---|---|
@@ -908,7 +996,7 @@ Para un dataset muy grande, o un alojamiento demasiado lento, la conversión pue
 1. Copie la carpeta del dataset (por ejemplo `DATA_WEB/3d/<carpeta>`) en el ordenador, dentro de una copia de la plataforma.
 2. Ejecute `python tools/convert_dataset.py DATA_WEB/3d/<carpeta>`. `--list` solo muestra los pasos pendientes; `--keep-previous` conserva el árbol antiguo.
 3. Una conversión interrumpida **se reanuda** donde se paró si vuelve a ejecutar la orden.
-4. Arrastre la carpeta convertida a la pestaña **Importar** (capítulo 4): acepta un dataset en formato 5 y lo verifica entero antes de dejarle publicarlo.
+4. Arrastre la carpeta convertida a la pestaña **Importar** (capítulo 4): acepta un dataset en formato 5 o 6 y lo verifica entero antes de dejarle publicarlo.
 :::
 
 # 6. Tipos de datos — el nombre público de cada categoría
@@ -941,7 +1029,7 @@ Para un dataset muy grande, o un alojamiento demasiado lento, la conversión pue
 - **Nombre corto** — insignias, filtros, listas. **Título largo** — tarjetas grandes de la página de inicio.
 - **Deje un campo vacío para conservar el nombre por defecto**: la plataforma recurre entonces a su propia traducción, en el idioma del visitante.
 - [Nombres por defecto]{.ui} pregunta «¿Restaurar los nombres traducidos por defecto para todos los tipos?». **Vacía** los campos, no escribe ningún texto fijo.
-- Resultado: aviso «Nombres de los tipos guardados.» (o «No se pudo guardar.»).
+- Resultado: aviso «Nombres de los tipos guardados.» (o «No se pudo guardar.»). Si el servidor rechaza el guardado, el aviso añade el código HTTP y el motivo que devuelve (por ejemplo «HTTP 403 · Invalid or missing CSRF token», es decir, sesión caducada: recargue la página, vuelva a entrar y guarde de nuevo).
 
 ::: note
 **Lo que esta pestaña no cambia.** Ni las carpetas del servidor (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`), ni las direcciones de las páginas, ni los enlaces que sus visitantes ya hayan guardado, ni nada dentro de los datasets. **No crea** ninguna categoría: los tres tipos son los que el software sabe mostrar. El seguimiento celular **no** es un tipo: es una capa de un dataset Live.
@@ -949,7 +1037,12 @@ Para un dataset muy grande, o un alojamiento demasiado lento, la conversión pue
 
 Las variables de página `{type3d}`, `{type2d}` y `{typeLive}` (capítulo 10) toman estos nombres. La pestaña solo escribe el bloque `datasetTypes` de la configuración: no sobrescribe lo que haya hecho en Identidad. Le avisa si sale con cambios sin guardar.
 
-# 7. Estadísticas — quién consulta qué
+
+# 7. Estadísticas, almacenamiento e integridad
+
+Tres pestañas del grupo **Datos** para **saber lo que ocurre**: quién consulta el sitio, cuánto espacio ocupa cada cosa y si cada dataset está completo. Estas tres pestañas **no modifican ningún dataset**.
+
+## 7.1. Estadísticas — quién consulta qué
 
 ![La pestaña Estadísticas.](img-es/tab-stats.png){.shot width=88%}
 
@@ -971,6 +1064,113 @@ La tabla «Por dataset» da vistas, descargas y última consulta. Sin datos: «A
 ::: note
 **No se recoge ningún dato personal.** Son simples contadores: ni cookie de seguimiento, ni dirección IP registrada, ni servicio externo. Nada sale del servidor. Además, el servidor limita el ritmo de las señales de estadísticas.
 :::
+
+## 7.2. Almacenamiento — ¿qué ocupa el disco?
+
+::: chapter-intro
+- Muestra la **capacidad del volumen** que aloja el sitio y cuánto queda libre.
+- Separa lo **publicado**, lo **importado** y la **papelera**, el **programa** y el resto del volumen.
+- Es de **solo lectura**. El recuento se guarda **10 minutos**; [«Recalculer»]{.ui} lo rehace.
+:::
+
+::: note
+**Nombres en la interfaz.** La pestaña se titula «Stockage» y su botón «Recalculer». La plataforma no tiene todavía una traducción española para ellos (ni en `lang/es.json` ni en los demás idiomas), así que el panel los muestra en francés. Se citan aquí tal como aparecen.
+:::
+
+### La barra del volumen
+
+La barra reparte la capacidad del volumen en cinco partes:
+
+| Segmento | Qué incluye |
+|---|---|
+| **Datos publicados** | Los datasets publicados (carpetas `3d`, `2d` y `live`) |
+| **Importaciones y papelera** | Las importaciones en curso, la papelera (60 días), los diarios de importación y los datos de las actualizaciones de datos |
+| **Plataforma y código** | Los archivos del programa: scripts, estilos, traducciones, configuración, documentación, pipeline e historial de Git |
+| **Otros en el volumen** | Lo que ocupa el mismo disco y no pertenece a la plataforma (otros servicios del alojamiento) |
+| **Disponible** | El espacio libre real del volumen |
+
+Bajo la barra, tres tarjetas detallan **Datos publicados**, **Importaciones y papelera** y **Plataforma y código**, con sus carpetas y su peso.
+
+::: note
+**«Disponible»** es el espacio libre **del volumen**. Si el alojamiento aplica una cuota más estricta que el volumen, la cuota no aparece aquí.
+:::
+
+### La tabla «Por dataset»
+
+Cada dataset publicado aparece con su **tipo**, su **tamaño**, su número de **archivos**, su **parte** del total y el **detalle por carpeta** (por ejemplo `bricks`, `planes`, `mips`, `download`). La lista va de mayor a menor tamaño.
+
+::: tip
+Un dataset que ocupa mucho suele deber su peso a `download/` (los originales que se ofrecen en descarga) o a una versión anterior de sus ladrillos conservada (`bricks.previous/`, §5.2). Compruébelo aquí antes de borrar nada.
+:::
+
+### «Recalculer» y plazos
+
+- El recuento del sitio se hace una vez y se **guarda 10 minutos**; la cabecera de la barra indica cuándo se midió.
+- [«Recalculer»]{.ui} fuerza un nuevo recuento. En un alojamiento grande puede tardar unos segundos.
+- El espacio **libre** se lee en cada apertura: siempre es el actual.
+- Un archivo enlazado en dos sitios (enlace duro) se cuenta **una sola vez**, como en el disco.
+
+## 7.3. Integridad de datos — ¿falta algo?
+
+::: chapter-intro
+- Comprueba **cada dataset**, publicado o en importación, **sin modificar nada**.
+- Señala **lo que falta**, **lo que sobra** y si el dataset está en el **último formato**.
+- Cada hallazgo indica **cómo corregirlo**.
+:::
+
+Esta pestaña responde a una pregunta: ¿está este dataset completo y utilizable? Se lanza a petición suya y no toca ningún archivo.
+
+### Qué se comprueba
+
+| Comprobación | Ejemplos de lo que señala |
+|---|---|
+| Lo que **falta** | `metadata.json`, la miniatura, el manifiesto de bloques y su índice, **cada paquete** que nombra el manifiesto, las imágenes de galería o los archivos de seguimiento que los metadatos declaran |
+| Lo que **sobra** | Archivos que ninguna importación aceptaría, restos de una actualización interrumpida, imágenes de galería que los metadatos no listan, un árbol de bloques anterior conservado |
+| El **formato** | Una conversión pendiente, una reparación pendiente, un árbol de bloques dañado |
+
+::: note
+Un dataset **en importación** se juzga con la misma validación que usa [Publicar]{.ui}, y se indica como «Importación en curso — comprobado hasta lo recibido.».
+:::
+
+### Leer el resultado
+
+| Elemento | Qué es |
+|---|---|
+| Tarjetas de resumen | **Correctos**, **Avisos** y **Errores** (número de datasets), y **Último formato** (la versión actual, v6) |
+| [Ejecutar la comprobación]{.ui} / [Repetir]{.ui} | Revisa todos los datasets |
+| [Solo datasets con hallazgos]{.ui} | Filtra la tabla |
+| Columna **Estado** | **OK**, o el número de hallazgos |
+| Columna **Formato** | La versión del formato y su esquema |
+| [Detalles]{.ui} | Cada hallazgo, con los archivos concernidos |
+| [Volver a comprobar]{.ui} | Aparece en un dataset con avisos o errores |
+
+Los resultados llegan **dataset por dataset**: la tabla se completa a medida que avanza la comprobación.
+
+### Cómo corregir cada hallazgo
+
+| Hallazgo | Qué hacer |
+|---|---|
+| Falta un paquete nombrado por el manifiesto, o un paquete es más corto de lo que indica | Reimporte el dataset: solo se reenvían los archivos que faltan |
+| No está en el último formato (conversión pendiente) | Abra [Actualizaciones de datos]{.ui} y ejecute la conversión (capítulo 5) |
+| Falta una estructura de datos o no es válida (reparación pendiente) | La reparación aparece en [Actualizaciones de datos]{.ui} y se ejecuta como una conversión |
+| Faltan imágenes de galería listadas en los metadatos | Datasets › editar › Galería: quite las entradas que faltan o vuelva a subir las imágenes |
+| Archivos de galería no listados en los metadatos | Guarde el dataset para reconciliar la lista, o borre los archivos sobrantes |
+| Se conserva un árbol de bloques anterior | Puede eliminarse cuando el dataset esté correcto: Actualizaciones de datos › eliminar la versión anterior |
+| Restos de una actualización interrumpida | Repita la conversión desde Actualizaciones de datos; borre los restos solo cuando el dataset abra bien |
+| Archivos que ninguna importación aceptaría | Bórrelos por SFTP, si no los añadió a propósito |
+| Importación en curso, o archivos aún no recibidos por completo | Abra [Importar]{.ui} y reanude la importación |
+| Ya existe un dataset publicado con el mismo nombre | Publicar reemplazaría el publicado. Descarte la importación si es un duplicado |
+
+::: tip
+Los textos de cada hallazgo y de cada acción están en los **cuatro idiomas** del panel.
+:::
+
+### Volver a comprobar
+
+- [Volver a comprobar]{.ui} revisa **solo ese dataset**, en su sitio, sin rehacer toda la tabla.
+- La comprobación **no mueve, no borra y no repara** ningún archivo: solo informa.
+- Si la comprobación falla, el hallazgo dice por qué (véase el anexo B).
+
 
 # 8. Identidad — el nombre y el vocabulario del sitio
 
@@ -1041,7 +1241,7 @@ Esa palabra se usa después **automáticamente** en toda la interfaz pública: t
 - **Navegación** — las casillas «Mostrar “Explorar”», «Mostrar “Comparar”», «Mostrar “Acerca de”», «Mostrar “Aviso legal”». Desmarcar quita la entrada del menú **sin eliminar la página**.
 
 ::: warning
-**«Aviso legal» está desmarcada por defecto.** Si redacta su aviso (capítulo 11), vuelva aquí para marcarla: si no, la página sigue invisible.
+**«Aviso legal» viene marcada en una instalación nueva.** Si la desmarca, la página queda oculta: vuelva a marcarla cuando haya redactado su aviso (capítulo 11).
 :::
 
 ::: note
@@ -1127,6 +1327,8 @@ Es la función más completa del panel.
 Existen dos páginas de origen: **`home`** (el inicio) y **`about`** (Acerca de). La mención *(integrada)* significa que aún usan la plantilla suministrada: desde su primera publicación, su versión toma el relevo. **No** se pueden eliminar («Las páginas integradas no se pueden eliminar (restablézcalas).»; restablézcalas desde el editor).
 
 Las plantillas de inicio y Acerca de ya no contienen tarjeta «Tracking» ni «Wholemount»: esas categorías ya no existen.
+
+**Exportar e importar páginas.** Los botones [Exportar]{.ui} e [Importar]{.ui} de la pestaña pasan las páginas a un archivo `.lumen-pages.json` y de vuelta, para moverlas de una instalación a otra o guardar una copia. La exportación incluye el contenido publicado, el borrador en curso, las imágenes de la mediateca y las variables que usan. La importación comprueba el archivo entero antes de escribir nada; el aviso dice si las páginas quedaron publicadas («… importada(s) y publicada(s).») o como borrador («… importada(s) como borrador.»).
 
 ## 10.2. El editor
 
@@ -1379,8 +1581,16 @@ Un editor sencillo, de diseño fijo, para el texto legal. Las secciones se muest
 
 **Secciones habituales:** editor del sitio, proveedor de alojamiento, propiedad intelectual, datos personales, contacto.
 
+**Qué muestra una instalación nueva.** Una instalación recién hecha no tiene todavía `config/instance.json` ni `config/legal.json`: el sitio usa entonces los valores neutros de `config/defaults/neutral/`. Sin hacer nada más:
+
+- el enlace **«Aviso legal»** aparece en el pie de página, porque la casilla «Mostrar «Aviso legal»» viene marcada;
+- la página legal muestra seis secciones de plantilla (Editor del sitio, Protección de datos y privacidad, Cookies y almacenamiento local, Propiedad intelectual, Aviso legal y responsabilidad, Contacto), con sus marcadores entre corchetes sin rellenar;
+- esta pestaña muestra esas mismas plantillas hasta que usted guarde su propio texto.
+
+Son plantillas genéricas, no asesoramiento jurídico: rellene los corchetes y guarde, o use [Restablecer]{.ui} para volver a las plantillas.
+
 ::: warning
-**Dos cosas que no hay que olvidar.** (1) La página sigue invisible mientras la casilla «Mostrar “Aviso legal”» no esté marcada en **Identidad › Navegación**. (2) El contenido jurídico depende de su país y de su institución: acuda al servicio competente en lugar de copiar una plantilla encontrada en línea.
+**Dos cosas que no hay que olvidar.** (1) La página sigue invisible mientras la casilla «Mostrar “Aviso legal”» no esté marcada en **Identidad › Navegación** (en una instalación nueva ya lo está). (2) El contenido jurídico depende de su país y de su institución: acuda al servicio competente en lugar de copiar una plantilla encontrada en línea.
 :::
 
 # 12. Plugins — las funciones del visor
@@ -1405,7 +1615,7 @@ Cada plugin ocupa uno de los **tres emplazamientos**:
 |---|---|---|
 | **Herramientas** (barra de herramientas) | Los botones en la parte superior del visor | Medida de distancia, captura de pantalla, modo presentación |
 | **Canales** (por canal) | Los ajustes bajo cada canal de fluorescencia | Histograma, desenfoque gaussiano |
-| **Modos de renderizado** (shaders) | El menú desplegable que elige cómo se dibuja el volumen | Fluorescence, Natural Fluorescence, Structure (DVR) |
+| **Modos de renderizado** (shaders) | El menú desplegable que elige cómo se dibuja el volumen | Fluorescence, Fluorescencia natural (profundidad), Structure (DVR) |
 
 ## 12.2. La pantalla
 
@@ -1529,7 +1739,7 @@ Estos plugins **no** se entregan con el sitio: se instalan bajo demanda (asisten
 | Plugin | Qué hace para el visitante |
 |---|---|
 | **Fluorescence** | El renderizado por defecto: cada canal emite su color, como en un microscopio de fluorescencia |
-| **Natural Fluorescence** | Cada fluoróforo brilla con su color; las estructuras densas tapan lo que hay detrás |
+| **Fluorescencia natural (profundidad)** | Cada fluoróforo brilla con su color; las estructuras densas tapan lo que hay detrás |
 | **Structure (DVR)** | Renderizado volumétrico con profundidad y sombreado, que hace resaltar las formas |
 
 **Canales**
@@ -1547,7 +1757,7 @@ Estos plugins **no** se entregan con el sitio: se instalan bajo demanda (asisten
 | **Slice through Volume** | Un corte plano orientable a través del volumen |
 | **Z-Stack Browser** | Recorrer los cortes: apertura plana animada, muesca 3D, recorte superior / inferior, barra de grosor ajustable, control «Rotación» |
 | **Decompose by Channel** | Mostrar los canales lado a lado |
-| **Download Center** | Recuperar los archivos de la carpeta `download/` y el CSV de las mediciones |
+| **Download Center** | Recuperar los archivos de la carpeta `download/` y el CSV de las mediciones; en un volumen, la exportación OME-Zarr de los niveles sin pérdida; en un dataset de formato 6, además el paquete `.q30.zip` |
 | **Screenshot** | Capturar la vista 3D en PNG |
 | **Screenshot (sandboxed)** | La misma captura, aislada: el ejemplo de plugin aislado |
 | **Presentation Mode** | Pantalla completa sin interfaz, para proyectar |
@@ -1634,7 +1844,7 @@ Un plugin instalado para el que existe una versión más reciente **y** compatib
 | **`incompatible`** | Solo aparece en un plugin **no instalado**: pide otra versión de la plataforma. El botón de instalación está en gris: actualice la plataforma (capítulo 14). |
 
 ::: note
-Un plugin **ya instalado** nunca lleva la etiqueta `incompatible`: el que funciona en su sitio funciona; solo su versión siguiente puede esperar. Un paquete que declara un tipo de datos exige una plataforma **reciente** (1.51 a 1.53): un sitio sin actualizar verá «incompatible» en los plugins recientes.
+Un plugin **ya instalado** nunca lleva la etiqueta `incompatible`: el que funciona en su sitio funciona; solo su versión siguiente puede esperar. La compatibilidad de un paquete depende de su campo `platformCompat` (un rango de versiones de la plataforma): un sitio fuera de ese rango ve «incompatible» en ese paquete.
 :::
 
 Estados del catálogo: «Catálogo no disponible: …», «Catálogo inaccesible.», «No hay plugins en el catálogo.», «No hay fuente de catálogo configurada…».
@@ -1760,7 +1970,7 @@ Una tarjeta **Actualizaciones de complementos** responde a la misma pregunta par
 
 ## 14.5. El paquete de procesamiento
 
-La tarjeta **Paquete de procesamiento** compara el paquete Pipeline **instalado aquí** con el adjunto a la **última versión de GitHub**. Estados: «El paquete de procesamiento está al día.» (v0.21.0) o «Nuevo paquete de procesamiento: vX (aquí: vY)» con [Descargar el paquete]{.ui}.
+La tarjeta **Paquete de procesamiento** compara el paquete Pipeline **instalado aquí** con el adjunto a la **última versión de GitHub**. Estados: «El paquete de procesamiento está al día.» (v0.23.0) o «Nuevo paquete de procesamiento: vX (aquí: vY)» con [Descargar el paquete]{.ui}.
 
 Se instala **en el puesto de procesamiento, no en este servidor**: descárguelo y sustituya la carpeta que se usa allí. **No hace falta actualizar la plataforma** para obtener un paquete más reciente. Si GitHub es inalcanzable: «No se ha podido contactar con GitHub para comprobar el paquete de procesamiento.».
 
@@ -1798,7 +2008,7 @@ Se instala **en el puesto de procesamiento, no en este servidor**: descárguelo 
 El paquete contiene **dos pipelines** (volúmenes con tracking, análisis de tracking), la **importación de fotografías 2D**, ejemplos de entrada (utilizables de inmediato para familiarizarse) y un lanzador que **verifica su propia integridad** (SHA-256).
 
 ::: note
-**Dos números, y es normal.** El encabezado muestra `pipeline v0.21.0`: la versión **del paquete**, no la del sitio. El pipeline 0.22.0 escribe **el formato 4** (solo queda el paso 4 → 5 en **Actualizaciones de datos**), o el formato 5 con la opción `--format 5`, **conserva la curación** hecha en el panel cuando se reprocesa un dataset (oculto, nombre, orientación…) y **publica todo o nada**.
+**Dos números, y es normal.** El encabezado muestra `pipeline v0.23.0`: la versión **del paquete**, no la del sitio. El pipeline 0.23.0 escribe **el formato 6** por defecto (`--format 6`); los formatos 4 y 5 siguen disponibles con `--format 4` y `--format 5`, **conserva la curación** hecha en el panel cuando se reprocesa un dataset (oculto, nombre, orientación…) y **publica todo o nada**.
 :::
 
 Cuando se publica una versión más reciente del paquete, aparece un **banner** en la parte superior: «Nueva versión del paquete: v… — Este servidor ofrece la v…. Descargue la nueva más abajo: no hace falta actualizar la plataforma para esto.» con [Descargar la v…]{.ui}; para la edición ligera, [Versión instalada]{.ui} mantiene accesible el paquete del servidor.
@@ -1940,7 +2150,7 @@ Reservado a la persona que gestiona el repositorio, pero conviene saberlo para p
   └──────────────────────── la fecha AAMMDD: es el número de versión
 ```
 
-- **La fecha** ordena las versiones: la más reciente se propone y las demás siguen siendo accesibles. Esta guía, fechada el **7 de octubre de 2026**, pasa a ser «la más reciente» frente a las ediciones de agosto de 2026.
+- **La fecha** ordena las versiones: la más reciente se propone y las demás siguen siendo accesibles. Esta guía, fechada el **2 de noviembre de 2026**, pasa a ser «la más reciente» frente a las ediciones de octubre de 2026.
 - **El identificador** debe seguir siendo **idéntico** de una versión a otra; si no, el panel ve dos documentos distintos.
 - Un archivo que no sigue la regla se **señala como ignorado** («Archivos ignorados (nombre no válido)») al pie de la pestaña: un error de tecleo se nota.
 
@@ -2043,6 +2253,7 @@ Tras 10 fallos en 15 minutos, el acceso queda bloqueado 15 minutos; el mensaje i
 | **Aviso legal** | [Restablecer]{.ui} |
 | **Tipos de datos** | [Nombres por defecto]{.ui} y luego [Guardar]{.ui} |
 | **Datasets** | [↺ Restablecer]{.ui} (antes de haber guardado); el ojo se vuelve a conmutar |
+| **Datasets** eliminado por error | Papelera (60 días): [Restaurar]{.ui} (§3.4) |
 | **Actualizaciones de datos** | La cruz **cancelar**: el dataset queda como estaba |
 | **Importar** | [Eliminar]{.ui} borra los archivos enviados (nunca un dataset publicado) |
 
@@ -2052,6 +2263,7 @@ Tras 10 fallos en 15 minutos, el acceso queda bloqueado 15 minutos; el mensaje i
 2. Si viene de una **importación**: [Publicar]{.ui} y luego **active la visibilidad** (un dataset publicado desde Importar está oculto por defecto).
 3. Compruebe que está en `DATA_WEB/3d/`, `DATA_WEB/2d/` o `DATA_WEB/live/` (nombres de carpeta obligatorios; renombrar un *tipo* solo cambia la visualización) y que su carpeta contiene un `metadata.json`.
 4. Recargue la página. **No hay ningún catálogo que regenerar**.
+5. Si lo eliminó desde el panel, búsquelo en la **Papelera** (§3.4).
 
 En un alojamiento PHP, si la pestaña está totalmente vacía, es que la respuesta de la lista no se pudo leer: pida a la persona que gestiona el servidor que compruebe `api/datasets.php?action=list`.
 
@@ -2088,6 +2300,30 @@ Haga una **recarga forzada**: <kbd>Ctrl</kbd> + <kbd>Mayús</kbd> + <kbd>R</kbd>
 
 Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la página.».
 
+### «La propia comprobación ha fallado» (Integridad de datos)
+
+El servidor no pudo terminar la comprobación de ese dataset; el detalle dice por qué. Si indica **HTTP 5xx** o una respuesta vacía, el alojamiento cortó la petición (límite de tiempo o de memoria). Si indica un error de PHP, es el propio límite de memoria o de tiempo de PHP. En ambos casos, use [Volver a comprobar]{.ui} **solo en ese dataset**; si persiste, pida a la persona que gestiona el alojamiento que suba `memory_limit` y `max_execution_time`. Si el detalle es **HTTP 401**, la sesión ha caducado: vuelva a iniciar sesión.
+
+### «Error» en una actualización de datos que se reanudaba sola
+
+Causa: el fallo se repitió cinco veces seguidas sin que se terminara una sola unidad nueva (un trabajador caído, una unidad que no avanza, un enlace perdido). Lea la causa mostrada y pulse [Reintentar]{.ui}. Si dice que el servidor no puede convertir una unidad dentro de su límite de tiempo, no se reintenta sola: use [Este navegador]{.ui} (§5.9).
+
+### «En otra pestaña» en Actualizaciones de datos
+
+Causa: otra pestaña de **este mismo navegador** está actualizando ese dataset, y dos pestañas no deben hacer el mismo trabajo. Siga la actualización en esa pestaña, o ciérrela: la actualización queda en pausa y se reanuda con [Reanudar]{.ui}. No se pierde nada.
+
+### «No se pudo guardar» con «HTTP 403» (Tipos de datos, Identidad)
+
+Causa: la sesión ha caducado, o la página se abrió con otra sesión (el token de seguridad del formulario ya no es válido). Recargue la página, vuelva a iniciar sesión y guarde de nuevo.
+
+### «Veo la imagen comprimida y quiero medir»
+
+Causa: la visualización usa WebP calidad 30 en el formato 6, y las calidades comprimidas en el formato 5. Las **exportaciones** leen siempre los datos sin pérdida, en la resolución que se ve. Las **medidas** se toman sobre la imagen mostrada: su precisión es la del vóxel del nivel mostrado. Para ver la imagen sin compresión, desactive [Carga rápida]{.ui} (formato 6) o elija **Exacta** (formato 5). Véase §3.3.
+
+### «Se muestra un nivel más grueso que el que elegí»
+
+Causa: la memoria de la tarjeta gráfica no admite el nivel elegido. El visor muestra el siguiente nivel más grueso y lo indica en el resumen («Mostrado en … : la GPU no admite …»). Es un comportamiento normal y previsto (§3.3).
+
 # Anexo C — Pequeño glosario
 
 ::: chapter-intro
@@ -2101,14 +2337,19 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 |---|---|
 | **Canal** | Un marcaje fluorescente (DAPI, GFP, Pecam1…). Un conjunto de datos suele contener varios, superpuestos. |
 | **Vóxel** | El equivalente de un píxel en tres dimensiones. Su tamaño real lo da la calibración (§3.6). |
-| **Ladrillo (brick)** | Un pequeño cubo de volumen (64×64×64 vóxeles, o 66³ con borde en los formatos 4 y 5). El sitio los carga bajo demanda para mostrar volúmenes de varios gigabytes sin descargarlo todo. |
+| **Ladrillo (brick)** | Un pequeño cubo de volumen (64×64×64 vóxeles, o 66³ con borde en los formatos 4, 5 y 6). El sitio los carga bajo demanda para mostrar volúmenes de varios gigabytes sin descargarlo todo. |
 | **LOD** | *Level of Detail*: varias resoluciones del mismo volumen. El sitio muestra primero una versión gruesa y luego afina. |
 | **Tipo de conjunto de datos** | Una de las tres categorías: `3d` (volumen fijo), `2d` (fotografía calibrada), `live` (serie temporal 4D, con el seguimiento de sus células si lo hay). Son las carpetas del servidor; el nombre que ve el público se ajusta en **Tipos de datos** (capítulo 6). |
-| **Formato de datos** (`formatVersion`) | El «nivel de acondicionamiento» de un dataset publicado, de 1 a 4 (actual: 4). Se lleva al día en **Actualizaciones de datos**. |
+| **Formato de datos** (`formatVersion`) | El «nivel de acondicionamiento» de un dataset publicado, de 1 a 6 (actual: 6). Se lleva al día en **Actualizaciones de datos**. |
 | **Planos** (`planes/`) | Formato 2: una copia del nivel nativo **plano a plano** (PNG sin pérdida), para cortes XY rápidos en el Studio. |
 | **Proyecciones de capa** (`mips/`) | Formato 3: la proyección máxima de cada capa de 64 planos, para figuras z-stack rápidas. |
-| **Pirámide de ladrillos v3** | Formato 4: ladrillos 66³ con borde de un vóxel, niveles reducidos también en Z, `index.bin`. Aporta el filtrado sin costuras y el «Zoom detail». |
-| **Matriz (formato 5)** | Formato 5: el mismo volumen a varias resoluciones (se conservan todos los cortes) y en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera), más copias para cortes rápidos. El visitante elige su casilla en una tabla; las medidas y exportaciones siguen sin pérdidas. |
+| **Pirámide de ladrillos v3** | Formato 4: ladrillos 66³ con borde de un vóxel, niveles reducidos también en Z, `index.bin`. Aporta el filtrado sin costuras. |
+| **Matriz (formato 5)** | Formato 5: el mismo volumen a varias resoluciones (se conservan todos los cortes) y en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera), más copias para cortes rápidos. El visitante elige su casilla en una tabla; las exportaciones siguen sin pérdidas; las medidas se toman sobre la imagen mostrada. |
+| **Formato 6 (WebP Q30)** | El formato actual: cada nivel se guarda **dos veces**, sin pérdida (para exportaciones y descargas) y en WebP calidad 30 (para lo que se muestra). Sustituye a las cinco compresiones del formato 5. |
+| **Q30** | WebP de calidad 30: la versión comprimida que el visor muestra en el formato 6. Las exportaciones no la usan. Las medidas se toman sobre la imagen mostrada, que con **Carga rápida** activada es esta versión. |
+| **Carga rápida** | Casilla bajo la lista de resoluciones (formato 6). Activada, el visor carga los niveles en Q30; desactivada, los carga sin pérdida (descargas más grandes). La elección se recuerda en cada navegador. |
+| **Nivel sin pérdida** | El nivel tal como se adquirió. Es el que leen las exportaciones en la resolución que se ve. |
+| **Presupuesto GPU** | La memoria de la tarjeta gráfica que el visor se permite ocupar. Lo calcula el visor solo (véase §3.3); ya no se elige a mano. |
 | **Lado de la muestra** | Ajuste que dice si el archivo muestra la muestra vista desde arriba («al derecho») o desde abajo («al revés»). |
 | **Vista por defecto** | La pose en la que se abre un dataset, guardada desde la vista previa. |
 
@@ -2120,6 +2361,15 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 | **Ejecutor** | Quien hace el cálculo de una actualización de datos: **este navegador** o **el servidor**. Cada uno tiene su cola. |
 | **Regulador de red** | La salvaguarda que limita el número de peticiones enviadas al proveedor de alojamiento (6 en vuelo, de 4 a 6 por segundo) para evitar que bloquee su dirección. |
 | **Registro** | El cuaderno que lleva el servidor de lo que ya ha llegado o se ha convertido: permite **reanudar** en el punto exacto. |
+
+### El panel
+
+| Término | Qué significa aquí |
+|---|---|
+| **«Stockage»** | Pestaña que muestra qué ocupa el disco del sitio (datos publicados, importaciones y papelera, programa, otros archivos) y cuánto queda libre (capítulo 7). |
+| **Integridad de datos** | Pestaña de solo lectura que comprueba que cada dataset tiene todos sus archivos, sin sobrantes, y que está en el último formato (capítulo 7). |
+| **Papelera** | Donde van los datasets eliminados: se conservan 60 días y pueden restaurarse (§3.4). |
+| **En otra pestaña** | Estado de un dataset que se actualiza en otra pestaña del mismo navegador: se sigue allí, y no se procesa dos veces. |
 
 ### Las extensiones, las páginas, la seguridad
 
@@ -2135,4 +2385,4 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 
 ---
 
-*Documento escrito para la versión **1.65.0** de la plataforma (pipeline 0.22.0, formato de datos 5). Las capturas de pantalla muestran un conjunto de datos de demostración (embriones sintéticos); los colores pueden diferir si se ha modificado el tema.*
+*Documento escrito para la versión **1.76.0** de la plataforma (pipeline 0.23.0, formato de datos 6). Las capturas de pantalla muestran un conjunto de datos de demostración (embriones sintéticos); los colores pueden diferir si se ha modificado el tema.*

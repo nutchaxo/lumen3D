@@ -176,10 +176,14 @@ The [Gaussian blur σ]{.ui} slider (from 0 to 5, in steps of 0.1) smooths the no
 ::::
 
 ::: warning
-The blur is only available if the displayed level fits in **a single dense texture**. For a large level stored in an atlas, the slider is greyed out with the message: "Not available at this quality (sparse brick atlas): choose a lower quality to use the blur." Using the blur also disables the [Zoom detail]{.ui} mode (chapter 10).
+The blur is only available if the displayed level fits in **a single dense texture**. For a large level stored in an atlas, the slider is greyed out with the message: "Not available at this quality (sparse brick atlas): choose a lower quality to use the blur."
 :::
 
 ## 11.9 A safeguard: what the grey levels mean
+
+::: note
+**On a format 6 dataset, the picture is drawn from WebP Q30 bricks by default** (lossy, quality 30). The grey levels you see may therefore be very slightly smoothed. With the [Fast loading]{.ui} switch turned off, the picture is drawn from the lossless bricks instead. Exports always read the **lossless** copy at the resolution on screen; distance picks read the picture on screen (chapters 10 and 12).
+:::
 
 ::: warning
 **The grey levels displayed are relative, not calibrated.** The pipeline brought the original intensities (12 or 16 bits) down to 0–255, between an estimated background (99th percentile of the volume's corners) and a maximum signal (99.9th percentile); the viewer adds its floor on top. A value of 120 therefore corresponds to **no number of photons**.

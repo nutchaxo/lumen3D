@@ -116,6 +116,10 @@ The normalised coordinates (0 to 1) are converted to micrometres with the physic
 
 `d = √( (Δx)² + (Δy)² + (Δz)² )`
 
+::: note
+**On a format 6 dataset**, the point is found on the picture on screen, which is the WebP Q30 display copy by default. The **distance** itself is computed from the two picked positions. Its precision is that of the displayed level's voxel size: the compressed copy can move a picked point slightly, while the distance formula is unchanged. [Fast loading]{.ui} (chapter 10) switches the display to the lossless copy.
+:::
+
 ::: example
 The points of the screenshot: A = (498.5, 163.4, 211.1) µm and B = (639.3, 311.9, 203.2) µm. The differences are Δx = 140.8, Δy = 148.5, Δz = 8.0 µm. So d = √(19,838 + 22,043 + 63) = √41,944 ≈ **204.8 µm**, the value displayed.
 :::
@@ -283,7 +287,8 @@ The **3D view export** (button 20) redoes the render **at any size**.
 - [Size]{.ui}: [Screen]{.ui}, 2×, 4×, [Custom]{.ui} (width from 16 to 16,384 px).
 - [Background]{.ui}: as displayed, [Transparent]{.ui}, black, white.
 - [Scale bar]{.ui}: disabled without calibration (it would count voxels, not µm).
-- [Quality]{.ui}: [Current]{.ui} (the displayed cell) or [Lossless]{.ui}. *Lossless* loads the lossless column of the native level, or of the finest level the graphics card can hold (the dialog says which), renders the picture, then puts the previous quality back.
+- [Quality]{.ui} (format 5 and older only): [Current]{.ui} (the displayed cell) or [Lossless]{.ui}. *Lossless* loads the lossless column of the native level, or of the finest level the graphics card can hold (the dialog says which), renders the picture, then puts the previous quality back.
+- **On a format 6 dataset** the [Quality]{.ui} choice is hidden: the export is always **lossless** at the resolution shown in the quality list.
 - File: `<dataset>_3d_<W>x<H>.png`.
 :::::
 ::::::
@@ -302,6 +307,11 @@ Button 12 hides the interface so that the volume fills the screen: useful for pr
 
 In the viewer it shows a **list of files**: the original Imaris file, the calibrated TIFF, the per-channel projections (PNG), the web archive and a README file. They exist only if the pipeline was run with downloads (chapter 8). These files are always served as an **attachment**. If there are measurements, a [Measurements CSV]{.ui} button appears (columns: label, type, distance, unit, point A, point B…).
 
+The same centre also offers, for the open volume:
+
+- [Export .ome.zarr.zip]{.ui}: the **lossless** voxels of the chosen levels as one OME-Zarr store (for napari, Fiji or Python), built in your browser. A timelapse exports the frame on screen.
+- On a **format 6** dataset, [Download .q30.zip]{.ui}: the display bricks (WebP Q30) exactly as stored, for the chosen levels, with a README describing the format. It is much lighter than the lossless data, and it is read only by Lumen3D tools. Distance measurements follow the picture on screen; for the lossless voxels, use the OME-Zarr export.
+
 ### Decompose by channel
 
 ::::::: cols-wide-left
@@ -309,7 +319,17 @@ In the viewer it shows a **list of files**: the original Imaris file, the calibr
 ![One thumbnail per channel: DAPI, Pecam1, Sox2.](img-en/ch12/decomposer-c.png){.shot width=100%}
 ::::::
 :::::: col
-Each channel that is switched on gets its **thumbnail** (the same volume, with that channel alone). Clicking a thumbnail lets you adjust that channel in the left-hand panel ([Done]{.ui} to leave, [Reset to original]{.ui}). The three buttons (1) choose the layout; [Export]{.ui} (2) writes a PNG `decomposition_<layout>_<date>.png`. Each thumbnail is rendered at the size of the volume (512 to 4,096 px) and the viewer refuses an image too large for the graphics card ("Too many views to export as one image").
+The toolbar button is called [Decompose by channel]{.ui}, and the panel itself is titled **Channel Split**. Each channel that is switched on gets its **thumbnail** (the same volume, with that channel alone). Clicking a thumbnail lets you adjust that channel in the left-hand panel ([Done]{.ui} to leave, [Reset to original]{.ui}). The three buttons (1) choose the layout; [Export]{.ui} (2) writes a PNG `decomposition_<layout>_<date>.png`.
+
+- **Red frame**: with a layout that has a **main picture** (*Main + Right*, *Horizontal*), a red frame outlines the 3D view. It shows exactly the area the exported figure captures.
+- **Export framing**: the main picture is rendered at the aspect of the displayed view, as on the screen, not stretched into a square buffer.
+- Each thumbnail is rendered at the size of the volume (512 to 4,096 px). The viewer refuses an image too large for the graphics card ("Too many views to export as one image. Remove some and try again.").
+
+<!-- Screenshot pending (DOCS/documentation/img-en/ch12/channel-split.png: the Channel Split panel with the red capture frame): add the figure and its callouts here when it exists. -->
+
+::: tip
+Look at the red frame before you export: it is exactly what the figure captures, with the same proportions as the screen.
+:::
 ::::::
 :::::::
 
@@ -323,7 +343,7 @@ The most instructive tool of chapter 7: it **draws the edges of every non-empty 
 
 ::: tldr
 - **What it is for**: making a publication figure from a slice (scale bar, arrows, measurements, text).
-- It opens **immediately** on a preview, then reloads the slice at **native resolution**.
+- It opens **immediately** on a preview, then reloads the slice at **native resolution** (on a format 6 dataset, only when you export).
 - Channels are **recoloured** in the Studio without re-rendering the volume.
 :::
 
@@ -370,11 +390,13 @@ The most instructive tool of chapter 7: it **draws the edges of every non-empty 
 
 The preview (at most 2,048 px) comes from the graphics card. The native pass fetches the **voxels at maximum resolution** for this exact plane, and replaces the image as they arrive. A bar shows bytes, chunks and time remaining, with [Stop here]{.ui}.
 
+**On a format 6 dataset** the Studio works on the **WebP Q30 picture** on screen and does **not** start the native pass when it opens. The lossless pass runs only when you export a PNG, at the resolution on screen (see *Exports and limits* below).
+
 - An **XY** slice of a format 2 (or later) dataset reads the `planes/` folder: only the voxels of the plane.
 - An **oblique** plane or an old volume goes through the bricks (targeted byte reads, chapter 10).
 - A brick that is absent because it is empty counts as **zero**, never as "missing".
 - If a figure needs more than 256 MB, a dialogue offers native, reduced resolution or preview.
-- On a **format-5** dataset, the native pass reads the **cut copies** (section 7.11): an XZ or YZ cut = one row of the `xz/` or `yz/` pack, three small reads per channel; an oblique cut = only the small 32 × 32 × *bz* bricks the plane crosses. If a copy is missing or fails, the pass falls back to the bricks. The pictures are identical, voxel for voxel.
+- On a **format 5 or 6** dataset, the native pass reads the **cut copies** (section 7.11): an XZ or YZ cut = one row of the `xz/` or `yz/` pack, three small reads per channel; an oblique cut = only the small 32 × 32 × *bz* bricks the plane crosses. If a copy is missing or fails, the pass falls back to the bricks. The pictures are identical, voxel for voxel.
 
 ::: note
 On the demo dataset (768 × 576 px), the native version is as small as the preview: the progress bar has almost nothing to load. It comes into its own on a volume of several gigabytes.
@@ -383,7 +405,8 @@ On the demo dataset (768 × 576 px), the native version is as small as the previ
 ### Exports and limits
 
 - **PNG**: native size, black background, with a **caption line always burned in** at the top left (dataset | plane | size | pixel). Refused beyond 16,384 px per side or 2²⁸ pixels.
-- Before the PNG export, a question: [Native lossless]{.ui} or [This picture]{.ui}. *Native lossless* waits for the native pass (or runs it again if you had stopped it); the layers are rescaled to the new picture and **keep their place**. *Decompose by channel* asks the same question.
+- **Format 5 and older**: before the PNG export, a question: [Native lossless]{.ui} or [This picture]{.ui}. *Native lossless* waits for the native pass (or runs it again if you had stopped it); the layers are rescaled to the new picture and **keep their place**. [Channel Split]{.ui} (§ 12.6) asks the same question.
+- **Format 6**: no question. The export loads the lossless picture at the resolution on screen, then writes the PNG; the layers keep their place. If that picture cannot be loaded, nothing is exported and a message says so.
 - **JSON** (`<dataset>_studio.json`): layers, guides, channels, plane, calibration. **Never any pixels.** On import, a file larger than **5 MB**, or with more than 2,000 layers or 10,000 points, is refused; a file from another figure applies only its layers.
 - Beyond 4 channels, only the first 4 are shown. Without calibration: no scale bar, and measurements are in pixels.
 

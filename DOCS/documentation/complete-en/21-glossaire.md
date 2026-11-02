@@ -8,7 +8,7 @@
 
 ::: glossary
 Apron (border)
-: An extra voxel around a brick, copied from its neighbours, so that filtering leaves no seam between two bricks. Format 4 and 5 bricks are 66³ for 64³ of useful data. → chapter 7
+: An extra voxel around a brick, copied from its neighbours, so that filtering leaves no seam between two bricks. Bricks of formats 4 to 6 are 66³ for 64³ of useful data. → chapter 7
 
 Atlas
 : A large 3D texture in graphics memory where the bricks to display are stored, like the pigeonholes of a locker. → chapter 10
@@ -49,8 +49,11 @@ Cell tracking
 Channel
 : One image of the same object for a given fluorescence colour (for example DAPI, Pecam1, Sox2). → chapter 4
 
+Channel Split
+: The panel of the [Decompose by channel]{.ui} tool: one picture per channel next to the 3D view. Its main picture carries a red frame that shows what the export captures. → chapter 12
+
 Column (compression)
-: In format 5, one of the five ways to store a level: lossless, ±2, ±4, light (WebP 80), very light (WebP 50). Chosen in the quality matrix. → chapters 7 and 10
+: In format 5, one of the five ways to store a level: lossless, ±2, ±4, light (WebP 80), very light (WebP 50). Format 6 keeps only two: lossless (`ll`) and WebP Q30. Chosen in the quality matrix. → chapters 7 and 10
 
 Confocal (microscope)
 : A microscope that records only the light coming from a very thin plane of the specimen, plane after plane; the stack of planes forms the volume. → chapter 4
@@ -71,16 +74,22 @@ DAPI, Pecam1, Sox2
 : The three channels of the demonstration dataset: DAPI stains DNA (the nuclei), Pecam1 marks the vessels, Sox2 the neural tissue. → chapter 4
 
 Data format
-: The way a dataset is laid out on disk; numbered 1 to 5. The current format is 5. → chapters 7 and 17
+: The way a dataset is laid out on disk; numbered 1 to 6. The current format is **6** (pipeline 0.23.0 writes it). Older datasets are converted in place. → chapters 7 and 17
+
+Data integrity
+: The [Data integrity]{.ui} tab of the administration panel: a read-only check of every dataset, published or still importing, for missing or extra files and for the latest format. → chapter 14
 
 Dead zone
-: In format 5, a threshold (0 to 12) below which a lossy-compressed brick puts small values back to 0, so the background stays black; written in one byte at the end of the brick. → chapter 7
+: In formats 5 and 6, a threshold (0 to 12) below which a lossy-compressed brick puts small values back to 0, so the background stays black; written in one byte at the end of the brick. → chapter 7
 
 Deconvolution
 : A calculation that tries to undo the blur of the optics to sharpen the image. Lumen3D does not do it. → chapter 20
 
 Dilation
 : An operation that thickens the areas of a mask by one or more pixels. → chapter 5
+
+Display bricks (WebP Q30)
+: On a format 6 dataset, the copy of the bricks that the viewer shows by default: WebP at quality 30, much lighter than the lossless data. The Download Center offers it as [Download .q30.zip]{.ui}. → chapters 7 and 12
 
 Ed25519 (signature)
 : A digital signature method: a "wax seal" that only the publisher can apply and that anyone can verify. → chapter 19
@@ -97,6 +106,9 @@ Executor
 Exposure
 : A global brightness setting applied to the display; it does not alter the data. → chapter 11
 
+Fast loading
+: The [Fast loading]{.ui} switch under the resolution list of a format 6 dataset. On (the default): the display comes from the WebP Q30 bricks, which download quickly. Off: it comes from the lossless bricks, which are larger. It is remembered in the browser. → chapter 10
+
 Finalisation
 : The last step of a data conversion: the new files replace the old ones in a single move, then the format number is updated. → chapter 17
 
@@ -111,6 +123,9 @@ Gamma
 
 GPU
 : The graphics card's processor, specialised in parallel computing; it runs the ray marching. → chapter 9
+
+GPU budget
+: The amount of graphics memory the viewer may fill with the volume's data. It is **detected** from the card's name (60 % of its memory), or estimated from the class of the card; it halves after each graphics-context loss of the week. There is no setting for it any more. → chapter 10
 
 HDF5
 : A scientific file format that stores large arrays of numbers, like a filing cabinet with drawers. Imaris files are one. → chapter 4
@@ -131,7 +146,7 @@ Idempotent
 : An Imaris file: an HDF5 container that holds the channels, the resolution levels and the metadata of an acquisition. → chapter 4
 
 index.bin
-: A binary file of formats 4 and 5 (one per column in format 5) that says which pack holds each brick; it replaces the large JSON manifest. → chapter 7
+: A binary file of formats 4 to 6 (one per column in formats 5 and 6) that says which pack holds each brick; it replaces the large JSON manifest. → chapter 7
 
 Intensity
 : The value of a voxel: how much light was measured at that spot. In the viewer it is relative (0 to 255), not calibrated. → chapters 4 and 11
@@ -151,11 +166,14 @@ LOD (level of detail) / level
 LOD0
 : The finest level of detail: the native resolution of the acquisition. → chapter 6
 
+Lossless copy (lossless level)
+: The exact copy of a resolution, stored beside its display copy. Exports, downloads and the OME-Zarr export read it, at the resolution on screen; distance picks read the picture on screen. Its interface name is [Lossless]{.ui}. → chapters 7, 10 and 12
+
 Lossless WebP
 : A compressed image format that restores the original values exactly; it stores the brick mosaics. → chapter 6
 
 Lossy, lossless compression
-: With loss, the file is smaller but the values are slightly modified; lossless, the original values are recovered exactly. Bricks are stored losslessly; format 5 adds, for display only, ±2, ±4 and lossy columns. → chapters 6 and 7
+: With loss, the file is smaller but the values are slightly modified; lossless, the original values are recovered exactly. Bricks are stored losslessly; format 5 adds, for display only, ±2, ±4 and lossy columns; format 6 keeps only the lossless copy and the WebP Q30 copy. → chapters 6 and 7
 
 Manifest
 : A file that describes the content of a dataset (levels, bricks, packs). → chapter 7
@@ -164,7 +182,7 @@ Mask
 : A black-and-white image that says which pixels count (white) and which are discarded (black). → chapter 5
 
 Matrix (quality)
-: The "resolution × compression" table of the quality panel of a format-5 dataset: one row per level, one column per compression; each cell shows its size and graphics memory. → chapter 10
+: The "resolution × compression" table of the quality panel of a format-5 dataset: one row per level, one column per compression; each cell shows its size and graphics memory. A format 6 dataset shows the resolutions alone, with a note that the display is WebP Q30. → chapter 10
 
 Median filter
 : Replaces each value with the median of its neighbours: it removes isolated spots without blurring the edges. → chapter 5
@@ -197,7 +215,7 @@ Page table
 : A table that says where each brick is in the atlas, like a plan of the lockers. → chapter 10
 
 PBKDF2
-: A method that turns a password into a fingerprint that is deliberately slow to compute (600,000 rounds), to discourage mass guessing. → chapter 19
+: A method that turns a password into a fingerprint that is deliberately slow to compute (the server sets the number of rounds), to discourage mass guessing. → chapter 19
 
 Percentile
 : The value below which a given percentage of the measurements lie: the 99th percentile is exceeded by 1 % of the values. → chapter 5
@@ -228,6 +246,9 @@ PSF (point spread function)
 
 Pyramid
 : A set of versions of the volume at increasingly coarse resolutions, stacked like the floors of a pyramid. → chapter 6
+
+Q30 (WebP Q30)
+: The lossy WebP setting (quality 30, with a dead zone) of the display copy of format 6. It keeps the look of the volume at a fraction of the size of the lossless copy. → chapters 7 and 10
 
 Quaternion
 : Four numbers that describe a 3D rotation without gimbal lock; they are used to store an embryo's orientation. → chapter 12
@@ -267,6 +288,9 @@ Staging
 
 Stereomicroscope
 : A low-magnification microscope that gives a colour image of the whole embryo; it produces the 2D-type photographs. → chapter 12
+
+Stockage (Storage)
+: The [Stockage]{.ui} tab of the administration panel: how the disk of the platform is used (published data, imports and trash, code, other files, free space), per dataset. → chapter 14
 
 Streaming
 : Progressive loading: what has arrived is displayed and completed continuously, without waiting for the whole file. → chapter 10

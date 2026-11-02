@@ -33,7 +33,7 @@ Fait bouger les choses : clic sur un bouton, téléchargement des briques, calcu
 
 Le « client », c'est votre navigateur. Il reçoit les fichiers HTML, CSS et JavaScript, puis fait tout le travail visible.
 
-- **JavaScript « vanilla »** : du JavaScript pur, organisé en petits modules, sans framework. Environ **68 400 lignes**.
+- **JavaScript « vanilla »** : du JavaScript pur, organisé en petits modules, sans framework. Environ **77 000 lignes** (mesure du dépôt, hors bibliothèques et tests).
 - **Web Workers** : des « employés de l'ombre » du navigateur. Ils décodent les images WebP et font les calculs lourds pour que l'écran ne se fige jamais.
 - **Bibliothèques** : Three.js (scène 3D), Lucide (icônes), Plotly (graphiques de suivi). Elles sont copiées dans le dossier `js/vendor/`.
 
@@ -57,7 +57,7 @@ La carte graphique est faite pour cela : elle les exécute en parallèle. Le pet
 - Le navigateur les confie à **WebGL2**, l'interface standard pour parler à la carte graphique.
 
 ::: tech
-Le volume est stocké dans la carte graphique sous forme de **textures 3D**, découpées en emplacements de 64³ voxels (66³ en formats 4 et 5). Le shader lit ces emplacements ; ceux qui sont vides sont sautés. Les détails sont aux chapitres 9 et 10.
+Le volume est stocké dans la carte graphique sous forme de **textures 3D**, découpées en emplacements de 64³ voxels (66³ aux formats 4 à 6). Le shader lit ces emplacements ; ceux qui sont vides sont sautés. Les détails sont aux chapitres 9 et 10.
 :::
 
 ## 2.4 Le serveur : un guichet, pas un cerveau
@@ -121,7 +121,8 @@ Un format est un **contenant** ; ce qui compte, c'est ce qu'on met dedans.
 | Format | Image mentale | Rôle dans Lumen3D |
 |---|---|---|
 | **JSON** | des fiches cartonnées étiquetées | `metadata.json` (fiche d'un jeu), `manifest.json` (l'index des briques), configuration, traductions |
-| **WebP sans perte** | une boîte hermétique pour une image | chaque brique ; les pixels sont restitués exactement |
+| **WebP sans perte** | une boîte hermétique pour une image | chaque brique de mesure ; les pixels sont restitués exactement |
+| **WebP avec perte (qualité 30)** | la même boîte, qui gomme un peu les nuances | la version affichée des briques d'un jeu au format 6 : bien plus légère, les distances se mesurent sur l'image affichée, à la précision de son voxel |
 | **PNG** | idem, format plus ancien | les plans entiers du format 2 (coupes rapides) |
 | **`.bin` (packs)** | un classeur à anneaux | des centaines de briques mises bout à bout, pour moins de fichiers |
 | **HDF5 (`.ims`)** | un **système de fichiers dans un fichier** | le fichier Imaris d'origine : dossiers, tableaux et métadonnées dans un seul bloc |
@@ -129,7 +130,7 @@ Un format est un **contenant** ; ce qui compte, c'est ce qu'on met dedans.
 | **TIFF** | le négatif de laboratoire | uniquement les téléchargements facultatifs et l'entrée des photographies |
 
 ::: note
-La photographie d'un jeu 2D est enregistrée en WebP **avec** une légère perte (qualité 90) par défaut. Les briques des volumes, elles, sont toujours sans perte.
+La photographie d'un jeu 2D est enregistrée en WebP **avec** une légère perte (qualité 90) par défaut. Les briques des volumes sont sans perte, sauf la version affichée du format 6 (WebP qualité 30, chapitre 7) : les distances se mesurent sur l'image affichée ; pour des voxels exacts, décochez [Chargement rapide]{.ui} (chapitre 10).
 :::
 
 ## 2.7 Pourquoi tout est « auto-hébergé »
@@ -165,11 +166,12 @@ Three.js, Lucide et Plotly ne sont pas chargés depuis Internet : leurs fichiers
 
 La plateforme **mesure** la mémoire disponible et s'y adapte :
 
-| Classe de carte graphique | Budget mémoire retenu |
+| Carte graphique | Budget mémoire retenu |
 |---|---|
+| reconnue (son modèle figure dans la table de la plateforme) | 60 % de sa mémoire dédiée, au moins 2 Gio laissés au reste ; de 1 à 16 Gio |
 | sans carte (rendu logiciel) | 256 Mio |
-| intégrée (portable) | 0,5 à 2 Gio |
-| dédiée | 3 à 4 Gio |
+| intégrée (portable, mobile) | 0,5 à 2 Gio selon la mémoire de l'appareil |
+| dédiée, modèle inconnu | 3 à 4 Gio |
 | inconnue | 1 à 2 Gio |
 
 ::: remember

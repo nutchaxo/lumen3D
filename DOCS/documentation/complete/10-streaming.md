@@ -32,65 +32,115 @@ La **première image** s'affiche quand **25 %** des briques du niveau en cours s
 
 Le pourcentage est la part des briques **déjà traitées** (déposées ou abandonnées), pas des octets téléchargés. La ligne disparaît quand le niveau est complet.
 
-## 10.2 Le menu de qualité : 512, 1024, Natif
+## 10.2 Le menu de qualité : résolutions et compressions
 
-La pyramide de niveaux a été fabriquée par le pipeline (chapitre 6) : chaque niveau a **4 fois moins de voxels en X × Y** que le précédent. Le menu choisit **le plus fin des niveaux qui reste raisonnable** pour le réglage demandé.
+Le menu [Qualité de Rendu]{.ui}, dans la barre latérale, choisit une **résolution** (un niveau de la pyramide, chapitre 6) et, sur les formats récents, une **compression**. Ce qui s'affiche dépend du format du jeu de données.
 
-![La pyramide réelle du jeu de démonstration E9.5 et la règle des trois qualités.](img/ch10/pyramide.svg){width=100%}
+| Format du jeu | Ce que propose le menu |
+|---|---|
+| 1 à 4 | une liste : 256 × 256, 512 × 512, 1024 × 1024, natif |
+| 5 | deux listes, [Résolution]{.ui} et [Qualité]{.ui}, et le bouton [Comment choisir ?]{.ui} |
+| 6 (**format actuel**) | la liste des [Résolutions]{.ui} et la case [Chargement rapide]{.ui} |
 
-| Réglage | Niveau retenu (format 4) |
+### Formats 1 à 4 : 512, 1024, Natif
+
+Le viewer s'ouvre en qualité **512**. Un changement de qualité qui échoue laisse le volume précédent à l'écran et remet le menu en place.
+
+| Réglage | Niveau retenu |
 |---|---|
 | **512** (défaut) | le niveau le plus fin dont le plus grand côté XY est **≤ 768 voxels** |
 | **1024** | le niveau le plus fin dont le plus grand côté XY est **≤ 1 536 voxels** |
 | **Natif** | toujours le **niveau 0** (pleine résolution) |
+
+![La pyramide réelle du jeu de démonstration E9.5 et la règle des trois qualités.](img/ch10/pyramide.svg){width=100%}
 
 ::: example
 Jeu **fictif** de 3 072 × 2 304 voxels en XY, niveaux à 3 072, 1 536, 768 et 384 :
 
 - **512** → niveau à 768 (≤ 768) ; **1024** → niveau à 1 536 (≤ 1 536) ; **Natif** → 3 072.
 
-Sur le jeu de démonstration E9.5, le plus grand côté est 768 : les trois réglages tombent sur le niveau 0. Le menu **n'affiche alors qu'une seule option**, avec les vraies dimensions : [Natif (768x576x112)]{.ui}.
+Sur le jeu de démonstration E9.5, le plus grand côté est 768 : les trois réglages tombent sur le niveau 0. Le menu **n'affiche alors qu'une seule option** par niveau réellement distinct, avec les vraies dimensions : [Natif (768x576x112)]{.ui}.
 :::
 
-![Le panneau [Qualité de Rendu]{.ui} : une seule ligne par niveau réellement distinct (ici une seule, avec ses dimensions), la ligne d'état (« 512x512 actif ») et, dessous, le sélecteur [Détail au zoom]{.ui} (section 10.8).](img/ch10/qualite-liste.png){.shot width=45%}
+### Format 6 : les résolutions et [Chargement rapide]{.ui}
 
-::: note
-Le viewer s'ouvre en qualité **512**. Un changement de qualité qui échoue laisse le volume précédent à l'écran et remet le menu en place.
-:::
+Un jeu au format 6 stocke chaque résolution **deux fois**, côte à côte : en **version sans perte** et en **WebP qualité 30** (chapitre 7).
 
-### Sur un jeu au format 5 : la matrice
+- Le menu ne propose que les **résolutions**. Chaque ligne donne le niveau, ses dimensions et la **mémoire graphique** qu'il occupe.
+- La case [Chargement rapide]{.ui}, **cochée par défaut**, choisit la version affichée :
+  - **cochée** : la version WebP qualité 30, téléchargements légers ;
+  - **décochée** : la version sans perte de la même résolution, téléchargements plus gros, voxels exacts.
+- Le réglage est gardé dans ce navigateur seulement.
+- Si la carte graphique ne tient pas la résolution choisie, le menu l'indique et le viewer affiche le niveau plus grossier.
 
-Sur un jeu au format 5 (section 7.11), le menu laisse place à un **tableau** : une ligne par niveau, une colonne par compression. Chaque case est une façon d'afficher le même volume ; **un clic la charge**.
-
-![Le panneau [Qualité de Rendu]{.ui} d'un jeu au format 5 (jeu de démonstration ; barre latérale élargie pour montrer les cinq colonnes).](img/f5/matrice.png){.shot width=85%}
+![Le menu Qualité de Rendu d'un jeu au format 6 (capture de test) : la liste des résolutions et la case Chargement rapide.](img/ch09/quality-format6.png){.shot width=75%}
 
 ::: legend
 | n | ce que c'est |
-|-|----------------------|
-| 1 | Les **lignes** : un niveau, avec ses vraies dimensions (ici natif 768 × 576 × 112, puis 512 et 256). |
-| 2 | Les **colonnes** : [Sans perte]{.ui}, [±2]{.ui}, [±4]{.ui}, [Légère]{.ui}, [Très légère]{.ui}. Une info-bulle sur l'en-tête explique chaque compression. |
-| 3 | La **mémoire graphique** du niveau (« GPU 21,0 MB »), avec un trait de couleur. |
-| 4 | La **case active**, encadrée : ici **512 · ±2**, le réglage d'ouverture. Chaque case indique le **poids à télécharger** et, une fois le débit mesuré, le **temps estimé**. |
+|--|----------------------|
+| 1 | La liste des **résolutions** : un niveau par ligne, avec ses dimensions et la mémoire graphique (GPU) qu'il occupe. |
+| 2 | Le niveau affiché, en surbrillance (ici 512). |
+| 3 | La case [Chargement rapide]{.ui}, cochée : la version compressée WebP qualité 30 est affichée. |
 :::
-
-| couleur | signification |
-|---|---|
-| vert | tient dans les trois quarts de la mémoire graphique estimée |
-| orange | juste : au-delà des trois quarts, ou seulement grâce à la compression graphique (section 10.3) |
-| rouge | ne tient pas : l'ensemble reste au niveau le plus fin qui tient, et le **détail au zoom** (section 10.8) va chercher la case choisie autour de ce que vous regardez |
-
-::: example
-**Jeu de démonstration** (lu sur la capture). Le natif sans perte pèse **7,5 Mo** ; la case d'ouverture, 512 · ±2, **2,3 Mo**, trois fois moins ; 256 · Très légère, **0,4 Mo**. La mémoire graphique dépend seulement de la ligne : 189 Mo au natif, 84 Mo à 512, 21 Mo à 256.
-:::
-
-- La case choisie est gardée dans l'espace de travail, l'adresse de la page (`512x512@b2`, `native@ll`…) et ce navigateur.
-- Le **détail au zoom** reste dans la **même colonne** que la case choisie.
-- La page **Comparer** répartit toujours la mémoire par lignes ; chaque panneau garde sa colonne.
-- La barre latérale fait 320 pixels de large : les dernières colonnes se voient en **faisant défiler le tableau vers la droite**.
 
 ::: warning
-Une colonne avec perte **change les voxels affichés**, pas les données : les mesures, les plugins de calcul et les exports « sans perte » lisent toujours la colonne sans perte du niveau natif (chapitres 12 et 15).
+La case ne change **pas** les exports : ils lisent toujours les voxels **sans perte**, à la résolution affichée (chapitre 12). Elle change en revanche l'image sur laquelle une distance est mesurée.
 :::
+
+### Exporter un jeu au format 6
+
+Le [Centre de téléchargement]{.ui} propose deux exports, l'un à côté de l'autre, pour les niveaux que vous cochez :
+
+- **[Exporter .ome.zarr.zip]{.ui}** : les voxels **sans perte**, calibrés en micromètres, lisibles par napari, Fiji ou Python ;
+- **[Télécharger .q30.zip]{.ui}** : les briques d'affichage **telles quelles** (WebP qualité 30), pour les outils Lumen3D.
+
+Un export ne demande rien de plus : il prend la résolution affichée, sans question.
+
+### Format 5 : la matrice
+
+Sur un jeu au format 5, la liste [Résolution]{.ui} est croisée avec la liste [Qualité]{.ui} : une case par couple. Chaque case indique le **poids à télécharger** pour ce niveau, et, une fois un téléchargement mesuré, le **temps estimé**.
+
+![Le menu Qualité de Rendu d'un jeu au format 5 (capture de test) : deux listes et le bouton Comment choisir.](img/ch09/quality-format5.png){.shot width=75%}
+
+::: legend
+| n | ce que c'est |
+|--|----------------------|
+| 1 | Le bouton [Comment choisir ?]{.ui} : ouvre le guide complet (figure plus bas). |
+| 2 | Le résumé de la qualité affichée : la résolution, la qualité et le poids à télécharger. |
+| 3 | La qualité active, en surbrillance (ici **Extra**). |
+| 4 | La liste [Qualité]{.ui} : une ligne par compression. **Low** se trouve sous **Medium**, en bas de la liste. |
+:::
+
+Les qualités portent les noms affichés suivants :
+
+| Nom | Ce que c'est |
+|---|---|
+| **Max** | exacte : chaque voxel tel qu'acquis |
+| **Extra** | ±2 niveaux de gris sur 256, visuellement sans perte (réglage par défaut pour explorer) |
+| **High** | ±4 niveaux de gris, quasi sans perte |
+| **Medium** | WebP avec perte, qualité 80 |
+| **Low** | WebP avec perte, qualité 50 : le plus léger |
+
+La couleur d'une résolution indique si la carte graphique la tient :
+
+| Couleur | Signification |
+|---|---|
+| vert | moins de 75 % du budget de mémoire graphique |
+| orange | entre 75 et 100 % du budget |
+| rouge | au-delà du budget : le viewer affiche le niveau plus grossier suivant |
+
+Le bouton [Comment choisir ?]{.ui} ouvre le guide complet : toutes les combinaisons, la signification des qualités et ce conseil du viewer : la résolution la plus fine affichée en vert, en qualité **Extra** ; pour une mesure ou une figure, **Max** en **Natif**.
+
+![Le guide « Choisir la résolution et la qualité » (capture de test, format 5) : chaque combinaison, sa taille et son temps au débit mesuré.](img/ch09/howto-quality.png){.shot width=70%}
+
+::: warning
+Une qualité compressée **change les voxels affichés**, pas les données : les exports « sans perte » lisent la version sans perte au niveau affiché (format 6) ou le plus fin niveau sans perte que la carte tient (format 5, chapitres 7 et 12) ; une distance se mesure sur l'image affichée. Sur un jeu au format 5, l'export demande d'abord quelle qualité prendre.
+:::
+
+### Ce que vous choisissez reste
+
+- La case ou la qualité choisie est gardée dans l'espace de travail, dans l'adresse de la page (par exemple `512x512@b2` ou `native@ll`) et dans ce navigateur.
+- La page **Comparer** répartit la mémoire entre ses panneaux ; chaque panneau garde sa qualité.
 
 ## 10.3 L'atlas GPU et la table des pages
 
@@ -103,33 +153,50 @@ L'atlas est un **entrepôt** dont toutes les étagères ont la même taille. La 
 ![L'atlas et sa table des pages.](img/ch10/atlas.svg){width=100%}
 
 - **Une case de la table par brique** du volume : numéro de page + emplacement, ou « vide ».
-- Jusqu'à **8 pages** d'atlas, de 4, 8 ou 16 emplacements de côté.
-- **1 à 4 canaux** par voxel, un octet chacun : 1 canal = 1 octet par voxel, 2 canaux = 2, 3 ou 4 canaux = 4.
+- Jusqu'à **8 pages** d'atlas, de **512 Mio** au plus chacune, ou de **1 Gio** au plus quand le budget dépasse 4 Gio.
+- Un voxel occupe **un octet par canal** : 1 canal = 1 octet, 2 canaux = 2 octets, 4 canaux = 4 octets. Trois canaux prennent 4 octets, ou **3 octets** quand l'atlas est scindé en deux textures (carte sans RGTC, rendu logiciel, GPU mobile).
 - Quand tous les emplacements sont occupés, on **recycle le moins récemment utilisé**.
 - L'atlas est **dimensionné avant d'être alloué** : jamais de texture créée au hasard par brique.
 
 ::: tech
-Un petit volume reste d'un seul tenant : si le niveau tient dans moins de **512 Mio** (en 4 octets par voxel) et dans les limites de la carte, il est stocké dans **une seule texture 3D** dense. Le jeu E9.5 au niveau 0 en est un exemple : 768 × 576 × 112 × 4 octets ≈ **189 Mio**. L'atlas à pages ne sert que pour les gros niveaux.
+Un volume qui tient en une seule texture 3D (ses dimensions et sa taille restent dans les limites de la carte) est stocké **d'un seul bloc**. Un volume plus grand passe par l'atlas à pages. La table des pages tient une entrée RGBA8 par brique de la grille.
 :::
 
-### La compression graphique (timelapses)
+### La compression GPU : automatique
 
-Depuis la plateforme 1.60, les images d'un **timelapse** peuvent être gardées dans la carte graphique sous forme **compressée** (blocs BC4 / BC5) : **0,5 octet** par voxel et par canal au lieu de 1, donc environ **deux fois plus d'instants** en mémoire. C'est de l'affichage seulement (les valeurs affichées s'écartent d'environ 1 à 2 niveaux de gris) ; le Studio et le détail au zoom restent exacts. Réglage [Compression GPU]{.ui} du panneau : [Timelapses]{.ui} (par défaut), [Activé]{.ui} ou [Désactivé]{.ui}. Sur un rendu logiciel, l'option est indisponible et le panneau le dit.
+Quand la carte graphique le permet, le viewer garde le volume **compressé** dans sa mémoire : blocs **BC4 / BC5**, soit **0,5 octet** par voxel et par canal au lieu de 1. Pour trois canaux, cela fait environ 1,5 octet par voxel contre 4 en RGBA8, et deux fois plus d'instants tiennent en mémoire pour un timelapse. C'est automatique : il n'y a aucun réglage.
+
+La compression n'est **pas** utilisée (le volume reste en octets bruts) quand :
+
+- le rendu est **logiciel** (SwiftShader, llvmpipe) ;
+- le GPU est un **GPU mobile** (Adreno, Mali, PowerVR, Xclipse, Immortalis, Vivante, VideoCore) ou le navigateur est **Android** ;
+- la carte n'a pas l'extension RGTC, ou le navigateur est en WebGL1 ;
+- la compression a déjà fait perdre le contexte graphique sur cet appareil.
+
+::: note
+L'image compressée s'écarte d'environ 1 à 2 niveaux de gris. Elle ne sert qu'à l'affichage : le Studio et les exports restent exacts.
+:::
 
 ## 10.4 Le budget de mémoire vidéo
 
-Aucun navigateur ne dit combien de mémoire vidéo il reste. Le viewer **l'estime** d'après le type de carte graphique et, si disponible, la mémoire de l'appareil.
+Aucun navigateur ne dit combien de mémoire vidéo il reste. Le viewer **l'estime** à partir du modèle de la carte, lu dans le nom que le navigateur donne au GPU.
 
-![Le budget estimé selon le type de carte graphique (1 Gio = 1 024 Mio).](img/ch10/vram.svg){width=95%}
+- **Carte reconnue** (NVIDIA, AMD, Intel Arc, dans une table de modèles) : le budget vaut **60 %** de sa mémoire dédiée, en laissant **au moins 2 Gio** au navigateur et au reste du système, avec un minimum de 1 Gio et un plafond de **16 Gio**. Exemple : une RTX 4070 de bureau (12 Gio) donne 60 % de 12 = **7,2 Gio**.
+- **Autre cas** : une estimation par classe de carte.
 
-| Type de GPU | Budget estimé |
+| Cas | Budget estimé |
 |---|---|
-| Logiciel (pas de vraie carte graphique) | **256 Mio** |
-| Intégrée (Intel, Apple…) | de **0,5 à 2 Gio** selon la mémoire de l'appareil |
-| Dédiée (NVIDIA, Radeon…) | **4 Gio** (3 Gio si l'appareil déclare moins de 8 Go) |
-| Inconnue | 1 ou 2 Gio |
+| Carte reconnue | 60 % de sa mémoire dédiée, voir ci-dessus |
+| Rendu logiciel (pas de vraie carte) | **256 Mio** |
+| Intégrée (Intel, Apple, mobile) | **2 Gio** si l'appareil déclare 8 Go ou plus ; 1 Gio à partir de 4 Go ; 512 Mio sinon (1 Gio si l'appareil ne déclare pas sa mémoire) |
+| Dédiée, modèle inconnu | **4 Gio** (3 Gio si l'appareil déclare moins de 8 Go) |
+| Inconnue | **2 Gio** si l'appareil déclare 8 Go ou plus ; sinon 1 Gio |
 
-Chaque **perte de contexte** graphique de la dernière semaine **divise le budget par deux** (plancher : 256 Mio). L'administrateur peut le fixer à la main si besoin.
+Chaque **perte de contexte** graphique de la dernière semaine **divise le budget par deux**, jusqu'à quatre fois et sans descendre sous 256 Mio.
+
+::: note
+Le panneau ne propose **aucun réglage** de la mémoire graphique : le budget se détecte seul. Seuls des tests ou des outils de l'équipe peuvent le fixer.
+:::
 
 ### Quand ça ne rentre pas
 
@@ -193,29 +260,16 @@ Un jeu **live** (série temporelle) contient **un arbre de briques par pas de te
 Le préchargement complet n'est possible que pour les niveaux stockés en **texture dense** : un niveau en atlas à pages n'est pas préchargé.
 :::
 
-## 10.8 Le mode « Détail au zoom »
+## 10.8 Une seule qualité : celle que vous voyez
 
-Vous zoomez fort sur une zone : les voxels du niveau choisi deviennent plus gros que l'écran n'en a besoin, l'image paraît floue. Le mode [Détail au zoom]{.ui} charge alors **des briques plus fines, seulement dans la zone visible**.
+Il n'existe **pas** de zone de détail : quand vous zoomez fort, le viewer ne télécharge pas de briques plus fines dans la vue. Le volume reste à la **résolution choisie dans le menu**, et c'est cette résolution que vous voyez. Le zoom reste fluide, et l'arrêt de la caméra ne déclenche aucun téléchargement supplémentaire.
 
-![Le niveau choisi partout (bleu), et des briques plus fines uniquement dans la vue (vert).](img/ch10/roi.svg){width=95%}
+- Pour voir plus de détail, choisissez une **résolution plus fine** dans le menu. Le menu indique la mémoire graphique que coûte chaque résolution.
+- Un niveau trop grand pour la carte n'est pas affiché : le viewer descend au niveau plus grossier suivant (section 10.4), et l'indique.
 
-| Option | Effet |
-|---|---|
-| [Automatique]{.ui} | actif si le budget mémoire dépasse **1 Gio** |
-| [Activé]{.ui} | actif même sous 1 Gio |
-| [Désactivé]{.ui} | jamais |
-
-- **Déclencheur** : un voxel du niveau courant couvre **plus de 1,5 pixel d'écran**.
-- Le niveau retenu est **le plus grossier** des niveaux plus fins qui descend sous 1,5 pixel par voxel (le moins d'octets possible).
-- Le chargement démarre **350 ms** après que la caméra s'est arrêtée, 8 briques à la fois, **les plus grosses et les plus centrales d'abord**. Il utilise au plus 768 Mio et 75 % de la mémoire restante.
-- À la frontière de la zone fine, l'image passe d'un niveau à l'autre **à une face de brique**, sans fondu.
-
-::: warning
-Le mode n'existe que pour les **formats 4 et 5** (briques à bordure) ; en format 5, il reste dans la colonne de compression choisie. Il est suspendu pendant qu'un volume se charge et dès que vous appliquez un **flou gaussien** à un canal (chapitre 11), car des briques brutes sur un canal flou donneraient une autre image.
+::: tip
+Pour une **mesure** ou une **figure**, prenez la résolution **native**, en version sans perte (format 6 : case [Chargement rapide]{.ui} décochée ; format 5 : colonne **Max**). C'est sur cette image que les distances sont mesurées.
 :::
-
-Le texte d'état affiche, selon le cas : « Détail : N briques du niveau L visibles », « Détail : chargement de x sur y briques du niveau L », ou « Détail indisponible : mémoire GPU insuffisante ».
-
 
 ## 10.9 Quand la carte graphique plante
 
@@ -223,4 +277,16 @@ Un navigateur peut retirer sa carte graphique à une page (pilote en difficulté
 
 ![La reprise après une perte de contexte graphique.](img/ch10/perte-contexte.svg){width=100%}
 
-Vous voyez d'abord « Contexte GPU perdu : le rendu est en pause jusqu'à ce que le navigateur le rende. », puis le volume se recharge en plus léger. Après **trois pertes en moins de 120 secondes**, il s'arrête et vous invite à choisir une qualité plus basse ou à recharger la page.
+Vous voyez d'abord « Contexte GPU perdu : le rendu est en pause jusqu'à ce que le navigateur le rende. », puis le volume se recharge au **budget divisé par deux** (section 10.4). Après **trois pertes en moins de 120 secondes**, le viewer ne recharge plus seul : il vous invite à choisir une qualité plus basse ou à recharger la page.
+
+::: warning
+Si la page affiche un refus de contexte 3D (WebGL), le navigateur a bloqué WebGL après un plantage du pilote. Fermez **entièrement** le navigateur (sur Android : Paramètres › Applications › Chrome › Forcer l'arrêt), puis rouvrez la page. Si cela persiste, vérifiez que l'accélération matérielle est activée.
+:::
+
+Sur mobile et sur Android, la compression GPU n'est pas utilisée (section 10.3) : ces appareils gardent le volume en octets bruts.
+
+::: remember
+- Le menu choisit une **résolution** ; sur le format 6, la case [Chargement rapide]{.ui} choisit la version compressée ou sans perte.
+- Le budget de mémoire se **détecte** : 60 % de la mémoire d'une carte reconnue, avec au moins 2 Gio laissés au reste.
+- Une perte de contexte divise le budget par deux ; trois pertes en 120 s arrêtent le rechargement automatique.
+:::

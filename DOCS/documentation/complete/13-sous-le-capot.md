@@ -216,7 +216,7 @@ Il n'y a **pas de bouton** « stabilisé / brut » dans l'interface : la stabili
 ::: tldr
 - Une figure du Studio est un **document** : des calques, des repères, des réglages de canaux, un plan, une calibration. Jamais de pixels dans le fichier JSON.
 - Les canaux se **recolorent sans nouveau rendu**, avec la même arithmétique que le shader de coupe.
-- La résolution **native** arrive après l'ouverture, par un chemin « plan » ou « atlas », sous la protection d'un **jeton** de document.
+- La résolution **native** arrive après l'ouverture, par un chemin « plan » ou « atlas », sous la protection d'un **jeton** de document. Sur un jeu au **format 6**, elle n'arrive qu'à l'export d'un PNG.
 :::
 
 Le chapitre 12 (§ 12.7) a montré comment annoter. Voici ce qui se passe quand vous cliquez.
@@ -289,7 +289,11 @@ Le **compositeur** (`SliceCompositor`) applique à chaque canal allumé la formu
 
 ### La passe native
 
-Un volume de plusieurs gigaoctets n'a pas de coupe « à portée de main » en pleine résolution. Le Studio fait donc deux temps.
+Un volume de plusieurs gigaoctets n'a pas de coupe « à portée de main » en pleine résolution. Le Studio fait donc deux temps (sur les formats 1 à 5 ; le format 6 suit la note ci-dessous).
+
+::: note
+**Format 6 : la passe sans perte attend l'export.** Le Studio travaille sur l'aperçu WebP Q30 de la coupe affichée et ne lance **pas** la passe native à l'ouverture. Au moment d'exporter un PNG, le viewer charge la version sans perte **au niveau de résolution affiché**, puis exporte. Si ce chargement échoue, rien n'est exporté et un message le dit.
+:::
 
 ![De l'aperçu à la résolution native.](img/ch13/studio-natif.svg){width=94%}
 
@@ -467,7 +471,7 @@ Une restauration d'espace de travail ne rejoue rien : l'état sauvegardé du pan
 
 L'export (§ 12.8) compose **la grille visible** sur un canevas de 2× la taille d'écran, plafonné à **4096 px** de côté. Pour chaque panneau l'hôte envoie `REQUEST_CAPTURE`, dessine l'image reçue dans sa cellule, ajoute le titre et une signature. Un panneau qui ne répond pas est remplacé par un cadre gris avec son nom, et le nombre de panneaux de secours est compté. Le format est PNG ou WebP (qualité 0,95) ; le fond suit le thème.
 
-Le **Studio de Comparer** réutilise le Studio du § 13.3 : une cellule par panneau. En **échelle physique**, tous les panneaux calibrés sont dessinés à **un seul µm par pixel**, celui du plus grossier, et ne sont jamais agrandis : une barre d'échelle est vraie pour tous.
+Le **Studio de Comparer** réutilise le Studio du § 13.3 : une cellule par panneau. Il exporte l'image affichée, sans passe sans perte : sur un jeu au format 6, les panneaux montrent la Q30. En **échelle physique**, tous les panneaux calibrés sont dessinés à **un seul µm par pixel**, celui du plus grossier, et ne sont jamais agrandis : une barre d'échelle est vraie pour tous.
 
 ### L'espace de travail
 
@@ -720,20 +724,21 @@ Le viewer n'a **pas** de boutons Sauvegarder / Restaurer : c'est l'adresse. Ils 
 | `iribhm.viewer.zScale.<jeu>` | étirement Z de ce jeu |
 | `iribhm.workspace.<portée>.<jeu>` | un espace de travail enregistré |
 | `iribhm-gallery-dock` | état du dock de la galerie (ouvert, large, puce) |
-| `lumen3d.vramBudgetMB` | budget de mémoire vidéo imposé (opérateur) |
+| `lumen3d.fastLoading` | « Chargement rapide » d'un jeu au format 6 : `0` charge les résolutions sans perte ; absent ou `1`, la Q30 |
 | `lumen3d.gpuContextLosses` | les 8 dernières pertes de contexte graphique (une semaine) |
+| `lumen3d.gpuCompressionFailed` | date d'un échec : la compression GPU est alors désactivée sur cet appareil |
 | `sessionStorage` `lumen_view_<jeu>` | une seule vue comptée par session |
 
 ::: note
 Les **mesures** ne sont pas dans cette liste : elles vivent dans la mémoire de la page (`MeasurementStore`, une `Map` par portée et par jeu) et voyagent **dans le lien**. L'administration a ses propres clés (`adm-theme`, `adm-upload-dock-size`, `lumen-dupd-*`), décrites au chapitre 14.
 :::
 
-Le budget graphique mérite d'être connu (§ 10.4) : il est **divisé par deux pour chaque perte de contexte graphique** de la semaine écoulée (plancher 256 Mio), sur ce profil de navigateur. Vider les données du site le remet à zéro.
+Le budget de mémoire graphique (§ 10.4) n'est **plus réglé à la main** : le viewer reconnaît la carte d'après son nom et prend, dans une table de modèles, 60 % de sa mémoire, sans dépasser sa mémoire moins 2 Gio, entre 1 et 16 Gio. Une carte inconnue reçoit une estimation par classe. Le budget est ensuite **divisé par deux pour chaque perte de contexte graphique** de la semaine écoulée (plancher 256 Mio), sur ce profil de navigateur. Vider les données du site le remet à zéro ; les anciens réglages manuels sont effacés au chargement.
 
 ## 13.8 Algorithmes de mesure et de pose
 
 ::: tldr
-- Un clic de mesure lit la **profondeur sur le GPU** en deux passes d'un pixel, avec une précision de 16 bits.
+- Un clic de mesure lit la **profondeur sur le GPU** en deux passes d'un pixel. La position est codée sur **16 bits par axe** ; la précision réelle est de l'ordre du **demi-voxel** le long du rayon.
 - Mettre une pile à plat, c'est **deux rotations autour des axes de l'écran** : la pile ne culbute pas.
 - L'export d'une grande image **recommence** si le volume ou les réglages changent pendant son rendu.
 :::
@@ -751,6 +756,10 @@ Le chapitre 12 (§ 12.2) a décrit la logique : le maximum du rayon, puis le pre
 - Les constantes sont `PICK_SURFACE = 0,55`, `PICK_MIN_VALUE = 0,02`, `PICK_MAX_STEPS = 4096` ; le pas est d'un demi-voxel (`1 / (2·nu)`), allongé si le rayon dépasserait 4 096 pas.
 - Sous stabilisation, la position codée est celle de la **boîte d'affichage** (`clipBoxMin + c · clipBoxSize`) ; sans stabilisation, celle de la boîte unité. Le décodeur gère les deux.
 - Une perte de contexte graphique, ou l'absence de volume actif, retire la voie GPU : le point retombe sur la boîte, et l'outil de mesure **refuse** ce point.
+:::
+
+::: note
+**Ce que mesure un clic.** La profondeur vient de l'image **affichée** : sur un jeu au format 6, c'est la Q30 au niveau choisi, et la précision de la distance est celle de cette image. Les valeurs de voxels sans perte passent par `DataAccess` (la façade `ctx.data` des plugins, et l'export OME-Zarr) ; aucun outil livré ne s'en sert pour mesurer une distance.
 :::
 
 ### Coucher la pile : l'ouverture du Z-stack
@@ -781,6 +790,10 @@ L'export (§ 12.6) rend la vue **par tuiles** d'au plus 2048 px (moins si la car
 - continue le grain aléatoire d'une tuile à l'autre (`fragCoordOffset`) pour qu'aucune couture ne se voie, et écrit un fond transparent par une opacité par pixel (`exportAlpha`).
 
 Les autres erreurs ont un code lisible : `busy` (un export tourne déjà), `size`, `canvas` (le navigateur refuse une image si grande), `gpu-memory`, `context-lost`.
+
+::: note
+**Sur un jeu au format 6, l'export est sans perte, sans question.** Le choix « Qualité » n'apparaît pas : l'image est rendue sur les données sans perte, au niveau de résolution choisi dans la liste de qualité, puis la qualité d'affichage est rétablie. Sur les formats 1 à 5, le choix entre la qualité actuelle et le sans perte reste proposé.
+:::
 
 ## 13.9 L'orientation en pratique, et le sens de l'échantillon
 
@@ -904,6 +917,6 @@ Ce chapitre en une page :
 - **2D** : trois repères, worker de pixels, importeur qui ne devine rien.
 - **Frise** : horloge plafonnée à 250 ms, retenue pendant le chargement.
 - **État** : le lien est la sauvegarde ; le navigateur ne retient que des préférences.
-- **Mesure** : profondeur lue sur le GPU en deux passes de 16 bits ; poses par deux rotations.
+- **Mesure** : profondeur lue sur le GPU en deux passes d'un pixel (position codée sur 16 bits par axe) ; poses par deux rotations.
 - **Orientation** : Q_base, Q_anat, Q_cube ; le sens de l'échantillon est un demi-tour de la verticale.
 :::

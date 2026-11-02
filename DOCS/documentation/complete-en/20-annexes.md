@@ -16,7 +16,7 @@ Lumen3D is written in "plain" JavaScript: no framework, no compilation. Each fil
 **A restaurant.** The *pages* are the waiters who take your order. The *viewers* are the cooks who draw the dish. The *core* is the pantry, the knives and the work surface. The *workers* are the washing-up, backstage: you do not see it, but nothing would leave the kitchen without it.
 :::
 
-### The core: `js/core/` (33 files)
+### The core: `js/core/` (41 files)
 
 | File | What it does, in plain words | Ch. |
 |---|---|---|
@@ -25,6 +25,10 @@ Lumen3D is written in "plain" JavaScript: no framework, no compilation. Each fil
 | `svr-manager.js` | manages the 3D atlas in graphics memory and its memory budget | 10 |
 | `cut-store.js` | reads the format-5 cut copies (`xz/`, `yz/`, `cuts/`) for the Studio | 7, 12 |
 | `data-access.js` | `ctx.data`: the exact, lossless voxels for tools that measure | 15 |
+| `q30-export.js` | the Download Center's *Download .q30.zip* (format 6 display bricks, as stored) | 12 |
+| `ome-zarr-export.js` / `ome-zarr.js` | the OME-Zarr export, built in the browser from the lossless bricks | 12 |
+| `cell-max.js` | the maximum of each 8³ cell, for the empty-space skip of the render | 9 |
+| `bc-codec.js` / `bc7-codec.js` | GPU compression of the display atlas: BC4/BC5 (in use); BC7, a prototype that is not used | 9, 10 |
 | `catalog.js` | loads the list of datasets, filters it, searches it, finds related datasets | 3 |
 | `utils.js` | common toolbox: the type vocabulary (3d, 2d, live), dates, 1-2-5 scale bars | 1 |
 | `tool-manager.js` | knows which tool is active (navigate, slice, measure) and handles keyboard shortcuts | 12 |
@@ -74,7 +78,7 @@ Lumen3D is written in "plain" JavaScript: no framework, no compilation. Each fil
 | `timeline.js` | the time strip and the series player | 12 |
 | `dataset-gallery.js` | the gallery of images attached to a dataset, with its enlargement | 12 |
 
-### The workers: `js/workers/` (9 files)
+### The workers: `js/workers/` (11 files)
 
 A worker is a background employee: it works without blocking the screen (chapter 2).
 
@@ -87,6 +91,8 @@ A worker is a background employee: it works without blocking the screen (chapter
 | `tracks-load-worker.js` | prepares the cell-tracking tables (32-bit integers) | 12 |
 | `upload-worker.js` | sends the files of an import: reading, fingerprint, sending, retries | 17 |
 | `migration-worker.js` | runs the units of a format conversion on the browser side | 17 |
+| `cut-decode-worker.js` | decodes the cut copies (XZ / YZ rows, cut bricks) for the Studio, several at a time | 7, 12 |
+| `ome-zarr-worker.js` | encodes the shards of an OME-Zarr export | 12 |
 
 ### The pages: `js/pages/` (10 files)
 
@@ -101,14 +107,16 @@ A worker is a background employee: it works without blocking the screen (chapter
 | `about.js` / `legal.js` / `page-view.js` | About, Legal, custom pages | 3, 16 |
 | `admpan.js` | the administration page (starts the `shell` module) | 14 |
 
-### The administration: `js/pages/admin/` (27 files)
+### The administration: `js/pages/admin/` (34 files)
 
 | File | What it does, in plain words | Ch. |
 |---|---|---|
 | `shell.js` / `shared.js` / `bus.js` | the frame (menu, theme, login), the common tools (requests, messages) and the messaging between tabs | 14 |
 | `tab-datasets.js` | the [Datasets]{.ui} tab: list, editor, orientation, gallery | 14 |
 | `tab-upload.js`, `upload-manager.js`, `upload-dock.js` | the [Import]{.ui} tab, its orchestrator and the floating badge | 17 |
-| `tab-dataset-updates.js`, `migration-runner.js` | [Data updates]{.ui} and its engine (including the request governor) | 17 |
+| `tab-dataset-updates.js`, `migration-runner.js`, `migration-tabs.js` | [Data updates]{.ui} and its engine (the request governor, the automatic restart), and the coordination between the tabs of one browser | 17 |
+| `tab-dataset-integrity.js` | [Data integrity]{.ui}: the read-only check of every dataset | 14 |
+| `tab-storage.js` | [Stockage]{.ui}: the capacity bar, the cards and the per-dataset table | 14 |
 | `tab-dataset-types.js` | [Data types]{.ui}: rename 3d, 2d, live | 16 |
 | `tab-branding.js`, `tab-appearance.js`, `tab-legal.js` | [Identity]{.ui}, [Appearance]{.ui}, [Legal]{.ui} | 16 |
 | `tab-pages.js` + `pages-controls.js`, `pages-translate.js`, `pages-variables.js` | the page editor and its panels | 16 |
@@ -125,14 +133,15 @@ A worker is a background employee: it works without blocking the screen (chapter
 | `fast_server.py` | a fast static server, with no administration (performance tests) | 2 |
 | `upload_staging.py` | the import engine (allowlist, journal, validation, publication) | 17 |
 | `dataset_migrations.py` | the data-format conversions, Python side | 17 |
-| `format5.py` | the shared format-5 engine (levels, compressions, mosaics, packs, cut copies), used by the migration and by the pipeline | 7, 17 |
+| `format5.py` | the shared engine of formats 5 and 6 (levels, compressions, mosaics, packs, cut copies), used by the migrations and by the pipeline | 7, 17 |
+| `dataset_integrity.py` / `api/integrity.php` | the read-only check of every dataset (Data integrity tab), on both servers | 14 |
 | `tools/convert_dataset.py` | convert a dataset to the latest format on your own computer | 17 |
 | `ed25519_pure.py` | Ed25519 signature verifier, in pure Python | 19 |
-| `js/migrations/` | the three conversions (`m002`, `m003`, `m004`) on the browser side, and a speed-test block | 17 |
+| `js/migrations/` | the five conversions (`m002` to `m006`) on the browser side, and the speed-test block | 17 |
 | `js/modules/` | the plugins: `tools/` (toolbar), `channels/` (channel panel), `shaders/` (render modes) | 12, 15 |
 | `js/vendor/` | the third-party libraries, hosted locally (Three.js, Lucide, Plotly) | 2 |
 | `preprocess/` | the preparation pipeline, in Python | 4 to 8 |
-| `tests/`, `tools/` | the test suite (201 files) and the publishing tools | 18 |
+| `tests/`, `tools/` | the test suite (239 files) and the publishing tools | 18 |
 
 ## 20.B Browser memories and address parameters {.page}
 
@@ -155,14 +164,14 @@ Every access to these drawers is protected: in private browsing, or if storage i
 | `iribhm.viewer.zScale.<id>` | the display stretch in Z, dataset by dataset |
 | `iribhm.viewer.playbackFps` | the preferred playback speed for time series (one for the whole viewer) |
 | `iribhm-gallery-dock` | the state of the gallery: open, wide or reduced to a badge |
+| `lumen3d.fastLoading` | the [Fast loading]{.ui} switch of a format 6 dataset: `0` = off (lossless bricks); absent or `1` = on (WebP Q30). Shared by every dataset in this browser |
 | `lumen3d.gpuContextLosses` | the dates of the last graphics-context losses (8 at most): each loss in the week halves the budget |
-| `lumen3d.vramBudgetMB` | **operator setting**: imposes a graphics-memory budget, in MB. Never written by the site (chapter 10) |
 | `adm-theme`, `adm-sidebar-collapsed` | theme and collapsed menu of the administration panel |
 | `adm-upload-dock-size` | size of the import badge |
 | `lumen-dupd-ds-executor`, `lumen-dupd-speedtest`, `lumen-dupd-log` | data conversions: executor chosen per dataset, last speed test, log of the last 20 operations |
 
 ::: tip
-To bring an over-cautious graphics budget (after several context losses) back to normal, delete `lumen3d.gpuContextLosses` in the browser's tools, or wait a week.
+To bring an over-cautious graphics budget (after several context losses) back to normal, delete `lumen3d.gpuContextLosses` in the browser's tools, or wait a week. The keys `lumen3d.vramBudgetMB` and `lumen3d.gpuCompression` of earlier versions are removed by the viewer as soon as it loads: there is no longer a manual setting for graphics memory.
 :::
 
 ### B.2 What this tab remembers (`sessionStorage`) and the cookie
@@ -237,7 +246,8 @@ All the important constants, gathered. The last column says where the idea is ex
 | Mosaic of a brick | 9 × 8 slices of 66²: a lossless WebP image of 594 × 528 px | 7 |
 | Pack | at most 64 bricks or 16 MiB, in super-blocks of 4 × 4 × 4 bricks | 7 |
 | Levels of detail | halved in X and Y; in Z only while vz ≤ 1.5 × vxy | 6, 7 |
-| Current data format | 4 (formats 1 to 3 are converted in place) | 7, 17 |
+| Current data format | **6** (formats 1 to 5 are converted in place; pipeline 0.23.0 writes 6 by default) | 7, 17 |
+| Display copy (format 6) | WebP quality 30 with a dead zone; the lossless copy is kept beside it | 7, 10 |
 | XY plane (format 2) | one file per plane; 512 × 512 PNG tiles | 7, 17 |
 | Layer projection (format 3) | one maximum-intensity projection per layer of 64 planes | 7 |
 | Maximum size accepted | 2²⁰ voxels per axis; 64 channels at most accepted, **4 displayed** | 19 |
@@ -267,9 +277,10 @@ All the important constants, gathered. The last column says where the idea is ex
 | Quality 512 | finest level whose longest XY side is ≤ 768 voxels | 10 |
 | Quality 1024 | same, ≤ 1,536 voxels | 10 |
 | Atlas | up to 8 pages | 10 |
+| Graphics budget: card recognised by name | 60 % of its dedicated memory, at least 1 GiB, never more than the card's memory minus 2 GiB, at most 16 GiB | 10 |
 | Graphics budget: software rendering | 256 MiB | 10 |
-| Graphics budget: integrated card | 0.5 · 1 · 2 GiB depending on the device's memory | 10 |
-| Graphics budget: discrete card | 3 or 4 GiB | 10 |
+| Graphics budget: integrated card (not recognised) | 0.5 · 1 · 2 GiB depending on the device's memory | 10 |
+| Graphics budget: discrete card (not recognised) | 3 or 4 GiB | 10 |
 | Graphics budget: unknown | 1 or 2 GiB | 10 |
 | Graphics context loss | budget ÷ 2 per loss in the week (floor 256 MiB) | 19 |
 | Safeguard | 3 losses within 120 s: no more automatic reload | 19 |
@@ -288,7 +299,7 @@ All the important constants, gathered. The last column says where the idea is ex
 
 | Constant | Value | Ch. |
 |---|---|---|
-| Password | at least 8 characters; PBKDF2-HMAC-SHA256, 600,000 rounds | 19 |
+| Password | at least 8 characters; salted PBKDF2-HMAC-SHA256, round count set by the server | 19 |
 | Login failures | 10 in 15 minutes from one address → 15-minute block; global ceiling of 200 per window | 19 |
 | Administration session | 8 hours; closed at every password change | 19 |
 | `#state=` link | 64 KiB written · 2 MiB read · 16 MiB decompressed | 12, 20.B |
@@ -306,9 +317,11 @@ All the important constants, gathered. The last column says where the idea is ex
 | Bricks read per request | 128 | 17 |
 | Body of a conversion unit | 32 MiB at most (PHP hosts) | 17 |
 | Conversion unit | a layer of 64 planes × one channel × one 512² tile (8 × 8 bricks) | 17 |
+| Conversion workers (browser) | up to 4; 2 below 8 GB of device memory; never more than half the processor cores; 2 units per worker | 17 |
+| Automatic restart of a failed job | after 10 s, 30 s, 1 min, 2 min, 5 min; stops after 5 failures in a row with no new unit | 17 |
 | Health probe after update (Python) | about 30 s | 18 |
 | Plugins in the signed catalogue | 28 | 15 |
-| Test files | 201 (one process per file) | 18 |
+| Test files | 239 (one process per file) | 18 |
 
 ## 20.E Versions and history {.page}
 
@@ -342,6 +355,12 @@ The platform version exists only in the **name of the latest notes file**: to mo
 | **1.59** | Formats 3 and 4 (v3 bricks with border, `index.bin`, detail on zoom); executor chosen per dataset and speed test (1.59.1); request governor (1.59.2); eight times fewer requests (1.59.3) |
 | 1.60 – 1.62 | Graphics compression of timelapses (1.60); 60-day trash for deleted datasets (1.62); import / export of pages (1.61) |
 | **1.63 – 1.65** | **Format 5**: the resolution × compression matrix, the cut copies, lossless access for tools (`ctx.data`), a "lossless" choice on every export (1.64); conversion in the browser on any host, import of a v5 tree, local conversion tool (1.65) |
+| 1.66 – 1.67 | OME-Zarr export of the lossless voxels (1.66); the GPU memory setting, lossless once the view rests (1.67) |
+| 1.68 – 1.69 | Up to four conversion workers and batched requests (1.68); the **Storage** tab, progress from 0 %, the size kept on each row (1.69) |
+| 1.69.2 – 1.70 | One tab per dataset, a shared request quota (1.69.2); **format 6**: WebP Q30 display, the lossless copy beside it, the in-place migration m006, Q30 download, lossless exports (1.70) |
+| 1.71 – 1.72 | GPU compression for every volume and a split atlas for three channels without RGTC (1.71); the zoom detail and the refinement at rest are removed (1.72) |
+| **1.73** | The **Data integrity** tab (1.73.0, with its recheck and fix advice); the GPU memory is detected, not chosen, and the **Fast loading** switch arrives (1.73.2); Channel Split: red capture frame and framed export (1.73.8 – 1.73.9) |
+| 1.74 – 1.76 | Empty-space skipping per 8³ cell (1.74); the Fluorescence mode no longer marches again on a display change (1.75); two measured studies of the render and of compression that were not built into the viewer (1.76) |
 
 ### E.2 Preparation pipeline
 
@@ -354,8 +373,9 @@ The platform version exists only in the **name of the latest notes file**: to mo
 | 0.19 | "All or nothing" publication in a staging area, with recovery after interruption |
 | 0.20 | XY planes written directly (format 2) |
 | 0.21 | Format 4 written directly, byte-identical to the conversion; exact skipping of empty space |
-| **0.22** | Format 5 on request (`--format 5`), byte-identical to the m005 conversion |
+| 0.22 | Format 5 on request (`--format 5`), byte-identical to the m005 conversion |
+| **0.23** | **Format 6 by default** (`--format 6`): the WebP Q30 display copy beside the lossless one |
 
 ::: remember
-Current version of this document: platform **1.65.0**, pipeline **0.22.0**, data format **5**.
+Current version of this document: platform **1.76.0**, pipeline **0.23.0**, data format **6**.
 :::

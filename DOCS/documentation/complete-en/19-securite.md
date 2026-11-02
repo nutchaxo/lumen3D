@@ -3,7 +3,7 @@
 ::: chapter-intro
 - Lumen3D protects the administration panel, the code that runs in the pages and the files that are uploaded. Each protection has a **simple reason**.
 - No study data is ever sent to a third party, and the platform works **offline**.
-- Reliability rests on **all-or-nothing** publishing and on a suite of about **200 test files** that blocks any faulty release.
+- Reliability rests on **all-or-nothing** publishing and on a suite of **239 test files** that blocks any faulty release.
 - A single table, "**What happens if…?**" (sections 19.8 to 19.12), lists every foreseen failure and the fallback waiting for it.
 :::
 
@@ -17,7 +17,7 @@ There is **no default password**: the first visitor to the panel creates the acc
 **A fingerprint.** The server keeps the fingerprint of your password, not the password. With a fingerprint you can recognise the right person, but you cannot rebuild the finger.
 :::
 
-- The fingerprint is computed with **PBKDF2-HMAC-SHA256**, with a salt unique to the account and 600,000 rounds: deliberately slow, to discourage mass guessing.
+- The fingerprint is computed with **PBKDF2-HMAC-SHA256**, with a salt unique to the account and a number of rounds set by the server: deliberately slow, to discourage mass guessing.
 - After **10 failures** in 15 minutes from the same address, access is blocked for 15 minutes. Failures are counted **before** the check, and a wrong user name costs the same time as a wrong password.
 - A session lasts **8 hours**. Changing the password closes all other sessions.
 - Every change also goes through an anti-forgery token (CSRF).
@@ -79,7 +79,7 @@ A plugin is code. Letting it in unchecked would be like giving a stranger a copy
 | A publication is interrupted | **all or nothing**: the pipeline builds everything aside and publishes by a rename; an interruption is picked up at the next launch |
 | A network outage during an import | resume to the nearest block |
 | A corrupt brick | reported and ignored, never sent to the graphics card |
-| A regression in the code | about **200 test files** must pass before each release |
+| A regression in the code | **239 test files** must pass before each release |
 
 ::: remember
 Each version is **tested in full** before being signed and published. A version that fails the tests simply cannot be released.
@@ -157,8 +157,8 @@ Graphics-card memory is the only real hard ceiling. Lumen3D **plans it before** 
 | The **WebGL context is lost** (driver, sleep, too much memory) | Textures freed, streams stopped; the budget is **halved** (floor 256 MiB), remembered for a week | A status message: graphics context lost, waiting for it to return |
 | The context is **restored** | The last view is reloaded with the reduced budget | A status message: context restored, reloading with a lower budget |
 | **3 losses within 120 s** | The automatic reload **stops** (otherwise the loop would lock up the GPU) | Choose a lower quality or reload the page |
-| A resting frame takes **too long** (over 200 ms) | The ceiling of samples per ray is reduced (chapter 9); a context loss halves it | The image is slightly less fine, the view stays smooth |
-| You want to **force a budget** | Operator setting: the browser key `lumen3d.vramBudgetMB` replaces the estimate | Appendix B |
+| A resting frame takes **too long** (over 200 ms) | The step along each ray is stretched, so fewer samples are taken (chapter 9), only for as long as the frames are that slow | The image is slightly less fine, the view stays smooth |
+| The **card is unknown** to the viewer, or its memory is misjudged | The budget uses the class of the card (software, integrated, discrete, unknown) instead of its model; there is **no setting** to force a budget any more. A stale manual key left by an older version is removed at load | Pick a lower resolution in the quality list |
 
 ::: why
 **Why halve the budget?** A context loss often comes from a driver that cuts off an overlong frame, or from saturated memory. Reloading with the same request would repeat the same mistake: so we ask for **less** next time.

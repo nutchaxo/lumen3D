@@ -74,13 +74,24 @@ C'est le cœur de la plateforme. Ouvrez un jeu 3D : le volume apparaît d'abord 
 | 3 | Groupe **Visuels** : grille, axes, axes d'orientation, masquer le volume, débogage des briques. |
 | 4 | Groupe **Dispositions** : [Mode présentation]{.ui}, [Décomposer par canal]{.ui}, [Explorateur Z-Stack]{.ui}. |
 | 5 | Panneau [Canaux]{.ui} : une ligne par canal (case, couleur, histogramme réglable). |
-| 6 | [Qualité de Rendu]{.ui} : 512, 1024 ou natif ; sur un jeu au format 5, un tableau « résolution × compression » (chapitre 10). Le texte dessous donne la qualité réellement active. |
+| 6 | [Qualité de Rendu]{.ui} : la liste des résolutions (sur un jeu au format 6, la case [Chargement rapide]{.ui} choisit la version compressée ou sans perte) ; sur un jeu au format 5, deux listes, [Résolution]{.ui} et [Qualité]{.ui}. La ligne dessous donne la qualité réellement affichée (chapitre 10). |
 | 7 | Quatre boutons sur le volume : centrer l'échantillon, réinitialiser la vue, exporter la vue en PNG, réinitialiser l'espace de travail. |
 :::
 
 **Bouger** : glisser = tourner ; <kbd>Maj</kbd> + glisser (ou bouton droit) = déplacer ; molette = zoomer ; deux doigts = déplacer et pincer.
 
-Sous les canaux, le panneau [Affichage]{.ui} règle le [Mode de rendu]{.ui} (par défaut « Fluorescence »), la [Visibilité (exposition)]{.ui} et l'[Arrière-plan]{.ui}. Plus bas, [Détail au zoom]{.ui} charge des briques plus fines quand vous zoomez, et [Échelle Physique]{.ui} étire l'affichage en Z.
+Sous les canaux, le panneau [Affichage]{.ui} règle le [Mode de rendu]{.ui} (par défaut « Fluorescence (type Imaris) »), la [Visibilité (exposition)]{.ui} et l'[Arrière-plan]{.ui}. Plus bas, [Échelle Physique]{.ui} règle la [Surcharge Z]{.ui} : elle étire l'affichage en Z, de ×0,25 à ×2, sans toucher aux mesures.
+
+Avec [Décomposer par canal]{.ui} (groupe **Dispositions**), un cadre rouge posé sur la vue montre la zone que capture la figure ; l'export reprend le cadrage de l'écran (chapitre 12).
+
+![Décomposer par canal (capture de test) : le cadre rouge sur la vue et les vignettes du panneau Séparer.](img/ch09/channel-split.png){.shot width=90%}
+
+::: legend
+| n | ce que c'est |
+|--|----------------------|
+| 1 à 3 | Les boutons de disposition et d'export du panneau [Séparer]{.ui} (chapitre 12). |
+| 4 | Le cadre rouge : la zone de la vue que capture la figure. |
+:::
 
 ::: note
 Les boutons dépendent des **plugins installés** sur votre instance. Chapitre 12 : chaque outil ; chapitre 11 : couleurs et histogrammes.
@@ -157,7 +168,7 @@ Jusqu'à **quatre panneaux** côte à côte. Chaque panneau est un **vrai viewer
 ![La page À propos.](img/ch03/a-propos.png){.shot width=80%}
 
 ::: note
-Sur une installation neuve, les mentions légales sont un modèle à compléter (nom de l'organisation, adresse, hébergeur) : ce sont des champs entre crochets que l'administrateur remplit.
+Sur une installation neuve, les mentions légales sont un modèle à compléter (nom de l'organisation, adresse, hébergeur) : ce sont des champs entre crochets que l'administrateur remplit. Le lien du pied de page y est déjà activé, et la page affiche six sections de modèle : éditeur du site, protection des données & vie privée, cookies & stockage local, propriété intellectuelle, avertissement & responsabilité, contact.
 :::
 
 D'autres pages peuvent exister : l'administrateur peut créer des **pages personnalisées**, ouvertes par `page.html?slug=<nom>` et ajoutées à la barre du haut.

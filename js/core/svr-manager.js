@@ -471,6 +471,7 @@ class SVRManager {
     // null when the option is off, CellMax is not loaded or the GPU refused it: the
     // shader then skips per brick only. Allocated through the manual GL path of the atlases.
     this.cellMap = null;
+    this.cellSkipEnabled = true;
     this.cellsPerBrick = 8;
     this.cellDim = null;
     this.cellBytes = 0;
@@ -982,7 +983,7 @@ class SVRManager {
     this.material.uniforms.ptScale.value = new THREE.Vector3(scaleX, scaleY, scaleZ);
     this.material.uniforms.brickSize.value = this.brickSize;
     // Fine empty-space cells: the define and its texture go together or not at all.
-    SVRManager._setDefine(this.material, 'CELL_SKIP', this.cellMap ? 1 : null);
+    SVRManager._setDefine(this.material, 'CELL_SKIP', this.cellMap && this.cellSkipEnabled ? 1 : null);
     if (this.material.uniforms.cellMap) this.material.uniforms.cellMap.value = this.cellMap || null;
     if (this.cellMap && this.material.uniforms.cellDim) this.material.uniforms.cellDim.value = new THREE.Vector3(this.cellDim.x, this.cellDim.y, this.cellDim.z);
 

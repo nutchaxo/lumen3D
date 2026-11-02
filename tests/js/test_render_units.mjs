@@ -141,7 +141,7 @@ const U = new Function('THREE', `
   assert.ok(/if \(rayLength \/ delta > maxSamples\) delta = rayLength \/ maxSamples;/.test(frag), 'capped by the sample budget');
   assert.ok(/for \(int i = 0; i < MAX_MARCH_STEPS; i\+\+\)/.test(frag), 'loop bound from the constant');
   assert.ok(/float brickExit\(vec3 uvw, vec3 dirTex, vec3 cell\)/.test(frag), 'brick exit');
-  assert.ok(/t \+= max\(delta, ceil\(skip \/ delta\) \* delta\);/.test(frag), 'an empty brick is skipped to its exit, on the sample lattice');
+  assert.ok(/k \+= max\(1\.0, ceil\(skip \/ delta\)\);\s*t = jitter \+ k \* delta;/.test(frag), 'an empty brick is skipped to its exit, on the sample lattice (integer index, no drift)');
   assert.ok(/if \(any\(notEqual\(cell, cachedCell\)\)\)/.test(frag), 'the page table is read once per brick');
   assert.ok(!/[^D]texture\(svrAtlas/.test(frag) && /textureLod\(svrAtlas0, atlasCoord, 0\.0\)/.test(frag), 'textureLod in the march');
   assert.ok(!/clipCoord\.x >= clipMin\.x/.test(frag), 'no per-sample clip test (the march is confined to the clip box)');

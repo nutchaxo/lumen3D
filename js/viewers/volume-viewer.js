@@ -831,7 +831,11 @@ const VolumeViewer = (() => {
       vec3 hi = min((fcell + vec3(1.0)) * 8.0 / volumeVoxels, vec3(1.0));
       vec3 safe = dirTex + (1.0 - step(vec3(1e-8), abs(dirTex))) * 1e-8;
       vec3 tt = (mix(lo, hi, step(vec3(0.0), safe)) - uvw) / safe;
-      return max(0.0, min(tt.x, min(tt.y, tt.z)));
+      // Conservative by the float32 error of the face distance: a lattice sample that
+      // lies just inside the next cell must never be jumped over. A sample just inside
+      // this empty cell is simply taken (it adds nothing).
+      float exitT = min(tt.x, min(tt.y, tt.z));
+      return max(0.0, exitT - (exitT * 2e-5 + 2e-6));
     }
     #endif
 
@@ -1046,6 +1050,12 @@ const VolumeViewer = (() => {
       float jitter = renderMode == 1
         ? ceil(bounds.x / delta) * delta - bounds.x
         : hash(gl_FragCoord.xy + fragCoordOffset) * delta;
+      // The lattice is addressed by an integer index k, t = jitter + k·delta, never by
+      // repeated t += delta: with a thousand samples the float32 rounding of the running
+      // sum drifts a sample by a fraction of a voxel, and a jump over empty space (which
+      // recomputes the position) would then land elsewhere than a walk. Walking and
+      // skipping visit the same samples.
+      float k = 0.0;
       float t = jitter;
 
       // Slab normalisation. A clipped segment is displayed as if it were optically
@@ -1112,7 +1122,8 @@ const VolumeViewer = (() => {
         float skip;
         if (!fetchVoxel(uvw, dirTex, cachedCell, cachedPage, val, skip)) {
           // Jump to the brick's exit, on the jittered sample lattice.
-          t += max(delta, ceil(skip / delta) * delta);
+          k += max(1.0, ceil(skip / delta));
+          t = jitter + k * delta;
           continue;
         }
         vec4 v = channelValues(val);
@@ -1151,7 +1162,8 @@ const VolumeViewer = (() => {
             accumAlpha += (1.0 - accumAlpha) * aStep;
           }
         }
-        t += delta;
+        k += 1.0;
+        t = jitter + k * delta;
       }
 
       // ── Natural Fluorescence (mode 2): luminance-only Reinhard + chroma lock ──
@@ -1429,6 +1441,45 @@ const VolumeViewer = (() => {
    * Render the current view now, synchronously, so a capture in the same task reads
    * this frame (with preserveDrawingBuffer off the canvas is blank between frames).
    */
+  /**
+   * Mean GPU-bound time of a frame, in ms: `frames` renders of the current view with the
+   * orbit advanced by `stepDeg` about the vertical between them, each ended by a
+   * readback of one pixel (the only portable fence), after `warmup` untimed frames.
+   * A measurement tool for the render options below; the view is restored.
+   * @returns {{ms:number, frames:number, width:number, height:number}|null}
+   */
+  function measureFrameMs({ frames = 30, warmup = 4, stepDeg = 1.5 } = {}) {
+    if (!renderer || !scene || !camera || !cube || _contextLost) return null;
+    const gl = renderer.getContext();
+    const px = new Uint8Array(4);
+    const q0 = cube.quaternion.clone();
+    const dq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), stepDeg * Math.PI / 180);
+    let t0 = 0;
+    for (let i = 0; i < warmup + frames; i++) {
+      if (i === warmup) t0 = performance.now();
+      cube.quaternion.premultiply(dq);
+      cube.updateMatrixWorld(true);
+      renderer.render(scene, camera);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    }
+    const ms = (performance.now() - t0) / frames;
+    cube.quaternion.copy(q0);
+    cube.updateMatrixWorld(true);
+    _scheduleFrame();
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    return { ms, frames, width: size.x, height: size.y };
+  }
+
+  /** Turn the fine 8³ empty-space skip on or off for the volume on screen (a comparison switch). */
+  function setCellSkip(on) {
+    const m = _activeVolumeEntry?.svrManager;
+    if (!m) return false;
+    m.cellSkipEnabled = Boolean(on);
+    m.updateUniforms();
+    _scheduleFrame();
+    return Boolean(m.cellMap);
+  }
+
   function renderNow() {
     if (!renderer || !scene || !camera || _contextLost) return false;
     _syncRotGizmoTransform();
@@ -6088,6 +6139,8 @@ const VolumeViewer = (() => {
     dispose,
     releaseDataset,
     renderNow,
+    measureFrameMs,
+    setCellSkip,
     getCapabilities,
     getQualityFootprints,
     getQualityLevels,

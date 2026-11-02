@@ -12,5 +12,12 @@
 ## [ADDED]
 - **Tests for the new paths**: `tests/js/test_cell_max.mjs` (cell maxima against a brute force, trilinear footprint, BC overshoot), `tests/js/test_cell_skip_parity.mjs` (the march with and without the cell test agrees on 21 600 rays, 3 modes, random windows, gammas, opacities and channel switches), `tests/js/test_svr_cell_texture.mjs` (allocation, budget, writers, uniforms, disposal), worker cases in `test_brick_decode_encode.mjs`, and the extra `CELL_SKIP` shader permutations of `test_v3_render_glsl.mjs`.
 
+## [FIXED]
+- **Sample lattice without float drift**: the march advanced with `t += delta`, so after a thousand samples the rounding of the running sum had moved a sample by a fraction of a voxel, and a jump over empty space (which recomputes the position) landed elsewhere than a walk. Samples are now addressed by an integer index, `t = jitter + k·delta`. On the real dataset this is what made the skip exact: with the drift, a thin-structure maximum projection differed by up to 30/255 on 51 pixels between the skipping and the non-skipping march; with the index the two images are identical (0/255 on 2 views × 3 modes).
+
+## [ADDED]
+- **`VolumeViewer.measureFrameMs` and `setCellSkip`**: a fenced frame-time measurement (renders with a one-pixel readback) and a switch for the cell skip, for comparing renders on a real GPU.
+
 ## [NOTE]
-- **Not in this release**: the cell test covers the SVR (atlas) path; a dense (monolithic) coarse level keeps its per-brick occupancy skip. The speed-up has been proven exact on a CPU port, not yet timed on the real shader.
+- **Measured on F6TEST-E85 (native 1946×1946×72, 3 channels, BC atlas, canvas 1280×793, RTX 4070 laptop)**: the cell skip takes the maximum projection from 14.7 to 11.3 ms looking along z and from 44 to 32 ms from the side (about −25 %), Natural Fluorescence from 18.6 to 18.2 ms along z and from 46 to 37 ms from the side (−5 to −20 %). Less than the 2.3× of the study: the embryo fills most cells. Timings on this machine vary by ±20 % between runs.
+- **Not in this release**: the cell test covers the SVR (atlas) path; a dense (monolithic) coarse level keeps its per-brick occupancy skip.

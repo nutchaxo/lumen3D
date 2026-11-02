@@ -231,6 +231,25 @@ function* product(axes) {
   }
 }
 
+// ── The raw-maximum variants (maximum projection cache) ───────────────────────
+{
+  const axes = { ENABLE_SVR: [undefined, 1], CELL_SKIP: [undefined, 1], VOLUME_WARP: [undefined, 1], ENABLE_CHANNEL_0: [0, 1], ENABLE_CHANNEL_1: [0, 1], ENABLE_CHANNEL_2: [0, 1], ENABLE_CHANNEL_3: [0, 1] };
+  const failures = [];
+  let n = 0;
+  for (const variant of ['RAW_OUT', 'RAW_READ']) {
+    for (const defines of product(axes)) {
+      n++;
+      try {
+        const { code, macros } = preprocess(VIEWER_FRAG, { ...defines, [variant]: 1 });
+        const res = check(code, macros);
+        if (res.errors.length) failures.push(`${variant} ${JSON.stringify(defines)}: ${res.errors.join('; ')}`);
+      } catch (e) { failures.push(`${variant}: ${e.message}`); }
+    }
+  }
+  assert.equal(failures.length, 0, 'raw-maximum shader permutations failing: ' + failures.slice(0, 8).join(' | '));
+  console.log(`raw-maximum shader variants: ${n} permutations resolve: OK`);
+}
+
 // ── The ray-march shader: every permutation ──────────────────────────────────
 {
   const axes = {
@@ -238,6 +257,7 @@ function* product(axes) {
     HAS_OCCUPANCY: [undefined, 1],
     SVR_COMPONENTS: [undefined, 1, 2],
     SVR_SPLIT: [undefined, 1],
+    CELL_SKIP: [undefined, 1],
     VOLUME_WARP: [undefined, 1],
     PICK_MODE: [undefined, 1],
     ENABLE_CHANNEL_0: [0, 1],
@@ -261,8 +281,8 @@ function* product(axes) {
     if (res.errors.length) failures.push(`${JSON.stringify(defines)}: ${res.errors.join('; ')}`);
   }
   assert.equal(failures.length, 0, `ray-march shader permutations failing:\n${failures.slice(0, 10).join('\n')}`);
-  assert.equal(n, 2 * 2 * 3 * 2 * 2 * 2 * 16, 'every permutation enumerated');
-  assert.equal(maxSamplers, 9, 'the busiest permutation binds 8 base pages + page table');
+  assert.equal(n, 2 * 2 * 3 * 2 * 2 * 2 * 2 * 16, 'every permutation enumerated');
+  assert.equal(maxSamplers, 10, 'the busiest permutation binds 8 base pages + page table + cell texture');
   console.log(`ray-march shader: ${n} define permutations preprocess and resolve; ≤ ${maxSamplers} samplers: OK`);
 }
 

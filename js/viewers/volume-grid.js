@@ -343,7 +343,6 @@ const VolumeGrid = (() => {
         1 / (_cube.scale.y || 1),
         1 / (_cube.scale.z || 1)
       );
-      const isInteractingNow = _cube.userData.isInteractingNow;
       _gridGroup.children.forEach(child => {
         if (child.userData.isProjMesh) {
           if (child.material?.uniforms?.invCubeScale) {

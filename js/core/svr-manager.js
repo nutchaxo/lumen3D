@@ -320,7 +320,7 @@ class SVRManager {
 
   /** Remove every atlas define from a material (a dense texture is bound next). */
   static clearAtlasDefines(material) {
-    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS', 'SVR_SPLIT']) SVRManager._setDefine(material, d, null);
+    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS', 'SVR_SPLIT', 'CELL_SKIP']) SVRManager._setDefine(material, d, null);
   }
 
   /**
@@ -338,6 +338,16 @@ class SVRManager {
   /** Does an uncompressed atlas of `channels` channels save bytes as a split atlas? */
   static canSplit(channels) {
     return Math.round(Number(channels) || 0) === 3;
+  }
+
+  /**
+   * Bytes of the fine empty-space texture (cell-max.js) of a volume of `dim` voxels:
+   * one RGBA8 texel per 8³ cell of the page table's grid (every brick holds 8³ cells).
+   */
+  static cellBytes(dim, brickSize = 64) {
+    const per = Math.round(brickSize / 8);
+    const n = (v) => Math.max(1, Math.ceil(Number(v) / brickSize)) * per;
+    return n(dim.x) * n(dim.y) * n(dim.z) * 4;
   }
 
   /** Bytes held right now by the atlases of every live manager of this page. */
@@ -456,6 +466,17 @@ class SVRManager {
     // slotStride: the edge of an atlas slot (64, or 66 with the 1-voxel border).
     this.brickSize = 64;
     this.apron = 0;
+    // Fine empty-space cells: an RGBA8 NEAREST 3D texture, one texel per 8³ cell of the
+    // volume (ptN · 8 per axis), holding each cell's raw per-channel maximum (cell-max.js).
+    // null when the option is off, CellMax is not loaded or the GPU refused it: the
+    // shader then skips per brick only. Allocated through the manual GL path of the atlases.
+    this.cellMap = null;
+    this.cellSkipEnabled = true;
+    this.cellsPerBrick = 8;
+    this.cellDim = null;
+    this.cellBytes = 0;
+    this._cellGl = null;
+    this._fullCells = null;
     this.slotStride = 64;
     // Texels between slot origins: the stride, or for a compressed atlas the stride
     // rounded up to whole 4 × 4 blocks (pitchFor).
@@ -595,7 +616,10 @@ class SVRManager {
       ? Number(options.budgetBytes)
       : SVRManager.vramBudget(renderer).bytes;
     const others = options.countLiveAtlases === false ? 0 : SVRManager.liveAtlasBytes(this);
-    const available = options.ignoreBudget ? Infinity : Math.max(0, budget - others);
+    // The cell texture comes out of the same budget, before the atlas is planned.
+    const wantCells = options.cellSkip === true && typeof CellMax !== 'undefined' && Boolean(renderer);
+    const cellBytes = wantCells ? SVRManager.cellBytes(volumeDim, this.brickSize) : 0;
+    const available = options.ignoreBudget ? Infinity : Math.max(0, budget - others - cellBytes);
     const maxPageBytes = SVRManager._maxPageBytes(options.ignoreBudget ? Infinity : budget);
     // Bytes a voxel takes in the atlas: 3 split, `components` otherwise (compressed: texelBytes).
     const planComponents = this.split ? this.texelBytes : this.components;
@@ -656,6 +680,7 @@ class SVRManager {
     for (let i = this.maxSlots - 1; i >= 0; i--) this.freeSlots.push(i);
     this.atlasBytes = allocated.bytes;
     SVRManager._live.add(this);
+    if (wantCells) this._allocateCells(cellBytes);
 
     this.pageData = new Uint8Array(this.ptNx * this.ptNy * this.ptNz * 4);
     const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
@@ -712,6 +737,74 @@ class SVRManager {
     }
     this.planeAtlases = this.compressed || this.split ? byPlane : [];
     this.atlases = byPlane[0];
+  }
+
+  /** The cell texture; on any refusal the manager simply runs without it. */
+  _allocateCells(bytes) {
+    const gl = this.renderer.getContext();
+    const n = this.cellsPerBrick;
+    const dim = { x: this.ptNx * n, y: this.ptNy * n, z: this.ptNz * n };
+    const limit = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE) || 256;
+    if (dim.x > limit || dim.y > limit || dim.z > limit || typeof gl.texStorage3D !== 'function') return;
+    for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) { /* drain stale errors */ }
+    const tex = gl.createTexture();
+    const target = gl.TEXTURE_3D;
+    if (this.renderer.state?.bindTexture) this.renderer.state.bindTexture(target, tex); else gl.bindTexture(target, tex);
+    gl.texParameteri(target, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    gl.texStorage3D(target, 1, gl.RGBA8, dim.x, dim.y, dim.z);
+    if (gl.getError() !== gl.NO_ERROR) {
+      gl.deleteTexture(tex);
+      return;
+    }
+    const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
+    const map = new TextureClass(null, dim.x, dim.y, dim.z);
+    map.format = THREE.RGBAFormat;
+    map.type = THREE.UnsignedByteType;
+    map.minFilter = THREE.NearestFilter;
+    map.magFilter = THREE.NearestFilter;
+    map.unpackAlignment = 1;
+    const properties = this.renderer.properties.get(map);
+    properties.__webglTexture = tex;
+    properties.__webglInit = true;
+    properties.__version = map.version;
+    map.needsUpdate = false;
+    this.cellMap = map;
+    this._cellGl = tex;
+    this.cellDim = dim;
+    this.cellBytes = bytes;
+    this._fullCells = new Uint8Array(n * n * n * 4).fill(255);
+    this.atlasBytes += bytes;
+  }
+
+  /**
+   * Cell maxima of brick (bx, by, bz): cellsPerBrick³ RGBA texels from CellMax.fromBox.
+   * A brick delivered without them (null) gets 255 everywhere: nothing of it is skipped
+   * by cell, only by the page table. Must follow every write of the brick's voxels, in
+   * the same task, so a frame never pairs new voxels with old maxima.
+   */
+  _writeCells(bx, by, bz, cells) {
+    if (!this.cellMap || !this._cellGl) return;
+    const n = this.cellsPerBrick;
+    if (bx >= this.ptNx || by >= this.ptNy || bz >= this.ptNz) return;
+    const data = cells instanceof Uint8Array && cells.length === n * n * n * 4 ? cells : this._fullCells;
+    const gl = this.renderer.getContext();
+    const target = gl.TEXTURE_3D;
+    if (this.renderer.state?.bindTexture) this.renderer.state.bindTexture(target, this._cellGl); else gl.bindTexture(target, this._cellGl);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
+    if (gl.UNPACK_FLIP_Y_WEBGL !== undefined) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    if (gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL !== undefined) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    if (gl.PIXEL_UNPACK_BUFFER) gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+    gl.texSubImage3D(target, 0, bx * n, by * n, bz * n, n, n, n, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
   }
 
   _applyAtlasConfig(config) {
@@ -817,6 +910,14 @@ class SVRManager {
     for (const atlas of all) {
       atlas?.dispose?.();
     }
+    if (this.cellMap) {
+      try { if (this._cellGl && this.renderer) this.renderer.getContext().deleteTexture(this._cellGl); } catch (err) { /* context gone */ }
+      this.cellMap.dispose?.();
+    }
+    this.cellMap = null;
+    this._cellGl = null;
+    this.cellDim = null;
+    this.cellBytes = 0;
     this.atlases = [];
     this.planeAtlases = [];
     this._atlasWebglTextures = [];
@@ -881,6 +982,10 @@ class SVRManager {
     const scaleZ = (this.volumeDim.z) / (this.ptNz * this.brickSize);
     this.material.uniforms.ptScale.value = new THREE.Vector3(scaleX, scaleY, scaleZ);
     this.material.uniforms.brickSize.value = this.brickSize;
+    // Fine empty-space cells: the define and its texture go together or not at all.
+    SVRManager._setDefine(this.material, 'CELL_SKIP', this.cellMap && this.cellSkipEnabled ? 1 : null);
+    if (this.material.uniforms.cellMap) this.material.uniforms.cellMap.value = this.cellMap || null;
+    if (this.cellMap && this.material.uniforms.cellDim) this.material.uniforms.cellDim.value = new THREE.Vector3(this.cellDim.x, this.cellDim.y, this.cellDim.z);
 
     if ((this.compressed && this.planes.length > 1) || this.split) {
       const half = SVRManager.MAX_PAGES / 2;
@@ -976,6 +1081,7 @@ class SVRManager {
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
     this._writeChannelToSlot(slotIndex, channel, brickData, bw, bh, bd);
     const uploadData = this._extractSlotRegion(slotIndex, bw, bh, bd);
+    this._writeCells(bx, by, bz, null);
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadSlotBox(coord, bw, bh, bd, uploadData));
   }
 
@@ -985,12 +1091,13 @@ class SVRManager {
    * brick cut with cropToVolume, uploaded as it is). Returns false when the upload
    * was refused (the page-table entry is then left empty: the shader skips it).
    */
-  writeRgbaBrick(bx, by, bz, brickData, bw, bh, bd) {
+  writeRgbaBrick(bx, by, bz, brickData, bw, bh, bd, cells = null) {
     const uploadData = this._compactRgbaBrickData(brickData, bw, bh, bd);
     if (!uploadData) return false;
     const slotIndex = this.getSlot(bx, by, bz);
     const coord = this._slotCoord(slotIndex);
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
+    this._writeCells(bx, by, bz, cells);
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadSlotBox(coord, bw, bh, bd, uploadData));
   }
 
@@ -1006,6 +1113,7 @@ class SVRManager {
     const slotIndex = this.getSlot(bx, by, bz);
     const coord = this._slotCoord(slotIndex);
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
+    this._writeCells(bx, by, bz, encoded.cellMax);
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadEncoded(coord, encoded));
   }
 
@@ -1083,6 +1191,7 @@ class SVRManager {
     const coord = this._slotCoord(slotIndex);
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
     const upload = data.length === needed ? data : data.subarray(0, needed);
+    this._writeCells(bx, by, bz, null);
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadRgbaRegion(
       coord.atlas,
       coord.x * bs + rx, coord.y * bs + ry, coord.z * bs + rz,
@@ -1091,6 +1200,7 @@ class SVRManager {
   }
 
   _finishUpload(bx, by, bz, slotIndex, ptIdx, result) {
+    SVRManager.contentVersion++;
     if (result === false) {
       this.pageData[ptIdx + 3] = 0;
       this.pageTable.needsUpdate = true;
@@ -1334,6 +1444,7 @@ class SVRManager {
   }
 }
 
+SVRManager.contentVersion = 0;   // bumped by every brick write: a cache of the picture keys on it
 SVRManager.MAX_PAGES = 8;   // the shader's svrAtlas0..7
 SVRManager.BRICK_INTERIOR = 64;
 // Slots per side of a page: 4, 8 or 16 (256/512/1024 texels at stride 64).

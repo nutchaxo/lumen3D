@@ -2438,7 +2438,9 @@ const BrickLoader = (() => {
       channels,
       luts: Array.isArray(raw.luts) ? raw.luts : [],
       cropToVolume: raw.cropToVolume === true,
-      encode: raw.encode === 'bc' ? 'bc' : null
+      encode: raw.encode === 'bc' ? 'bc' : null,
+      // Deliver each brick's 8³ cell maxima (cell-max.js) with it: { apron, margin, blocks }.
+      cells: raw.cells && typeof raw.cells === 'object' ? raw.cells : null
     };
   }
 
@@ -2508,7 +2510,7 @@ const BrickLoader = (() => {
             options.onBrickLoaded?.({
               bx: unit.bx, by: unit.by, bz: unit.bz, lod: unit.lod,
               channel: 'rgba', composed: true, components: compose.components,
-              data: out.data || null, encoded: out.encoded || null, region: out.region,
+              data: out.data || null, encoded: out.encoded || null, cellMax: out.cellMax || null, region: out.region,
               channels: unit.tasks.filter(t => !out.failed.has(t)).map(t => t.channel),
               failedChannels: unit.tasks.filter(t => out.failed.has(t)).map(t => t.channel),
               batchId: batch.id
@@ -2545,6 +2547,10 @@ const BrickLoader = (() => {
       return { data: null, failed, region };
     }
     const encodeMsg = compose.encode ? { format: 'bc', channels: compose.channels, w: box.w, h: box.h, d: box.d } : null;
+    // Cell maxima describe a box from the brick's origin; a sub-box from elsewhere has none.
+    const cellsMsg = compose.cells && (!region || (region.x0 === 0 && region.y0 === 0 && region.z0 === 0))
+      ? { w: box.w, h: box.h, d: box.d, apron: compose.cells.apron ? 1 : 0, margin: compose.cells.margin | 0, blocks: Boolean(compose.cells.blocks) }
+      : null;
     for (let restart = 0; restart < RETRY_ATTEMPTS; restart++) {
       failed.clear();
       if (batch.reason) return { data: null, failed, region };
@@ -2597,14 +2603,14 @@ const BrickLoader = (() => {
         // with main-thread channels is interleaved below and encoded afterwards.
         const encodeInWorker = Boolean(encodeMsg && rec && inWorker && !scalars.length);
         data = (rec && inWorker)
-          ? await _postToWorker(batch, rec, { type: 'TAKE', key: assemblyKey, voxels, components: comps, ...(encodeInWorker ? { encode: encodeMsg } : {}) })
+          ? await _postToWorker(batch, rec, { type: 'TAKE', key: assemblyKey, voxels, components: comps, ...(encodeInWorker ? { encode: encodeMsg } : {}), ...(cellsMsg && !scalars.length ? { cells: cellsMsg } : {}) })
           : new Uint8Array(voxels * comps);
         if (encodeInWorker) {
           if (!_validEncoded(data, box)) {
             for (const t of unit.tasks) if (!failed.has(t)) failed.set(t, _fatal(`brick ${unit.key} encoded to an unexpected layout`));
             return { data: null, failed, region };
           }
-          return { data: null, encoded: data, failed, region };
+          return { data: null, encoded: data, cellMax: data.cellMax || null, failed, region };
         }
       } catch (err) {
         if (batch.reason) return { data: null, failed, region };
@@ -2636,6 +2642,11 @@ const BrickLoader = (() => {
           data[o] = lut ? lut[v] : v;
         }
       }
+      let cellMax = (rec && inWorker && !scalars.length && data.cellMax) || null;
+      if (!cellMax && cellsMsg && typeof CellMax !== 'undefined' && data.length === voxels * comps) {
+        // No worker took the whole brick: the same cells on this thread, as the decode ran.
+        cellMax = CellMax.fromBox(data, comps, box.w, box.h, box.d, cellsMsg);
+      }
       if (encodeMsg) {
         // No worker took the whole brick (no worker at all, or a raw transport): the
         // same encoder on this thread, the way the decode itself ran here.
@@ -2644,9 +2655,9 @@ const BrickLoader = (() => {
           return { data: null, failed, region };
         }
         const enc = BCCodec.encodeBox(data, comps, box.w, box.h, box.d, compose.channels);
-        return { data: null, encoded: { width: enc.width, height: enc.height, depth: enc.depth, planes: enc.planes }, failed, region };
+        return { data: null, encoded: { width: enc.width, height: enc.height, depth: enc.depth, planes: enc.planes, cellMax }, cellMax, failed, region };
       }
-      return { data, failed, region };
+      return { data, cellMax, failed, region };
     }
     return { data: null, failed, region };
   }
@@ -2818,6 +2829,8 @@ const BrickLoader = (() => {
             planes: (msg.encoded.planes || []).map(p => ({ format: p.format, channels: p.channels, bytes: new Uint8Array(p.buffer) }))
           }
           : (msg.buffer ? new Uint8Array(msg.buffer) : null);
+        // The cells ride on the value (an expando of the typed array / the encoded box).
+        if (value && msg.cellMax) value.cellMax = new Uint8Array(msg.cellMax);
         _settlePending(msg.id, true, value);
       } else {
         _settlePending(msg.id, false, new Error(msg.message || 'Brick decode failed'));

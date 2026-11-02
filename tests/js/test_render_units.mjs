@@ -1,6 +1,5 @@
 // Units of the volume renderer, lifted from the source and run as written:
-//   • the interactive quality controller (_nextAdaptiveState) and the settled sample
-//     cap (_settledSampleCap);
+//   • the sample cap per ray (_settledSampleCap);
 //   • the stream's level choice under a VRAM budget (_chooseStreamLevel) and the
 //     cache budget (_volumeCacheBudget);
 //   • the GPU pick decoding (_decodePickTexels), the sampled histogram, the
@@ -34,8 +33,6 @@ const MiB = 1024 * 1024;
 
 const U = new Function('THREE', `
   const MAX_MARCH_STEPS = 4096;
-  const INTERACTIVE_TARGET_MS = 16.7;
-  const ADAPTIVE_LIMITS = { minScale: 0.25, maxScale: 1, minRate: 0.1, maxRate: 0.75 };
   const SETTLED_PIXEL_SAMPLE_BUDGET = 6e9;
   const VOLUME_BRICK_SIZE = 64;
   let _physicalSizeUm = null;
@@ -43,7 +40,6 @@ const U = new Function('THREE', `
   const material = { uniforms: { clipMin: { value: new THREE.Vector3(0, 0, 0) }, clipMax: { value: new THREE.Vector3(1, 1, 1) } } };
   function _scheduleFrame() {}
   function _gpuBudgetBytes() { return 2048 * 1024 * 1024; }
-  ${lift('_nextAdaptiveState')}
   ${lift('_settledSampleCap')}
   ${lift('_chooseStreamLevel')}
   ${lift('_volumeCacheBudget')}
@@ -54,43 +50,19 @@ const U = new Function('THREE', `
   ${lift('_sampleArray')}
   ${lift('setClipRange')}
   ${lift('setClip')}
-  return { _nextAdaptiveState, _settledSampleCap, _chooseStreamLevel, _volumeCacheBudget, _decodePickTexels,
+  return { _settledSampleCap, _chooseStreamLevel, _volumeCacheBudget, _decodePickTexels,
            _channelHistogram, _orderBricksForStreaming, _buildSampleIndices, _sampleArray, setClipRange, setClip,
            clipPlanes, material };
 `)(THREE);
 
-// ── adaptive quality ──────────────────────────────────────────────────────────
-{
-  const L = { minScale: 0.25, maxScale: 1, minRate: 0.1, maxRate: 0.75 };
-  let s = { scale: 1, rate: 0.5 };
-  s = U._nextAdaptiveState(s, 66.8, 16.7, L);   // 4× too slow → ½ the resolution
-  assert.equal(s.scale, 0.5, 'a 4x-too-slow frame halves the resolution (cost ∝ scale²)');
-  assert.equal(s.rate, 0.5, 'the sample rate is kept while the resolution can still shrink');
-  s = U._nextAdaptiveState({ scale: 0.25, rate: 0.5 }, 33.4, 16.7, L);
-  assert.equal(s.scale, 0.25);
-  assert.equal(s.rate, 0.25, 'at the floor resolution, the rate follows the cost ratio');
-  assert.deepEqual(U._nextAdaptiveState({ scale: 0.5, rate: 0.4 }, 20, 16.7, L), { scale: 0.5, rate: 0.4 }, 'no change inside the band');
-  s = U._nextAdaptiveState({ scale: 0.5, rate: 0.4 }, 16.7, 16.7, L);
-  assert.ok(s.rate > 0.4 && s.scale === 0.5, 'an on-target frame raises the rate first');
-  s = U._nextAdaptiveState({ scale: 0.5, rate: 0.75 }, 10, 16.7, L);
-  assert.equal(s.rate, 0.75);
-  assert.equal(s.scale, 0.55, 'then the resolution, quantised to 1/20');
-  assert.deepEqual(U._nextAdaptiveState({ scale: 0.6, rate: 0.3 }, NaN, 16.7, L), { scale: 0.6, rate: 0.3 }, 'no measurement, no change');
-  for (let i = 0; i < 50; i++) s = U._nextAdaptiveState(s, 1000, 16.7, L);
-  assert.deepEqual(s, { scale: 0.25, rate: 0.1 }, 'bounded below');
-  // From the floor, fast frames bring the resolution back (x1.05 alone rounded back
-  // down to 0.25 at every step below 0.5: one slow frame pinned it for the session).
-  for (let i = 0; i < 200; i++) s = U._nextAdaptiveState(s, 5, 16.7, L);
-  assert.deepEqual(s, { scale: 1, rate: 0.75 }, 'recovers from the floor to full resolution');
-  assert.equal(U._nextAdaptiveState({ scale: 0.25, rate: 0.75 }, 10, 16.7, L).scale, 0.3, 'one quantum up from the floor');
-}
+// ── sample cap (the picture does not depend on interaction) ──────────────────
 {
   assert.equal(U._settledSampleCap(800 * 600), 4096, 'a small view samples every voxel of the longest native ray');
   assert.equal(U._settledSampleCap(3840 * 2160 * 4), 256, 'a 4K DPR-2 frame stays within the watchdog budget (floor 256)');
   assert.equal(U._settledSampleCap(1e12), 256, 'never below 256');
   assert.equal(U._settledSampleCap(1920 * 1080, 0.5), 1446, 'scaled by the learned budget (3e9 / 2073600)');
   assert.equal(U._settledSampleCap(1920 * 1080, 1), 2893);
-  console.log('adaptive quality + settled cap: OK');
+  console.log('sample cap: OK');
 }
 
 // ── level choice under a budget ───────────────────────────────────────────────
@@ -169,7 +141,7 @@ const U = new Function('THREE', `
   assert.ok(/if \(rayLength \/ delta > maxSamples\) delta = rayLength \/ maxSamples;/.test(frag), 'capped by the sample budget');
   assert.ok(/for \(int i = 0; i < MAX_MARCH_STEPS; i\+\+\)/.test(frag), 'loop bound from the constant');
   assert.ok(/float brickExit\(vec3 uvw, vec3 dirTex, vec3 cell\)/.test(frag), 'brick exit');
-  assert.ok(/t \+= max\(delta, ceil\(skip \/ delta\) \* delta\);/.test(frag), 'an empty brick is skipped to its exit, on the sample lattice');
+  assert.ok(/k \+= max\(1\.0, ceil\(skip \/ delta\)\);\s*t = jitter \+ k \* delta;/.test(frag), 'an empty brick is skipped to its exit, on the sample lattice (integer index, no drift)');
   assert.ok(/if \(any\(notEqual\(cell, cachedCell\)\)\)/.test(frag), 'the page table is read once per brick');
   assert.ok(!/[^D]texture\(svrAtlas/.test(frag) && /textureLod\(svrAtlas0, atlasCoord, 0\.0\)/.test(frag), 'textureLod in the march');
   assert.ok(!/clipCoord\.x >= clipMin\.x/.test(frag), 'no per-sample clip test (the march is confined to the clip box)');

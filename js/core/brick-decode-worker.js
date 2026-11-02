@@ -20,6 +20,9 @@
        box) the assembly is encoded to the GPU's BC4 / BC5 blocks (bc-codec.js) and the
        result carries `encoded: {width, height, depth, planes: [{format, channels,
        buffer}]}` instead of `buffer`: the display atlas uploads the blocks as they are.
+       With `cells: {w, h, d, apron, margin, blocks}` the result also carries `cellMax`
+       (cell-max.js): the 8³ maxima of that w × h × d box, computed on the voxels the
+       GPU will read (before the BC encode) — the shader's fine empty-space skip.
      DROP {key}: forget an assembly.
      CANCEL {batch?}: with a batch id, drop that batch's queued jobs, suppress its
        in-flight results and forget its assemblies; without, the same for every job
@@ -30,6 +33,10 @@
 if (typeof importScripts === 'function' && typeof BCCodec === 'undefined') {
   const stamp = (/[?&]v=([^&#]+)/.exec((self.location && self.location.search) || '') || [])[1];
   importScripts(`bc-codec.js${stamp ? `?v=${stamp}` : ''}`);
+}
+if (typeof importScripts === 'function' && typeof CellMax === 'undefined') {
+  const stamp = (/[?&]v=([^&#]+)/.exec((self.location && self.location.search) || '') || [])[1];
+  importScripts(`cell-max.js${stamp ? `?v=${stamp}` : ''}`);
 }
 
 let decodeQueue = Promise.resolve();
@@ -77,6 +84,14 @@ function processTake(msg, epoch) {
   assemblies.delete(msg.key);
   const buf = a ? a.buf : new Uint8Array(Math.max(0, msg.voxels | 0) * components);
   const enc = msg.encode && typeof msg.encode === 'object' ? msg.encode : null;
+  // The fine empty-space cells of the brick, from the voxels as they will be displayed.
+  let cellMax = null;
+  const cells = msg.cells && typeof msg.cells === 'object' ? msg.cells : null;
+  if (cells && typeof CellMax !== 'undefined' && cells.w * cells.h * cells.d * components === buf.length) {
+    try {
+      cellMax = CellMax.fromBox(buf, components, cells.w, cells.h, cells.d, { apron: cells.apron, margin: cells.margin, blocks: cells.blocks });
+    } catch (_) { cellMax = null; }   // no cells: the brick is simply not skippable by cell
+  }
   if (enc && enc.format === 'bc') {
     let encoded;
     try {
@@ -90,11 +105,13 @@ function processTake(msg, epoch) {
     const planes = encoded.planes.map(p => ({ format: p.format, channels: p.channels, buffer: p.bytes.buffer }));
     self.postMessage({
       type: 'DECODE_RESULT', id: msg.id, ok: true, assembled: true,
-      encoded: { width: encoded.width, height: encoded.height, depth: encoded.depth, planes }
-    }, planes.map(p => p.buffer));
+      encoded: { width: encoded.width, height: encoded.height, depth: encoded.depth, planes },
+      cellMax: cellMax ? cellMax.buffer : null
+    }, planes.map(p => p.buffer).concat(cellMax ? [cellMax.buffer] : []));
     return;
   }
-  self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: true, buffer: buf.buffer, assembled: true }, [buf.buffer]);
+  self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: true, buffer: buf.buffer, assembled: true, cellMax: cellMax ? cellMax.buffer : null },
+    [buf.buffer].concat(cellMax ? [cellMax.buffer] : []));
 }
 
 async function processDecode(msg, epoch) {

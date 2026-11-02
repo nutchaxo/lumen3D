@@ -13,6 +13,7 @@ import { ROOT } from './harness.mjs';
 
 const WORKER = readFileSync(path.join(ROOT, 'js/core/brick-decode-worker.js'), 'utf8');
 const CODEC = readFileSync(path.join(ROOT, 'js/core/bc-codec.js'), 'utf8');
+const CELLS = readFileSync(path.join(ROOT, 'js/core/cell-max.js'), 'utf8');
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // A v3 brick mosaic: 66 slices of 66² in a 9 × 8 grid (594 × 528); the grey value of
@@ -43,18 +44,20 @@ function makeWorker() {
   };
   vm.createContext(sandbox);
   vm.runInContext(CODEC, sandbox, { filename: 'bc-codec.js' });
+  vm.runInContext(CELLS, sandbox, { filename: 'cell-max.js' });
   vm.runInContext(WORKER, sandbox, { filename: 'brick-decode-worker.js' });
   return {
     results,
     BC: self.BCCodec,
+    CM: self.CellMax,
     async decode(id, key, slot, components) {
       channel = slot;
       self.onmessage({ data: { type: 'DECODE', id, batch: 1, buffer: new ArrayBuffer(4), brickSize: 66,
         packing: { mode: 'grid', cols: 9 }, expect: { width: 594, height: 528 }, assemble: { key, slot, components } } });
       for (let i = 0; i < 20; i++) await tick();
     },
-    async take(id, key, voxels, components, encode) {
-      self.onmessage({ data: { type: 'TAKE', id, batch: 1, key, voxels, components, ...(encode ? { encode } : {}) } });
+    async take(id, key, voxels, components, encode, cells) {
+      self.onmessage({ data: { type: 'TAKE', id, batch: 1, key, voxels, components, ...(encode ? { encode } : {}), ...(cells ? { cells } : {}) } });
       for (let i = 0; i < 5; i++) await tick();
       return results.find(m => m.id === id);
     },
@@ -85,6 +88,36 @@ const V = 66 * 66 * 66;
   assert.equal(Buffer.compare(Buffer.from(res.encoded.planes[0].buffer), Buffer.from(expected.planes[0].bytes.buffer)), 0,
     'the worker encodes exactly what BCCodec.encodeBox gives');
   console.log('worker-side encoding = encodeBox of the assembly: OK');
+}
+
+// The cell maxima ride with the brick, taken on the voxels before they are encoded.
+{
+  const box = { w: 66, h: 66, d: 66 };
+  const opts = { apron: 1, margin: 24, blocks: true };
+  const raw = makeWorker();
+  await raw.decode(1, 'k', 0, 2);
+  await raw.decode(2, 'k', 1, 2);
+  const plain = await raw.take(3, 'k', V, 2, null);
+  const expected = raw.CM.fromBox(new Uint8Array(plain.buffer), 2, 66, 66, 66, opts);
+
+  const w = makeWorker();
+  await w.decode(1, 'k', 0, 2);
+  await w.decode(2, 'k', 1, 2);
+  const res = await w.take(3, 'k', V, 2, { format: 'bc', channels: 2, ...box }, { ...box, ...opts });
+  assert.ok(res.ok, res.message);
+  assert.equal(Buffer.compare(Buffer.from(res.cellMax), Buffer.from(expected.buffer, expected.byteOffset, expected.length)), 0, 'cells of the encoded brick');
+
+  const w2 = makeWorker();
+  await w2.decode(1, 'k', 0, 2);
+  await w2.decode(2, 'k', 1, 2);
+  const res2 = await w2.take(3, 'k', V, 2, null, { ...box, apron: 1, margin: 0, blocks: false });
+  assert.equal(res2.cellMax.byteLength, 8 * 8 * 8 * 4, 'cells of a raw brick');
+  const w3 = makeWorker();
+  const none = await w3.take(4, 'z', V, 2, null, null);
+  assert.equal(none.cellMax, null, 'no cells unless asked');
+  const wrong = await w3.take(5, 'z', V, 2, null, { w: 10, h: 10, d: 10, apron: 1 });
+  assert.equal(wrong.cellMax, null, 'a box that does not describe the assembly gives no cells');
+  console.log('cell maxima returned with the brick: OK');
 }
 
 // No channel assembled: the zero brick, all-zero blocks.

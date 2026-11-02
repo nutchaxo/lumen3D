@@ -1,0 +1,12 @@
+## [OPTIMIZED]
+- **Maximum projection: editing the display no longer marches the volume again**: in the maximum projection (render mode 1, the default shader) a pixel is the display of the largest raw value along its ray, because the window, gamma and opacity curve is non-decreasing. A frame is now two passes: a march that writes the raw maximum of every channel, whatever the display settings, into a half-float target of the drawing buffer's size (shader variant `RAW_OUT`), then the cube drawn again by a cheap shader that recolours them (`RAW_READ`: window, gamma, opacity, colour, exposure, channel switches). The march is redone only when something that moves the maxima changed: camera, pose, clip box, warp, step count, quality level, bricks landing, a dense-texture update. Measured on F6TEST-E85 at native resolution (1280×793), a slider change costs 1.2 ms instead of 34.8 ms (about 29× less), with the picture within 3/255 of the classic path (half-float rounding); a camera move costs no more than before (MIP along z 10.6 vs 11.2 ms, from the side 26.9 vs 30.3 ms) because the raw march no longer evaluates the window at every sample.
+- **Raw march skips with the window ignored**: a cell is empty for the raw pass only when its raw maximum is 0, so the cache stays valid whatever the window.
+
+## [ADDED]
+- **`VolumeViewer.setRawCache` / `getRawCacheStats`**: a switch for the cache (comparison and fallback) and the count of marches against recolours.
+- **`SVRManager.contentVersion`**: bumped by every brick write; the cache keys on it so a brick landing redoes the march.
+- **Tests**: `tests/js/test_raw_mip_cache.mjs` (the raw-maximum identity over random settings, shader wiring, which uniforms a recolour may change) and the `RAW_OUT` / `RAW_READ` permutations of `test_v3_render_glsl.mjs`; the permutation check caught a sampler declared inside the atlas-only block, which would have failed to compile on a dense volume.
+
+## [CHANGED]
+- **Where it applies**: maximum projection only, on the screen. Natural Fluorescence and Structure DVR (the absorption depends on the order of the samples), image exports, the depth pick and a cross-fade between two volumes keep the classic single pass. If the GPU cannot render to a half-float target the cache is simply off.
+- **Memory**: the target takes 8 bytes per drawing-buffer pixel (7.7 MB at 1280×793, about 66 MB in 4K); it is not part of the atlas budget.

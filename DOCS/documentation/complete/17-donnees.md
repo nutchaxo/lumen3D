@@ -2,7 +2,7 @@
 
 ::: chapter-intro
 - Un jeu de données est **un dossier** : chaque fichier a un auteur (le pipeline, l'opérateur ou la plateforme), une raison d'être et, le plus souvent, une empreinte qui permet de le contrôler.
-- Il existe **cinq formats de données**. Une mise à jour de données passe de l'un à l'autre **sur place**, par petites unités notées dans un journal, avec un échange final atomique.
+- Il existe **six formats de données** (le format 6 est le dernier). Une mise à jour de données passe de l'un à l'autre **sur place**, par petites unités notées dans un journal, avec un échange final atomique.
 - L'import dans le navigateur envoie un dossier **bloc par bloc**, vérifié et reprenable, dans une zone privée ; les fichiers qui rendent le jeu ouvrable partent en premier.
 :::
 
@@ -54,6 +54,20 @@ Pendant une opération, la plateforme construit **à côté** du jeu, puis écha
 ::: remember
 Un fichier n'est jamais écrit « sur place » : on écrit un fichier temporaire voisin, puis on le **renomme**. Un renommage est atomique : le visiteur voit l'ancien fichier ou le nouveau, jamais la moitié de chacun.
 :::
+
+### Où passe la place : l'onglet Stockage
+
+L'onglet [Stockage]{.ui} (chapitre 14, section 14.10) répartit le volume de la plateforme en cinq parts :
+
+| Part | Ce qu'elle compte |
+|---|---|
+| [Données publiées]{.ui} | le dossier `DATA_WEB/` (les jeux visibles et masqués) |
+| [Imports & corbeille]{.ui} | `uploads/` : zone d'arrivée, journaux, corbeille et migrations |
+| [Plateforme & code]{.ui} | les fichiers de la plateforme |
+| [Autres sur le volume]{.ui} | le reste de ce disque |
+| [Disponible]{.ui} | la place libre du volume, lue à chaque affichage |
+
+Le parcours de tous les fichiers coûte des secondes sur un gros dépôt : le résultat est **gardé 10 minutes** (600 secondes), et le bouton [Recalculer]{.ui} refait le calcul tout de suite. Une liste par jeu indique la taille, le nombre de fichiers et la part de chacun.
 
 ## 17.2 Qui écrit quoi : trois auteurs
 
@@ -115,7 +129,7 @@ Les tableaux qui suivent donnent, pour chaque champ, **ce qu'il veut dire** (ave
 | `description` | phrase de départ, par exemple « Confocal imaging stack: E9.5 fixed embryo, 112 slices, 3 channels. » | pipeline ; opérateur |
 | `created`, `lastModified` | dates ISO ; `created` est protégée ; `lastModified` est remise à jour à chaque enregistrement | pipeline ; plateforme |
 | `configured` | `true` ; sert à décider si le jeu entre au catalogue (section 17.5) | pipeline ; imposé |
-| `formatVersion` | `4` ou `5` ; absent = 1 | pipeline, ou fin d'une migration |
+| `formatVersion` | de `1` à `6` (absent = 1) ; le pipeline 0.23.0 écrit `6` | pipeline, ou fin d'une migration |
 | `hidden` | `true` = invisible du public, visible de l'administration | opérateur ; **l'import publie toujours masqué** |
 
 ### Géométrie et calibration
@@ -230,6 +244,22 @@ Le manifeste du format 5 (`"schema": "iribhm-bricks-v5"`, `"version": 5`) décri
 | `bytes` | les octets de chaque case, par niveau, colonne et canal : ce que la matrice du viewer affiche **sans rien télécharger d'autre** |
 
 Les adresses des paquets portent `?v=` suivi des 12 premiers caractères de l'empreinte de **leur** index : changer un index change l'adresse, donc le cache du navigateur ne sert jamais un vieux paquet.
+
+### `bricks/manifest.json` (format 6)
+
+Le format 6 garde le format 5 et **remplace ses cinq compressions par deux colonnes** : `ll` (sans perte) et `q30` (WebP qualité 30 avec zone morte). Les copies de coupe `xy/`, `xz/`, `yz/` et `cuts/` restent sans perte.
+
+| Élément | Format 6 |
+|---|---|
+| `schema` | `"iribhm-bricks-v6"` |
+| `columns[]` | **exactement** `ll` et `q30` ; un manifeste qui en annonce d'autres est refusé à l'import |
+| `index/ll.bin`, `index/q30.bin` | un index par colonne, chacun avec sa taille et son empreinte |
+| paquets `q30` | `l{k}/q30/c{c}/p{NNNNN}.bin` |
+| poids (E8.5 Em1, natif) | Q30 : 26 Mo ; sans perte : 89 Mo (erreur moyenne de 1,5 niveau de gris sur 255) |
+
+::: note
+Dans une brique `q30`, un octet de queue indique si l'image est en WebP Q30 ou si la brique n'existe qu'en version sans perte (repli). La plateforme ne lit que les deux colonnes ; les anciennes copies (±2, ±4, légère, très légère) n'existent plus.
+:::
 
 ### `index.bin`
 
@@ -350,20 +380,23 @@ Un fichier nommé `a.php.png` dont les octets ne sont pas ceux d'un PNG est **re
 La galerie **ne voyage pas** avec l'import (aucune règle de la liste blanche ne l'accepte). Quand un jeu est remplacé, c'est la plateforme qui **déplace** la galerie de l'ancien dossier vers le nouveau (section 17.18).
 :::
 
-## 17.7 Les formats 1 à 5
+## 17.7 Les formats 1 à 6
 
-Un jeu publié porte un numéro de **format** (`formatVersion`). Le visiteur n'a rien à faire : le viewer lit les cinq formats. Mais les formats récents ouvrent des possibilités que les anciens n'ont pas.
+Un jeu publié porte un numéro de **format** (`formatVersion`). Le visiteur n'a rien à faire : le viewer lit les six formats. Mais les formats récents ouvrent des possibilités que les anciens n'ont pas.
 
-![Cinq marches : chacune ajoute une structure ; une migration sait y monter.](img/ch17/formats-escalier.svg){width=100%}
-
-Ce que débloque chaque marche :
+Ce que débloque chaque format :
 
 | Format | Ce qu'il permet | Où c'est expliqué |
 |---|---|---|
 | 2 (`planes/`) | une coupe XY **native** du Studio lit un plan au lieu d'une couche de 64 ; les figures z-stack s'ouvrent vite | chapitres 7 et 12 |
 | 3 (`mips/`) | une projection maximale de toute la pile lit une image par couche | chapitre 7 |
-| 4 (briques v3) | filtrage **sans couture** entre briques, **détail local** (« Zoom detail »), atlas plus légers pour 1 ou 2 canaux, niveaux de qualité exacts | chapitres 9 et 10 |
-| 5 (matrice) | des niveaux qui gardent **toutes les tranches**, **cinq compressions** au choix, des coupes XZ / YZ / obliques natives rapides, des exports et des mesures toujours **sans perte** | chapitres 7, 10 et 12 |
+| 4 (briques v3) | filtrage **sans couture** entre briques, atlas plus légers pour 1 ou 2 canaux, niveaux de qualité exacts | chapitres 9 et 10 |
+| 5 (matrice) | des niveaux qui gardent **toutes les tranches**, **cinq compressions** au choix, des coupes XZ / YZ / obliques natives rapides, des exports **sans perte** | chapitres 7, 10 et 12 |
+| 6 (Q30) | **une seule qualité d'affichage**, WebP qualité 30, pour tous les niveaux ; l'image affichée est plus légère. Les exports lisent la colonne sans perte à la résolution affichée | chapitres 9, 12 et 13 |
+
+::: warning
+**Ce que lit une mesure.** Les points d'une mesure de distance sont pris sur l'image affichée (la surface du volume, en Q30 sur un format 6) ; seule la valeur des voxels passe par la colonne sans perte, dans les exports et les téléchargements. Les mesures ne sont pas enregistrées : elles disparaissent au rechargement de la page.
+:::
 
 ### Ce qu'un numéro de format promet
 
@@ -385,9 +418,9 @@ Dans l'ancien format, on réduisait surtout en XY. Le format 4 applique une règ
 
 La réduction est une **moyenne entière**, arrondie au plus proche (la moitié vers le haut) : `(somme + n/2) // n`. La même arithmétique est utilisée par le pipeline, Python, PHP et le navigateur : c'est ce qui rend leurs résultats **identiques voxel pour voxel**.
 
-## 17.8 Quatre migrations, un registre
+## 17.8 Cinq migrations, un registre
 
-Une **migration** transforme un jeu de la version *v* à la version *v + 1*. Les quatre migrations forment un **registre ordonné**, identique dans trois langages.
+Une **migration** transforme un jeu de la version *v* à la version *v + 1*. Les cinq migrations forment un **registre ordonné**, identique dans trois langages.
 
 | Identifiant | De → vers | Ce qu'elle crée | S'applique à |
 |---|---|---|---|
@@ -395,6 +428,7 @@ Une **migration** transforme un jeu de la version *v* à la version *v + 1*. Les
 | `m003-layer-mips` | 2 → 3 | `mips/` : le maximum de chaque couche de 64 plans | `3d`, `live` |
 | `m004-bricks-v3` | 3 → 4 | un nouvel arbre `bricks/` (66³, index binaire) | `3d`, `live` |
 | `m005-matrix` | 4 → 5 | un nouvel arbre `bricks/` : la matrice et les copies de coupe | `3d`, `live` |
+| `m006-q30` | 5 → 6 | les colonnes `q30` ; les colonnes `b2`, `b4`, `q80` et `q50` sont retirées | `3d`, `live` |
 
 Chaque entrée porte un identifiant, les versions, les types concernés et un **titre et une description en quatre langues** (c'est ce que l'onglet affiche).
 
@@ -404,7 +438,7 @@ Chaque entrée porte un identifiant, les versions, les types concernés et un **
 
 ### Quel jeu a besoin de quoi ?
 
-Un jeu à la version *v* reçoit **dans l'ordre** toutes les migrations dont le « de » est ≥ *v* ; une migration ne s'applique que si le jeu est **exactement** à sa version de départ. Un jeu au format 1 reçoit donc m002, puis m003, puis m004, puis m005.
+Un jeu à la version *v* reçoit **dans l'ordre** toutes les migrations dont le « de » est ≥ *v* ; une migration ne s'applique que si le jeu est **exactement** à sa version de départ. Un jeu au format 1 reçoit donc m002, puis m003, puis m004, puis m005, puis m006.
 
 L'onglet décide ainsi, pour chaque jeu **publié** de type `3d` ou `live` (les photographies 2D sont toujours « à jour » ; un jeu encore en import n'est pas concerné) :
 
@@ -452,6 +486,26 @@ La migration vers le format 5 lit le **niveau natif sans perte** (le dossier `pl
 **Mesuré dans ce conteneur** (exécutant Python, 22 cœurs, outil `tools/convert_dataset.py`) : le jeu de démonstration E9.5 (768 × 576 × 112, 3 canaux) passe du format 4 au format 5 en **546 unités et 38 secondes** ; E10.5 en 28 s ; E8.5 en 11 s. Ses briques passent de 9 Mo à environ 80 Mo sur le disque (section 7.11).
 :::
 
+### m006 : deux colonnes au lieu de cinq
+
+La migration vers le format 6 **ne recalcule rien à partir du fichier d'origine** : elle lit la colonne `ll` du format 5 et en tire une copie WebP Q30.
+
+| Point | Ce que fait m006 |
+|---|---|
+| **Une unité** | un super-bloc de 4 × 4 × 4 briques `ll` (temps, niveau, canal, puis position) ; une unité sans brique `ll` est vide |
+| **Ordre** | toutes les unités sont exécutables dès le départ : aucune n'attend une autre ; les niveaux les plus grossiers sont convertis en premier, pour être utilisables tôt |
+| **Résultat** | une colonne `q30` par niveau (paquets et index `index/q30.bin`), à côté de `ll` |
+| **Échange** | sur place : les paquets `q30` sont écrits à côté des colonnes du format 5, le manifeste v6 est **le point de validation**, puis les colonnes `b2`, `b4`, `q80` et `q50` sont supprimées |
+| **Exécutants** | le serveur Python, ou le navigateur ; un hébergement PHP n'a pas d'exécutant serveur : la conversion s'y fait dans le navigateur |
+
+::: note
+Une interruption **après** le manifeste v6 reprend en supprimant les colonnes du format 5 ; avant, rien n'a changé pour le visiteur.
+:::
+
+::: example
+**Mesuré** (changelog 1.70.0) : une copie locale de E8.5 Em1, convertie du format 5 au format 6 en 23 secondes ; ses briques passent de 834 Mo à 588 Mo.
+:::
+
 ## 17.9 Les unités de travail et le journal
 
 Convertir un jeu de 10 Go d'un seul tenant échouerait au premier incident. La plateforme le découpe donc en **unités** indépendantes.
@@ -471,6 +525,7 @@ Les trois migrations n'ont pas la même forme d'unité :
 | m002 | `t{t}.z{bz}.c{c}.y{ty}.x{tx}` | décode les briques d'une couche, produit des tuiles PNG |
 | m003 | `t{t}.l{l}.c{c}.y{ty}.x{tx}` | lit les ≤ 64 tuiles de plan d'une couche, en garde le **maximum** pixel par pixel |
 | m004 | `t{t}.k{k}.c{c}.z{BZ}.y{BY}.x{BX}` | fabrique les briques v3 d'un **super-bloc 4 × 4 × 4** du niveau *k* |
+| m006 | un super-bloc 4 × 4 × 4 de briques `ll` (temps, niveau, canal, position) | encode ces briques en WebP Q30 |
 
 Une unité dont **toutes** les briques sont absentes est **vide** : elle est comptée « faite » d'emblée et ne demande aucun travail.
 
@@ -533,11 +588,11 @@ Un **Web Worker** (`js/workers/migration-worker.js`) fait tout le calcul, avec u
 4. **envoyer** le résultat en une requête (`unit_put`, 32 Mio au plus).
 :::
 
-L'onglet lance **au plus 2 workers × 2 unités** (le nombre de workers vaut la moitié des cœurs, de 1 à 2) : une unité retient jusqu'à environ 40 Mio en mémoire. Le serveur **revérifie** tout ce qu'il reçoit : chaque PNG doit commencer par la bonne signature et avoir les bonnes dimensions ; chaque brique v3 doit être du WebP sans perte de 594 × 528 pixels, les 6 cases inutilisées à zéro.
+L'onglet lance **jusqu'à quatre workers**, chacun avec au plus **deux unités** en cours. Le nombre de workers ne dépasse **pas la moitié des cœurs** du processeur, et il est limité à **deux** quand la mémoire déclarée par le navigateur est inférieure à 8 Go. Une unité garde en mémoire environ 16 Mio de plans, plus ses briques compressées. Le serveur **revérifie** tout ce qu'il reçoit : chaque PNG doit commencer par la bonne signature et avoir les bonnes dimensions ; chaque brique v3 doit être du WebP sans perte de 594 × 528 pixels, les 6 cases inutilisées à zéro.
 
 ### Le serveur
 
-L'onglet appelle `unit_run` **en boucle** ; chaque appel dure au plus 20 secondes (moins sur un hébergement qui limite le temps) et traite autant d'unités que possible. Le serveur lit lui-même les briques et écrit dans le magasin. Un « bail » de 120 secondes empêche deux appels de prendre la même unité.
+L'onglet appelle `unit_run` **en boucle** ; un appel tient sa requête pendant au plus 20 secondes sur PHP, et traite autant d'unités que possible dans ce temps. Le serveur lit lui-même les briques et écrit dans le magasin. Un verrou par unité empêche deux appels de traiter la même unité en même temps.
 
 ::: why
 **Pourquoi une boucle pilotée par le navigateur ?** Les hébergements mutualisés n'ont pas de tâche de fond : tout calcul doit tenir **dans une requête**. C'est l'onglet ouvert qui relance, d'où la consigne de ne pas le fermer.
@@ -626,6 +681,7 @@ Deux idées font sa robustesse.
 ### Les gestes propres à chaque migration
 
 - **m002 et m003** : `planes/` (ou `mips/`) est renommé en `.planes-old/`, le dossier voisin le remplace, puis l'ancien est supprimé.
+- **m006** : les paquets `q30` et `index/q30.bin` sont écrits à côté des colonnes du format 5 ; le manifeste v6 est le point de validation ; ensuite, les colonnes `b2`, `b4`, `q80` et `q50` sont supprimées ;
 - **m004** : `bricks/` est échangé avec `.bricks-incoming/` ; les manifestes de `planes/` et de `mips/` — qui avaient noté l'empreinte de l'ancien manifeste — sont **re-signés** avec celle du nouveau (leurs voxels, ceux du niveau natif, n'ont pas changé) ; la version monte ; **ensuite seulement** `bricks.v2-old/` est supprimé.
 - avant d'échanger, chaque structure assemblée est **relue et validée** (`assembly_invalid` sinon) ;
 - la version est montée **sous le verrou de `metadata.json`**, en **fusionnant** dans le fichier courant : un enregistrement fait dans l'éditeur pendant ce temps n'est pas perdu, aucun autre champ n'est touché ;
@@ -675,6 +731,20 @@ Avant chaque étape, le serveur appelle `set_time_limit()` ; `status.server.limi
 1. **avant** de lancer une unité, il note `attempts[unité] + 1` dans le journal ;
 2. pour m004, une unité peut être faite en **8 octants** (2 × 2 × 2 briques du super-bloc), chacun rangé et noté (`partial[unité]`) avant le suivant : l'unité est cochée quand tous y sont. Il le fait d'office tant qu'aucune unité entière du niveau n'a été chronométrée, quand la plus lente (+ 25 %) ne tiendrait pas dans le temps restant, ou après une mort de requête ;
 3. une unité dont les étapes ont tué la requête **deux fois** reçoit la réponse **409 `unit_timeout`**. Le journal reste `running`, **rien n'est perdu**, et l'onglet confie cette migration au navigateur, qui n'a pas ce plafond.
+
+### La reprise automatique
+
+Une mise à jour qui échoue (un worker planté, une unité qui échoue sans cesse, une liaison coupée) **redémarre seule** depuis le journal, après :
+
+- 10 secondes, puis 30 secondes, 1 minute, 2 minutes et 5 minutes ;
+- elle **abandonne** après cinq échecs de suite sans qu'aucune nouvelle unité ne soit terminée ;
+- les erreurs `unit_timeout`, `no_executor`, `prepare_failed` et `cancelled` ne sont **jamais** relancées automatiquement : elles demandent une action de votre part.
+
+Chaque reprise est écrite dans l'historique du jeu, et la ligne « Échec » garde la dernière erreur.
+
+### La barre de progression
+
+Une unité **sans donnée** (vide) est comptée faite dès le plan ; la barre ne mesure que le travail réel. Elle part donc de **0 %** et monte à mesure que les unités à faire sont terminées. La ligne indique « {n} sans données, déjà terminées » pour ces unités vides.
 
 ### Ce que dit l'onglet quand quelque chose ne va pas
 
@@ -760,8 +830,9 @@ Seul ce que **produit le pipeline** est accepté. Tout le reste est refusé **av
 
 Les détails des règles, tels que le moteur les applique :
 
-- les paquets : `lod<N>/c<M>/pack_<n>.bin` (format 1 à 3), `l<k>/c<c>/p<NNNNN>.bin` (format 4) ou `l<k>/<colonne>/c<c>/p<NNNNN>.bin` (format 5), sous `bricks/` ou sous `bricks/tNNN/` pour une série (type `live` seulement) ;
+- les paquets : `lod<N>/c<M>/pack_<n>.bin` (format 1 à 3), `l<k>/c<c>/p<NNNNN>.bin` (format 4) ou `l<k>/<colonne>/c<c>/p<NNNNN>.bin` (formats 5 et 6), sous `bricks/` ou sous `bricks/tNNN/` pour une série (type `live` seulement) ;
 - format 5 : les index `index/<colonne>.bin` (palier 0), les copies de coupe `xy/`, `xz/`, `yz/` et `cuts/` (dernier palier, comme `planes/`) ;
+- format 6 : les colonnes `ll` et `q30` seulement (`index/ll.bin`, `index/q30.bin`, paquets `l<k>/ll/…` et `l<k>/q30/…`) ; **un fichier d'une autre colonne est refusé** (`foreign_column`), par exemple une copie ±2 dans un jeu de format 6 ;
 - `planes/` et `mips/` : `manifest.json` et les paquets nommés (`zNNNNN.bin`, `lNNNNN.bin`), avec un sous-dossier `tNNN/` pour une série ;
 - `download/` : un nom simple (pas de sous-dossier), jusqu'à 181 caractères, extension de **données** (liste de la section 17.6), **jugée sur sa dernière extension** ; les noms réservés de Windows (`CON`, `NUL`…) et ceux qui finissent par un point ou une espace sont refusés ;
 - jamais acceptés : les fichiers `.php`, `.js`, `.htaccess`, tout fichier caché, tout chemin remontant (`..`), et les formats qu'un navigateur **exécute** à l'ouverture (HTML, SVG, XML).
@@ -878,7 +949,7 @@ Un jeu que personne ne termine occupe du vrai disque dans la zone d'arrivée. L'
 
 ### Qu'est-ce qui reste lisible pendant l'envoi ?
 
-L'aperçu d'un jeu non publié passe par l'action `blob` : un fichier de la zone d'arrivée est servi, **sous session d'administration**, comme des octets opaques (avec `nosniff`), jamais comme un document. La zone d'arrivée n'est atteignable par **aucune adresse** ; elle est bloquée dans le serveur Python, dans le `.htaccess` racine, dans `router.php` et par un fichier d'interdiction qui lui est propre.
+L'aperçu d'un jeu non publié passe par l'action `blob` : un fichier de la zone d'arrivée est servi, **sous session d'administration**, comme des octets opaques (avec `nosniff`), jamais comme un document. Depuis la version 1.72.1, cet aperçu s'ouvre de nouveau : l'adresse de la visionneuse, avec son numéro de cache, n'arrive plus en erreur 404. La zone d'arrivée n'est atteignable par **aucune adresse** ; elle est bloquée dans le serveur Python, dans le `.htaccess` racine, dans `router.php` et par un fichier d'interdiction qui lui est propre.
 
 ## 17.18 Valider, publier, remplacer
 
@@ -897,7 +968,8 @@ L'action de validation relit le jeu **en entier** et vérifie qu'il forme un tou
 | `missing_index:…`, `index_hash_mismatch:…` | `index.bin` absent, ou différent de l'empreinte du manifeste |
 | `index_bad_magic`, `index_bad_length`, `index_shape_mismatch:…`, `index_grid_mismatch:…` | l'index n'a pas la bonne forme ou ne décrit pas les niveaux du manifeste |
 | `missing_pack:<chemin>` | un paquet que l'index cite n'est pas arrivé |
-| `manifest_v5_…`, `missing_store:<chemin>` | (format 5) manifeste v5 incohérent, ou une copie de coupe (`xy/`, `xz/`, `yz/`) manque |
+| `manifest_v5_…`, `missing_store:<chemin>` | (formats 5 et 6) manifeste v5 ou v6 incohérent, ou une copie de coupe (`xy/`, `xz/`, `yz/`) manque |
+| `foreign_column:<chemin>` | (formats 5 et 6) un fichier d'une colonne que le format du jeu n'a pas, par exemple un `q30` dans un jeu de format 5 |
 | `truncated_pack:<chemin>` | un paquet est plus court que ce que l'index réclame |
 | `manifest_pack_escapes` | un paquet pointe hors du dossier du jeu |
 | `incomplete_files` | des fichiers planifiés ne sont pas terminés |
@@ -934,6 +1006,28 @@ Si le serveur s'arrête **entre les deux renommages**, au démarrage suivant `re
 
 ::: note
 L'interface ne **renvoie pas** un dossier dont le nom existe déjà dans `DATA_WEB/` : elle le considère comme « déjà publié » plutôt que de renvoyer des gigaoctets. Le remplacement se propose au moment de [Publier]{.ui}, quand le serveur signale que le nom existe.
+:::
+
+### Contrôler sans rien changer : l'onglet Intégrité des données
+
+L'onglet [Intégrité des données]{.ui} (chapitre 14, section 14.9) vérifie **chaque** jeu, publié ou encore en import, avec les mêmes validateurs que l'import et les migrations. Il est **en lecture seule** : il ne répare ni ne supprime rien.
+
+- le bouton [Lancer le diagnostic]{.ui} vérifie tous les jeux ; [Relancer]{.ui} refait la vérification ;
+- chaque jeu avec un constat a un bouton [Revérifier]{.ui} qui ne recontrôle que ce jeu ;
+- le filtre [Seulement les datasets avec des constats]{.ui} ne garde que les lignes à traiter ; le résumé compte les jeux [Sains]{.ui}, [Avertissements]{.ui} et [Erreurs]{.ui} ;
+- chaque constat s'accompagne de **[Pour corriger :]{.ui}** et d'une action concrète, dans la langue de l'interface : réimporter, ouvrir [Mises à jour des données]{.ui}, retirer une entrée de galerie, supprimer un reste, etc.
+
+| Ce qui est vérifié | Exemples de constats |
+|---|---|
+| le `metadata.json` (identité, dimensions, canaux) | `metadata_identity`, `metadata_no_channels` |
+| les manifestes et index des briques | `missing_index`, `index_hash_mismatch` |
+| chaque paquet cité par le manifeste, et sa longueur | `missing_pack`, `truncated_pack` |
+| le format : un jeu n'est pas dans le dernier format | `not_latest_format` (une conversion est en attente) |
+| la galerie et les fichiers de suivi | `gallery_missing`, `gallery_unlisted` |
+| les restes d'un import ou d'une mise à jour | `stray_files`, `incomplete_files`, `interrupted_swap` |
+
+::: note
+Un jeu encore en import est jugé par la **même validation** que la publication : un constat `incomplete_files` signifie « pas encore entièrement reçu », pas « endommagé ».
 :::
 
 ### Ce qu'on retient

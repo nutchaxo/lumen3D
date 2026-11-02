@@ -30,7 +30,7 @@ They are stored in `bricks/manifest.json` (`counts`, `edges`, `total`, `max`, `m
 
 ## 8.3 `metadata.json`: the dataset's identity card
 
-This is the only place where the facts about a dataset are written; the site's catalogue is computed from it on every request. **Real** excerpt (abridged) from the demonstration dataset:
+This is the only place where the facts about a dataset are written; the site's catalogue is computed from it on every request. **Real** excerpt (abridged) from the demonstration dataset, published in format 4 (a dataset written by pipeline 0.23.0 carries `"formatVersion": 6`):
 
 ```json
 {
@@ -52,7 +52,7 @@ This is the only place where the facts about a dataset are written; the site's c
 | field | what it is |
 |---|---|
 | `id`, `type` | the type (`3d` or `live`) and the folder: `3d/<name>` |
-| `formatVersion` | the data format (chapter 7); written by the pipeline, never edited by hand |
+| `formatVersion` | the data format (chapter 7): **6** from pipeline 0.23.0; written by the pipeline, never edited by hand |
 | `stage`, `embryo` | read from the file name (next section) |
 | `dimensions`, `voxel_size` | size in voxels and in micrometres, read from the Imaris file |
 | `calibrationStatus` | `exact` if the three voxel sizes are known, otherwise `metadata-missing`: no scale is invented |
@@ -232,6 +232,7 @@ python run_preprocess.py --input input --output DATA_WEB --only "*E95*" --with-d
 | `--only` | filter on file names (e.g. `"*E8*"`) |
 | `--with-downloads` | also prepares the `download/` folder (slower) |
 | `--tracking` | `auto` (default), `off`, or the path of a tracking file |
+| `--format` | `6` (default, the current format), `5` or `4`: the older layouts, which the Data updates tab can convert later (chapter 7) |
 
 The type is decided automatically: more than one image in the file means `live`, otherwise `3d`. `Ctrl+C` asks for confirmation before stopping, and cleans up the temporary files.
 

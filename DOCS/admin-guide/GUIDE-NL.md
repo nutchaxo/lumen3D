@@ -2,8 +2,8 @@
 title: "Handleiding voor de beheerder"
 subtitle: "Het beheerpaneel van Lumen3D, tabblad voor tabblad"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Webplatform 1.65.0"
-date: "Oktober 2026"
+version: "Webplatform 1.76.0"
+date: "November 2026"
 abstract: "Alles wat u kunt doen vanuit het beheerpaneel van de site: datasets beheren en importeren, ze naar het huidige formaat brengen, de publieke site aanpassen, functies installeren en het platform bijwerken. Geschreven voor iemand die dit paneel nog nooit heeft gezien en niet kan programmeren."
 lang: nl
 toc-class: compact
@@ -27,12 +27,12 @@ Het is geschreven voor iemand die **dit paneel nog nooit heeft gezien** en die *
 
 ## Het paneel in vier groepen
 
-Het linkermenu ordent de 15 tabbladen in **vier groepen**, afhankelijk van wat u aan het doen bent. Deze handleiding volgt dezelfde volgorde.
+Het linkermenu ordent de 17 tabbladen in **vier groepen**, afhankelijk van wat u aan het doen bent. Deze handleiding volgt dezelfde volgorde.
 
 | Groep | Tabbladen | Hoofdstukken |
 |---|---|---|
 | **Aan de slag** | Inloggen, rondleiding door het paneel | 1 – 2 |
-| **Gegevens** | Datasets · Importeren · Data-updates · Soorten data · Statistieken | 3 – 7 |
+| **Gegevens** | Datasets · Importeren · Data-updates · Soorten data · Statistieken, opslag en integriteit | 3 – 7 |
 | **Publieke site** | Identiteit · Vormgeving · Pagina's · Juridisch | 8 – 11 |
 | **Extensies** | Plug-ins · Catalogus | 12 – 13 |
 | **Systeem** | Updates (en de pagina *Versienotities*) · Verwerkingsketen · Beveiliging · Documentatie | 14 – 17 |
@@ -51,7 +51,7 @@ Hoofdstuk **4** (Importeren), daarna **3** (Datasets) om ze een naam te geven en
 :::
 ::: card
 #### 🛠 Ik onderhoud de site
-Hoofdstukken **5**, **12 tot 14**: data-updates, plug-ins, versie van het platform.
+Hoofdstukken **5**, **7** en **12 tot 14**: data-updates, opslag en integriteit, plug-ins, versie van het platform.
 :::
 ::::
 
@@ -145,7 +145,7 @@ Na het inloggen is het scherm verdeeld in drie zones die nooit veranderen: het *
 ::: legend
 | n | wat het is |
 |-|----------------------|
-| 1 | Groep **Gegevens**: Datasets, Importeren, Data-updates, Soorten data, Statistieken. |
+| 1 | Groep **Gegevens**: Datasets, Importeren, Data-updates, Soorten data, Statistieken, Opslag en Data-integriteit (hoofdstuk 7). |
 | 2 | Groep **Publieke site**: Identiteit, Vormgeving, Pagina's, Juridisch. |
 | 3 | Groep **Extensies**: Plug-ins, Catalogus. |
 | 4 | Groep **Systeem**: Updates, Verwerkingsketen, Beveiliging, Documentatie. |
@@ -199,6 +199,8 @@ Is er een **import bezig**, dan vragen uitloggen en links die het paneel verlate
 | **Data-updates** | De gepubliceerde datasets naar het huidige gegevensformaat brengen | Af en toe |
 | **Soorten data** | De publieke naam van de drie categorieën (3D, 2D, Live) | Zelden |
 | **Statistieken** | Zien hoeveel de site wordt bezocht | Af en toe |
+| **Opslag** | Zien hoeveel schijfruimte de installatie gebruikt, en waaruit | Af en toe |
+| **Data-integriteit** | Controleren of elke dataset compleet is en het nieuwste formaat heeft (alleen lezen) | Af en toe |
 | **Identiteit** | Naam van de site, vocabulaire, voettekst, menu | Zelden |
 | **Vormgeving** | Kleuren, lettertype en hoeken van de publieke site | Zelden |
 | **Pagina's** | De inhoud van de pagina's wijzigen (start, over…) | Vaak |
@@ -320,6 +322,57 @@ Sommige instellingen in het voorbeeld worden **door het paneel opgepikt** en bew
 - de **oriëntatie** als u die aan het bepalen bent (§3.8).
 
 Al de rest — cameraposisie, weergavemodus, kwaliteit, achtergrond, snijvlak — dient om te kijken en wordt **niet bewaard**.
+
+### De renderkwaliteit van het voorbeeld
+
+Het voorbeeld is de echte viewer. Het paneel **Renderkwaliteit** in de zijbalk bepaalt wat de bezoekers zien, en wat erin staat hangt af van het **formaat** van de dataset (zie hoofdstuk 5).
+
+**Formaat 6** (alle nieuwe datasets): de lijst **Resolutie**, van fijn naar grof, met per niveau de grootte en het GPU-geheugen. Eronder staat het vakje **Snel laden**:
+
+- **aan** (standaard): de resoluties laden uit de gecomprimeerde bricks in WebP-kwaliteit 30;
+- **uit**: dezelfde resoluties uit de verliesvrije bricks: grotere downloads, pixel voor pixel exact.
+
+Het vakje onthoudt uw keuze in deze browser. Een notitie zegt dat elk volume in WebP-kwaliteit 30 wordt getoond, en dat metingen het getoonde beeld lezen (de Q30-kopie zolang het vakje aan staat), terwijl exports altijd verliesvrij zijn op de resolutie die op het scherm staat.
+
+**Formaat 5**: twee lijsten naast elkaar, **Resolutie** en **Kwaliteit**.
+
+| Kwaliteit | Wat ze bewaart |
+|---|---|
+| **Max** | Elke voxel zoals gemeten, niets verloren. Voor figuren en exports. |
+| **Extra** | Geen enkele voxel verschuift met meer dan 2 van de 256 grijswaarden. |
+| **High** | Geen enkele voxel verschuift met meer dan 4 grijswaarden. |
+| **Medium** | WebP-kwaliteit 80: lichter, met iets minder textuur en ruis. |
+| **Low** | WebP-kwaliteit 50: het lichtst, met zichtbaar verlies van fijne details. |
+
+Elke cel toont de downloadgrootte. De **kleur** van een resolutie zegt of de kaart het niveau aankan (het GPU-geheugen van dat niveau, dat voor elke kwaliteit gelijk is omdat de kaart de uitgepakte voxels krijgt):
+
+- **groen**: minder dan 75 % van het budget;
+- **oranje**: tussen 75 % en 100 %;
+- **rood**: boven het budget. De viewer toont dan het eerstvolgende grovere niveau, en de regel “Getoond op …” zegt welk niveau dat is.
+
+Met de knop [Hoe kiezen?]{.ui} opent een venster “Resolutie en kwaliteit kiezen”: alle combinaties met hun grootte, downloadtijd en GPU-geheugen, de betekenis van elke kwaliteit, en de aanbeveling van het paneel: de fijnste resolutie in groen, in kwaliteit Extra; voor een meting of een figuur: Max op Native. De tijden gelden tegen de gemeten downloadsnelheid, of tegen 5, 20 of 100 Mb/s.
+
+**Datasets van formaat 1 tot 4** hebben het gewone menu: 256×256, 512×512, 1024×1024 en Native.
+
+::: note
+**Er is geen keuze meer voor het GPU-geheugen, de GPU-compressie, het detail bij inzoomen of het verliesvrij laden in rust.** Het paneel leidt het geheugen en de compressie af van de kaart, en een eerder handmatig gekozen waarde wordt bij het laden gewist. De gekozen kwaliteit is de getoonde kwaliteit, en het hele volume blijft geladen. Zie hieronder.
+:::
+
+**Het GPU-geheugen wordt automatisch vastgesteld.**
+
+- De viewer herkent de grafische kaart aan de naam die de browser meldt, en zoekt haar geheugen op in een tabel van modellen van NVIDIA, AMD en Intel Arc.
+- Het budget is **60 %** van dat geheugen, nooit meer dan het geheugen min **2 GiB** (de rest blijft voor de browser en de pagina), met een plafond van **16 GiB** en een ondergrens van **1 GiB**.
+- Een kaart die niet in de tabel staat, krijgt een schatting op basis van haar type (geïntegreerd, aparte kaart, software).
+- De **GPU-compressie** staat op automatisch: elk volume met bricks wordt gecomprimeerd zodra de kaart dat ondersteunt.
+
+::: tech
+De formule staat in `SVRManager.vramBudget` (`js/core/svr-manager.js`): `min(16 GiB, max(1 GiB, min(0,6 × geheugen, geheugen − 2 GiB)))`. Elk verlies van de WebGL-context in de afgelopen week halveert het budget (ondergrens 256 MiB).
+:::
+
+**Het beeld tijdens het draaien.**
+
+- **Niet grover tijdens het slepen.** Het beeld blijft even scherp terwijl u draait als in rust. Het verandert niet meer wanneer u de muis loslaat.
+- **De modus Fluorescentie (Imaris-achtig) reageert direct.** In deze modus passen helderheid, contrast, gamma en het aan- of uitzetten van kanalen onmiddellijk aan: het volume wordt dan niet opnieuw doorlopen. Dat gebeurt wel wanneer de camera, de stand, het uitknipvlak of de data veranderen.
 
 ## 3.4. De rechterkolom: de instellingen
 
@@ -557,11 +610,29 @@ Een dataset die wordt verstuurd, verschijnt **in deze lijst** (filter [Import]{.
 
 De banner en het formulier **werken zichzelf bij** wanneer de status verandert. De knop [Bewerken]{.ui} van het tabblad Importeren opent hier meteen de juiste dataset.
 
+Het **voorbeeld** laadt zodra de dataset bewerkbaar is, ook terwijl de rest nog binnenkomt. Tot dan toont het paneel een plaatsaanduiding in plaats van een foutmelding.
+
 ## 3.11. Als er geen dataset is geselecteerd
 
 ![Datasets, niets geselecteerd.](img-nl/tab-datasets-empty.png){.shot width=80%}
 
-Dit is het beginscherm van het tabblad: “Geen dataset geselecteerd — Klik op een dataset in de lijst om die hier te bekijken.”. Er is **geen** knop om een dataset te verwijderen en ook geen “catalogus opnieuw genereren”: verwijderen is een bewerking op de bestanden van de server, bewust zo, en de lijst wordt bij elke weergave opnieuw berekend.
+Dit is het beginscherm van het tabblad: “Geen dataset geselecteerd — Klik op een dataset in de lijst om die hier te bekijken.”. Om een dataset te verwijderen, zie § 3.12. Er is ook geen knop “catalogus opnieuw genereren”: de lijst wordt bij elke weergave opnieuw berekend.
+
+## 3.12. Een dataset verwijderen
+
+Een gepubliceerde dataset verwijderen **wist hem niet meteen**. Het prullenbakpictogram in zijn rij, met het label “Verwijderen (prullenbak, 60 dagen)”, verplaatst de map naar de **prullenbak**. De dataset verdwijnt uit de lijsten. De knop [Prullenbak]{.ui} van het tabblad, met een teller van de items, opent de prullenbak.
+
+::: note
+**De prullenbak bewaart elke verwijdering 60 dagen**, daarna wist hij ze definitief. Elk item toont de datum van verwijdering en het aantal resterende dagen. Per item kunt u:
+
+- [Herstellen]{.ui}: zet hem terug. Bestaat er al een dataset met dezelfde naam, dan vraagt het paneel om een andere naam.
+- [Definitief verwijderen]{.ui}: wist hem meteen, na bevestiging (“Dit kan niet ongedaan worden gemaakt.”).
+- [Prullenbak legen]{.ui}: wist alle items, na bevestiging.
+:::
+
+::: tip
+Een dataset **die nog wordt geïmporteerd** heeft geen prullenbakpictogram: verwijder hem in plaats daarvan via het tabblad [Importeren]{.ui} (hoofdstuk 4), met de knop [Verwijderen]{.ui}.
+:::
 
 # 4. Importeren — data versturen vanuit de browser
 
@@ -647,7 +718,7 @@ Een **onderbroken** import wordt niet eeuwig bewaard: de kaart toont “wordt ge
 | 6 | [Verwijderen]{.ui}: wist de reeds verzonden bestanden. |
 :::
 
-**[Controleren]{.ui}** leest alles wat is aangekomen opnieuw en controleert of elke brick-index naar aanwezige pakketten verwijst. Toast “Dataset geldig ✓”, of “Validatie mislukt:” gevolgd door codes (bijvoorbeeld `missing_pack:…`: een pakket ontbreekt; `truncated_pack:…`: een pakket is afgekapt; `incomplete_files`; `stray_files`; `index_hash_mismatch`).
+**[Controleren]{.ui}** leest alles wat is aangekomen opnieuw en controleert of elke brick-index naar aanwezige pakketten verwijst. Toast “Dataset geldig ✓”, of “Validatie mislukt:” gevolgd door codes (bijvoorbeeld `missing_pack:…`: een pakket ontbreekt; `truncated_pack:…`: een pakket is afgekapt; `incomplete_files`; `stray_files`; `index_hash_mismatch`; `foreign_column:…`: een bestand van een kolom die het formaat van de dataset niet heeft).
 
 **[Publiceren]{.ui}**: toast “Dataset gepubliceerd ✓ (verborgen in de verkenner — schakel hem in via het tabblad Datasets)”.
 
@@ -730,7 +801,7 @@ Dit bericht verschijnt wanneer u op **uitloggen** klikt of op een link die het p
 - De overdracht draait in een **Web Worker**: de interface blijft vloeiend. Ruwe blokken van **8 MiB** (kleiner op een PHP-host met strenge limieten: “Blokgrootte verlaagd naar {n} — sleep de map opnieuw om te hervatten.”), **4 blokken tegelijk**.
 - Elk blok draagt een **SHA-256-vingerafdruk** die **vóór** het schrijven wordt gecontroleerd. Een **serverjournaal** onthoudt de ontvangen blokken: dezelfde map opnieuw slepen hervat **tot op het blok nauwkeurig**; een al volledig bestand wordt niet opnieuw verstuurd.
 - Het journaal is hetzelfde onder beide servers (Python of PHP): een import die onder de ene is begonnen, kan onder de andere hervat worden.
-- Aanvaarde formaten: **formaten 2 tot 5** (`planes/`, `mips/`, bricks v3 en `index.bin`, de matrix van formaat 5 met zijn indexen per compressie en zijn snijkopieën `xy/`, `xz/`, `yz/`, `cuts/`, als laatste verzonden).
+- Aanvaarde formaten: **formaten 2 tot 6** (`planes/`, `mips/`, bricks v3 en `index.bin`, de matrix van formaat 5 en 6 met zijn indexen per kolom en zijn snijkopieën `xy/`, `xz/`, `yz/`, `cuts/`, als laatste verzonden). Formaat 6 heeft de kolommen `ll` en `q30`; een kolom die het formaat van de boom niet heeft, wordt geweigerd.
 :::
 
 ## 4.9. Als er iets misgaat
@@ -752,7 +823,7 @@ Dit bericht verschijnt wanneer u op **uitloggen** klikt of op een link die het p
 # 5. Data-updates — het formaat van de datasets
 
 ::: chapter-intro
-- Een gepubliceerde dataset heeft een **formaat** (1 tot 5). Het huidige formaat is **5**.
+- Een gepubliceerde dataset heeft een **formaat** (1 tot 6). Het huidige formaat is **6**.
 - Dit tabblad brengt ze **ter plekke** op niveau, zoals een software-update.
 - U kiest **wie het werk doet**: deze browser of de server. Niets is verplicht.
 :::
@@ -763,29 +834,38 @@ Dit bericht verschijnt wanneer u op **uitloggen** klikt of op een link die het p
 
 ## 5.1. Waarom en voor wie
 
-Elke volumedataset (`3d`, `live`) heeft een **gegevensformaat** (`formatVersion`, afwezig = formaat 1). Een dataset uit de verwerkingsketen **0.22.0** komt aan in **formaat 4**: alleen stap **4 → 5** blijft over (de pipeline schrijft formaat 5 rechtstreeks met de optie `--format 5`). De **2D-foto's** worden nooit geraakt.
+Elke volumedataset (`3d`, `live`) heeft een **gegevensformaat** (`formatVersion`, afwezig = formaat 1). De huidige versie is **formaat 6**. Een dataset die de verwerkingsketen **0.23.0** maakt, is al in formaat 6 en heeft geen stap nodig. Een oudere dataset krijgt de ontbrekende stappen, in volgorde: een dataset in formaat 4 krijgt **4 → 5** en **5 → 6**, een dataset in formaat 5 alleen **5 → 6**. De **2D-foto's** worden nooit geraakt.
 
 ::: note
-**Data-updates zijn niet nodig om de site te laten werken.** De viewer leest altijd de formaten 1 tot 5; de Studio valt terug op de bricks als `planes/` ontbreekt. Ze **versnellen** bepaalde bewerkingen van de Studio en **verbeteren** de weergavekwaliteit.
+**Data-updates zijn niet nodig om de site te laten werken.** De viewer leest altijd de formaten 1 tot 6; de Studio valt terug op de bricks als `planes/` ontbreekt. Ze **versnellen** bepaalde bewerkingen van de Studio en **verbeteren** de weergavekwaliteit.
 :::
 
-## 5.2. De vier stappen
+## 5.2. De vijf stappen
 
-Ze volgen elkaar in volgorde op: een dataset in formaat 1 krijgt ze alle vier.
+Ze volgen elkaar in volgorde op: een dataset in formaat 1 krijgt ze alle vijf.
 
 | Stap | Titel op het scherm | Wat ze aanmaakt | Wat het oplevert |
 |---|---|---|---|
 | **1 → 2** | Kopie per vlak van het native niveau (snelle XY-sneden in de Studio) | `planes/`: één bestand per z-vlak, verliesloze PNG-tegels van 512² (≈ 1,3× het native niveau in schijfruimte). De bricks worden niet aangeraakt. | Een native XY-snede leest **één vlak** in plaats van een laag van 64 vlakken: tientallen keren minder bytes, resultaat pixelidentiek. |
 | **2 → 3** | Maximumprojecties van elke brick-laag (snelle z-stackfiguren over de hele stapel) | `mips/`: één maximumprojectie per laag van 64 vlakken. | Een z-stackfiguur over de hele stapel leest ~3 pakketten in plaats van ongeveer 150. |
-| **3 → 4** | Brick-piramide v3: ook in Z gehalveerd, rand van één voxel, binaire index | **Bouwt** `bricks/` **opnieuw op**: bricks van 66³ met rand, ook in Z gehalveerde niveaus, `index.bin`. | Naadloze filtering, lokaal detail (“Detail bij inzoomen”), lichtere atlassen voor 1 tot 2 kanalen. |
-| **4 → 5** | Matrix resolutie × compressie: niveaus op 256·2ᵏ met alle coupes, vijf compressies, snelle sneden | **Bouwt** `bricks/` **opnieuw op**: niveaus van 4096, 2048… 256 voxels breed die alle coupes behouden; elk in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht); kopieën voor XY-, XZ / YZ- en schuine sneden. | De bezoeker kiest zijn vakje in een **kwaliteitstabel**; lichtere downloads; snelle native sneden in alle richtingen; metingen en exports altijd verliesvrij. |
+| **3 → 4** | Brick-piramide v3: ook in Z gehalveerd, rand van één voxel, binaire index | **Bouwt** `bricks/` **opnieuw op**: bricks van 66³ met rand, ook in Z gehalveerde niveaus, `index.bin`. | Naadloze filtering tussen de bricks, lichtere atlassen voor 1 tot 2 kanalen. |
+| **4 → 5** | Matrix resolutie × compressie: niveaus op 256·2ᵏ met alle coupes, vijf compressies, snelle sneden | **Bouwt** `bricks/` **opnieuw op**: niveaus van 4096, 2048… 256 voxels breed die alle coupes behouden; elk in vijf compressies (Max, Extra, High, Medium, Low); kopieën voor XY-, XZ / YZ- en schuine sneden. | De bezoeker kiest zijn vakje in een **kwaliteitstabel**; lichtere downloads; snelle native sneden in alle richtingen; metingen en exports altijd verliesvrij. |
+| **5 → 6** | Eén weergavekwaliteit: WebP Q30 op elk niveau, verliesvrij bewaard voor exports en downloads | **Voegt ter plaatse** per niveau de kolom `q30` toe (`index/q30.bin` en de q30-pakketten, naast de verliesvrije kolom `ll`), de grofste niveaus eerst. Daarna verwijdert hij de kolommen `b2`, `b4`, `q80` en `q50`. | Elk volume wordt in WebP-kwaliteit 30 getoond: lichter en sneller. Metingen en exports lezen de verliesvrije gegevens op de gekozen resolutie. |
 
 ::: warning
 **Stappen 3 → 4 en 4 → 5 bouwen de boom `bricks/` opnieuw op.** Het **native niveau blijft voxel voor voxel behouden**; de grovere niveaus worden herberekend. De oude boom wordt verwijderd **nadat** de versie is omgezet, behalve als het vakje [Vorige versie bewaren]{.ui} is aangevinkt (hij blijft dan ernaast staan als `bricks.previous/`, om te vergelijken met het hulpmiddel *Chunk debug*; hij neemt de ruimte van de bricks een tweede keer in, verwijder hem na de vergelijking). Bewaar bij kostbare data een reservekopie, zoals bij elke bewerking op bestanden.
 :::
 
+::: warning
+**Stap 5 → 6 gebeurt ter plaatse**: de bestaande bricks blijven staan, er komt per niveau een kolom WebP Q30 bij, en de vier kolommen `b2`, `b4`, `q80` en `q50` worden daarna verwijderd. [Vorige versie bewaren]{.ui} geldt daarom **niet** voor deze stap.
+:::
+
+::: tech
+De stap 5 → 6 heet `m006-q30` (`dataset_migrations.py`, `js/migrations/m006-q30.js`, en de PHP-tweeling in `api/_migrations_lib.php`). Hij draait op de Python-server en in de browser; op een PHP-host alleen in de browser.
+:::
+
 ::: note
-**Formaat 5 neemt veel meer schijfruimte in**: het bewaart hetzelfde volume meerdere keren. Bij de demodataset worden 9 MB bricks ongeveer 80 MB. Het paneel weigert te starten als het resultaat niet past (§ 5.9).
+**Formaat 5 neemt veel meer schijfruimte in**: het bewaart hetzelfde volume meerdere keren. Bij de demodataset worden 9 MB bricks ongeveer 80 MB. Formaat 6 bewaart er twee per niveau: de stap 5 → 6 verwijdert vier kolommen en voegt er één toe. Het paneel weigert te starten als het resultaat niet past (§ 5.9).
 :::
 
 ## 5.3. Overzicht van het tabblad
@@ -813,8 +893,8 @@ Twee “uitvoerders” kunnen het werk doen:
 
 | Uitvoerder | Wie rekent | Wat nodig is |
 |---|---|---|
-| **Deze browser** | Uw browser downloadt de bricks, zet ze opnieuw samen (Web Workers) en stuurt het resultaat **eenheid voor eenheid** terug. | Een browser die kan comprimeren, PNG-tegels exact terug kan lezen en verliesloze WebP kan coderen. |
-| **De server** | De server converteert zelf, via kleine verzoeken met een tijdslimiet. Geschikt voor gedeelde hosting. | Decoderen (en, voor stap 3 → 4, coderen) van verliesloze WebP (GD van PHP of Pillow van Python), zlib, NumPy aan Python-kant, minstens 128 MiB per verzoek en 10 s uitvoertijd. **Stap 4 → 5: alleen Python-server.** |
+| **Deze browser** | Uw browser downloadt de bricks, zet ze opnieuw samen (Web Workers) en stuurt het resultaat **eenheid voor eenheid** terug. | Een browser die kan comprimeren, PNG-tegels exact terug kan lezen en verliesloze WebP kan coderen; voor stap 5 → 6 ook verliesgevende WebP (kwaliteit 30). |
+| **De server** | De server converteert zelf, via kleine verzoeken met een tijdslimiet. Geschikt voor gedeelde hosting. | Decoderen (en, voor stap 3 → 4, coderen) van verliesloze WebP (GD van PHP of Pillow van Python), zlib, NumPy aan Python-kant, minstens 128 MiB per verzoek en 10 s uitvoertijd. **Stappen 4 → 5 en 5 → 6: alleen Python-server.** |
 
 - De keuze gebeurt **per dataset**, **vóór** het starten; ze is **tijdens de uitvoering vergrendeld** en tussen twee uitvoeringen te wijzigen.
 - Een uitvoerder die het niet kan, is **grijs**, met een tooltip die zegt waarom (bijvoorbeeld “de server kan lossless WebP-afbeeldingen niet decoderen”).
@@ -828,7 +908,7 @@ Staat op een gedeelde hosting de optie [De server]{.ui} op grijs, dan **werkt [D
 :::
 
 ::: note
-**Stap 4 → 5 op een PHP-host.** Een PHP-server kan deze stap niet zelf uitvoeren: de tooltip van [De server]{.ui} zegt “op deze server draait deze update in de browser”. De browser vraagt de server wat hij moet lezen, berekent elke eenheid en stuurt die terug; de server controleert alles en stelt het resultaat samen. Er is een browser nodig die WebP **met** verlies kan coderen (anders: “deze browser kan geen WebP-afbeeldingen met verlies coderen”). Gemeten op de demodataset E8 (een oud formaat 1): stap 4 → 5 duurde **339 eenheden en 4 minuten** in de browser.
+**De stappen 4 → 5 en 5 → 6 op een PHP-host.** Een PHP-server kan deze stappen niet zelf uitvoeren: de tooltip van [De server]{.ui} zegt “op deze server draait deze update in de browser”. De browser vraagt de server wat hij moet lezen, berekent elke eenheid en stuurt die terug; de server controleert alles en stelt het resultaat samen. Er is een browser nodig die WebP **met** verlies kan coderen (anders: “deze browser kan geen WebP-afbeeldingen met verlies coderen”). Gemeten op de demodataset E8 (een oud formaat 1): stap 4 → 5 duurde **339 eenheden en 4 minuten** in de browser.
 :::
 
 ## 5.5. De snelheidstest
@@ -862,14 +942,31 @@ De hoofdknop heet [Herstellen]{.ui} als de dataset zegt up-to-date te zijn maar 
 
 ## 5.7. Tijdens de conversie
 
-Getoonde statussen: **Wacht op zijn beurt** (“volgende op de server”), **Bezig**, **Pauzeren…**, **Gepauzeerd** (met de oorzaak: tabblad verlaten, pagina gesloten, sessie verlopen, server onbereikbaar), **Samenstellen** (“Vlakken samenstellen x/y”, “samenstellen en publiceren…”), **Mislukt** (met de oorzaak).
+![Het tabblad Data-updates tijdens een update: de voortgang start bij 0 % en de rijen tonen de grootte.](img-nl/tab-dataupdates.png){.shot width=88%}
+
+Getoonde statussen: **Wacht op zijn beurt** (“volgende op de server”), **Bezig**, **Pauzeren…**, **Gepauzeerd** (met de oorzaak: tabblad verlaten, pagina gesloten, sessie verlopen, server onbereikbaar), **Samenstellen** (“Vlakken samenstellen x/y”, “samenstellen en publiceren…”), **Mislukt** (met de oorzaak), en **In een ander tabblad** (zie hieronder).
 
 - **[Pauzeren]{.ui}** pauzeert alle wachtrijen; **[Hervatten]{.ui}** gaat verder waar ze waren gebleven.
 - **Het tabblad verlaten**: “Er loopt een update. Dit tabblad verlaten pauzeert hem (u kunt later hervatten). Verlaten?”. **Er gaat niets verloren**: dankzij het serverjournaal kunt u hervatten na een herlaadbeurt, een onderbreking of een wissel van uitvoerder.
+- **De voortgang begint bij 0 %.** Eenheden zonder gegevens (de achtergrond rond het monster, gebieden van een kanaal zonder signaal) hoeven niets te rekenen. Ze staan vanaf het begin als klaar aangegeven (“n zonder gegevens, al klaar”) en tellen niet mee in het percentage.
+- **De grootte blijft op de rij staan.** Terwijl de update loopt of gepauzeerd is, toont de rij de grootte van de dataset met wat er nog over is, bijvoorbeeld “163 MB (nog 84,3 MB)”.
+- **Eén tabblad per dataset.** Een dataset wordt in één tabblad van de browser bijgewerkt. Een ander tabblad van dezelfde browser toont hem als **In een ander tabblad**, zonder knoppen: volg de update daar.
+- **Gedeeld quotum.** Zodra meerdere tabbladen van deze browser datasets bijwerken, meldt het paneel: “{n} tabbladen van deze browser werken datasets bij: ze delen één verzoekquotum.”
+- **Tot vier werkers.** Het tabblad gebruikt maximaal vier werkers: twee bij minder dan 8 GB geheugen, en nooit meer dan de helft van de processorkernen van de computer.
+- **Grootte van een aanvraag op een PHP-host.** PHP weigert een aanvraag die groter is dan zijn limiet `post_max_size`. Het paneel kent die limiet en houdt zich eraan: een aanvraag is hooguit het kleinste van 32 MiB en de limiet minus 64 KiB, met een ondergrens van 1 MiB. Een grotere uitkomst van een eenheid gaat in stukken.
 
 ::: warning
 **Start dezelfde update niet in meerdere tabbladen**, en herstart niet in een lus. In versie 1.59.1 leidde een stortvloed aan verzoeken ertoe dat een hoster het **adres van een operator blokkeerde**. Sinds 1.59.2 lopen **alle** verzoeken van het tabblad via een **regelaar** (maximaal 6 tegelijk; sinds 1.59.3 4 tot 6 per seconde, omdat elke eenheid al haar invoergegevens in één verzoek leest; hij vertraagt en pauzeert wanneer de host traag antwoordt of 429 / 503 teruggeeft). U kunt zien: “De host antwoordt traag: verzoeken worden vertraagd zodat hij dit adres niet blokkeert.” of “Verbinding verbroken — wachten op het netwerk, er gaat niets verloren.”. **Laat het gewoon gebeuren.**
 :::
+
+### Automatisch opnieuw starten na een mislukking
+
+Mislukt een update door een tijdelijke oorzaak (een werker die vastloopt, een verbroken verbinding, een eenheid die even niet lukt), dan start het paneel hem **zelf opnieuw**, na een wachttijd van **10 s, 30 s, 1 min, 2 min en 5 min**. Elke herstart wordt gemeld: “{naam}: {fout} — herstart vanzelf over {s} s (poging {n})”, en komt in de geschiedenis.
+
+- **Vijf herstarts op rij** zonder dat één nieuwe eenheid klaar is, en de zesde mislukking is definitief. Het paneel meldt “Update van {naam} mislukt: …”. Dan is het aan u: [Opnieuw proberen]{.ui}.
+- De teller begint opnieuw zodra er weer een eenheid klaar is.
+- Een **netwerkonderbreking** is geen definitieve mislukking: de update wacht en hervat zodra de verbinding terug is.
+- Er is **geen** automatische herstart bij een verlopen sessie (u moet opnieuw inloggen), bij een eenheid die de server niet binnen zijn tijdslimiet kan converteren, bij een stap die geen enkele uitvoerder kan doen, en bij een geannuleerde update.
 
 ## 5.8. De onderste blokken
 
@@ -878,8 +975,8 @@ Getoonde statussen: **Wacht op zijn beurt** (“volgende op de server”), **Bez
 ::: legend
 | n | wat het is |
 |-|----------------------|
-| 1 | **Gegevensformaten**: het nieuwste formaat (5) en de lijst van de vier updates (“1 → 2”…). |
-| 2 | **Geschiedenis**: de laatste 20 bewerkingen, onthouden in deze browser. |
+| 1 | **Gegevensformaten**: het nieuwste formaat (6) en de lijst van de vijf updates (“1 → 2”… “5 → 6”). |
+| 2 | **Geschiedenis**: de bewerkingen die in deze browser zijn onthouden (tot 1000 regels). |
 | 3 | [Wissen]{.ui}: maakt de geschiedenis leeg. |
 :::
 
@@ -906,9 +1003,9 @@ Voor een zeer grote dataset, of een te trage host, kan de conversie **op een com
 
 ::: steps
 1. Kopieer de map van de dataset (bijvoorbeeld `DATA_WEB/3d/<map>`) naar de computer, in een kopie van het platform.
-2. Start `python tools/convert_dataset.py DATA_WEB/3d/<map>`. `--list` toont alleen de wachtende stappen; `--keep-previous` bewaart de oude boom.
+2. Start `python tools/convert_dataset.py DATA_WEB/3d/<map>`. Dat brengt de dataset tot het nieuwste formaat (6). `--list` toont alleen de wachtende stappen; `--keep-previous` bewaart de oude boom; `--to 4` stopt eerder.
 3. Een onderbroken conversie **gaat verder** waar ze stopte als u de opdracht opnieuw start.
-4. Sleep de geconverteerde map naar het tabblad **Importeren** (hoofdstuk 4): het aanvaardt een dataset in formaat 5 en controleert hem volledig voordat u hem kunt publiceren.
+4. Sleep de geconverteerde map naar het tabblad **Importeren** (hoofdstuk 4): het aanvaardt een dataset in formaat 5 of 6 en controleert hem volledig voordat u hem kunt publiceren.
 :::
 
 # 6. Soorten data — de publieke naam van elke categorie
@@ -941,7 +1038,7 @@ Voor een zeer grote dataset, of een te trage host, kan de conversie **op een com
 - **Korte naam** — labels, filters, lijsten. **Lange titel** — grote kaarten van de startpagina.
 - **Laat een veld leeg om de standaardnaam te behouden**: het platform valt dan terug op zijn eigen vertaling, in de taal van de bezoeker.
 - [Standaardnamen]{.ui} vraagt “De vertaalde standaardnamen voor alle soorten herstellen?”. Het **maakt** de velden **leeg**, het schrijft geen vaste tekst.
-- Resultaat: toast “Namen van de soorten opgeslagen.” (of “Opslaan mislukt.”).
+- Resultaat: toast “Namen van de soorten opgeslagen.” (of “Opslaan mislukt.”). Lukt het opslaan niet, dan toont de melding ook de HTTP-status en de foutcode van de server (bijvoorbeeld `HTTP 403`): geef die door aan de persoon die de server beheert.
 
 ::: note
 **Wat dit tabblad niet wijzigt.** Niet de mappen van de server (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`), niet de adressen van de pagina's, niet de links die uw bezoekers al hebben opgeslagen, niets in de datasets. Het **maakt geen** categorie aan: de drie soorten zijn die welke de software kan tonen. Celtracking is **geen** soort: het is een laag van een Live-dataset.
@@ -949,7 +1046,15 @@ Voor een zeer grote dataset, of een te trage host, kan de conversie **op een com
 
 De paginavariabelen `{type3d}`, `{type2d}` en `{typeLive}` (hoofdstuk 10) nemen deze namen over. Het tabblad schrijft alleen het blok `datasetTypes` van de configuratie: het overschrijft niet wat u in Identiteit hebt gedaan. Het waarschuwt u als u het verlaat met wijzigingen.
 
-# 7. Statistieken — wie bekijkt wat
+# 7. Statistieken, opslag en integriteit — wie bekijkt wat, waar de ruimte heen gaat en of alles compleet is
+
+::: chapter-intro
+- Drie tabbladen uit de groep **Gegevens** om te **zien wat er gebeurt**: wie de site bezoekt, hoeveel schijfruimte de installatie gebruikt en of elke dataset compleet is.
+- Ze **wijzigen niets**: ze lezen en tonen.
+- De bezoekcijfers lopen door. De schijfruimte wordt tien minuten bewaard; de integriteit wordt gecontroleerd wanneer u de controle start.
+:::
+
+## 7.1. Wie bekijkt wat
 
 ![Het tabblad Statistieken.](img-nl/tab-stats.png){.shot width=88%}
 
@@ -970,6 +1075,143 @@ De tabel “Per dataset” geeft weergaven, downloads en laatste raadpleging. Zo
 
 ::: note
 **Er worden geen persoonsgegevens verzameld.** Het zijn gewone tellers: geen trackingcookie, geen opgeslagen IP-adres, geen externe dienst. Er verlaat niets de server. De server beperkt bovendien de snelheid van de statistiekbakens.
+:::
+
+## 7.2. Opslag — waar de schijfruimte naartoe gaat
+
+Dit tabblad beantwoordt één vraag: **waar gaat de schijfruimte naartoe?** Het wijzigt geen enkel bestand.
+
+::: note
+**De teksten van dit tabblad zijn nog Frans, in elke taal.** Ze hebben nog geen sleutels in de taalbestanden (ook niet in het Nederlands), dus het paneel toont de namen van de kaarten, de balk en de knoppen in het Frans. Hieronder staat de Nederlandse uitleg, naast de Franse naam die u op het scherm ziet. De getallen zijn wel juist.
+:::
+
+::: analogy
+**Een opslagkast.** U ziet hoeveel van de kast vol is, hoeveel de gepubliceerde boeken innemen, hoeveel de dozen van de verhuizing innemen, en hoeveel er nog vrij is. Alleen die laatste ruimte kunt u echt gebruiken.
+:::
+
+### De vijf delen van de balk
+
+![Het tabblad Opslag: de balk van het volume, de kaarten en de tabel per dataset.](img-nl/tab-storage.png){.shot width=88%}
+
+De bovenste kaart toont het volume waarop de installatie staat: de **totale capaciteit**, de **bezette** ruimte en de **vrije** ruimte. Eronder verdeelt een balk de ruimte in vijf delen:
+
+| Naam op het scherm | Wat het is |
+|---|---|
+| **Données publiées** | De gepubliceerde datasets: bricks, planes, mips, downloads en miniaturen (map `DATA_WEB`). |
+| **Imports & corbeille** | Imports die nog binnenkomen of wachten, de prullenbak en de resten van data-updates (map `uploads`). |
+| **Plateforme & code** | De programmabestanden: plug-ins, bibliotheken, scripts, vertalingen, configuratie en documentatie. |
+| **Autres sur le volume** | Wat op hetzelfde volume staat zonder bij de installatie te horen, bijvoorbeeld de bestanden van een andere dienst. |
+| **Disponible** | De werkelijk vrije ruimte van het volume. |
+
+::: note
+Het volume is dat van de installatie. Wordt het gedeeld met andere diensten, dan groepeert **Autres sur le volume** hun ruimte. **Disponible** is de echte vrije ruimte van het volume: een strenger quotum van de hoster verschijnt er niet in. Een bestand dat op twee plaatsen tegelijk staat (een harde koppeling) telt één keer, zoals op de schijf zelf.
+:::
+
+### De kaarten en de tabel « Per dataset »
+
+- **Données publiées**: het volume per soort data (3D, 2D, Live, en “Autres fichiers” voor de rest), met het aantal datasets. De namen zijn die u zelf hebt gekozen in Soorten data (hoofdstuk 6).
+- **Imports & corbeille**: de imports die nog binnenkomen (*Imports en cours*), de prullenbak (*Corbeille (60 jours)*), de migraties (*Migrations de données*), de importjournalen (*Journaux d’import*) en de rest, elk met het aantal bestanden.
+- **Plateforme & code**: de programmamappen, zoals plug-ins, bibliotheken, scripts, vertalingen, configuratie, de documentatie en het pipelinepakket.
+- **Par dataset** (de tabel): per dataset de grootte, het aantal bestanden, het aandeel en de vier grootste mappen (bijvoorbeeld `bricks`, `planes`). Van groot naar klein gesorteerd.
+
+### Herberekenen
+
+- Het meten van de mappen duurt enkele seconden. Het resultaat blijft **tien minuten** op de server bewaard: opnieuw openen is dan meteen klaar. De kop van de kaart zegt wanneer er gemeten is.
+- **Disponible** wordt elke keer dat u het tabblad opent opnieuw gelezen, zodat die waarde altijd actueel is.
+- [Recalculer]{.ui} dwingt een nieuwe meting af.
+
+### Als de schijf vol raakt
+
+| Wat neemt ruimte in | Wat u kunt doen |
+|---|---|
+| Bewaarde vorige versies van bricks | Tabblad **Data-updates**, blok *Bewaarde vorige versies*, knop *Verwijderen* (hoofdstuk 5). |
+| Een import die niet is gepubliceerd | Tabblad **Importeren**, knop [Verwijderen]{.ui} (hoofdstuk 4). Een gepubliceerde dataset wordt daarmee nooit gewist. |
+| Verwijderde datasets | Ze blijven **60 dagen** in de prullenbak (`uploads/trash`). Daarna maakt de server de ruimte automatisch vrij. |
+
+::: warning
+Verwijder bestanden in `DATA_WEB` nooit met de hand zonder reservekopie. Gebruik de knoppen van het paneel: die weten wat bij elkaar hoort.
+:::
+
+::: tech
+- De meting wordt gedaan door `api/admin.php?action=storage` (Python: `dev_server.py`): één doorloop van de installatie, elk bestand één keer ingedeeld, harde koppelingen één keer geteld.
+- `refresh=1` dwingt een nieuwe meting af; de server bewaart de meting 600 seconden.
+- Tests: `tests/test_storage_report.py` en `tests/test_storage_report_php.php`.
+:::
+
+## 7.3. Data-integriteit — controleren, zonder iets te wijzigen
+
+Dit tabblad controleert **elke dataset**, gepubliceerd of nog in import, op wat ontbreekt, wat te veel is, en of hij in het **nieuwste formaat** staat.
+
+::: analogy
+**Een controleur die de dozen telt.** Hij vergelijkt de lijst op het etiket met wat er echt in de doos zit. Ontbreekt er iets, dan schrijft hij dat op; ligt er iets dat niet op de lijst staat, dan schrijft hij dat ook op. Hij opent de doos niet en legt niets om.
+:::
+
+### Wat er wordt gecontroleerd
+
+| Vraag | Voorbeelden |
+|---|---|
+| Ontbreekt er iets? | `metadata.json`, de miniatuur, het manifest en de index, elk pakket dat het manifest noemt (met de juiste lengte), de galerijafbeeldingen die in `metadata.json` staan. |
+| Is er iets teveel? | Losse of onderbroken bestanden, resten van een onderbroken update (`*.pre-swap`), galerijbestanden die niet in `metadata.json` staan, bestanden die een import nooit had gepland. |
+| Is het formaat het nieuwste? | Een dataset die nog niet in formaat 6 staat, krijgt de bevinding dat de conversie in afwachting is. |
+
+::: note
+Een import die **nog bezig is**, wordt gecontroleerd tot wat er is aangekomen. De bevinding “Import bezig — gecontroleerd tot wat ontvangen is.” zegt dat. Controleer opnieuw zodra de overdracht klaar is.
+:::
+
+### Het scherm
+
+![Het tabblad Data-integriteit: de samenvatting en de tabel met de datasets.](img-nl/tab-integrity.png){.shot width=88%}
+
+- Bovenaan vier kaarten: **In orde**, **Waarschuwingen**, **Fouten** en **Nieuwste formaat**.
+- [Controle starten]{.ui} begint de controle van alle datasets. Daarna heet de knop [Opnieuw uitvoeren]{.ui}. De tabel vult zich naarmate de resultaten binnenkomen.
+- Het vakje [Alleen datasets met bevindingen]{.ui} verbergt de datasets zonder bevinding.
+- Per rij: de **status** (OK, of het aantal bevindingen), de **dataset** (met het label *import* bij een import), het **soort**, het **formaat**, en [Details]{.ui} met de bevindingen en hun oplossing.
+- [Opnieuw controleren]{.ui} verschijnt alleen bij een waarschuwing of een fout. Hij controleert **die ene dataset** opnieuw en laat de rest van de tabel staan.
+
+### De bevindingen en hoe u ze oplost
+
+De teksten hieronder zijn die van het paneel.
+
+| Bevinding | Oplossing |
+|---|---|
+| Een pack uit het manifest ontbreekt | Importeer de dataset opnieuw (alleen ontbrekende bestanden worden opnieuw verstuurd) of herstel ze uit een back-up. |
+| Een pack is korter dan het manifest aangeeft | Het bestand is afgekapt: importeer de dataset opnieuw, alleen beschadigde bestanden worden opnieuw verstuurd. |
+| Een brick-index komt niet overeen met zijn hash | Importeer de dataset opnieuw of herstel de indexbestanden uit een back-up. |
+| Niet in het nieuwste formaat — conversie in afwachting | Open Data-updates en voer de openstaande conversie uit. |
+| Een datastructuur ontbreekt of is ongeldig — herstel in afwachting | Open Data-updates: het herstel staat daar en draait als een conversie. |
+| Galerijafbeeldingen uit metadata ontbreken | Datasets > bewerken > Galerij: verwijder de ontbrekende items of upload de afbeeldingen opnieuw. |
+| Galeriebestanden die niet in metadata staan | Datasets > bewerken > Galerij: sla op om de lijst af te stemmen, of verwijder de overtollige bestanden. |
+| Resten van een onderbroken update | Voer de conversie opnieuw uit via Data-updates; verwijder de *.pre-swap-resten pas als de dataset correct opent. |
+| Een vorige bricks-boom wordt bewaard | Te verwijderen zodra de dataset in orde is: Data-updates > vorige versie verwijderen. |
+| Bestanden nog niet volledig ontvangen | Open het tabblad Importeren en hervat deze import. |
+| Bestanden die de import nooit gepland had | Verwijder deze bestanden uit de import, of annuleer de import en begin opnieuw. |
+| Er bestaat al een gepubliceerde dataset met dezelfde naam | Publiceren zou de gepubliceerde dataset vervangen. Annuleer deze import als het een duplicaat is. |
+| Bestanden in de databomen die geen import zou accepteren | Deze bestanden horen bij geen enkel formaat. Verwijder ze via SFTP als u ze niet bewust hebt toegevoegd. |
+| Het importjournaal is verdwenen | Annuleer en importeer opnieuw. |
+
+::: tip
+Een bevinding is een **waarschuwing** of een **fout**. Begin met de fouten. Een waarschuwing over het formaat verdwijnt zodra de conversie is uitgevoerd en de dataset opnieuw is gecontroleerd.
+:::
+
+### Alleen-lezen?
+
+::: warning
+**Op de Python-server wijzigt de controle niets.** Op een PHP-host repareert de controle eerst het `type` en de `id` van een `metadata.json` die niet meer bij de naam van de map passen; alleen die twee velden worden herschreven. Het tabblad zegt “Alleen-lezen: er wordt niets gewijzigd”: dat klopt op de Python-server, niet op PHP.
+:::
+
+### Als de controle zelf mislukt
+
+De bevinding **“De controle zelf is mislukt”** betekent dat de controle van die dataset **niet** is uitgevoerd. De dataset kan in orde zijn. Het detail zegt wat de server antwoordde:
+
+- **HTTP 401**: uw sessie is verlopen. Meld u opnieuw aan en controleer opnieuw.
+- **HTTP met een tekst** (bijvoorbeeld HTTP 500): de server heeft de controle afgebroken; het begin van het antwoord staat erbij.
+- **PHP stopped**: PHP heeft de controle afgebroken, bijvoorbeeld door de geheugen- of tijdslimiet. Het detail noemt die limieten.
+- **Leeg antwoord**: meestal een time-out van de hoster.
+
+Gebruik dan [Opnieuw controleren]{.ui} op deze dataset, niet de hele controle opnieuw. Komt de fout terug, dan kan de persoon die de server beheert de PHP-limieten verhogen (`memory_limit` en `max_execution_time`).
+
+::: tech
+De controle draait in `dataset_integrity.py` (Python, via `dev_server.py` `_handle_integrity`) en in `api/_integrity_lib.php` (PHP, via `api/integrity.php`). Ze vereist een beheerdersessie en hergebruikt de validatie van de import en van de data-updates. Op een PHP-host vraagt de controle om 1 GiB geheugen en 300 seconden, voordat ze een grote timelapse-manifest leest.
 :::
 
 # 8. Identiteit — de naam en het vocabulaire van de site
@@ -1041,7 +1283,7 @@ Dit woord wordt daarna **automatisch** overgenomen in de hele publieke interface
 - **Navigatie** — de vakjes ““Verkenner” tonen”, ““Vergelijken” tonen”, ““Over” tonen”, ““Juridisch” tonen”. Uitvinken haalt de ingang uit het menu **zonder de pagina te verwijderen**.
 
 ::: warning
-**“Juridisch” is standaard uitgevinkt.** Schrijft u uw juridische informatie (hoofdstuk 11), kom dan hier terug om het aan te vinken: anders blijft de pagina onzichtbaar.
+**“Juridisch” staat op een nieuwe installatie aangevinkt.** Vinkt u het uit, dan verdwijnt de link en blijft de pagina onzichtbaar: vink het weer aan zodra uw juridische informatie klaar is (hoofdstuk 11).
 :::
 
 ::: note
@@ -1377,6 +1619,8 @@ Fouten: “Ongeldige identificatie.”, “Deze pagina bestaat al.”. Verwijder
 
 Een eenvoudige editor met vaste opmaak voor de juridische tekst. De secties worden getoond in de volgorde waarin u ze maakt; elk heeft een “Titel van de sectie”, een “Tekst…” en een knop [Verwijderen]{.ui}. Zonder sectie: “Geen secties. Voeg er een toe.”. Resultaat: “Juridische informatie opgeslagen.”. <kbd>Ctrl</kbd> + <kbd>S</kbd> slaat op. De titel van het tabblad is “Juridische informatie”.
 
+**Op een nieuwe installatie** staat het vakje “Juridisch” tonen aangevinkt (de link staat in de voettekst) en toont de juridische pagina zes sjabloonsecties — Uitgever, Gegevensbescherming & privacy, Cookies & lokale opslag, Intellectuele eigendom, Disclaimer & aansprakelijkheid, Contact — waarvan u de [tussen haken] geplaatste velden vervangt door uw gegevens.
+
 **Gebruikelijke secties:** uitgever van de site, hoster, intellectueel eigendom, persoonsgegevens, contact.
 
 ::: warning
@@ -1405,7 +1649,7 @@ Elke plug-in neemt een van de **drie plaatsen** in:
 |---|---|---|
 | **Gereedschap** (werkbalk) | De knoppen bovenaan de viewer | Afstandsmeting, schermopname, presentatiemodus |
 | **Kanalen** (per kanaal) | De instellingen onder elk fluorescentiekanaal | Histogram, gaussiaans filter |
-| **Weergavemodi** (shaders) | Het keuzemenu dat bepaalt hoe het volume wordt getekend | Fluorescence, Natural Fluorescence, Structure (DVR) |
+| **Weergavemodi** (shaders) | Het keuzemenu dat bepaalt hoe het volume wordt getekend | Fluorescentie (Imaris-achtig), Natuurlijke fluorescentie (diepte), Structuur (DVR) |
 
 ## 12.2. Het scherm
 
@@ -1528,8 +1772,8 @@ Deze plug-ins worden **niet** met de site meegeleverd: ze worden op aanvraag ge�
 
 | Plug-in | Wat het voor de bezoeker doet |
 |---|---|
-| **Fluorescence** | De standaardweergave: elk kanaal geeft zijn kleur af, zoals in een fluorescentiemicroscoop |
-| **Natural Fluorescence** | Elk fluorofoor gloeit in zijn kleur; dichte structuren verbergen wat erachter ligt |
+| **Fluorescentie (Imaris-achtig)** | De standaardweergave: elk kanaal geeft zijn kleur af, zoals in een fluorescentiemicroscoop |
+| **Natuurlijke fluorescentie (diepte)** | Elk fluorofoor gloeit in zijn kleur; dichte structuren verbergen wat erachter ligt |
 | **Structure (DVR)** | Volumeweergave met diepte en schaduw, die vormen laat uitkomen |
 
 **Kanalen**
@@ -1634,7 +1878,7 @@ Een geïnstalleerde plug-in waarvoor een nieuwere **én** compatibele versie bes
 | **`niet compatibel`** | Verschijnt alleen bij een **niet-geïnstalleerde** plug-in: hij vraagt een andere versie van het platform. De installatieknop is grijs: werk het platform bij (hoofdstuk 14). |
 
 ::: note
-Een **al geïnstalleerde** plug-in draagt nooit het label `niet compatibel`: die bij u draait, werkt; alleen zijn volgende versie kan wachten. Een pakket dat een soort data declareert, vereist een **recent** platform (1.51 tot 1.53): een niet-bijgewerkte site ziet “niet compatibel” bij de recente plug-ins.
+Een **al geïnstalleerde** plug-in draagt nooit het label `niet compatibel`: die bij u draait, werkt; alleen zijn volgende versie kan wachten. De compatibiliteit van een pakket hangt af van het veld `platformCompat` (een bereik van platformversies): een site buiten dat bereik ziet “niet compatibel” bij dat pakket.
 :::
 
 Toestanden van de catalogus: “Catalogus niet beschikbaar: …”, “Catalogus onbereikbaar.”, “Geen plug-ins in de catalogus.”, “Geen catalogusbron ingesteld…”.
@@ -1760,7 +2004,7 @@ Een kaart **Plug-in-updates** beantwoordt dezelfde vraag voor de modules: “{n}
 
 ## 14.5. Het verwerkingspakket
 
-De kaart **Verwerkingspakket** vergelijkt het pakket van de verwerkingsketen dat **hier is geïnstalleerd** met dat bij de **laatste GitHub-release**. Toestanden: “Het verwerkingspakket is up-to-date. (v0.21.0)” of “Nieuw verwerkingspakket: vX (hier: vY)” met [Het pakket downloaden]{.ui}.
+De kaart **Verwerkingspakket** vergelijkt het pakket van de verwerkingsketen dat **hier is geïnstalleerd** met dat bij de **laatste GitHub-release**. Toestanden: “Het verwerkingspakket is up-to-date. (v0.23.0)” of “Nieuw verwerkingspakket: vX (hier: vY)” met [Het pakket downloaden]{.ui}.
 
 Het wordt **op het verwerkingswerkstation geïnstalleerd, niet op deze server**: download het en vervang de map die daar wordt gebruikt. **Het platform hoeft niet te worden bijgewerkt** om een nieuwer pakket te krijgen. Is GitHub onbereikbaar: “GitHub kon niet worden bereikt om het verwerkingspakket te controleren.”.
 
@@ -1798,7 +2042,7 @@ Het wordt **op het verwerkingswerkstation geïnstalleerd, niet op deze server**:
 Het pakket bevat **twee pipelines** (volumes met tracking, trackinganalyse), de **import van 2D-foto's**, voorbeeldinvoer (meteen bruikbaar om te oefenen) en een starter die **zijn eigen integriteit controleert** (SHA-256).
 
 ::: note
-**Twee nummers, en dat is normaal.** De kop toont `pipeline v0.21.0`: de versie **van het pakket**, niet die van de site. De pipeline 0.22.0 schrijft **formaat 4** (alleen stap 4 → 5 blijft over in **Data-updates**), of formaat 5 met de optie `--format 5`, **behoudt de curatie** die in het paneel is gedaan wanneer een dataset opnieuw wordt verwerkt (verborgen, naam, oriëntatie…) en **publiceert alles of niets**.
+**Twee nummers, en dat is normaal.** De kop toont `pipeline v0.23.0`: de versie **van het pakket**, niet die van de site. De pipeline 0.23.0 schrijft standaard **formaat 6** en kan ook formaat 4 of 5 maken (optie `--format`). Een dataset die hij maakt, heeft geen stap nodig in **Data-updates**. Hij **behoudt de curatie** die in het paneel is gedaan wanneer een dataset opnieuw wordt verwerkt (verborgen, naam, oriëntatie…) en **publiceert alles of niets**.
 :::
 
 Wanneer een nieuwere versie van het pakket wordt gepubliceerd, verschijnt bovenaan een **banner**: “Nieuwe versie van het pakket: v… — Deze server biedt v… aan. Download hieronder de nieuwe versie; het platform zelf hoeft hiervoor niet te worden bijgewerkt.” met [Download v…]{.ui}; voor de lichte editie houdt [Geïnstalleerde versie]{.ui} het pakket van de server bereikbaar.
@@ -1880,7 +2124,7 @@ Mik op **12 tekens of meer**. Een zin die u makkelijk onthoudt is beter dan een 
 
 ## 16.2. Hoe het wachtwoord wordt opgeslagen
 
-- **Nooit leesbaar.** De server bewaart er alleen een onomkeerbare vingerafdruk van (PBKDF2 met salt). Uit de vingerafdruk komt men niet terug bij het wachtwoord.
+- **Nooit leesbaar.** De server bewaart er alleen een onomkeerbare vingerafdruk van (PBKDF2-HMAC-SHA256 met salt). Uit de vingerafdruk komt men niet terug bij het wachtwoord.
 - **Het bestand met de inloggegevens wordt nooit geserveerd.** Zelfs door zijn exacte adres te typen krijgt men een fout.
 - **Wordt het bestand verwijderd**, dan stelt het paneel voor een wachtwoord aan te maken: dat is de nooduitgang (bijlage B).
 - **Het eerste aanmaken kan nooit** een bestaand wachtwoord **overschrijven**.
@@ -1933,14 +2177,14 @@ De beschikbare talen (Français, English, Nederlands, Español, Deutsch, Italian
 Voorbehouden aan de persoon die de repository beheert, maar goed om te weten om het juiste te vragen. Een document wordt gepubliceerd door een bestand in de map `DOCS/` van de repository te zetten, met een strenge naamregel:
 
 ```
-261007 - GUIDE-ADMIN - NL.pdf
+261102 - GUIDE-ADMIN - NL.pdf
 └─┬──┘   └────┬────┘   └┬┘
   │           │         └── de taal
   │           └──────────── de id van het document, dezelfde van versie tot versie
   └──────────────────────── de datum JJMMDD: dat is het versienummer
 ```
 
-- **De datum** rangschikt de versies: de recentste wordt voorgesteld, de andere blijven bereikbaar. Deze handleiding, gedateerd **7 oktober 2026**, wordt “de recentste” ten opzichte van de edities van augustus 2026.
+- **De datum** rangschikt de versies: de recentste wordt voorgesteld, de andere blijven bereikbaar. Deze handleiding, gedateerd **2 november 2026**, wordt “de recentste” ten opzichte van de vorige edities.
 - **De id** moet van versie tot versie **identiek** blijven, anders ziet het paneel er twee verschillende documenten in.
 - Een bestand dat de regel niet volgt, wordt onderaan het tabblad **als genegeerd gemeld** (“Genegeerde bestanden (naam voldoet niet)”): een tikfout valt op.
 
@@ -2082,6 +2326,38 @@ Probeer **Beveiliging › [Rechten herstellen]{.ui}** (§16.3): het is de meest 
 
 Zegt het bericht “automatisch teruggezet”, dan **hoeft u niets te doen**: de site is teruggekeerd naar zijn vorige versie. Probeer het later opnieuw, of meld het foutbericht.
 
+### “De afbeelding is minder scherp dan verwacht”
+
+**Oorzaak:** bij een dataset in formaat 6 staat het vakje [Snel laden]{.ui} standaard aan: het volume wordt dan in WebP-kwaliteit 30 getoond, wat lichter is. **Oplossing:** zet het vakje uit in de sectie Renderkwaliteit van het voorbeeld. De verliesvrije resoluties worden dan geladen (grotere downloads). Deze keuze geldt alleen voor deze browser.
+
+### “Kwaliteit {quality} niet beschikbaar” of het vakje ontbreekt
+
+**Oorzaak:** het vakje [Snel laden]{.ui} bestaat alleen voor een dataset in **formaat 6**; een dataset in formaat 5 toont de lijsten Resolutie en Kwaliteit. **Oplossing:** kies een andere resolutie in de lijst.
+
+### “Het voorbeeld toont een lager niveau dan ik koos”
+
+**Oorzaak:** de grafische kaart heeft niet genoeg geheugen voor het gekozen niveau. De viewer toont dan het eerstvolgende grovere niveau; de regel “Getoond op …” zegt welk niveau dat is. **Oplossing:** er is niets in te stellen: het geheugen van de kaart wordt automatisch vastgesteld (hoofdstuk 3, §3.3).
+
+### “De browser heeft de pagina een 3D-context geweigerd (WebGL)”
+
+**Oorzaak:** na een crash van het grafische stuurprogramma blokkeert de browser WebGL voor de site tot hij volledig opnieuw is gestart. **Oplossing:** sluit de browser helemaal af en open de pagina opnieuw. Blijft het zo, controleer dan of de hardwareversnelling aan staat.
+
+### “In een ander tabblad” of “Gedeeld quotum”
+
+**Oorzaak:** een ander tabblad van dezelfde browser werkt dezelfde dataset bij, of meerdere tabbladen werken tegelijk. **Oplossing:** niets te doen. Volg de update in het andere tabblad, of sluit dat tabblad als u niet wilt dat het meewerkt.
+
+### “De update herstart steeds, maar houdt niet op”
+
+**Oorzaak:** de hoster of het netwerk is onstabiel en de fouten blijven terugkomen. **Oplossing:** wacht. Na vijf herstarts zonder nieuwe eenheid stopt de update: klik op [Opnieuw proberen]{.ui}, of kies [Deze browser]{.ui} als de uitvoerder op de server faalt.
+
+### “HTTP 500” of “PHP stopped” bij Data-integriteit
+
+**Oorzaak:** op een PHP-host heeft de controle de tijds- of geheugenlimiet overschreden, of PHP heeft een fatale fout gemeld. **Oplossing:** geef de melding door aan de persoon die de server beheert (het PHP-foutenlogboek bevat de details), en klik daarna op [Opnieuw controleren]{.ui}.
+
+### De ruimte verandert niet in Opslag
+
+**Oorzaak:** het resultaat wordt **tien minuten** bewaard. **Oplossing:** klik op [Recalculer]{.ui}.
+
 ### “Het paneel is onleesbaar / de keuzemenu's zijn wit op wit”
 
 Doe een **geforceerde herlaadbeurt**: <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> (Windows) of <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> (Mac). De browser bewaart soms oude bestanden in het geheugen.
@@ -2101,14 +2377,18 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 |---|---|
 | **Kanaal** | Een fluorescente kleuring (DAPI, GFP, Pecam1…). Een dataset bevat er vaak meerdere, over elkaar heen gelegd. |
 | **Voxel** | Het equivalent van een pixel in drie dimensies. Zijn werkelijke grootte wordt door de kalibratie gegeven (§3.6). |
-| **Brick** | Een kleine volumekubus (64×64×64 voxels, of 66³ met rand in de formaten 4 en 5). De site laadt ze op aanvraag om volumes van meerdere gigabytes te tonen zonder alles te downloaden. |
+| **Brick** | Een kleine volumekubus (64×64×64 voxels, of 66³ met rand in de formaten 4 tot 6). De site laadt ze op aanvraag om volumes van meerdere gigabytes te tonen zonder alles te downloaden. |
 | **LOD** | *Level of Detail*: meerdere resoluties van hetzelfde volume. De site toont eerst een grove versie en verfijnt dan. |
 | **Soort dataset** | Een van de drie categorieën: `3d` (vast volume), `2d` (gekalibreerde foto), `live` (4D-tijdreeks, eventueel met de tracking van zijn cellen). Dit zijn de mappen van de server; de naam die het publiek ziet, stelt u in bij **Soorten data** (hoofdstuk 6). |
-| **Gegevensformaat** (`formatVersion`) | Het “inrichtingsniveau” van een gepubliceerde dataset, van 1 tot 4 (huidig: 4). Wordt op niveau gebracht in **Data-updates**. |
+| **Gegevensformaat** (`formatVersion`) | Het “inrichtingsniveau” van een gepubliceerde dataset, van 1 tot 6 (huidig: 6). Wordt op niveau gebracht in **Data-updates**. |
 | **Vlakken** (`planes/`) | Formaat 2: een kopie van het native niveau **vlak voor vlak** (verliesloze PNG), voor snelle XY-sneden in de Studio. |
 | **Laagprojecties** (`mips/`) | Formaat 3: de maximumprojectie van elke laag van 64 vlakken, voor snelle z-stackfiguren. |
-| **Brick-piramide v3** | Formaat 4: bricks van 66³ met een rand van één voxel, ook in Z gehalveerde niveaus, `index.bin`. Brengt naadloze filtering en “Detail bij inzoomen”. |
-| **Matrix (formaat 5)** | Formaat 5: hetzelfde volume op meerdere resoluties (alle coupes behouden) en in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht), plus kopieën voor snelle sneden. De bezoeker kiest zijn vakje in een tabel; metingen en exports blijven verliesvrij. |
+| **Brick-piramide v3** | Formaat 4: bricks van 66³ met een rand van één voxel, ook in Z gehalveerde niveaus, `index.bin`. Brengt naadloze filtering tussen de bricks. |
+| **Matrix (formaat 5)** | Formaat 5: hetzelfde volume op meerdere resoluties (alle coupes behouden) en in vijf kwaliteiten (Max, Extra, High, Medium, Low), plus kopieën voor snelle sneden. De bezoeker kiest zijn vakje in een tabel; exports blijven verliesvrij; metingen lezen het getoonde beeld. |
+| **Eén weergavekwaliteit (formaat 6)** | Het huidige formaat: elk niveau twee keer, verliesvrij (voor exports en downloads) en in WebP Q30 (voor wat op het scherm staat). Nieuwe datasets krijgen dit formaat. |
+| **WebP Q30** | Verliesgevende WebP met kwaliteit 30: wat de viewer toont. Metingen lezen het getoonde beeld (de Q30-kopie, tenzij Snel laden uit staat); exports zijn verliesvrij. |
+| **Snel laden** | Het vakje onder de resoluties van een formaat-6-dataset. Aan: de Q30-bricks laden; uit: de verliesvrije bricks (grotere downloads). |
+| **GPU-budget** | Het geheugen dat de viewer de grafische kaart toestaat: 60 % van het eigen geheugen van de kaart (zie hoofdstuk 3, §3.3). Wordt automatisch vastgesteld. |
 | **Zijde van het monster** | Instelling die zegt of het bestand het monster van bovenaf (“rechtop”) of van onderaf (“ondersteboven”) toont. |
 | **Standaardweergave** | De stand waarin een dataset opent, vastgelegd vanuit het voorbeeld. |
 
@@ -2120,6 +2400,10 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 | **Uitvoerder** | Wie de berekening van een data-update doet: **deze browser** of **de server**. Elk heeft zijn wachtrij. |
 | **Netwerkregelaar** | De beveiliging die het aantal naar de hoster gestuurde verzoeken beperkt (6 tegelijk, 4 tot 6 per seconde) om te voorkomen dat hij uw adres blokkeert. |
 | **Journaal** | Het schrift dat de server bijhoudt van wat al is aangekomen of omgezet: het maakt het **hervatten** op de juiste plek mogelijk. |
+| **Automatische herstart** | Een mislukte update die het paneel zelf opnieuw start, na 10 s tot 5 min (hoofdstuk 5). |
+| **In een ander tabblad** | De melding van een dataset die al in een ander tabblad van dezelfde browser wordt bijgewerkt (hoofdstuk 5). |
+| **Harde koppeling** | Een bestand dat op twee plaatsen in de mappen staat maar één keer op de schijf: het telt één keer (hoofdstuk 7, §7.2). |
+| **Bevinding** | Een punt dat de integriteitscontrole meldt, met de manier om het op te lossen (hoofdstuk 7, §7.3). |
 
 ### De extensies, de pagina's, de beveiliging
 
@@ -2135,4 +2419,4 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 
 ---
 
-*Document geschreven voor versie **1.65.0** van het platform (pipeline 0.22.0, gegevensformaat 5). De schermafbeeldingen tonen een demodataset (synthetische embryo's); de kleuren kunnen afwijken als het thema is gewijzigd.*
+*Document geschreven voor versie **1.76.0** van het platform (pipeline 0.23.0, gegevensformaat 6). De schermafbeeldingen tonen een demodataset (synthetische embryo's); de kleuren kunnen afwijken als het thema is gewijzigd.*

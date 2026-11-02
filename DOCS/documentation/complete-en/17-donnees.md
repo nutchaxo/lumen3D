@@ -2,7 +2,7 @@
 
 ::: chapter-intro
 - A dataset is **a folder**: every file has an author (the pipeline, the operator or the platform), a reason to exist and, most of the time, a fingerprint that lets you check it.
-- There are **five data formats**. A data update moves a dataset from one to the next **in place**, in small units recorded in a journal, with a final atomic swap.
+- There are **six data formats**; the current one is **format 6**. A data update moves a dataset from one to the next **in place**, in small units recorded in a journal, with a final atomic swap.
 - The browser import sends a folder **block by block**, verified and resumable, into a private area; the files that make the dataset openable go first.
 :::
 
@@ -115,7 +115,7 @@ The tables below give, for each field, **what it means** (with the real value fr
 | `description` | starting sentence, for example "Confocal imaging stack: E9.5 fixed embryo, 112 slices, 3 channels." | pipeline; operator |
 | `created`, `lastModified` | ISO dates; `created` is protected; `lastModified` is refreshed at every save | pipeline; platform |
 | `configured` | `true`; decides whether the dataset enters the catalogue (section 17.5) | pipeline; imposed |
-| `formatVersion` | `4` or `5`; absent = 1 | pipeline, or the end of a migration |
+| `formatVersion` | `6` for a current dataset (pipeline 0.23.0 writes it); absent = 1 | pipeline, or the end of a migration |
 | `hidden` | `true` = invisible to the public, visible in the administration panel | operator; **the import always publishes hidden** |
 
 ### Geometry and calibration
@@ -230,6 +230,14 @@ The format-5 manifest (`"schema": "iribhm-bricks-v5"`, `"version": 5`) describes
 | `bytes` | the bytes of each cell, per level, column and channel: what the viewer's matrix shows **without downloading anything else** |
 
 Pack addresses carry `?v=` followed by the first 12 characters of **their own** index's fingerprint: changing an index changes the address, so the browser cache never serves an old pack.
+
+### `bricks/manifest.json` (format 6)
+
+Format 6 keeps the format-5 layout (levels, stores, cut copies, one `ll` index), but only **two columns**: `ll` (lossless) and `q30` (WebP quality 30, with a dead zone). The schema is `"iribhm-bricks-v6"` and `"version": 6`; `columns` lists exactly `ll` and `q30`, and each column has its own index (`index/ll.bin`, `index/q30.bin`) and its own packs (`l{k}/ll/…` and `l{k}/q30/…`). The four lossy copies of format 5 (`b2`, `b4`, `q80`, `q50`) are gone.
+
+::: note
+The reader of format 6 is the same code path as format 5 (`format5.py`, one module shared by the pipeline and the migration). Every file of the format is checked by the import and by the Data integrity tab.
+:::
 
 ### `index.bin`
 
@@ -350,9 +358,9 @@ A file named `a.php.png` whose bytes are not those of a PNG is **refused**: only
 The gallery **does not travel** with the import (no rule of the allowlist accepts it). When a dataset is replaced, it is the platform that **moves** the gallery from the old folder to the new one (section 17.18).
 :::
 
-## 17.7 Formats 1 to 5
+## 17.7 Formats 1 to 6
 
-A published dataset carries a **format** number (`formatVersion`). The visitor has nothing to do: the viewer reads all five formats. But the recent formats open possibilities the old ones lack.
+A published dataset carries a **format** number (`formatVersion`). The visitor has nothing to do: the viewer reads all six formats. But the recent formats open possibilities the old ones lack.
 
 ![Five steps: each adds a structure; a migration knows how to climb to it.](img-en/ch17/formats-escalier.svg){width=100%}
 
@@ -362,8 +370,9 @@ What each step unlocks:
 |---|---|---|
 | 2 (`planes/`) | a **native** XY cut in the Studio reads one plane instead of a layer of 64; z-stack figures open fast | chapters 7 and 12 |
 | 3 (`mips/`) | a maximum projection of the whole stack reads one image per layer | chapter 7 |
-| 4 (v3 bricks) | **seamless** filtering between bricks, **local detail** ("Zoom detail"), lighter atlases for 1 or 2 channels, exact quality levels | chapters 9 and 10 |
-| 5 (matrix) | levels that keep **every slice**, **five compressions** to choose from, fast native XZ / YZ / oblique cuts, exports and measurements always **lossless** | chapters 7, 10 and 12 |
+| 4 (v3 bricks) | **seamless** filtering between bricks (66³ bricks with a one-voxel border), lighter atlases for 1 or 2 channels, exact quality levels | chapters 9 and 10 |
+| 5 (matrix) | levels that keep **every slice**, **five compressions** to choose from, fast native XZ / YZ / oblique cuts, a lossless choice on every export | chapters 7, 10 and 12 |
+| 6 (Q30) | the **display** copy is WebP quality 30; the lossless copy is kept for exports and downloads; the four lossy copies of format 5 are removed | chapters 7, 10 and 12 |
 
 ### What a format number promises
 
@@ -385,9 +394,9 @@ In the old format, reduction was mostly in XY. Format 4 applies a precise rule: 
 
 The reduction is an **integer mean**, rounded to the nearest (halves round up): `(sum + n/2) // n`. The same arithmetic is used by the pipeline, Python, PHP and the browser: that is what makes their results **identical voxel for voxel**.
 
-## 17.8 Four migrations, one registry
+## 17.8 Five migrations, one registry
 
-A **migration** transforms a dataset from version *v* to version *v + 1*. The four migrations form an **ordered registry**, identical in three languages.
+A **migration** transforms a dataset from version *v* to version *v + 1*. The five migrations form an **ordered registry**, identical in three languages.
 
 | Identifier | From → to | What it creates | Applies to |
 |---|---|---|---|
@@ -395,6 +404,7 @@ A **migration** transforms a dataset from version *v* to version *v + 1*. The fo
 | `m003-layer-mips` | 2 → 3 | `mips/`: the maximum of each layer of 64 planes | `3d`, `live` |
 | `m004-bricks-v3` | 3 → 4 | a new `bricks/` tree (66³, binary index) | `3d`, `live` |
 | `m005-matrix` | 4 → 5 | a new `bricks/` tree: the matrix and the cut copies | `3d`, `live` |
+| `m006-q30` | 5 → 6 | converts **in place**: adds the `q30` column and removes `b2`, `b4`, `q80`, `q50` | `3d`, `live` |
 
 Each entry carries an identifier, the versions, the types concerned and a **title and a description in four languages** (this is what the tab displays).
 
@@ -404,7 +414,7 @@ Each entry carries an identifier, the versions, the types concerned and a **titl
 
 ### Which dataset needs what?
 
-A dataset at version *v* receives, **in order**, every migration whose "from" is ≥ *v*; a migration applies only if the dataset is **exactly** at its starting version. A format 1 dataset therefore gets m002, then m003, then m004, then m005.
+A dataset at version *v* receives, **in order**, every migration whose "from" is ≥ *v*; a migration applies only if the dataset is **exactly** at its starting version. A format 1 dataset therefore gets m002, then m003, then m004, then m005, then m006.
 
 For each **published** `3d` or `live` dataset (2D photographs are always "up to date"; a dataset still being imported is not concerned), the tab decides as follows:
 
@@ -448,6 +458,18 @@ The migration to format 5 reads the **lossless native level** (the `planes/` fol
 - A unit whose area holds **no** format-4 brick is "empty": marked done at planning, never computed.
 - At the end, `finalize` assembles the new tree in `.bricks5-incoming/`, **checks it whole**, then swaps it with `bricks/`; the old one is deleted (or kept as `bricks.previous/` if the [Keep the previous version]{.ui} option is ticked).
 
+### m006: the display copy becomes WebP Q30
+
+The migration to format 6 needs no pipeline and no `.ims` file: it reads the **lossless** `ll` column of format 5 and writes one new column, `q30`.
+
+- **A unit** is one 4 × 4 × 4 super-block of `ll` bricks of one level, one channel and one frame, keyed `t{t}.k{k}.c{c}.z{…}.y{…}.x{…}`. Each unit is encoded once in WebP quality 30 with its dead zone. No unit waits for another, so the coarsest levels are converted first and are usable early.
+- The result goes into the `q30` packs and the `index/q30.bin` index of the same tree; the `ll` copy, the cut copies and the stored data are **not** changed.
+- **Finalisation** writes the `q30` index and packs, then writes the format-6 manifest (the commit point), then deletes `b2`, `b4`, `q80` and `q50`, and raises the version. A conversion interrupted before the manifest is simply resumed.
+
+::: note
+When a brick cannot be stored as a lossy WebP image, its `q30` entry holds the **lossless** brick instead, marked by a fallback byte at the end of the brick. The reader then knows it has the exact values.
+:::
+
 ::: example
 **Measured in this container** (Python executor, 22 cores, `tools/convert_dataset.py`): the E9.5 demonstration dataset (768 × 576 × 112, 3 channels) goes from format 4 to format 5 in **546 units and 38 seconds**; E10.5 in 28 s; E8.5 in 11 s. Its bricks grow from 9 MB to about 80 MB on disk (section 7.11).
 :::
@@ -471,6 +493,7 @@ The three migrations do not have the same unit shape:
 | m002 | `t{t}.z{bz}.c{c}.y{ty}.x{tx}` | decodes the bricks of a layer, produces PNG tiles |
 | m003 | `t{t}.l{l}.c{c}.y{ty}.x{tx}` | reads the ≤ 64 plane tiles of a layer, keeps the **maximum** pixel by pixel |
 | m004 | `t{t}.k{k}.c{c}.z{BZ}.y{BY}.x{BX}` | builds the v3 bricks of a **4 × 4 × 4 super-block** of level *k* |
+| m006 | `t{t}.k{k}.c{c}.z{…}.y{…}.x{…}` | one **4 × 4 × 4 super-block** of `ll` bricks, encoded as `q30` |
 
 A unit whose bricks are **all** absent is **empty**: it is counted "done" from the start and needs no work.
 
@@ -533,7 +556,7 @@ A **Web Worker** (`js/workers/migration-worker.js`) does all the computing, with
 4. **send** the result in one request (`unit_put`, 32 MiB at most).
 :::
 
-The tab launches **at most 2 workers × 2 units** (the number of workers is half the cores, from 1 to 2): a unit holds up to about 40 MiB in memory. The server **re-checks** everything it receives: each PNG must start with the right signature and have the right dimensions; each v3 brick must be a lossless WebP of 594 × 528 pixels, with the 6 unused cells at zero.
+The tab starts **up to four workers, two units each**: four on a machine with at least 8 GB of memory, two below that, and never more than half the processor cores. A unit holds up to about 40 MiB in memory. The server **re-checks** everything it receives: each PNG must start with the right signature and have the right dimensions; each v3 brick must be a lossless WebP of 594 × 528 pixels, with the 6 unused cells at zero.
 
 ### The server
 
@@ -543,10 +566,11 @@ The tab calls `unit_run` **in a loop**; each call lasts at most 20 seconds (less
 **Why a loop driven by the browser?** Shared hosts have no background task: every computation must fit **inside one request**. It is the open tab that restarts it, hence the instruction not to close it.
 :::
 
-### The case of format 5
+### The case of formats 5 and 6
 
 - **The browser** does not plan an m005 unit itself: it asks the server **what to read** (`unit_inputs`), reads those bytes in grouped requests, computes the unit with the **same arithmetic** as the Python engine, and sends it. Its lossless images decode to **exactly** the same voxels as the server's; its lossy images stay within the same bounds.
 - **The Python server** converts several units at once (in threads).
+- **Request size on a PHP host.** PHP silently drops a request body larger than its `post_max_size` and still answers 200. The platform therefore caps a body at the smaller of 32 MiB and `post_max_size` minus 64 KiB; a larger unit result is sent in **pieces** and assembled by the server.
 - **A PHP host** has **no m005 executor**: the tab shows "on this server, this update runs in the browser", and [This browser]{.ui} does the work. The PHP server prepares each unit's inputs, checks what it receives and assembles the final tree, byte for byte as Python would.
 - The browser probe also checks that it can encode **lossy WebP** (otherwise: "this browser cannot encode lossy WebP images").
 
@@ -676,6 +700,10 @@ Before each step, the server calls `set_time_limit()`; `status.server.limits.res
 2. for m004, a unit can be done in **8 octants** (2 × 2 × 2 bricks of the super-block), each stored and noted (`partial[unit]`) before the next: the unit is ticked when all are in. It does this automatically as long as no whole unit of the level has been timed, when the slowest (+ 25 %) would not fit in the remaining time, or after a request death;
 3. a unit whose steps have killed the request **twice** gets the answer **409 `unit_timeout`**. The journal stays `running`, **nothing is lost**, and the tab hands this migration to the browser, which has no such ceiling.
 
+### Automatic restart
+
+A job that fails (a worker out of memory, a unit that keeps failing, a lost link) starts again by itself, after **10 s, 30 s, 1 min, 2 min, then 5 min**. The journal keeps every finished unit, so a restart only redoes what was lost. The counter goes back to zero each time a new unit finishes; **five failures in a row without a new unit** stop the job. Some failures are final and are never retried: a unit that killed the request twice (`unit_timeout`), a missing executor, a job cancelled by you, and an expired session.
+
 ### What the tab says when something goes wrong
 
 | Code | Message on screen |
@@ -760,8 +788,8 @@ Only what the **pipeline produces** is accepted. Everything else is refused **be
 
 The details of the rules, as the engine applies them:
 
-- packs: `lod<N>/c<M>/pack_<n>.bin` (formats 1 to 3), `l<k>/c<c>/p<NNNNN>.bin` (format 4) or `l<k>/<column>/c<c>/p<NNNNN>.bin` (format 5), under `bricks/` or under `bricks/tNNN/` for a series (type `live` only);
-- format 5: the indexes `index/<column>.bin` (tier 0), the cut copies `xy/`, `xz/`, `yz/` and `cuts/` (last tier, like `planes/`);
+- packs: `lod<N>/c<M>/pack_<n>.bin` (formats 1 to 3), `l<k>/c<c>/p<NNNNN>.bin` (format 4) or `l<k>/<column>/c<c>/p<NNNNN>.bin` (formats 5 and 6), under `bricks/` or under `bricks/tNNN/` for a series (type `live` only);
+- formats 5 and 6: the indexes `index/<column>.bin` (tier 0; in format 6 only `ll` and `q30`), the cut copies `xy/`, `xz/`, `yz/` and `cuts/` (last tier, like `planes/`). A file of a column the tree's format does not have is refused (`foreign_column`);
 - `planes/` and `mips/`: `manifest.json` and the named packs (`zNNNNN.bin`, `lNNNNN.bin`), with a `tNNN/` sub-folder for a series;
 - `download/`: a plain name (no sub-folder), up to 181 characters, a **data** extension (list in section 17.6), **judged on its last extension**; Windows reserved names (`CON`, `NUL`…) and names ending in a dot or a space are refused;
 - never accepted: `.php`, `.js` and `.htaccess` files, any hidden file, any path going up (`..`), and the formats a browser **executes** when opened (HTML, SVG, XML).
@@ -880,6 +908,12 @@ A dataset that nobody finishes occupies real disk in the landing area. The opera
 
 The preview of an unpublished dataset goes through the `blob` action: a file from the landing area is served, **under the administration session**, as opaque bytes (with `nosniff`), never as a document. The landing area is reachable by **no address**; it is blocked in the Python server, in the root `.htaccess`, in `router.php` and by a deny file of its own.
 
+Since version 1.72.1 the viewer can show such a dataset while it is still importing: its cache stamp no longer breaks the request for the brick index. A dataset that is still being transferred is therefore previewable, but it is not published until you publish it.
+
+### The Data integrity tab
+
+The validators of this section are also run on **every** dataset, published or not, by the [Data integrity]{.ui} tab (chapter 14, section 14.6). That tab is read-only: it reports the same codes, with what to do about each one, and it never repairs anything.
+
 ## 17.18 Validate, publish, replace
 
 ### Validate
@@ -897,7 +931,7 @@ The validation action re-reads the **entire** dataset and checks that it forms a
 | `missing_index:…`, `index_hash_mismatch:…` | `index.bin` absent, or different from the manifest's fingerprint |
 | `index_bad_magic`, `index_bad_length`, `index_shape_mismatch:…`, `index_grid_mismatch:…` | the index has the wrong shape or does not describe the manifest's levels |
 | `missing_pack:<path>` | a pack that the index cites has not arrived |
-| `manifest_v5_…`, `missing_store:<path>` | (format 5) inconsistent v5 manifest, or a cut copy (`xy/`, `xz/`, `yz/`) is missing |
+| `manifest_v5_…`, `missing_store:<path>` | (formats 5 and 6) inconsistent manifest, or a cut copy (`xy/`, `xz/`, `yz/`) is missing |
 | `truncated_pack:<path>` | a pack is shorter than what the index requires |
 | `manifest_pack_escapes` | a pack points outside the dataset's folder |
 | `incomplete_files` | planned files are not finished |

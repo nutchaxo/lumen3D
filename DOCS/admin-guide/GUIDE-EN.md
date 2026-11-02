@@ -2,8 +2,8 @@
 title: "Administrator's guide"
 subtitle: "The Lumen3D admin panel, tab by tab"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.65.0"
-date: "October 2026"
+version: "Web platform 1.76.0"
+date: "November 2026"
 abstract: "Everything you can do from the site's admin panel: manage and import datasets, bring them to the current format, customise the public site, install features, update the platform. Written for someone who has never seen this panel and cannot code."
 lang: en
 toc-class: compact
@@ -27,12 +27,12 @@ It is written for someone who has **never seen this panel** and who **cannot cod
 
 ## The panel in four groups
 
-The left-hand menu arranges the 15 tabs into **four groups**, according to what you are doing. This guide follows the same order.
+The left-hand menu arranges the 17 tabs into **four groups**, according to what you are doing. This guide follows the same order.
 
 | Group | Tabs | Chapters |
 |---|---|---|
 | **Getting started** | Signing in, tour of the panel | 1 – 2 |
-| **Data** | Datasets · Import · Data updates · Data types · Statistics | 3 – 7 |
+| **Data** | Datasets · Import · Data updates · Data integrity · Data types · Statistics · Storage | 3 – 7 |
 | **Public site** | Identity · Appearance · Pages · Legal | 8 – 11 |
 | **Extensions** | Plugins · Catalog | 12 – 13 |
 | **System** | Updates (and the *Release notes* page) · Pipeline · Security · Documentation | 14 – 17 |
@@ -145,7 +145,7 @@ Once you are signed in, the screen is split into three areas that never change: 
 ::: legend
 | n | what it is |
 |-|----------------------|
-| 1 | **Data** group: Datasets, Import, Data updates, Data types, Statistics. |
+| 1 | **Data** group: Datasets, Import, Data updates, Data integrity, Data types, Statistics, Storage. |
 | 2 | **Public site** group: Identity, Appearance, Pages, Legal. |
 | 3 | **Extensions** group: Plugins, Catalog. |
 | 4 | **System** group: Updates, Pipeline, Security, Documentation. |
@@ -197,8 +197,10 @@ While an **import is running**, signing out and links that leave the panel ask f
 | **Datasets** | Name, describe, orient, show or hide each dataset | Frequent |
 | **Import** | Send the folder produced by the pipeline, from the browser | Frequent |
 | **Data updates** | Bring published datasets to the current data format | Occasional |
+| **Data integrity** | Check every dataset for missing or extra files, and for its format | Occasional |
 | **Data types** | The public name of the three categories (3D, 2D, Live) | Rare |
 | **Statistics** | See how much the site is visited | Occasional |
+| **Storage** | See where the platform's disk space goes | Occasional |
 | **Identity** | Site name, vocabulary, footer, menu | Rare |
 | **Appearance** | Colours, font and rounded corners of the public site | Rare |
 | **Pages** | Edit the content of pages (home, about…) | Frequent |
@@ -320,6 +322,28 @@ Some settings made in the preview are **picked up by the panel** and saved when 
 - the **orientation** if you are in the middle of defining it (§3.8).
 
 Everything else — camera position, render mode, quality, background, cutting plane — is for looking around and is **not kept**.
+
+### Render quality
+
+The preview is the real viewer, so its sidebar holds the **Render quality** panel. What it shows depends on the dataset's data format (chapter 5):
+
+- **Format 5**: a **Resolution** list and a **Quality** list. Each resolution row gives its download size and the graphics memory it takes, with a mark: green (the card holds it comfortably), amber (close to the budget), red (too large).
+- **Format 6**: the **Resolution** list alone, with its size in WebP Q30 and its graphics memory. Under it, the **Fast loading** checkbox (on by default): on, the volume loads the compressed WebP Q30 data; off, it loads the lossless data, which is larger to download.
+- **[How to choose?]{.ui}** (format 5) opens the dialog *Choosing a resolution and a quality*. Its qualities are labelled **Exact** (every voxel as acquired), **±2 levels**, **±4 levels**, **WebP 80** and **WebP 50** (the lightest).
+- **Current GPU budget** states how much graphics memory the viewer allows the volume.
+
+::: remember
+**There is no GPU memory setting and no GPU compression setting any more.** The viewer estimates the card's memory on its own. A value stored by an older version is erased when the page loads. **Zoom detail** and **Lossless once the view rests** were removed in platform 1.72.0: the quality you choose is the one shown, and the whole volume stays loaded.
+:::
+
+Two rendering points:
+
+- **Dragging the volume no longer lowers its quality.** The picture is the same while you move it and when it is still.
+- **In Fluorescence (Imaris-like) mode** (the default), changing the display settings (window, gamma, channel colours, brightness) updates the picture at once. Exports render the volume again.
+
+::: tech
+The budget comes from a table of known cards when the browser names the card; otherwise from a fallback by kind of renderer: software 256 MiB; integrated 512 MiB to 2 GiB depending on the device's memory; discrete 3 to 4 GiB; unknown 1 to 2 GiB. For a known card it is min(0.6 × its memory, its memory − 2 GiB), never below 1 GiB nor above 16 GiB. Each graphics context loss in the last week halves the budget (floor 256 MiB).
+:::
 
 ## 3.4. The right-hand column: the settings
 
@@ -555,13 +579,29 @@ A dataset being sent appears **in this list** (the [Import]{.ui} filter), with a
 | **Uploaded — ready to publish** | Same. Publishing is done in the Import tab. |
 | **Interrupted** | Nothing: form locked. |
 
-The banner and the form **update by themselves** when the state changes. The [Edit]{.ui} button in the Import tab opens the right dataset, here.
+The banner and the form **update by themselves** when the state changes. The [Edit]{.ui} button in the Import tab opens the right dataset, here. Once a dataset is **editable**, its preview loads in this tab (fixed in platform 1.72.1).
 
 ## 3.11. When no dataset is selected
 
 ![Datasets, nothing selected.](img-en/tab-datasets-empty.png){.shot width=80%}
 
-This is the tab's welcome screen: "No dataset selected — Click a dataset in the list to preview it here.". There is **no** button to delete a dataset or to "regenerate the catalog": deleting is an operation on the server's files, deliberately, and the list is recomputed every time it is displayed.
+This is the tab's welcome screen: "No dataset selected — Click a dataset in the list to preview it here.". There is no button to "regenerate the catalog": the list is recomputed every time it is displayed. To delete a dataset, see § 3.12.
+
+## 3.12. Deleting a dataset
+
+Deleting a published dataset **does not erase it at once**. The trash icon on its row, labelled "Delete (trash, 60 days)", moves its folder to the **trash**. The dataset leaves the lists. The tab's [Trash]{.ui} button, with a counter of entries, opens the trash.
+
+::: note
+**The trash keeps each deletion for 60 days**, then erases it for good. Each entry shows its deletion date and the days left. For each entry you can:
+
+- [Restore]{.ui}: puts it back. If a dataset with the same name exists, the panel asks for another name.
+- [Delete permanently]{.ui}: erases it at once, after confirmation ("This cannot be undone.").
+- [Empty the trash]{.ui}: erases every entry, after confirmation.
+:::
+
+::: tip
+A dataset **still importing** has no trash icon: discard it from the [Import]{.ui} tab (chapter 4) instead.
+:::
 
 # 4. Import — sending data from the browser
 
@@ -672,7 +712,7 @@ Only the files the pipeline produces are accepted. **Everything else is refused 
 | path refused, invalid size | Unacceptable name or size. |
 | unreadable item(s) while reading the folder | Local permissions to check. |
 
-These are **warnings**, not blocks: the rest of the import carries on.
+These are **warnings**, not blocks: the rest of the import carries on. The same unreadable-item count appears as a banner above the import, and the browser console names each file or folder it could not read.
 
 ## 4.6. The floating dock
 
@@ -730,7 +770,7 @@ This message appears when you click **sign out** or a link that leaves the panel
 - The transfer runs in a **Web Worker**: the interface stays smooth. Raw blocks of **8 MiB** (reduced on a PHP host with strict limits: "Block size reduced to {n} — drop the folder again to resume."), **4 blocks in parallel**.
 - Each block carries a **SHA-256 fingerprint** checked **before** writing. A **server journal** remembers the blocks received: dropping the same folder again resumes **to the nearest block**; a file already complete is not sent again.
 - The journal is the same under both servers (Python or PHP): an import started under one can resume under the other.
-- Accepted formats: **formats 2 to 5** (`planes/`, `mips/`, v3 bricks and `index.bin`, the format-5 matrix with its per-compression indexes and its cut copies `xy/`, `xz/`, `yz/`, `cuts/`, sent last).
+- Accepted formats: **formats 2 to 6** (`planes/`, `mips/`, v3 bricks and `index.bin`, the format-5 matrix with its per-compression indexes and its cut copies `xy/`, `xz/`, `yz/`, `cuts/`, sent last, and the format-6 tree, which holds only the `ll` and `q30` columns). A compression column the platform does not know is refused.
 :::
 
 ## 4.9. If something goes wrong
@@ -748,11 +788,13 @@ This message appears when you click **sign out** or a link that leaves the panel
 | Failure on {path} / {n} file(s) could not be sent. | [Retry]{.ui}, or drop the folder again. |
 | The server is not responding… / The transfer engine failed to start. | Check the connection, reload the page, drop the folder again. |
 | Everything is already uploaded — nothing to transfer. | Information: the dataset is already complete. |
+| Validation failed: `foreign_column:…` | The folder holds a compression the platform does not know (a file from another tool, or a mix of formats). | Rebuild the dataset with the pipeline, or convert it with `tools/convert_dataset.py`, then drop it again. |
+| "n item(s) in the folder could not be read and will be missing from the import." | The browser could not read some files or folders (permissions, a file in use). | Close whatever uses them, then drop the folder again. The console names each one (`[import] unreadable file:`). |
 
 # 5. Data updates — the datasets' format
 
 ::: chapter-intro
-- A published dataset has a **format** (1 to 5). The current format is **5**.
+- A published dataset has a **format** (1 to 6). The current format is **6**.
 - This tab upgrades them **in place**, like a software update.
 - You choose **who does the work**: this browser or the server. Nothing is mandatory.
 :::
@@ -763,29 +805,30 @@ This message appears when you click **sign out** or a link that leaves the panel
 
 ## 5.1. Why, and for whom
 
-Each volume dataset (`3d`, `live`) carries a **data format** (`formatVersion`, absent = format 1). A dataset that came out of pipeline **0.22.0** arrives in **format 4**: only the **4 → 5** step is left (the pipeline writes format 5 directly with the `--format 5` option). **2D photographs** are never concerned.
+Each volume dataset (`3d`, `live`) carries a **data format** (`formatVersion`, absent = format 1). A dataset that came out of pipeline **0.23.0** arrives in **format 6**, the pipeline's default, and nothing is left to do. A format-5 dataset needs only the **5 → 6** step; a format-4 dataset needs the **4 → 5** and **5 → 6** steps. **2D photographs** are never concerned.
 
 ::: note
-**Data updates are not needed for the site to work.** The viewer always reads formats 1 to 5; the Studio falls back to the bricks if `planes/` is missing. They **speed up** some Studio operations and **improve** display quality.
+**Data updates are not needed for the site to work.** The viewer always reads formats 1 to 6; the Studio falls back to the bricks if `planes/` is missing. They **speed up** some Studio operations and **improve** display quality.
 :::
 
-## 5.2. The four steps
+## 5.2. The five steps
 
-They follow one another in order: a dataset in format 1 receives all four.
+They follow one another in order: a dataset in format 1 receives all five.
 
 | Step | Title on screen | What it creates | What it brings |
 |---|---|---|---|
-| **1 → 2** | Plane copy of the native level (fast XY slices in the Studio) | `planes/`: one file per z plane, lossless 512² PNG tiles (≈ 1.3× the native level in disk space). The bricks are not touched. | A native XY slice reads **one plane** instead of a layer of 64 planes: tens of times fewer bytes, pixel-identical result. |
-| **2 → 3** | Maximum projections of each layer of bricks (fast z-stack figures over the whole stack) | `mips/`: one maximum projection per layer of 64 planes. | A z-stack figure over the whole stack reads ~3 packs instead of about 150. |
-| **3 → 4** | Brick pyramid v3: reduced in Z too, one-voxel border, binary index | **Rebuilds** `bricks/`: 66³ bricks with a border, levels reduced in Z too, `index.bin`. | Seamless filtering, local detail ("Zoom detail"), lighter atlases for 1 to 2 channels. |
-| **4 → 5** | Resolution × compression matrix: full-depth levels at 256·2ᵏ, five compressions, fast cuts | **Rebuilds** `bricks/`: levels of 4096, 2048… 256 voxels across that keep every slice; each in five compressions (lossless, ±2, ±4, light, very light); copies for XY, XZ / YZ and oblique cuts. | Visitors pick their cell in a **quality table**; lighter downloads; fast native cuts in every direction; measurements and exports always lossless. |
+| **1 → 2** | Plane-major copy of the native level (fast XY cuts in the Studio) | `planes/`: one file per z plane, lossless 512² PNG tiles (≈ 1.3× the native level in disk space). The bricks are not touched. | A native XY slice reads **one plane** instead of a layer of 64 planes: tens of times fewer bytes, pixel-identical result. |
+| **2 → 3** | Maximum projections of each brick layer (fast whole-stack z-stack figures) | `mips/`: one maximum projection per layer of 64 planes. | A z-stack figure over the whole stack reads ~3 packs instead of about 150. |
+| **3 → 4** | Brick pyramid v3: halved in Z too, 1-voxel border, binary index | **Rebuilds** `bricks/`: 66³ bricks with a border, levels reduced in Z too, `index.bin`. | Seamless filtering, lighter atlases for 1 to 2 channels. |
+| **4 → 5** | Resolution × compression matrix: full-depth levels at 256·2ᵏ, five compressions, fast cuts | **Rebuilds** `bricks/`: levels of 4096, 2048… 256 voxels across that keep every slice; each in five compressions (lossless, ±2, ±4, light, very light); copies for XY, XZ / YZ and oblique cuts. | Visitors choose a resolution and a quality in the Render quality panel; lighter downloads; fast native cuts in every direction; measurements and exports always lossless. |
+| **5 → 6** | One display quality: WebP Q30 at every level, lossless kept for exports | **Adds** a WebP Q30 copy of each brick beside the lossless one, in place, then deletes the other compressions. | Faster loading (**Fast loading**, § 3.3); exports stay lossless. |
 
 ::: warning
-**The 3 → 4 and 4 → 5 steps rebuild the `bricks/` tree.** The **native level is kept voxel for voxel**; the coarser levels are recomputed. The old tree is deleted **after** the version change, unless the [Keep the previous version]{.ui} box is ticked (it is then kept beside the new one, as `bricks.previous/`, for comparison with the *Chunk debug* tool; it takes the bricks' space a second time, so delete it once the comparison is done). For precious data, keep a backup copy, as for any operation on files.
+**The 3 → 4 and 4 → 5 steps rebuild the `bricks/` tree.** The 5 → 6 step changes the files in place. The **native level is kept voxel for voxel**; the coarser levels are recomputed. The old tree is deleted **after** the version change, unless the [Keep the previous version]{.ui} box is ticked (it is then kept beside the new one, as `bricks.previous/`, for comparison with the *Chunk debug* tool; it takes the bricks' space a second time, so delete it once the comparison is done, from **Previous versions kept** in § 5.8). For precious data, keep a backup copy, as for any operation on files.
 :::
 
 ::: note
-**Format 5 takes much more disk space**: it stores the same volume several times. On the demonstration dataset, 9 MB of bricks become about 80 MB. The panel refuses to start if the result does not fit (§ 5.9).
+**Format 5 takes much more disk space**: it stores the same volume several times. On the demonstration dataset, 9 MB of bricks become about 80 MB. The panel refuses to start if the result does not fit (§ 5.9). Format 6 keeps two compressions instead of five.
 :::
 
 ## 5.3. Overview of the tab
@@ -797,13 +840,17 @@ They follow one another in order: a dataset in format 1 receives all four.
 |-|----------------------|
 | 1 | [Pause]{.ui} (or [Resume]{.ui}); next to it [Refresh]{.ui} and [Update all]{.ui}. |
 | 2 | The **two-queue strip**: one badge per executor, with its state. |
-| 3 | A **dataset card**: name, type, "format 1 → 5", estimated units and size, numbered **steps**. |
+| 3 | A **dataset card**: name, type, the format change (for example "format 4 → 6"), estimated units and size, numbered **steps**. |
 | 4 | The **executor selector**: [This browser]{.ui} or [The server]{.ui}. |
 | 5 | The **progress** area: "step i of n", bar, percentage, units done, **time left**, units per minute. |
 | 6 | The cross: **cancel**: "Discard the progress of this update? The dataset stays as it was." |
 :::
 
 From top to bottom: the header and its buttons, the **Speed test** card, the **Datasets to update** card, then three collapsible sections: **Up to date**, **Data formats**, **History**. [Update all]{.ui} processes every ready dataset, one per executor at a time.
+
+Each dataset's progress starts at **0 %**. Units that hold no data are counted as done and listed beside the bar ("{n} without data, already done"), so the percentage reflects real work. A dataset keeps its size on its row while it runs ("({mb} left)").
+
+A dataset that another tab of this browser is updating shows **In another tab**, with no buttons: the hint says to follow it there. It is left out of [Update all]{.ui}. When several tabs of this browser convert datasets, a notice says that they share one request quota.
 
 All up to date: "Every dataset is in the latest format.". No published volume: "No published volume dataset.".
 
@@ -814,7 +861,7 @@ Two "executors" can do the work:
 | Executor | Who computes | What is needed |
 |---|---|---|
 | **This browser** | Your browser downloads the bricks, reassembles them (Web Workers) and sends the result back **unit by unit**. | A browser that can compress, re-read PNGs identically and encode lossless WebP. |
-| **The server** | The server converts by itself, in small time-bounded requests. Suited to shared hosting. | Lossless WebP decoding (and, for the 3 → 4 step, encoding) (PHP's GD or Python's Pillow), zlib, NumPy on the Python side, at least 128 MiB per request and 10 s of execution. **4 → 5 step: Python server only.** |
+| **The server** | The server converts by itself, in small time-bounded requests. Suited to shared hosting. | Lossless WebP decoding (and, for the 3 → 4 step, encoding) (PHP's GD or Python's Pillow), zlib, NumPy on the Python side, at least 128 MiB per request and 10 s of execution. On a PHP host the **4 → 5** and **5 → 6** steps run only in this browser (see the note below). |
 
 - The choice is made **per dataset**, **before** starting; it is **locked while running**, and can be changed between runs.
 - An executor that cannot do the job is **greyed out**, with a tooltip saying why (for example "the server cannot decode lossless WebP images").
@@ -828,7 +875,7 @@ On shared hosting where the [The server]{.ui} option is greyed out, **[This brow
 :::
 
 ::: note
-**The 4 → 5 step on a PHP host.** A PHP server cannot do this step itself: the tooltip of [The server]{.ui} says "on this server, this update runs in the browser". The browser asks the server what to read, computes and sends back each unit; the server checks everything and assembles the result. It needs a browser that can encode **lossy** WebP (otherwise: "this browser cannot encode lossy WebP images"). Measured on the demonstration dataset E8 (an old format 1): the 4 → 5 step took **339 units and 4 minutes** in the browser.
+**The 4 → 5 and 5 → 6 steps on a PHP host.** A PHP server cannot do these steps itself: the tooltip of [The server]{.ui} says "on this server, this update runs in the browser". The browser asks the server what to read, computes and sends back each unit; the server checks everything and assembles the result. It needs a browser that can encode **lossy** WebP (otherwise: "this browser cannot encode lossy WebP images"). Measured on the demonstration dataset E8 (an old format 1): the 4 → 5 step took **339 units and 4 minutes** in the browser.
 :::
 
 ## 5.5. The speed test
@@ -864,6 +911,9 @@ The main button is called [Repair]{.ui} if the dataset says it is up to date but
 
 States shown: **Waiting for its turn** ("next on the server"), **Running**, **Pausing…**, **Paused** (with the cause: tab left, page closed, session expired, server unreachable), **Assembling** ("Assembling planes x/y", "assembling and publishing…"), **Failed** (with the cause).
 
+- **Workers.** This browser runs up to **four** conversion workers: **two** on a computer with less than 8 GB of memory, and never more than half of its processor cores.
+- **Restart by itself.** A job that fails restarts on its own up to **five** times, after 10 seconds, then 30 seconds, 1 minute, 2 minutes and 5 minutes (toast "… restarting by itself in 10 s (attempt 1)"). The count starts again as soon as new units have finished. A sixth failure in a row, with no progress in between, stays **Failed**. Some failures never restart by themselves: a unit that exceeds the server's time limit, no executor able to run the step, a job that could not be prepared or was cancelled, and an expired session (sign in again first).
+- **Offline.** If the server does not answer after several attempts, the update pauses as **offline** and waits for you. Press [Resume]{.ui} when the connection is back.
 - **[Pause]{.ui}** pauses all queues; **[Resume]{.ui}** restarts where they stopped.
 - **Leaving the tab**: "An update is running. Leaving this tab pauses it (you can resume later). Leave?". **Nothing is lost**: the server journal lets you resume after a reload, a cut or a change of executor.
 
@@ -878,12 +928,14 @@ States shown: **Waiting for its turn** ("next on the server"), **Running**, **Pa
 ::: legend
 | n | what it is |
 |-|----------------------|
-| 1 | **Data formats**: the most recent format (5) and the list of the four updates ("1 → 2"…). |
+| 1 | **Data formats**: the most recent format (6) and the list of the five updates ("1 → 2"…). |
 | 2 | **History**: the last 20 operations, remembered in this browser. |
 | 3 | [Clear]{.ui}: empties the history. |
 :::
 
 A history row reads "format {v} · {n} units · {duration} · {executor}", or shows the **reason for the failure**. The **Up to date (n)** section lists the datasets already in the right format.
+
+The **Previous versions kept (n)** section lists the datasets whose replaced bricks are still on disk (see the *Keep the previous version* box in § 5.2), with their size and two buttons: [Open the previous version]{.ui} and [Delete]{.ui}. Deleting asks for confirmation and leaves the dataset as it is.
 
 ## 5.9. Safeguards and errors
 
@@ -899,6 +951,8 @@ A history row reads "format {v} · {n} units · {duration} · {executor}", or sh
 | Neither executor can run every step of: … | Try [This browser]{.ui}, or re-process with the pipeline. |
 | Update of {name} stopped: the server cannot convert a unit in time. | Run it again in this browser. |
 | Could not read the update status. | [Refresh]{.ui}. |
+| A dataset row shows `status_failed (<class>: <message>)` | The server could not read the status of this one dataset (a PHP error). The other datasets are not affected. | Read the message and the PHP error log. Raise `memory_limit` or `max_execution_time` if it names memory or time, then [Refresh]{.ui}. |
+| "The file list of "{folder}" exceeds the server's request size limit (post_max_size)." | Import: the file list of one folder is larger than the server accepts in one request. | Ask the person who manages the host to raise `post_max_size`. |
 
 ## 5.10. Converting on a computer, then importing
 
@@ -908,7 +962,7 @@ For a very large dataset, or a host that is too slow, the conversion can run **o
 1. Copy the dataset folder (for example `DATA_WEB/3d/<folder>`) to the computer, into a copy of the platform.
 2. Run `python tools/convert_dataset.py DATA_WEB/3d/<folder>`. `--list` only shows the pending steps; `--keep-previous` keeps the old tree.
 3. An interrupted conversion **resumes** where it stopped if you run the command again.
-4. Drag the converted folder into the **Import** tab (chapter 4): it accepts a format-5 dataset and checks it whole before letting you publish it.
+4. Drag the converted folder into the **Import** tab (chapter 4): it accepts a format-5 or format-6 dataset and checks it whole before letting you publish it.
 :::
 
 # 6. Data types — the public name of each category
@@ -949,7 +1003,15 @@ For a very large dataset, or a host that is too slow, the conversion can run **o
 
 The page variables `{type3d}`, `{type2d}` and `{typeLive}` (chapter 10) pick up these names. The tab writes only the `datasetTypes` block of the configuration: it does not overwrite what you did in Identity. It warns you if you leave it with changes.
 
-# 7. Statistics — who looks at what
+# 7. Statistics, storage and integrity
+
+::: chapter-intro
+- Who visits the site, and which datasets they open.
+- Where the platform's disk space goes.
+- Whether every dataset is complete and in the latest format.
+:::
+
+## 7.1. Who looks at what
 
 ![The Statistics tab.](img-en/tab-stats.png){.shot width=88%}
 
@@ -970,6 +1032,138 @@ The "By dataset" table gives views, downloads and last visit. With no data: "No 
 
 ::: note
 **No personal data is collected.** These are simple counters: no tracking cookie, no IP address stored, no external service. Nothing leaves the server. The server also rate-limits the statistics beacons.
+:::
+
+## 7.2. Storage — where the disk space goes
+
+::: chapter-intro
+- A report of **how much disk space** the platform uses, and what for.
+- A bar shows the whole disk: published data, imports and trash, the platform's own files, other files, and free space.
+- The figures are kept for **10 minutes**; [Recalculate]{.ui} counts again.
+- The texts of this tab currently appear in French in every language: its labels have no translation keys yet.
+:::
+
+::: analogy
+**The inventory of a storage unit.** The bar is the unit seen from the door. The cards and the table say which box takes how much room, and the largest folders of each dataset come first.
+:::
+
+::: note
+**The labels of this tab are still in French in this version**: no English translation exists yet. The names below are the English meanings; the French names are given in brackets so that you can match them with the screen.
+:::
+
+### The bar: five parts
+
+| Part | What it counts |
+|---|---|
+| **Published data** (*Données publiées*) | The datasets published in `DATA_WEB`: volumes, photographs and timelapses. |
+| **Imports and trash** (*Imports & corbeille*) | Imports still arriving or waiting for publication, the datasets in the trash (kept for 60 days), and the work files of data updates. |
+| **Platform and code** (*Plateforme & code*) | The platform's own files: programs, scripts and translations. |
+| **Other files on the volume** (*Autres sur le volume*) | Files on the same disk that do not belong to the platform, for example another site on a shared host. |
+| **Free** (*Disponible*) | The free space of the disk, read at each request. |
+
+::: note
+**Free space is the disk's, not a quota.** On a shared host, the host may impose a quota stricter than the disk. The tab shows the disk's real free space; the quota does not appear there. A file linked into two places is counted once.
+:::
+
+### The cards and the table
+
+- One **card** per group of the bar lists its parts with their sizes: *Published data*, *Imports & trash* (with the 60-day trash), *Platform & code* (scripts, translations).
+- The **by-dataset table** (*Par dataset*) gives, for each dataset: its name, its type, its size, its number of files, its share, and its breakdown by folder (*Détail par dossier*).
+- The breakdown lists the **four largest folders** of the dataset, largest first, for example `bricks`, `planes`, `mips` or `download`. Files directly in the dataset folder appear as "(root)" (*racine*). A fifth folder is not shown.
+
+### Recalculate and the cache
+
+- Counting the whole platform takes a few seconds, so the server keeps the result for **10 minutes** (600 seconds). Reopening the tab within that time shows the same figures at once.
+- [Recalculate]{.ui} forces a new count, for example after an import or a deletion.
+- The free space is read again at every request, even within the 10 minutes.
+
+::: tech
+The count is kept in memory by the Python server, and in a `storage-scan.json` file on a PHP host. Both servers classify each file the same way; the tests `tests/test_storage_report.py` and `tests/test_storage_report_php.php` check that they agree.
+:::
+
+## 7.3. Data integrity — checking every dataset
+
+::: chapter-intro
+- A **check-up** of every dataset, published or still importing: is anything missing, is anything extra, is it in the latest format?
+- It **reports** and tells you how to fix each finding. It does not repair anything by itself.
+- Nothing runs on its own: you start it with [Run the check-up]{.ui}.
+:::
+
+::: analogy
+**A building inspector's round.** The inspector goes through every flat, notes what is missing or out of place, and leaves a card saying what to do. The inspector does not move the furniture.
+:::
+
+### What is checked
+
+- **Metadata**: `metadata.json` exists and is valid, and its type and identifier match the folder.
+- **Thumbnail**: `thumbnail.webp` is there.
+- **Format**: the dataset is in the latest format (6), or the format it is in.
+- **Bricks** (formats 4 to 6): the brick manifest and its index files exist, and every pack the manifest names is present and not shorter than the manifest says.
+- **Extra files**: files that no import would accept, and the leftovers of an interrupted update.
+- **Gallery**: the images listed in `metadata.json` exist, and no image in the folder is left unlisted.
+- **Cell tracking**: the tracking files named in the metadata exist.
+- **Imports still arriving**: checked as far as they have been received, with the same validation as [Check]{.ui} in the Import tab (chapter 4).
+
+### The screen
+
+| Part | What it does |
+|---|---|
+| [Run the check-up]{.ui}, then [Run again]{.ui} | Checks every dataset, two at a time. The table stays empty until you start it. |
+| Progress counter (done / total) | How many datasets have been checked so far. |
+| **Healthy · Warnings · Errors** | The number of datasets in each state. |
+| **Only datasets with findings** | Hides the healthy datasets. |
+| One row per dataset | Its status, type, format and findings. [Details]{.ui} shows the fix for each finding. |
+| [Recheck]{.ui} | On a row with a warning or an error: checks that one dataset again and updates only its row. |
+
+::: note
+If the list of datasets itself cannot load, the table stays empty and no message appears. Press [Run again]{.ui}; if it stays empty, see § 7.3.
+:::
+
+### The statuses
+
+| Status | When | What you do |
+|---|---|---|
+| **OK** | Nothing to report. | Nothing. |
+| **Warning** | Something is missing or unusual, but the dataset can still open: thumbnail missing, not in the latest format, repair pending, leftovers of an interrupted update, unexpected files, gallery images not listed, or, for an import, a published dataset with the same name. | Follow the fix. |
+| **Error** | Something the dataset needs is missing or damaged: `metadata.json` missing or invalid, a brick pack missing, a gallery image listed but missing, a tracking file missing, a check that could not finish, an import whose journal has gone, an import that fails validation. | Fix it before you rely on the dataset. |
+
+::: note
+Two findings are information only and never make a row warn: a **previous brick tree kept** (§ 5.8) and an **import still running**.
+:::
+
+### How a finding is fixed
+
+Each finding says what is wrong and what to do, in the panel's language. The main ones:
+
+| Finding | What to do |
+|---|---|
+| Not in the latest format | Open [Data updates]{.ui} and run the pending conversion (chapter 5). |
+| Repair pending | Open [Data updates]{.ui}: the repair is listed there and runs like a conversion. |
+| Thumbnail missing | In Datasets, reset the preview (§ 3.3) to create the thumbnail. |
+| Metadata type or identifier disagrees with the folder | In Datasets, edit and save again: the save rewrites type and identifier from the folder. |
+| Missing or truncated pack | Re-import the dataset: only the missing or damaged files are sent again (chapter 4). |
+| Gallery image missing, or file not listed | In Datasets, Gallery: remove the missing entries, or save to reconcile the list. |
+| Leftovers of an interrupted update | Run the conversion again from Data updates. Delete the `*.pre-swap` leftovers only once the dataset opens correctly. |
+| Unexpected files | Delete them over SFTP, if you did not put them there on purpose. |
+
+### Rechecking one dataset
+
+Once you have fixed a finding, press [Recheck]{.ui} on its row. Only that dataset is checked again, and only its row changes.
+
+### When the check fails
+
+| Message on the row | Real cause | What to do |
+|---|---|---|
+| `HTTP 401: session expired, sign in again` | Your session ended. | Sign in again, then run the check-up. |
+| `HTTP <code>:` followed by the start of the answer | The server refused or failed the request. | Note the code. On a PHP host, read the server's error log. |
+| `… with an empty answer (a gateway or PHP timeout, or PHP ran out of memory)` | The host cut the request, usually for time or memory. | Press [Recheck]{.ui} on this dataset alone. If it persists, ask for a higher `memory_limit` or `max_execution_time`. |
+| `network error: …` | The connection was lost. | Check the connection, then press [Run again]{.ui}. |
+| `PHP stopped: …` | PHP stopped with an error during the check. | Read the message. Report it if it persists. |
+| `check_failed` (an error finding) | The server could not finish this dataset's check; the detail names the exception. | Follow the fix text of the finding, or [Recheck]{.ui} alone. |
+
+::: tech
+- Two datasets are checked at a time. The Python server writes nothing during the check.
+- On a PHP host, the check first runs the identity repair that the catalogue runs on each request: a `metadata.json` whose type or identifier disagrees with its folder can be rewritten, and a folder left under a former type name can be moved.
 :::
 
 # 8. Identity — the site's name and vocabulary
@@ -1041,7 +1235,7 @@ This word is then used **automatically** throughout the public interface: titles
 - **Navigation** — the boxes "Show "Explorer"", "Show "Compare"", "Show "About"", "Show "Legal"". Unticking removes the entry from the menu **without deleting the page**.
 
 ::: warning
-**"Legal" is unticked by default.** If you write your legal notice (chapter 11), come back here to tick it: the page stays invisible otherwise.
+**"Legal" is ticked on a fresh installation.** If you untick it, the link and the page disappear: tick it again once your legal notice is written (chapter 11).
 :::
 
 ::: note
@@ -1380,6 +1574,8 @@ A simple editor, with a fixed layout, for the legal text. Sections are displayed
 **Usual sections:** site publisher, host, intellectual property, personal data, contact.
 
 ::: warning
+**On a fresh installation**, the "Show "Legal"" box is ticked (the link is in the footer), and the legal page shows six template sections (Publisher, Data protection & privacy, Cookies & local storage, Intellectual property, Disclaimer & liability, Contact) whose [bracketed] placeholders you replace with your own details.
+
 **Two things not to forget.** (1) The page stays invisible as long as the box "Show "Legal"" is not ticked in **Identity › Navigation**. (2) Legal content depends on your country and your institution: ask the competent department rather than copying a template found online.
 :::
 
@@ -1405,7 +1601,7 @@ Each plugin occupies one of **three slots**:
 |---|---|---|
 | **Tools** (toolbar) | The buttons at the top of the viewer | Distance measurement, screenshot, presentation mode |
 | **Channels** (per channel) | The settings under each fluorescence channel | Histogram, Gaussian blur |
-| **Render modes** (shaders) | The drop-down menu that chooses how the volume is drawn | Fluorescence, Natural Fluorescence, Structure (DVR) |
+| **Render modes** (shaders) | The drop-down menu that chooses how the volume is drawn | Fluorescence (Imaris-like), Natural fluorescence (depth), Structure (DVR) |
 
 ## 12.2. The screen
 
@@ -1528,8 +1724,8 @@ These plugins are **not** shipped with the site: they are installed on demand (f
 
 | Plugin | What it does for the visitor |
 |---|---|
-| **Fluorescence** | The default rendering: each channel emits its colour, as on a fluorescence microscope |
-| **Natural Fluorescence** | Each fluorophore glows in its own colour; dense structures hide what is behind them |
+| **Fluorescence (Imaris-like)** | The default rendering: each channel emits its colour, as on a fluorescence microscope |
+| **Natural fluorescence (depth)** | Each fluorophore glows in its own colour; dense structures hide what is behind them |
 | **Structure (DVR)** | Volume rendering with depth and shading, which brings out shapes |
 
 **Channels**
@@ -1634,7 +1830,7 @@ An installed plugin for which a newer **and** compatible version exists moves to
 | **`incompatible`** | Appears only on a plugin that is **not installed**: it requires another version of the platform. The install button is greyed out: update the platform (chapter 14). |
 
 ::: note
-A plugin that is **already installed** never carries the `incompatible` label: the one running on your site works; only its next version may have to wait. A package that declares a data type requires a **recent** platform (1.51 to 1.53): a site that has not been updated will show "incompatible" on recent plugins.
+A plugin that is **already installed** never carries the `incompatible` label: the one running on your site works; only its next version may have to wait. A package's compatibility is set by its `platformCompat` field (a range of platform versions): a site outside that range shows "incompatible" on that package.
 :::
 
 Catalog states: "Catalog unavailable", "Catalog unreachable.", "No plugins in the catalog.", "No catalog source configured…".
@@ -1760,7 +1956,7 @@ A **Plugin updates** card answers the same question for modules: "{n} plugin(s) 
 
 ## 14.5. The processing pack
 
-The **Processing pack** card compares the Pipeline pack **installed here** with the one attached to the **latest GitHub release**. States: "The processing pack is up to date. (v0.21.0)" or "New processing pack: vX (here: vY)" with [Download the pack]{.ui}.
+The **Processing pack** card compares the Pipeline pack **installed here** with the one attached to the **latest GitHub release**. States: "The processing pack is up to date. (v0.23.0)" or "New processing pack: vX (here: vY)" with [Download the pack]{.ui}.
 
 It installs **on the processing workstation, not on this server**: download it and replace the folder used there. **The platform does not need updating** to get a newer pack. If GitHub is unreachable: "Could not reach GitHub to check the processing pack.".
 
@@ -1798,7 +1994,7 @@ It installs **on the processing workstation, not on this server**: download it a
 The pack contains **two pipelines** (volumes with tracking, tracking analysis), the **2D photograph import**, sample inputs (usable right away to get a feel for it), and a launcher that **checks its own integrity** (SHA-256).
 
 ::: note
-**Two numbers, and that is normal.** The header shows `pipeline v0.21.0`: the version **of the pack**, not of the site. Pipeline 0.22.0 writes **format 4** (only the 4 → 5 step remains in **Data updates**), or format 5 with the `--format 5` option, **keeps the curation** done in the panel when a dataset is re-processed (hidden, name, orientation…) and **publishes all or nothing**.
+**Two numbers, and that is normal.** The header shows `pipeline v0.23.0`: the version **of the pack**, not of the site. Pipeline 0.23.0 writes **format 6** by default (`--format 6`), **keeps the curation** done in the panel when a dataset is re-processed (hidden, name, orientation…) and **publishes all or nothing**.
 :::
 
 When a newer version of the pack is published, a **banner** appears at the top: "New pack version: v… — This server offers v…. Download the new one below — the platform does not need updating for this." with [Download v…]{.ui}; for the light edition, [Installed version]{.ui} keeps the server's pack accessible.
@@ -1880,7 +2076,7 @@ Aim for **12 characters or more**. A phrase that is easy to remember beats a com
 
 ## 16.2. How the password is stored
 
-- **Never in plain text.** The server keeps only an irreversible fingerprint (salted PBKDF2). You cannot get back to the password from the fingerprint.
+- **Never in plain text.** The server keeps only an irreversible fingerprint (salted PBKDF2-HMAC-SHA256). You cannot get back to the password from the fingerprint.
 - **The credentials file is never served.** Even by typing its exact address, you get an error.
 - **If the file is deleted**, the panel offers to create a password again: this is the emergency door (appendix B).
 - **The initial creation can never overwrite** an existing password.
@@ -1940,7 +2136,7 @@ Reserved for the person who manages the repository, but good to know so you can 
   └──────────────────────── the date YYMMDD: this is the version number
 ```
 
-- **The date** orders the versions: the most recent is offered, the others stay accessible. This guide, dated **7 October 2026**, becomes "the most recent" compared with the August 2026 editions.
+- **The date** orders the versions: the most recent is offered, the others stay accessible. This guide, dated **2 November 2026**, becomes "the most recent" compared with the October 2026 editions.
 - **The identifier** must stay **identical** from one version to the next, otherwise the panel sees two different documents.
 - A file that does not follow the rule is **flagged as ignored** ("Files ignored (name does not match)") at the bottom of the tab: a typing mistake shows.
 
@@ -2052,6 +2248,7 @@ After 10 failures in 15 minutes, access is blocked for 15 minutes; the message g
 2. If it comes from an **import**: [Publish]{.ui}, then **switch on visibility** (a dataset published by the Import is hidden by default).
 3. Check that it is really in `DATA_WEB/3d/`, `DATA_WEB/2d/` or `DATA_WEB/live/` (folder names are fixed; renaming a *type* changes only the display) and that its folder contains a `metadata.json`.
 4. Reload the page. There is **no catalog to regenerate**.
+5. If you deleted it by mistake, it may be in the trash (§ 3.12): open the trash and restore it.
 
 On a PHP host, if the tab is entirely empty, the list's answer could not be read: ask the person who manages the server to check `api/datasets.php?action=list`.
 
@@ -2082,6 +2279,22 @@ Try **Security › [Repair permissions]{.ui}** (§16.3): it is the most frequent
 
 If the message says "automatic rollback done", **there is nothing to do**: the site is back on its previous version. Try again later, or report the error message.
 
+### "A volume looks compressed or blurred"
+
+On a format-6 dataset, **Fast loading** is on by default: the display loads the WebP Q30 data. Untick it under the resolution list to load the lossless data. Exports always use the lossless data, whatever the checkbox says. Distances are picked on the picture on screen, so they follow the checkbox.
+
+### "The viewer shows a coarser resolution than I chose"
+
+The panel says "Shown at {n}: the GPU does not hold {n}." The graphics card cannot hold the chosen resolution within the GPU budget, so the next coarser one is shown. The panel can also say "The other {x} MB of the {y} MB budget hold volumes that stay loaded.": other volumes you have open share the same budget. Close them, or choose the coarser resolution on purpose.
+
+### "A dataset row says In another tab"
+
+Another tab of the same browser is updating that dataset, so this tab leaves it alone. Follow the update there. If that tab is stuck, close it, then press [Resume]{.ui} here: the server's journal lets the work continue.
+
+### "The Data integrity check reports an error"
+
+See § 7.3: the message on the row gives the cause (session, timeout, network) and what to do.
+
 ### "The panel is unreadable / the drop-down menus are white on white"
 
 Do a **hard reload**: <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> (Windows) or <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> (Mac). The browser sometimes keeps old files in memory.
@@ -2101,14 +2314,21 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 |---|---|
 | **Channel** | A fluorescent staining (DAPI, GFP, Pecam1…). A dataset often contains several, superimposed. |
 | **Voxel** | The equivalent of a pixel in three dimensions. Its real size is given by the calibration (§3.6). |
-| **Brick** | A small cube of volume (64×64×64 voxels, or 66³ with a border in formats 4 and 5). The site loads them on demand to display volumes of several gigabytes without downloading everything. |
+| **Brick** | A small cube of volume (64×64×64 voxels, or 66³ with a border in formats 4 to 6). The site loads them on demand to display volumes of several gigabytes without downloading everything. |
 | **LOD** | *Level of Detail*: several resolutions of the same volume. The site first shows a coarse version, then refines. |
 | **Dataset type** | One of the three categories: `3d` (fixed volume), `2d` (calibrated photograph), `live` (4D time series, possibly with its cell tracking). These are the server's folders; the name seen by the public is set in **Data types** (chapter 6). |
-| **Data format** (`formatVersion`) | The "level of fitting-out" of a published dataset, from 1 to 4 (current: 4). Upgraded in **Data updates**. |
+| **Data format** (`formatVersion`) | The "level of fitting-out" of a published dataset, from 1 to 6 (current: 6). Upgraded in **Data updates**. |
 | **Planes** (`planes/`) | Format 2: a copy of the native level **plane by plane** (lossless PNG), for fast XY slices in the Studio. |
 | **Layer projections** (`mips/`) | Format 3: the maximum projection of each layer of 64 planes, for fast z-stack figures. |
-| **Brick pyramid v3** | Format 4: 66³ bricks with a one-voxel border, levels reduced in Z too, `index.bin`. Brings seamless filtering and "Zoom detail". |
-| **Matrix (format 5)** | Format 5: the same volume at several resolutions (every slice kept) and in five compressions (lossless, ±2, ±4, light, very light), plus copies for fast cuts. Visitors pick their cell in a table; measurements and exports stay lossless. |
+| **Brick pyramid v3** | Format 4: 66³ bricks with a one-voxel border, levels reduced in Z too, `index.bin`. Brings seamless filtering. |
+| **Matrix (format 5)** | Format 5: the same volume at several resolutions (every slice kept) and in five compressions (lossless, ±2, ±4, light, very light), plus copies for fast cuts. Visitors choose a resolution and a quality in the Render quality panel; exports stay lossless. |
+| **Format 6** | The current format: each resolution is stored twice, losslessly (`ll`) and in WebP quality 30 (`q30`). The viewer shows `q30` by default; exports read `ll`, and distances are picked on the picture on screen. Created by the pipeline 0.23.0, or upgraded from format 5 in **Data updates** (5 → 6). |
+| **Q30** | WebP lossy compression at quality 30: much smaller files, the display default of format 6. |
+| **Lossless level** (`ll`) | The voxels exactly as acquired. Read by every export and by the Studio's figures; the screen reads it when Fast loading is off. |
+| **Fast loading** | The Render quality option of a format-6 dataset: on, the display loads Q30; off, it loads the lossless level. |
+| **GPU budget** | The graphics memory the viewer allows itself for a volume, estimated from the card. A resolution the card cannot hold is replaced by the next coarser one. |
+| **Storage** | The tab that shows where the disk space goes (section 7.2). |
+| **Data integrity** | The tab that checks every dataset for missing or extra files and for its format (section 7.3). |
 | **Sample side** | A setting that says whether the file shows the sample from above ("right side up") or from below ("upside down"). |
 | **Default view** | The pose in which a dataset opens, saved from the preview. |
 
@@ -2119,6 +2339,7 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 | **Staging / pending import** | The private area where an import's files arrive, never served by URL, before you click [Publish]{.ui}. |
 | **Executor** | Who does the computing for a data update: **this browser** or **the server**. Each has its own queue. |
 | **Network governor** | The safeguard that limits the number of requests sent to the host (6 in flight, 4 to 6 per second) so that it does not block your address. |
+| **In another tab** | A dataset that another tab of the same browser is updating: its row has no buttons and waits for that tab. |
 | **Journal** | The notebook kept by the server of what has already arrived or been converted: it lets you **resume** in the right place. |
 
 ### Extensions, pages, security
@@ -2135,4 +2356,4 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 
 ---
 
-*Document written for version **1.65.0** of the platform (pipeline 0.22.0, data format 5). Screenshots show a demonstration dataset (synthetic embryos); colours may differ if the theme has been modified.*
+*Document written for version **1.76.0** of the platform (pipeline 0.23.0, data format 6). Screenshots show a demonstration dataset (synthetic embryos); colours may differ if the theme has been modified.*

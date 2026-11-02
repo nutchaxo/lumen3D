@@ -3,7 +3,7 @@
 ::: chapter-intro
 - Chaque pixel de l'écran est calculé par **un rayon** qui traverse le volume : c'est le **lancer de rayons**, exécuté par la carte graphique.
 - **Three.js** fournit la scène, la caméra et les textures ; le calcul qui compte pour la science (les trois modes de rendu) est **écrit sur mesure** et reste lisible.
-- Pendant que vous tournez l'embryon, la netteté baisse un instant pour garder la fluidité ; au repos, tout revient à pleine qualité.
+- L'image est **la même en mouvement et au repos** : la définition et le nombre d'échantillons ne baissent pas pendant que vous tournez l'embryon. Seul un calcul trop long de la carte graphique réduit le nombre d'échantillons (section 9.9).
 :::
 
 ## 9.1 Deux cerveaux : le processeur et la carte graphique
@@ -31,7 +31,7 @@ Dans Lumen3D, la « recette » s'appelle un **shader** : un petit programme écr
 | Le moteur de dessin (le « renderer »), la scène | Les **shaders** du lancer de rayons (3 modes de rendu) |
 | La caméra en perspective (angle de vue 45°) | L'**atlas** de briques et sa table des pages |
 | Le **cube** (une boîte à 6 faces qui sert de point de départ aux rayons) | Le **streaming** des briques (chapitre 10) |
-| Les matrices, quaternions, vecteurs | La qualité adaptative et le budget de mémoire |
+| Les matrices, quaternions, vecteurs | Le choix de la qualité et le budget de mémoire |
 | L'enveloppe des textures 3D | La lecture de profondeur sous la souris (mesures) |
 | Le chargeur de modèles 3D (surface du suivi cellulaire) | Les canaux, histogrammes, filtre gaussien |
 
@@ -60,14 +60,18 @@ Le volume est un énorme tableau de valeurs. Pour en faire une image, on procèd
 
 ### Un échantillon par voxel
 
-Au repos, le viewer prend **exactement un échantillon par longueur de voxel**, quelle que soit la direction du rayon. C'est ce qui garantit qu'**une structure d'un seul voxel ne passe jamais à travers les mailles du filet**.
+Le viewer prend **exactement un échantillon par longueur de voxel**, en mouvement comme au repos : la densité d'échantillonnage ne change pas avec l'interaction. C'est ce qui garantit qu'**une structure d'un seul voxel ne passe jamais à travers les mailles du filet**.
 
 ::: example
 Le jeu de démonstration E9.5 fait 768 × 576 × 112 voxels. Un rayon qui traverse tout le cube dans la longueur (axe X) fait donc **768 échantillons**. Un rayon en diagonale, plus long (√(768² + 576² + 112²) ≈ 966 voxels), en fait **environ 966**.
 :::
 
 ::: tech
-Le pas (en unités du cube) est `delta = 1 / (taux × nu)`, où `nu = ‖direction × (nombre de voxels du niveau)‖` mesure combien de voxels le rayon traverse par unité de longueur et `taux = 1,0` au repos. Le pas est donc uniforme en voxels, pas en micromètres. Si le rayon demandait plus de 4 096 pas, ils sont répartis plus largement (voir 9.9).
+Le pas (en unités du cube) est `delta = 1 / (sampleRate × nu)`, où `nu = ‖direction × (nombre de voxels du niveau)‖` mesure combien de voxels le rayon traverse par unité de longueur et `sampleRate = 1,0` (une constante, la même en mouvement et au repos). Le pas est donc uniforme en voxels, pas en micromètres. Si le rayon demande plus de pas que le plafond de la carte (section 9.9), les pas sont répartis plus largement.
+:::
+
+::: note
+Dans le mode **Fluorescence (type Imaris)**, les échantillons se placent sur des plans perpendiculaires à la vue. Sur un rayon oblique, l'écart le long du rayon augmente comme 1 / cos θ (θ, l'angle entre le rayon et l'axe de la vue) : le viewer compte un échantillon **par plan de voxel**, pas par longueur de voxel le long de chaque rayon.
 :::
 
 ## 9.4 Le grain aléatoire contre les bandes
@@ -80,13 +84,19 @@ La parade est simple : le **premier échantillon de chaque rayon est décalé** 
 
 Le même décalage est utilisé à l'export d'une image : il se poursuit d'une tuile à l'autre, sans couture.
 
+::: warning
+Pour le mode **Fluorescence (type Imaris)**, le décalage aléatoire est remplacé par un quadrillage **ancré** sur des plans perpendiculaires à la vue. Un maximum calculé sur un décalage différent à chaque pixel clignote d'un pixel à l'autre et laisse des trous noirs dans les structures brillantes ; avec des plans communs, les rayons voisins voient la même tranche de profondeur.
+:::
+
 ## 9.5 Sauter le vide
 
 Un embryon n'occupe qu'une partie de sa boîte. Les briques sans signal ne sont même pas stockées (chapitre 7). Quand un rayon arrive dans une brique **absente**, il n'y lit rien : il **saute directement** à la face de sortie de cette brique.
 
 ![Le rayon franchit trois briques vides sans lire un seul voxel.](img/ch09/saut-briques.svg){width=95%}
 
-Le saut respecte le même quadrillage aléatoire que le reste du rayon : l'image ne change pas, elle est seulement calculée plus vite.
+Le saut respecte le même quadrillage que le reste du rayon : l'image ne change pas, elle est seulement calculée plus vite.
+
+Depuis la plateforme 1.74, le viewer saute aussi, **à l'intérieur d'une brique présente**, les **cellules de 8 × 8 × 8 voxels** qui ne peuvent rien apporter au mode affiché. Une carte des maxima par cellule (une texture, un texel par cellule) indique ces cellules. Le saut ne change pas l'image : il ne fait que réduire le travail.
 
 ::: note
 Une brique absente se lit comme des **zéros** : du noir qui ne coûte presque rien, pas un trou dans l'espace.
@@ -109,16 +119,16 @@ Le menu [Mode de rendu]{.ui} (panneau de gauche) propose trois façons de résum
 ::::
 
 ::: note
-Les captures du milieu et de droite sont éclairées avec un curseur [Visibilité (exposition)]{.ui} plus haut (voir la légende de la figure suivante) : ces deux modes produisent naturellement une image plus sombre à exposition égale.
+Les captures du milieu et de droite sont éclairées avec un curseur [Visibilité (exposition)]{.ui} plus haut : ces deux modes produisent naturellement une image plus sombre à exposition égale.
 :::
 
 | Mode | Ce qu'il fait le long du rayon | Profondeur ? |
 |---|---|---|
-| **Fluorescence** (mode par défaut) | garde la valeur **la plus forte** de chaque canal | non, tout se superpose |
+| **Fluorescence (type Imaris)** (mode par défaut) | garde la valeur **la plus forte** de chaque canal | non, tout se superpose |
 | **Fluorescence naturelle** | chaque point **brille** ; ce qui est devant **assombrit** ce qui est derrière | oui |
 | **Structure (DVR)** | empile des couches **semi-transparentes** de l'avant vers l'arrière | oui |
 
-### Mode 1 : Fluorescence (le maximum)
+### Mode 1 : Fluorescence (type Imaris)
 
 C'est le rendu « classique » des logiciels de microscopie. Pour **chaque canal séparément**, le viewer retient la **valeur maximale** rencontrée sur le rayon. Les couleurs des canaux sont ensuite **additionnées**.
 
@@ -127,8 +137,14 @@ Un rayon croise du vert à 0,85 puis du magenta à 0,75. Le pixel reçoit 0,85 d
 :::
 
 ::: tech
-`mip = max(mip, v)` pour chaque canal ; couleur finale = Σ `mip_i × couleur_i` × exposition. Le rayon s'arrête tôt quand **chaque** canal actif a atteint son plafond (opacité × 0,999). Un pixel dont le maximum est inférieur à 0,004 reste transparent.
+`mip = max(mip, v)` pour chaque canal ; couleur finale = Σ `mip_i × couleur_i` × exposition. Un pixel dont le maximum est inférieur à 0,004 reste transparent.
 :::
+
+### Réglages instantanés du mode Fluorescence (type Imaris)
+
+Pour ce mode, le viewer garde les **valeurs maximales brutes** de chaque canal le long de chaque rayon, avant tout réglage d'affichage. Changer la **fenêtre**, le **gamma**, la **couleur**, l'**opacité**, l'**exposition** ou activer et désactiver un **canal** ne fait alors que recolorer l'image : les rayons ne sont pas recalculés.
+
+Déplacer la caméra ou changer les données relance en revanche le calcul. Ce raccourci ne vaut que pour l'écran : les exports et la lecture de profondeur calculent l'image complète. Si la carte ne sait pas écrire en flottant 16 bits, il est désactivé et chaque image est calculée normalement.
 
 ### Mode 2 : Fluorescence naturelle (émission et absorption)
 
@@ -141,7 +157,7 @@ Pour chaque échantillon de densité `d` = valeur du canal le plus fort (si `d >
 - lumière émise : `T × emissionGain × exposition × delta × Σ v_i × couleur_i` avec `emissionGain = 2,2`, où `T` est la **transmittance** (la part de lumière qui n'a pas encore été absorbée, de 1 à 0) ;
 - puis `T ← T × (1 − a)` ; arrêt quand `T < 0,004`.
 
-À la fin, la **luminance** (formule Rec. 709) est compressée par une courbe de Reinhard étendue (point blanc 2,0) et les trois composantes sont multipliées par **le même rapport** (« verrouillage de la chromaticité ») : un fluorophore très brillant reste vert, il ne vire jamais au blanc. Seul le recouvrement de 3 ou 4 canaux est éclairci (au plus 50 %). Une saturation de 1,18 est appliquée à luminance constante.
+À la fin, la **luminance** (formule Rec. 709) est compressée par une courbe de Reinhard étendue et les trois composantes sont multipliées par **le même rapport** (« verrouillage de la chromaticité ») : un fluorophore très brillant reste vert, il ne vire jamais au blanc. Seul le recouvrement de 3 ou 4 canaux est éclairci (au plus 50 %). Une saturation de 1,18 est appliquée à luminance constante.
 :::
 
 ::: warning
@@ -156,7 +172,7 @@ Le DVR (« Direct Volume Rendering ») empile des couches **semi-transparentes**
 Pour chaque échantillon d'opacité locale `a = max des canaux` (si `a > 0,01`) :
 `pas = 1 − (1 − 0,05 × a)^(delta / 0,01)` puis `couleur += (1 − alpha) × pas × couleur_locale` et `alpha += (1 − alpha) × pas`.
 
-L'exposant fait qu'une colonne de matière opacifie **selon sa longueur**, pas selon le nombre d'échantillons : l'image ne change pas quand le viewer allège le pas pendant la rotation.
+L'exposant fait qu'une colonne de matière opacifie **selon sa longueur**, pas selon le nombre d'échantillons : l'image ne change pas quand le nombre de pas varie.
 :::
 
 ### Un rayon, trois réponses
@@ -165,35 +181,34 @@ Imaginons un rayon qui rencontre d'abord un nuage vert, puis, un peu derrière, 
 
 ![Le même rayon, résumé par les trois modes (calcul avec les formules du viewer ; curseur d'exposition 1 pour le mode 1, 4 pour le mode 2 et 3 pour le mode 3, comme sur les captures).](img/ch09/rayon-1d.png){width=100%}
 
-- **Fluorescence** : on garde le plus fort de chaque canal, **sans tenir compte de l'ordre**.
+- **Fluorescence (type Imaris)** : on garde le plus fort de chaque canal, **sans tenir compte de l'ordre**.
 - **Naturelle** : la lumière du nuage magenta est un peu **atténuée** par le nuage vert qui est devant (la transmittance descend à environ 0,67).
 - **Structure** : le nuage vert **cache** partiellement le magenta ; l'opacité cumulée finit autour de 0,68.
 
 ## 9.7 Lisser entre les voxels
 
-Entre deux voxels, le viewer ne montre pas des marches d'escalier : il **interpole**. Sur le **format 4** (celui de tous les jeux de démonstration), la carte graphique mélange les huit voxels voisins : c'est l'**interpolation trilinéaire**.
+Entre deux voxels, le viewer ne montre pas des marches d'escalier : il **interpole**. Sur les formats 4 à 6, la carte graphique mélange les huit voxels voisins : c'est l'**interpolation trilinéaire**.
 
 Pour que ce mélange ne déborde jamais d'une brique sur sa voisine, chaque brique est stockée avec **1 voxel de bordure** (66³ au lieu de 64³). Aux frontières entre briques, l'image est donc continue, sans couture.
 
 ::: remember
-- **Format 4** et texture 3D complète : interpolation trilinéaire (lisse).
+- **Formats 4 à 6** et texture 3D complète : interpolation trilinéaire (lisse).
 - **Ancien format 2**, quand l'atlas est découpé en briques : le voxel le plus proche est affiché tel quel (blocs visibles en zoom).
 :::
 
-## 9.8 Fluide quand vous bougez, net quand vous vous arrêtez
+## 9.8 La même image en mouvement et au repos
 
-Faire tourner un volume à 60 images par seconde demande de calculer chaque image en moins de **16,7 ms**. Le viewer mesure le temps de chaque image pendant que vous glissez et **ajuste deux réglages** pour tenir ce budget.
+Le viewer ne baisse plus la qualité pendant que vous bougez. Une image en mouvement et la même image au repos ont la **même définition** et le **même nombre d'échantillons** : vous ne voyez pas l'image « se nettoyer » quand vous lâchez la souris.
 
-![Pendant le glissement, la définition de l'image et le nombre d'échantillons sont réglés en continu ; dès que vous vous arrêtez, tout revient à la qualité maximale.](img/ch09/adaptatif.svg){width=100%}
+| Réglage | En mouvement et au repos |
+|---|---|
+| Définition de l'image | le pixel de la carte graphique suit l'écran : ×1 à ×2 selon la densité de pixels de l'écran (au plus ×2) |
+| Échantillons par voxel | **1,0** |
+| Plafond d'échantillons par rayon | voir la section 9.9 |
 
-| Réglage | Pendant le glissement | Au repos |
-|---|---|---|
-| Définition de l'image | de ×0,25 à ×1 (départ ×0,75) | 1 pixel d'écran (jusqu'à ×2) |
-| Échantillons par voxel | de 0,1 à 0,75 (départ 0,35) | **1,0** |
-
-- L'interaction est considérée comme terminée **250 ms** après le dernier mouvement.
-- Si une image dépasse 1,3 × 16,7 ms, on baisse d'abord la définition, puis les échantillons ; si elle reste sous 1,1 ×, on remonte doucement.
-- Le temps est mesuré par le **chronomètre de la carte graphique** quand le navigateur le propose, sinon par l'intervalle entre deux images.
+::: warning
+Sur une machine lente, la rotation peut saccader davantage, puisque chaque image est calculée complètement. Le viewer a fait ce choix pour que l'image soit toujours la même, et il n'a pas de mode « brouillon ».
+:::
 
 ::: note
 Rien n'est dessiné en continu : le viewer ne calcule une image que si quelque chose change (caméra, réglage, arrivée de briques). Pendant le chargement, les redessins dus aux nouvelles briques sont groupés **toutes les 250 ms** au plus.
@@ -201,15 +216,19 @@ Rien n'est dessiné en continu : le viewer ne calcule une image que si quelque c
 
 ## 9.9 Le garde-fou contre les plantages de la carte graphique
 
-Sous Windows, si un seul calcul de la carte graphique dure plus de **2 secondes environ**, le système la réinitialise : c'est un « TDR » et l'écran clignote. Le viewer s'en protège.
+Sous Windows, si un seul calcul de la carte graphique dure plus de **2 secondes environ**, le système la réinitialise : c'est un « TDR » et l'écran clignote. Le viewer s'en protège en limitant le nombre d'échantillons par rayon.
 
 ::: tech
-Pour une image **au repos**, le nombre maximal d'échantillons par rayon est `clamp(⌊6 × 10⁹ / nombre de pixels⌋, 256, 4096)`. Exemple : un écran de 1 920 × 1 080 donne ⌊6 × 10⁹ / 2 073 600⌋ = **2 893** échantillons au plus par rayon ; le même écran en pixels doublés (Retina, 8,3 millions de pixels) en donne 723.
+Le plafond est `clamp(⌊6 × 10⁹ / nombre de pixels⌋, 256, 4096)`. Exemple : un écran de 1 920 × 1 080 donne ⌊6 × 10⁹ / 2 073 600⌋ = **2 893** échantillons au plus par rayon ; le même écran en pixels doublés (Retina, 8,3 millions de pixels) en donne 723.
 
-Ce plafond est ajusté en cours d'usage : multiplié par `max(0,5 ; 150 / durée)` si une image au repos dépasse 200 ms, relevé de 10 % si elle reste sous 60 ms, et divisé par deux après une perte de contexte graphique (chapitre 10). Pendant un glissement, il vaut un dixième de cette valeur.
+Le viewer mesure le temps GPU de chaque image quand le navigateur sait le donner (extension `EXT_disjoint_timer_query_webgl2`). Au-delà de **200 ms**, il réduit ce plafond (au plus de moitié, ou `150 / durée`) ; sous **60 ms**, il le remonte de 10 % à la fois, jusqu'à sa valeur maximale. Il ne le baisse jamais pour la fluidité.
 :::
 
-Pour vous, cela signifie qu'un rayon exceptionnellement long peut, sur un très grand écran, être échantillonné un peu plus largement qu'un voxel. Dans l'usage normal (volumes de quelques centaines de voxels), le plafond n'est jamais atteint.
+Pour vous, cela signifie que sur un très grand écran, un rayon exceptionnellement long peut être échantillonné un peu plus largement qu'un voxel. Dans l'usage normal (volumes de quelques centaines de voxels), le plafond n'est jamais atteint sur un écran ordinaire.
+
+::: note
+Une perte de contexte graphique (la carte est retirée à la page) n'agit pas sur ce plafond mais sur le **budget de mémoire** : il est divisé par deux (chapitre 10, section 10.9).
+:::
 
 ## 9.10 Les vraies proportions : calibration et étirement en Z
 
@@ -231,4 +250,24 @@ Dans le panneau [Échelle Physique]{.ui}, le curseur [Surcharge Z]{.ui} (de ×0,
 
 ::: warning
 La barre d'échelle 3D est exacte pour ce qui se trouve **à la profondeur du centre de l'échantillon**. La vue est en perspective : ce qui est plus près paraît plus grand, ce qui est plus loin paraît plus petit.
+:::
+
+### Les axes démarrent au centre de gravité
+
+Les **axes** et le **cube d'orientation** ne se posent pas au centre de la boîte, mais au **centre de gravité des briques présentes** : la moyenne des positions des briques non vides du niveau le plus grossier. Chaque brique y compte pour le même poids ; ce n'est donc pas une moyenne pondérée par l'intensité. Tant qu'aucun arbre de briques n'est chargé, ils restent au centre de la boîte.
+
+![Les axes d'orientation au démarrage (capture de test) : le point de départ, au centre de gravité, et les bras R1 et G1.](img/ch09/axes-start.png){.shot width=70%}
+
+::: legend
+| n | ce que c'est |
+|--|----------------------|
+| 1 | Le point de départ des axes : le centre de gravité des briques présentes. |
+| 2 | Le bras rouge **R1** (sens +X). |
+| 3 | Le bras vert **G1** (sens +Y). |
+:::
+
+Dès que vous les déplacez à la souris, ils gardent leur position : le centre de gravité ne les déplace plus.
+
+::: tip
+Si l'embryon n'occupe qu'un côté de sa boîte, son centre de gravité s'en écarte : les axes se placent alors près de la matière, et non dans le vide.
 :::

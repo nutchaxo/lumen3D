@@ -3,7 +3,7 @@
 ::: chapter-intro
 - Lumen3D se sert depuis **trois sortes de serveurs** (Python, PHP, ou simples fichiers). Ce chapitre dit ce que chacun sait faire, comment il répond au navigateur et pourquoi les pages restent rapides.
 - Une **mise à jour** est un colis **signé** : la plateforme refuse tout ce qu'elle ne peut pas prouver authentique, puis bascule en gardant un chemin de retour (sur Python).
-- Chaque version est **testée en entier** (201 fichiers de tests), signée, puis publiée d'un coup. La plateforme marche **sans Internet**.
+- Chaque version est **testée en entier** (239 fichiers de tests), signée, puis publiée d'un coup. La plateforme marche **sans Internet**.
 :::
 
 Ce chapitre s'adresse à la personne qui **installe et entretient** le site : l'administrateur, ou la personne du service informatique qui l'aide. Les chapitres 9 à 12 expliquent ce que voit le visiteur ; celui-ci explique **la machine derrière**.
@@ -11,7 +11,7 @@ Ce chapitre s'adresse à la personne qui **installe et entretient** le site : l'
 Rien ici n'oblige à écrire du code. Mais comprendre ces mécanismes permet de **diagnostiquer** un site lent, une mise à jour refusée ou un hébergeur capricieux.
 
 ::: note
-Les numéros de version cités sont ceux de ce document : plateforme web **1.65.0**, pipeline **0.22.0**, format de données **5**. Le panneau d'administration en bref est au chapitre 14 ; la sécurité en général au chapitre 19.
+Les numéros de version cités sont ceux de ce document : plateforme web **1.76.0**, pipeline **0.23.0**, format de données **6** (le plus récent ; le pipeline écrit le format 6 par défaut). Le panneau d'administration en bref est au chapitre 14 ; la sécurité en général au chapitre 19.
 :::
 
 ## 18.1 Trois façons de servir Lumen3D
@@ -218,6 +218,17 @@ Beaucoup d'instituts placent un **proxy inverse** (Nginx, Apache…) devant le s
 | Import, mises à jour de données | régulateur du navigateur (chapitre 17) | ne pas faire bannir l'adresse de l'opérateur |
 | GitHub (admin) | réponse mémorisée 5 minutes | 60 demandes/heure par adresse sans compte |
 
+### La taille d'une requête sur PHP
+
+Sur un hébergement PHP, la directive `post_max_size` fixe la taille maximale d'**une** requête. Une requête plus grosse est **jetée en silence** par PHP : le serveur ne reçoit rien et peut répondre une réponse qui ressemble à un succès, sans JSON. La plateforme s'en protège en calculant elle-même la taille de ses envois :
+
+- un **bloc d'import** est dimensionné d'après `post_max_size` et le quart de `memory_limit` (`api/_upload_lib.php`, lignes 59 à 66) ;
+- un **envoi de migration** ne dépasse jamais le plus petit de 32 Mio et de `post_max_size` − 64 Kio, avec un plancher de 1 Mio (`api/_migrations_lib.php`, lignes 862 à 870) ; l'onglet [Mises à jour des données]{.ui} reçoit cette limite avec l'état du serveur.
+
+::: tip
+Pour envoyer des blocs plus gros, augmentez `post_max_size` dans la configuration PHP de l'hébergeur, si celui-ci le permet. Sinon, la plateforme réduit elle-même la taille de ses blocs.
+:::
+
 ### Le verrou de session PHP
 
 Sur PHP, **une session est un fichier verrouillé** tant qu'une requête s'en sert. Deux requêtes d'un même administrateur se **mettent en file**. Or l'onglet *Mises à jour* lance trois vérifications vers GitHub : l'onglet *Datasets* attendait derrière elles.
@@ -238,6 +249,8 @@ Sur PHP, **une session est un fichier verrouillé** tant qu'une requête s'en se
 | Sauvegardes avant mise à jour | `backups/backup-<version>-<date>.zip` (les 3 plus récentes) |
 | Changer le mot de passe | onglet *Sécurité*, ou `python dev_server.py --set-password` |
 | Valider une installation | `python dev_server.py --check` |
+| Espace disque et ce qui le consomme | onglet [Stockage]{.ui} (chapitre 14, section 14.10) : le calcul est gardé 10 minutes |
+| Un jeu semble incomplet ou incohérent | onglet [Intégrité des données]{.ui} (chapitre 14, section 14.9) : contrôle en lecture seule, API `integrity` |
 
 ::: tip
 **Avant de bricoler, lancez `--check`.** Cette commande vérifie, sans ouvrir de port, que les fichiers essentiels sont là, que `dev_server.py` se compile, que les fichiers de langue sont lisibles et que la version est cohérente. Code de sortie 0 = tout va bien ; 1 = un problème (un rapport JSON dit lequel).
@@ -263,9 +276,9 @@ Une mise à jour se déclenche depuis [Système › Mises à jour]{.ui}. L'admin
 
 ![Les numéros de version que l'on croise.](img/ch18/versions.svg){width=100%}
 
-- La **plateforme** n'a **pas** de constante de version : c'est le **nom du fichier de changelog le plus récent** (`changelog_1.65.0.md`). Publier = créer ce fichier.
-- Le **serveur Python** a sa propre version (`0.16.0`), qui **dérive volontairement** : elle suit l'outil serveur, pas la plateforme.
-- Le **pipeline** (0.22.0) est un autre logiciel, qui s'installe sur le poste de traitement.
+- La **plateforme** n'a **pas** de constante de version : c'est le **nom du fichier de changelog le plus récent** (`changelog_1.76.0.md`). Publier = créer ce fichier.
+- Le **serveur Python** a sa propre version (`0.16.0`, `dev_server.py`), qui **dérive volontairement** : elle suit l'outil serveur, pas la plateforme.
+- Le **pipeline** (0.23.0) est un autre logiciel, qui s'installe sur le poste de traitement.
 
 ### Comment la plateforme apprend qu'une version existe
 
@@ -487,23 +500,21 @@ Les plugins de la plateforme ne **partent pas** avec la version : ils sont publi
 
 Une version n'est signée **que si** la suite de tests est entièrement verte. Cette suite se lance par **une seule commande**.
 
-![201 fichiers de tests, trois langages.](img/ch18/tests.svg){width=100%}
-
 ::::: keynums
 ::: keynum
-**201**
+**239**
 fichiers de tests
 :::
 ::: keynum
-**124**
+**142**
 Node (viewer, workers, protocoles)
 :::
 ::: keynum
-**55**
+**73**
 Python (serveur, pipeline, import)
 :::
 ::: keynum
-**22**
+**24**
 PHP (serveur jumeau)
 :::
 :::::
@@ -513,7 +524,7 @@ PHP (serveur jumeau)
 - **`--check-clean`** : un test qui **salit le dépôt** (fichier créé ou modifié) échoue. Tout doit se passer dans des dossiers temporaires.
 
 ::: why
-**Pourquoi tester les « jumeaux » avec les mêmes vecteurs ?** Plusieurs règles existent en **deux ou trois langages** (compatibilité de version, empreinte de confiance, import, notes de version). Un même fichier de cas est joué par Python, PHP et JavaScript : s'ils divergent, un test échoue. Par exemple, `tests/compat-vector.json` contient 42 cas.
+**Pourquoi tester les « jumeaux » avec les mêmes vecteurs ?** Plusieurs règles existent en **deux ou trois langages** (compatibilité de version, empreinte de confiance, import, notes de version). Un même fichier de cas est joué par Python, PHP et JavaScript : s'ils divergent, un test échoue. Par exemple, `tests/compat-vector.json` contient 44 cas.
 :::
 
 ### L'intégration continue, à chaque modification
@@ -564,11 +575,13 @@ Lumen3D a été conçu pour un **réseau fermé**. Tout ce dont le **visiteur** 
 | L'administration PHP est lente | verrou de session | vérifier que le code est à jour (§18.6) |
 | Sans HTTPS, l'import refuse de démarrer | le navigateur exige un contexte sûr pour le calcul d'empreintes | HTTPS, ou `localhost` |
 | Un nouveau jeu n'apparaît pas | fiche masquée, ou ni configurée ni vignette | éditer la fiche (chapitre 14) |
+| Une mise à jour de données affiche « Échec » | un worker planté, une unité en échec, une liaison coupée | la reprise est automatique (10 s à 5 min, cinq échecs au plus) ; garder l'onglet ouvert, chapitre 17 |
+| Un envoi de bloc est refusé sur PHP | `post_max_size` trop petit pour le bloc | l'import réduit la taille du bloc et propose de relancer le dossier (§18.6) |
 
 ::: remember
 - Trois serveurs : **Python** (tout), **PHP** (tout, sans retour arrière auto), **fichiers** (lecture seule).
 - Un **`?v=`** dit au navigateur « cette adresse ne change jamais » : paquets 1 an, scripts 7 jours ; tout le reste se **revalide** (304).
-- Une version se **prouve** (signature Ed25519 épinglée + SHA-256), se **teste** (201 fichiers) et se **bascule** avec filet de sécurité.
+- Une version se **prouve** (signature Ed25519 épinglée + SHA-256), se **teste** (239 fichiers) et se **bascule** avec filet de sécurité.
 - Vos **données, mots de passe et personnalisations** ne sont jamais touchés par une mise à jour.
 :::
 

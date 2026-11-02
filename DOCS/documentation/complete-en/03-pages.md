@@ -64,23 +64,33 @@ The badges on a card say a lot: **Web** (can be displayed), **Raw** (original fi
 
 This is the heart of the platform. Open a 3D dataset: the volume first appears blurry, then sharpens.
 
-![The viewer on a 3D dataset (viewer.html?id=3d/…).](img-en/ch03/viewer-3d.png){.shot width=92%}
+The screen has a toolbar above the volume and a control panel on the left. The toolbar groups its buttons:
 
-::: legend
-| n | what it is |
-|--|----------------------|
-| 1 | **Tools** group: [Navigate]{.ui} (default), [Slice through volume]{.ui}, [Measure distance]{.ui}. |
-| 2 | **Export** group: [Download Center]{.ui}, [Screenshot]{.ui}. |
-| 3 | **Visuals** group: grid, axes, orientation axes, hide the volume, brick debugging. |
-| 4 | **Layouts** group: [Presentation mode]{.ui}, [Decompose by channel]{.ui}, [Z-Stack Browser]{.ui}. |
-| 5 | The [Channels]{.ui} panel: one row per channel (checkbox, colour, adjustable histogram). |
-| 6 | [Render Quality]{.ui}: 512, 1024 or native; on a format-5 dataset, a "resolution × compression" table (chapter 10). The text below gives the quality actually active. |
-| 7 | Four buttons on the volume: centre the sample, reset the view, export the view as PNG, reset the workspace. |
-:::
+| Group | What it holds |
+|---|---|
+| **Tools** | [Navigate]{.ui} (default), the slice tool, [Measure distance]{.ui} |
+| **Export** | [Download Center]{.ui} (on format 6, also **Download .q30.zip**, beside the lossless OME-Zarr export), [Screenshot]{.ui}, the 3D view as a PNG |
+| **Visuals** | grid, axes, orientation axes, hide the volume, brick debugging |
+| **Layouts** | [Presentation mode]{.ui}, [Decompose by channel]{.ui} (its panel is titled [Channel Split]{.ui}), [Z-Stack Browser]{.ui} |
+
+The left panel holds, from top to bottom:
+
+| Panel | What it does |
+|---|---|
+| **Channels** | one row per channel: checkbox, colour, adjustable histogram |
+| **Display** | [Render mode]{.ui} (default "Fluorescence (Imaris-like)"), [Visibility (exposure)]{.ui}, [Background]{.ui} |
+| **Render Quality** | the list of resolutions of the dataset, with the graphics memory each one takes. On a format 6 dataset, one more option, [Fast loading]{.ui}. On a format 5 dataset, a second list of qualities. Chapter 10 explains both. |
+| **Physical Scale** | [Display Z override]{.ui}, which stretches the display along Z; the [1:1]{.ui} button puts it back |
 
 **Moving around**: drag = rotate; <kbd>Shift</kbd> + drag (or right button) = pan; wheel = zoom; two fingers = pan and pinch.
 
-Under the channels, the [Display]{.ui} panel sets the [Render mode]{.ui} (default "Fluorescence"), the [Visibility (exposure)]{.ui} and the [Background]{.ui}. Further down, [Zoom detail]{.ui} loads finer bricks when you zoom in, and [Physical Scale]{.ui} stretches the display along Z.
+::: note
+**Where the axes start.** The axes and the orientation gizmo start at the **centre of gravity of the bricks that hold signal**, not at the centre of the box (each brick counts the same). Once you drag them, they stay where you put them.
+:::
+
+::: note
+**Channel Split.** [Decompose by channel]{.ui} opens a side panel with one view per channel. A **red frame** around the 3D view marks the picture the exported figure uses; it is hidden for the grid-only layout. The export renders the same pose, framed with the same shape as the canvas on screen, so the main picture of the figure shows what the frame encloses.
+:::
 
 ::: note
 The buttons depend on the **plugins installed** on your instance. Chapter 12: each tool; chapter 11: colours and histograms.
@@ -156,7 +166,7 @@ Up to **four panels** side by side. Each panel is a **real viewer** (or a real 2
 ![The About page.](img-en/ch03/a-propos.png){.shot width=80%}
 
 ::: note
-On a fresh installation, the legal notice is a template to complete (organisation name, address, host): these are bracketed fields that the administrator fills in.
+On a fresh installation, the legal notice is a template to complete (organisation name, address, host): these are bracketed fields that the administrator fills in. The footer link is already ticked, and the page shows six template sections: publisher, data protection & privacy, cookies & local storage, intellectual property, disclaimer & liability, contact.
 :::
 
 Other pages may exist: the administrator can create **custom pages**, opened by `page.html?slug=<name>` and added to the top bar.

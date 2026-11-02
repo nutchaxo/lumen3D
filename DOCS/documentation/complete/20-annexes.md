@@ -16,14 +16,18 @@ Lumen3D est écrit en JavaScript « simple » : pas de framework, pas de compila
 **Un restaurant.** Les *pages* sont les serveurs qui prennent votre commande. Les *viewers* sont les cuisiniers qui dessinent le plat. Le *noyau* est la réserve, les couteaux et le plan de travail. Les *workers* sont la plonge, en coulisses : on ne la voit pas, mais rien ne sortirait sans elle.
 :::
 
-### Le noyau : `js/core/` (33 fichiers)
+### Le noyau : `js/core/` (41 fichiers)
 
 | Fichier | Ce qu'il fait, en clair | Chap. |
 |---|---|---|
 | `brick-loader.js` | va chercher les briques dans les packs, par lots, sans télécharger deux fois la même chose | 10 |
 | `brick-decode-worker.js` | worker : décode les images WebP et redécoupe les mosaïques en briques | 10 |
-| `svr-manager.js` | gère l'atlas 3D en mémoire graphique et son budget de mémoire | 10 |
-| `cut-store.js` | lit les copies de coupe du format 5 (`xz/`, `yz/`, `cuts/`) pour le Studio | 7, 12 |
+| `svr-manager.js` | gère l'atlas 3D en mémoire graphique et son budget de mémoire, détecté d'après la carte | 10 |
+| `bc-codec.js` | compresse les briques en blocs RGTC (BC4 / BC5) pour l'atlas graphique | 10 |
+| `cell-max.js` | calcule, pour chaque cellule de 8³ voxels, la valeur maximale à sauter dans le rendu | 9, 10 |
+| `cut-store.js` | lit les copies de coupe du format 5 et 6 (`xz/`, `yz/`, `cuts/`) pour le Studio | 7, 12 |
+| `q30-export.js` | le téléchargement `.q30.zip` d'un jeu au format 6 | 12, 17 |
+| `ome-zarr.js` / `ome-zarr-export.js` | écrivent l'export OME-Zarr sans perte, dans le navigateur | 12, 17 |
 | `data-access.js` | `ctx.data` : les voxels exacts, sans perte, pour les outils qui mesurent | 15 |
 | `catalog.js` | charge la liste des jeux de données, la filtre, la cherche, trouve les jeux liés | 3 |
 | `utils.js` | boîte à outils commune : vocabulaire des types (3d, 2d, live), dates, barres d'échelle 1-2-5 | 1 |
@@ -74,7 +78,7 @@ Lumen3D est écrit en JavaScript « simple » : pas de framework, pas de compila
 | `timeline.js` | la frise temporelle et le lecteur de séries | 12 |
 | `dataset-gallery.js` | la galerie d'images rattachées à un jeu, avec son agrandissement | 12 |
 
-### Les workers : `js/workers/` (9 fichiers)
+### Les workers : `js/workers/` (11 fichiers)
 
 Un worker est un employé d'arrière-plan : il travaille sans bloquer l'écran (chapitre 2).
 
@@ -85,6 +89,8 @@ Un worker est un employé d'arrière-plan : il travaille sans bloquer l'écran (
 | `studio-plane-worker.js` / `studio-plane-ops.js` | maximum par canal sur une épaisseur ; les calculs purs sont dans `ops` | 12 |
 | `pixel-2d-worker.js` / `pixel-ops-2d.js` | réglages d'affichage et isolement du marquage d'une photographie ; calculs purs dans `ops` | 12 |
 | `tracks-load-worker.js` | prépare les tables de suivi cellulaire (entiers 32 bits) | 12 |
+| `cut-decode-worker.js` | décode les briques de coupe du Studio, hors de la page | 12 |
+| `ome-zarr-worker.js` | encode les morceaux de l'export OME-Zarr | 12 |
 | `upload-worker.js` | envoie les fichiers d'un import : lecture, empreinte, envoi, reprises | 17 |
 | `migration-worker.js` | exécute les unités d'une conversion de format côté navigateur | 17 |
 
@@ -101,14 +107,19 @@ Un worker est un employé d'arrière-plan : il travaille sans bloquer l'écran (
 | `about.js` / `legal.js` / `page-view.js` | À propos, Mentions légales, pages personnalisées | 3, 16 |
 | `admpan.js` | la page d'administration (démarre le module `shell`) | 14 |
 
-### L'administration : `js/pages/admin/` (27 fichiers)
+### L'administration : `js/pages/admin/` (34 fichiers)
 
 | Fichier | Ce qu'il fait, en clair | Chap. |
 |---|---|---|
 | `shell.js` / `shared.js` / `bus.js` | le cadre (menu, thème, connexion), les outils communs (requêtes, messages) et la messagerie entre onglets | 14 |
 | `tab-datasets.js` | l'onglet [Datasets]{.ui} : liste, éditeur, orientation, galerie | 14 |
 | `tab-upload.js`, `upload-manager.js`, `upload-dock.js` | l'onglet [Import]{.ui}, son orchestrateur et la pastille flottante | 17 |
-| `tab-dataset-updates.js`, `migration-runner.js` | [Mises à jour des données]{.ui} et son moteur (dont le régulateur de requêtes) | 17 |
+| `tab-dataset-updates.js`, `migration-runner.js` | [Mises à jour des données]{.ui} et son moteur (reprise automatique, nombre de workers) | 17 |
+| `migration-tabs.js` | coordonne les onglets ouverts : un seul onglet par jeu, quota de requêtes partagé | 17 |
+| `tab-storage.js` | l'onglet [Stockage]{.ui} : répartition du volume et table par jeu | 14 |
+| `tab-dataset-integrity.js` | l'onglet [Intégrité des données]{.ui} : contrôle en lecture seule | 14, 17 |
+| `dataset-trash.js` | la corbeille des jeux supprimés (60 jours) | 14 |
+| `pages-transfer.js` / `pages-transfer-ui.js` | export et import des pages (`lumen-pages/1`) | 16 |
 | `tab-dataset-types.js` | [Types de données]{.ui} : renommer 3d, 2d, live | 16 |
 | `tab-branding.js`, `tab-appearance.js`, `tab-legal.js` | [Identité]{.ui}, [Apparence]{.ui}, [Mentions légales]{.ui} | 16 |
 | `tab-pages.js` + `pages-controls.js`, `pages-translate.js`, `pages-variables.js` | l'éditeur de pages et ses panneaux | 16 |
@@ -125,14 +136,15 @@ Un worker est un employé d'arrière-plan : il travaille sans bloquer l'écran (
 | `fast_server.py` | un serveur statique rapide, sans administration (tests de performance) | 2 |
 | `upload_staging.py` | le moteur d'import (liste blanche, journal, validation, publication) | 17 |
 | `dataset_migrations.py` | les conversions de format de données, côté Python | 17 |
-| `format5.py` | le moteur partagé du format 5 (niveaux, compressions, mosaïques, paquets, copies de coupe), utilisé par la migration et par le pipeline | 7, 17 |
+| `format5.py` | le moteur partagé des formats 5 et 6 (niveaux, compressions, mosaïques, paquets, copies de coupe), utilisé par les migrations et par le pipeline | 7, 17 |
+| `dataset_integrity.py` | le contrôle en lecture seule de l'onglet Intégrité des données (aussi `api/integrity.php` et `api/_integrity_lib.php`) | 14, 17 |
 | `tools/convert_dataset.py` | convertir un jeu au dernier format sur son propre ordinateur | 17 |
 | `ed25519_pure.py` | vérificateur de signatures Ed25519, en Python pur | 19 |
-| `js/migrations/` | les trois conversions (`m002`, `m003`, `m004`) côté navigateur, et un bloc de test de vitesse | 17 |
+| `js/migrations/` | les conversions `m002` à `m006` côté navigateur, et un bloc de test de vitesse | 17 |
 | `js/modules/` | les plugins : `tools/` (barre d'outils), `channels/` (panneau des canaux), `shaders/` (modes de rendu) | 12, 15 |
 | `js/vendor/` | les bibliothèques tierces, hébergées sur place (Three.js, Lucide, Plotly) | 2 |
 | `preprocess/` | le pipeline de préparation, en Python | 4 à 8 |
-| `tests/`, `tools/` | la suite de tests (201 fichiers) et les outils de publication | 18 |
+| `tests/`, `tools/` | la suite de tests (239 fichiers) et les outils de publication | 18 |
 
 ## 20.B Mémoires du navigateur et paramètres d'adresse {.page}
 
@@ -156,7 +168,10 @@ Tout accès à ces tiroirs est protégé : en navigation privée, ou si le stock
 | `iribhm.viewer.playbackFps` | la vitesse de lecture préférée des séries temporelles (une seule pour le viewer) |
 | `iribhm-gallery-dock` | l'état de la galerie : ouverte, large ou réduite en pastille |
 | `lumen3d.gpuContextLosses` | les dates des dernières pertes de contexte graphique (8 au plus) : chaque perte de la semaine divise le budget par deux |
-| `lumen3d.vramBudgetMB` | **réglage d'opérateur** : impose un budget de mémoire graphique, en Mo. Jamais écrit par le site (chapitre 10) |
+| `lumen3d.fastLoading` | le réglage [Chargement rapide]{.ui} : `0` = désactivé, absent ou autre = activé (défaut) |
+| `lumen3d.gpuCompressionFailed` | mémorise un échec de compression graphique, pour ne pas la retenter à chaque ouverture |
+| `lumen3d.brickTreeHandoff` | mémorise le passage à l'arbre de briques conservé d'une conversion (`bricks.previous`, chapitre 17) |
+| `lumen3d.vramBudgetMB`, `lumen3d.gpuCompression` | **anciens réglages**, supprimés au chargement depuis la v1.73.2 : le budget et la compression sont désormais détectés |
 | `adm-theme`, `adm-sidebar-collapsed` | thème et menu replié du panneau d'administration |
 | `adm-upload-dock-size` | taille de la pastille d'import |
 | `lumen-dupd-ds-executor`, `lumen-dupd-speedtest`, `lumen-dupd-log` | conversions de données : exécutant choisi par jeu, dernier test de vitesse, journal des 20 dernières opérations |
@@ -164,7 +179,6 @@ Tout accès à ces tiroirs est protégé : en navigation privée, ou si le stock
 ::: tip
 Pour qu'un budget graphique trop prudent (après plusieurs pertes de contexte) revienne à la normale, supprimez `lumen3d.gpuContextLosses` dans les outils du navigateur, ou attendez une semaine.
 :::
-
 ### B.2 Ce que cet onglet retient (`sessionStorage`) et le cookie
 
 | Nom | Rôle |
@@ -233,11 +247,12 @@ Toutes les constantes importantes, regroupées. La dernière colonne dit où l'i
 
 | Constante | Valeur | Chap. |
 |---|---|---|
-| Brique | 64³ voxels utiles ; 66³ stockés avec 1 voxel de bordure (formats 4 et 5) | 7 |
+| Brique | 64³ voxels utiles ; 66³ stockés avec 1 voxel de bordure (formats 4 à 6) | 7 |
 | Mosaïque d'une brique | 9 × 8 coupes de 66² : une image WebP sans perte de 594 × 528 px | 7 |
 | Pack | au plus 64 briques ou 16 Mio, par super-blocs de 4 × 4 × 4 briques | 7 |
 | Niveaux de détail | divisés par deux en X et Y ; en Z seulement tant que vz ≤ 1,5 × vxy | 6, 7 |
-| Format de données courant | 4 (les formats 1 à 3 sont convertis en place) | 7, 17 |
+| Format de données courant | 6 (les formats 1 à 5 sont convertis en place) | 7, 17 |
+| Format 6 : affichage | WebP qualité 30, zone morte ; la colonne sans perte reste pour les exports et les téléchargements | 7, 12, 17 |
 | Plan XY (format 2) | un fichier par plan ; tuiles PNG de 512 × 512 | 7, 17 |
 | Projection par couche (format 3) | une projection d'intensité maximale par couche de 64 plans | 7 |
 | Taille maximale acceptée | 2²⁰ voxels par axe ; 64 canaux au plus acceptés, **4 affichés** | 19 |
@@ -267,9 +282,10 @@ Toutes les constantes importantes, regroupées. La dernière colonne dit où l'i
 | Qualité 512 | niveau le plus fin dont le plus grand côté XY est ≤ 768 voxels | 10 |
 | Qualité 1024 | idem ≤ 1 536 voxels | 10 |
 | Atlas | jusqu'à 8 pages | 10 |
+| Budget graphique : carte reconnue dans la table | 60 % de sa mémoire dédiée, 2 Gio laissés au système, entre 1 et 16 Gio | 10 |
 | Budget graphique : rendu logiciel | 256 Mio | 10 |
-| Budget graphique : carte intégrée | 0,5 · 1 · 2 Gio selon la mémoire de l'appareil | 10 |
-| Budget graphique : carte dédiée | 3 ou 4 Gio | 10 |
+| Budget graphique : carte intégrée (non reconnue) | 0,5 · 1 · 2 Gio selon la mémoire de l'appareil | 10 |
+| Budget graphique : carte dédiée (non reconnue) | 3 ou 4 Gio | 10 |
 | Budget graphique : inconnue | 1 ou 2 Gio | 10 |
 | Perte de contexte graphique | budget ÷ 2 par perte de la semaine (plancher 256 Mio) | 19 |
 | Garde-fou | 3 pertes en moins de 120 s : plus de rechargement automatique | 19 |
@@ -279,16 +295,17 @@ Toutes les constantes importantes, regroupées. La dernière colonne dit où l'i
 
 | Constante | Valeur | Chap. |
 |---|---|---|
-| Échantillons par rayon (au repos) | `clamp(6·10⁹ / pixels, 256, 4096)` | 9 |
-| Image visée | 16,7 ms (60 images/s) ; on dégrade au-delà de 1,3×, on remonte sous 1,1× | 9 |
-| Image au repos trop lente | au-delà de 200 ms, le plafond d'échantillons est réduit | 9 |
+| Résolution de l'image | pleine résolution du canevas, en mouvement comme au repos ; plus de qualité adaptative pendant un glissement (v1.74.0) | 9 |
+| Échantillons par voxel | un échantillon par voxel, au mouvement comme au repos | 9 |
+| Plafond d'échantillons par rayon | `6·10⁹ / pixels` (`SETTLED_PIXEL_SAMPLE_BUDGET`), réduit seulement si une image dépasse 200 ms | 9 |
+| Saut des cellules vides | cellules de 8³ voxels (au lieu de briques de 64³) : un rayon saute une cellule dont le maximum ne se voit pas | 9, 10 |
 | Garde-fou Windows (TDR) | un calcul graphique de plus de 2 s environ réinitialise la carte | 9 |
 
 ### D.5 Sécurité et accès
 
 | Constante | Valeur | Chap. |
 |---|---|---|
-| Mot de passe | 8 caractères au moins ; PBKDF2-HMAC-SHA256, 600 000 tours | 19 |
+| Mot de passe | 8 caractères au moins ; PBKDF2-HMAC-SHA256 avec sel, nombre de tours fixé par le serveur | 19 |
 | Échecs de connexion | 10 en 15 minutes depuis une adresse → blocage de 15 minutes ; plafond global de 200 par fenêtre | 19 |
 | Session d'administration | 8 heures ; fermée à chaque changement de mot de passe | 19 |
 | Lien `#state=` | 64 Kio écrits · 2 Mio lus · 16 Mio décompressés | 12, 20.B |
@@ -303,12 +320,15 @@ Toutes les constantes importantes, regroupées. La dernière colonne dit où l'i
 | Essais d'un morceau | 6, attente 1 s doublée jusqu'à 30 s ; sonde réseau 2 s à 15 s | 19 |
 | Délai d'une requête d'import | au moins 60 s (jusqu'à 50 Ko/s au plancher) | 17 |
 | Régulateur de requêtes (conversions) | 6 en vol, 0,5 à 6 par seconde (départ à 4), pause de 5 s à 60 s | 17 |
+| Workers de conversion (navigateur) | 4 au plus, 2 sous 8 Go de mémoire déclarée, et au plus la moitié des cœurs ; 2 unités par worker | 17 |
+| Reprise automatique d'une conversion en échec | après 10 s, 30 s, 1 min, 2 min, 5 min ; abandon après 5 échecs sans unité terminée | 17 |
 | Briques lues par requête | 128 | 17 |
-| Corps d'une unité de conversion | 32 Mio au plus (hôtes PHP) | 17 |
-| Unité de conversion | une couche de 64 plans × un canal × une tuile de 512² (8 × 8 briques) | 17 |
+| Corps d'une unité de conversion | 32 Mio au plus, et moins si `post_max_size` est plus petit (hôtes PHP) | 17, 18 |
+| Unité de conversion | une couche de 64 plans × un canal × une tuile de 512² (8 × 8 briques) ; m006 : un super-bloc 4 × 4 × 4 | 17 |
+| Calcul de l'état du stockage | gardé 600 s (10 minutes) | 14, 18 |
 | Sonde de santé après mise à jour (Python) | environ 30 s | 18 |
 | Plugins au catalogue signé | 28 | 15 |
-| Fichiers de tests | 201 (un processus par fichier) | 18 |
+| Fichiers de tests | 239 : 142 Node, 73 Python, 24 PHP (un processus par fichier) | 18 |
 
 ## 20.E Versions et historique {.page}
 
@@ -342,6 +362,20 @@ La version de la plateforme n'existe que dans le **nom du dernier fichier de not
 | **1.59** | Formats 3 et 4 (briques v3 avec bordure, `index.bin`, détail au zoom) ; exécutant choisi par jeu et test de vitesse (1.59.1) ; régulateur de requêtes (1.59.2) ; huit fois moins de requêtes (1.59.3) |
 | 1.60 – 1.62 | Compression graphique des timelapses (1.60) ; corbeille de 60 jours pour les jeux supprimés (1.62) ; import / export des pages (1.61) |
 | **1.63 – 1.65** | **Format 5** : la matrice résolution × compression, les copies de coupe, l'accès sans perte pour les outils (`ctx.data`), un choix « sans perte » à chaque export (1.64) ; conversion dans le navigateur sur tout hébergement, import d'un arbre v5, outil de conversion locale (1.65) |
+| 1.66 | Export OME-Zarr des niveaux sans perte, construit dans le navigateur |
+| 1.67 | Réglage de la mémoire graphique (retiré en 1.73.2) ; affinage « sans perte une fois la vue posée » (retiré en 1.72) |
+| 1.68 | Conversion du format 5 par lots dans le navigateur ; jusqu'à quatre workers ; envois fragmentés pour les hôtes PHP |
+| 1.69 | **Onglet Stockage** (groupe Données) ; onglets d'administration coordonnés : un seul onglet par jeu, un quota de requêtes partagé (1.69.2) |
+| **1.70** | **Format 6** : chaque niveau en deux copies, sans perte et en WebP Q30 ; le Q30 devient l'affichage de tous les volumes ; exports sans perte à la résolution affichée ; téléchargement `.q30.zip`; conversion `m006-q30` |
+| 1.70.1 | Correctif des tablettes Android à GPU Adreno (repli explicite si le navigateur refuse WebGL) |
+| 1.71 | Compression graphique (RGTC) pour tous les volumes, et répartition sur deux atlas sans RGTC |
+| 1.72 | Détail de zone (« Zoom detail ») retiré : la qualité choisie est celle affichée, tout l'embryon reste en mémoire |
+| 1.72.1 – 1.72.2 | Prévisualisation d'un import en cours réparée ; une conversion en échec redémarre seule (10 s à 5 min) |
+| **1.73** | **Onglet Intégrité des données** : contrôle en lecture seule de chaque jeu |
+| 1.73.2 – 1.73.4 | Réglage [Chargement rapide]{.ui} ; budget graphique détecté (les réglages manuels disparaissent) ; bouton [Revérifier]{.ui} par jeu |
+| **1.74** | Image au plein rendu, un échantillon par voxel, saut des cellules vides de 8³ voxels ; changer de canal ne recompile plus le shader |
+| 1.75 | Projection maximale : modifier l'affichage n'impose plus une nouvelle marche dans le volume |
+| **1.76** | Étude BC7 : prototype mesuré, non retenu ; la qualité actuelle reste BC5 + BC4 (chapitre 13) |
 
 ### E.2 Pipeline de préparation
 
@@ -354,8 +388,9 @@ La version de la plateforme n'existe que dans le **nom du dernier fichier de not
 | 0.19 | Publication « tout ou rien » en zone d'attente, avec reprise après interruption |
 | 0.20 | Plans XY écrits directement (format 2) |
 | 0.21 | Format 4 écrit directement, identique octet pour octet à la conversion ; saut exact de l'espace vide |
-| **0.22** | Format 5 sur demande (`--format 5`), identique octet pour octet à la conversion m005 |
+| 0.22 | Format 5 sur demande (`--format 5`), identique octet pour octet à la conversion m005 |
+| **0.23** | Format 6 par défaut (`--format 6`) : ll sans perte et Q30 pour l'affichage |
 
 ::: remember
-Version actuelle de ce document : plateforme **1.65.0**, pipeline **0.22.0**, format de données **5**.
+Version actuelle de ce document : plateforme **1.76.0**, pipeline **0.23.0**, format de données **6**.
 :::

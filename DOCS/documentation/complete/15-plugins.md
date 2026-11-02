@@ -266,7 +266,7 @@ Depuis la plateforme 1.64, un plugin qui **calcule** quelque chose (profil d'int
 | `valueAt(voxel)` | La valeur exacte de chaque canal en un voxel |
 
 ::: example
-Un plugin qui affiche « intensité au point cliqué » appelle `ctx.data.screenToVoxel(x, y)`, puis `ctx.data.valueAt(voxel)`. Même si le visiteur regarde la case 256 · Très légère, la valeur rendue est celle du voxel natif, exacte. Fonctionne sur les formats 2 à 5.
+Un plugin qui affiche « intensité au point cliqué » appelle `ctx.data.screenToVoxel(x, y)`, puis `ctx.data.valueAt(voxel)`. Même si le visiteur regarde la case 256 · Très légère, la valeur rendue est celle du voxel natif, exacte. Fonctionne sur les formats 2 à 6 (le format 6 garde la colonne `ll` sans perte, comme les autres).
 :::
 
 ### Les textes d'un plugin
@@ -319,8 +319,8 @@ Une page embarquée n'a pas de barre d'outils visible. Elle **décrit** donc ce 
 
 | Plugin | En une ligne |
 |---|---|
-| Fluorescence | Rendu par défaut : chaque canal émet sa couleur (mode 1) |
-| Natural Fluorescence | Émission-absorption : les structures denses masquent ce qui est derrière (mode 2) |
+| Fluorescence (type Imaris) | Rendu par défaut : chaque canal émet sa couleur (mode 1) |
+| Fluorescence naturelle (profondeur) | Émission-absorption : les structures denses masquent ce qui est derrière (mode 2) |
 | Structure (DVR) | Rendu volumique avec profondeur et occlusion (mode 0) |
 
 **Canaux** (placement `channels`).
@@ -346,7 +346,7 @@ Une page embarquée n'a pas de barre d'outils visible. Elle **décrit** donc ce 
 
 | Plugin | Contexte | En une ligne |
 |---|---|---|
-| Download Center | page | Fichiers du dossier `download/` du jeu, et au-dessus les exports d'analyse de la page et de ses plugins (mesures, tableaux du suivi cellulaire, graphique affiché) |
+| Download Center | page | Fichiers du dossier `download/` du jeu, et au-dessus les exports d'analyse de la page et de ses plugins (mesures, tableaux du suivi cellulaire, graphique affiché). Sur un jeu au format 6, il propose aussi « Télécharger le .q30.zip » (briques d'affichage WebP Q30, aux résolutions choisies) |
 | Screenshot | page | Capture PNG de la vue |
 | Screenshot (sandboxed) | page | La même, **en bac à sable** (plugin de référence) |
 | Presentation Mode | page | Plein écran sans interface |
@@ -637,7 +637,7 @@ Un catalogue périmé mais encore **validement signé** pourrait servir à réin
 L'administrateur voit alors « Catalogue refusé : il est plus ancien… » : il n'y a rien à faire de son côté.
 
 ::: example
-Au moment de la rédaction, le catalogue du dépôt est au `serial` 2. Un serveur qui a accepté le 2 refusera un catalogue de serial 1, même si sa signature est parfaitement valide.
+Au moment de la rédaction, le catalogue du dépôt est au `serial` 7. Un serveur qui a accepté le 7 refusera un catalogue de serial 6, même si sa signature est parfaitement valide.
 :::
 
 ## 15.18 Installer, mettre à jour, désinstaller

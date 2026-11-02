@@ -266,7 +266,7 @@ Since platform 1.64, a plugin that **computes** something (intensity profile, hi
 | `valueAt(voxel)` | The exact value of each channel at a voxel |
 
 ::: example
-A plugin that shows "intensity at the clicked point" calls `ctx.data.screenToVoxel(x, y)`, then `ctx.data.valueAt(voxel)`. Even if the visitor is looking at the 256 · Very light cell, the value returned is the native voxel's, exact. Works on formats 2 to 5.
+A plugin that shows "intensity at the clicked point" calls `ctx.data.screenToVoxel(x, y)`, then `ctx.data.valueAt(voxel)`. Even if the visitor is looking at the WebP Q30 picture, the value returned is the native voxel's, exact. Works on formats 2 to 6.
 :::
 
 ### A plugin's texts
@@ -299,6 +299,10 @@ Result: **the toolbar changes from one dataset to the next**, without a line of 
 **Is your toolbar different from the manual's?** That is normal: the administrator has installed other plugins (chapter 14) or disabled some. A missing button is never a viewer fault.
 :::
 
+::: note
+**What is *not* a plugin.** The viewer's core owns the **resolution list** and the **Fast loading** switch of a format 6 dataset (chapter 10), and the graphics-memory handling. No plugin can add, hide or replace them. The former *GPU memory* and *GPU compression* selects of *Render quality* are gone: the viewer detects the graphics card itself (chapter 10). A plugin that still refers to them has been written for an earlier version.
+:::
+
 ## 15.9 Plugins and the workspace, exports, embedded pages
 
 ### Workspace
@@ -320,7 +324,7 @@ An embedded page has no visible toolbar. It therefore **describes** what it offe
 | Plugin | In one line |
 |---|---|
 | Fluorescence | Default rendering: each channel emits its colour (mode 1) |
-| Natural Fluorescence | Emission-absorption: dense structures hide what is behind them (mode 2) |
+| Natural fluorescence (depth) | Emission-absorption: dense structures hide what is behind them (mode 2) |
 | Structure (DVR) | Volume rendering with depth and occlusion (mode 0) |
 
 **Channels** (placement `channels`).
@@ -337,7 +341,7 @@ An embedded page has no visible toolbar. It therefore **describes** what it offe
 | Slice through Volume | page + panel | Orientable plane slice; the slice takes over the canvas |
 | Z-Stack Browser | page + panel | Browse the slices (exclusive with the oblique slice) |
 | Measure Distance | page + panel | Two points → distance in µm |
-| Decompose by Channel | page | One channel per panel |
+| Decompose by Channel (its panel is titled *Channel Split*) | page | One channel per panel; red frame on the main picture; export framed like the screen |
 | Orientation Axes | page + panel | Orientation gizmo and default view |
 | Toggle Grid · Toggle Axes · Hide/Show 3D Volume | page + panel | Grid, axes, volume |
 | Chunk Debug | page | Brick boundaries (requires `bricks`) |

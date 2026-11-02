@@ -3,8 +3,8 @@
 ::: chapter-intro
 - A volume of several gigabytes cannot be loaded in one go: it is cut into **bricks** (small cubes of 64 × 64 × 64 voxels) that the browser fetches one by one.
 - Each brick becomes **a single WebP image** (lossless); the bricks are stored in **packs**, and found again thanks to an **index** of a few kilobytes.
-- Two side structures, `planes/` and `mips/`, make slices and projections fast; the whole forms **data format 4**.
-- **Format 5** (section 7.11) stores the same volume as a **matrix**: several resolutions × five compressions, plus three copies for fast cuts.
+- Two side structures, `planes/` and `mips/`, make slices and projections fast; the whole forms **data format 4**, the base of the newer formats.
+- **Formats 5 and 6** (section 7.11) store the same volume as a **matrix** of resolutions, plus three lossless copies for fast cuts. Format 5 has five compressions per level; **format 6**, the current one, has two: lossless, and WebP Q30 for display.
 :::
 
 In this chapter, the data images (mosaic, seam, packs…) all come from the **demonstration dataset**: the synthetic embryo `Embryo-E95-Em2-Pecam1-Sox2` (768 × 576 × 112 voxels, 3 channels), published by the real pipeline. It is not lab data.
@@ -218,9 +218,9 @@ For an arbitrary thickness, the Studio combines: the **MIPs of the layers entire
 
 ![A thickness of 220 planes: 3 layer MIPs + 28 end planes, i.e. 31 images instead of 220, with an identical result.](img-en/ch07/mips-schema.svg){width=100%}
 
-## 7.10 Data formats 1 to 5
+## 7.10 Data formats 1 to 6
 
-Over the versions, the file organisation has evolved. Each dataset carries a number, `formatVersion`, in its `metadata.json`. Format **5** is the current format (platform 1.65).
+Over the versions, the file organisation has evolved. Each dataset carries a number, `formatVersion`, in its `metadata.json`. Format **6** is the current format: the pipeline (version 0.23.0) writes it by default, and the platform's latest migration target is 6 (platform 1.76.0).
 
 | format | what it adds | migration |
 |---|---|---|
@@ -229,8 +229,9 @@ Over the versions, the file organisation has evolved. Each dataset carries a num
 | 3 | `mips/`: MIP per layer of 64 planes | `m003-layer-mips` |
 | 4 | v3 bricks: 66³ border, 9 × 8 mosaic, packs in super-blocks, `index.bin` | `m004-bricks-v3` |
 | 5 | the **matrix**: levels at 256 · 2^k^ that keep every slice, **five compressions** per level, three copies for fast cuts (section 7.11) | `m005-matrix` |
+| 6 | the same matrix with **two** columns per level: `ll` (lossless) and `q30` (WebP Q30, the display). Three lossless copies for fast cuts stay (section 7.11) | `m006-q30` |
 
-The pipeline (version 0.22.0) writes **format 4 by default**, and format 5 on request (`--format 5`). A dataset published in format 4, or older, is not lost: the platform knows how to upgrade it, up to 5.
+The pipeline (version 0.23.0) writes **format 6 by default**; `--format 5` and `--format 4` still produce the older layouts. A dataset in an older format is not lost: the platform upgrades it, up to 6, one format after the other (4 to 5, then 5 to 6).
 
 ### "Data updates"
 
@@ -240,12 +241,12 @@ Like a software update, the [Data updates]{.ui} tab of the admin panel (chapter 
 ::: card
 #### In this browser
 
-Your browser does the work (WebP decoding and encoding) and sends the files to the server. On a PHP host, it is the **only** way to reach format 5.
+Your browser does the work (WebP decoding and encoding) and sends the files to the server. On a PHP host, it is the **only** way to reach formats 5 and 6.
 :::
 ::: card
 #### On the server
 
-The server converts by itself, if its hosting can do it (a Python server for format 5).
+The server converts by itself, if its hosting can do it (a Python server, for formats 5 and 6).
 :::
 ::: card
 #### Pause and resume
@@ -254,16 +255,16 @@ The work is cut into small units noted in a journal: you can pause, close, resum
 :::
 ::::
 
-## 7.11 Format 5: a resolution × compression matrix
+## 7.11 Formats 5 and 6: a matrix of resolutions
 
 ::: tldr
-- The same volume is stored **several times**: at several **resolutions** (the rows) and in **five compressions** (the columns). The visitor picks a cell.
+- The same volume is stored **several times**: at several **resolutions** (the rows) and, per level, in several **compressions** (the columns): five in format 5, two in **format 6**, the current one.
 - The reduced levels **keep every slice**; their long side is exactly 4096, 2048, 1024, 512 or 256.
-- Three **re-cut copies** (XY, XZ / YZ, oblique) make the Studio's cuts fast, and everything that **measures** always reads the voxels **losslessly**.
+- Three **re-cut copies** (XY, XZ / YZ, oblique) make the cuts fast, and exports and downloads read the voxels **losslessly**. Distance picks read the picture on screen.
 :::
 
 ::: analogy
-A **photo library** keeps each picture in several sizes and several qualities: the thumbnail to browse, the original to print. Format 5 does the same with a volume: you **look** at a light version, you **measure** and **export** from the original.
+A **photo library** keeps each picture in several sizes and several qualities: the thumbnail to browse, the original to print. Formats 5 and 6 do the same with a volume: you **look** at a light version, you **measure** and **export** from the original.
 :::
 
 The principle: **disk is spent; the network and the graphics card are not.** What is displayed may be compressed with loss, as long as the picture is not visibly altered; what measures reads the original.
@@ -281,7 +282,19 @@ The principle: **disk is spent; the network and the graphics card are not.** Wha
 To go from 768 to 512 voxels, one reduced voxel covers 1.5 native voxels. The pipeline cuts the line into whole pieces (768 × 512 units), counts how much of each reduced voxel every native voxel covers, and takes the weighted average: reduced voxel 0 takes all of native voxel 0 and half of voxel 1. No voxel is forgotten or counted twice.
 :::
 
-### The columns: five compressions
+### Format 6: two columns, lossless and Q30
+
+| column | what it is | what it is used for |
+|---|---|---|
+| **Lossless** (`ll`) | every voxel exact | measurements, exports and downloads; the picture when **Fast loading** is off |
+| **WebP Q30** (`q30`) | lossy WebP at quality 30, with a dead zone | the picture on screen when **Fast loading** is on (the default) |
+
+- **How Q30 is made.** Each brick is written as a WebP image of quality 30, on a mosaic with an 80-pixel pitch (720 × 640 pixels: each 66-pixel slice sits in an 80-pixel cell with a 7-pixel margin, so no compression block mixes two slices). A dead zone of 0 to 12 grey levels, chosen by the encoder, is written as one byte at the end of the brick. A brick whose Q30 image would be larger than the lossless one is kept lossless.
+- **Size and error.** Measured on the native level of one lab dataset (E8.5 Em1): Q30 weighs **26 MB** against **89 MB** lossless, about 29 %, with a mean error of **1.5 grey levels** out of 255.
+- **Downloads.** The Download Center offers **Download .q30.zip**, the Q30 bricks of the chosen levels as they are stored, next to the lossless OME-Zarr export.
+- The three lossless re-cut copies of format 5 (XY, XZ / YZ, oblique) are kept unchanged in format 6 (see "Three copies for fast cuts" below).
+
+### Format 5 only: the five compressions
 
 | column | on screen | what is guaranteed | size (relative to "lossless") |
 |---|---|---|---|
@@ -325,7 +338,7 @@ Sizes measured on 1,673 native bricks of three of the lab's embryos (specificati
 
 ### Three copies for fast cuts
 
-A cut drawn from 64³ bricks downloads far more than it shows: an XY cut one voxel thick reads 64 slices. Format 5 adds, **at every level**, three re-cut copies, all **lossless**:
+A cut drawn from 64³ bricks downloads far more than it shows: an XY cut one voxel thick reads 64 slices. Formats 5 and 6 add, **at every level**, three re-cut copies, all **lossless**:
 
 ![The three cut copies, and what they save.](img-en/f5/coupes.svg){width=100%}
 
@@ -343,7 +356,9 @@ A cut drawn from 64³ bricks downloads far more than it shows: an XY cut one vox
 
 ### What measures reads the original
 
-Every measurement, every plugin that reports a number and every "native" export reads the **lossless column of the native level**, whatever cell is displayed (chapters 12 and 15). A light display setting therefore never skews a number.
+A plugin that computes a number through `ctx.data` reads the **lossless column of the native level**, whatever is displayed (chapters 12 and 15). A distance measurement is picked on the picture on screen, so its precision is the voxel size of the displayed level.
+
+On format 6, the 3D image, the Studio figure and the Decompose panels are exported **lossless at the resolution on screen**, without a question. On format 5, the export offers the choice: *Lossless*, which is the finest level the card holds, or *Current quality*.
 
 ### The tree of a format-5 dataset
 
@@ -353,14 +368,15 @@ Every measurement, every plugin that reports a number and every "native" export 
 - `bricks/index/ll.bin`, `b2.bin`…: one index per column (same structure as format 4's `index.bin`). The viewer reads the lossless index when the dataset opens, the others only when their column is chosen.
 - The packs of the lossless column of level 0 **are** those of format 4: the migration links them (hard link) instead of re-encoding them.
 - `planes/` and `mips/` do not change: they already hold the native level.
+- In format 6 (the figure shows format 5), the tree keeps `index/ll.bin` and `index/q30.bin`, the lossless packs and the Q30 packs `l{k}/q30/c{c}/`. The `b2`, `b4`, `q80` and `q50` files are deleted by the conversion (manifest `iribhm-bricks-v6`).
 
 ::: warning
-**Disk use grows a lot**: on the demonstration dataset, 9 MB of bricks in format 4 become about 80 MB in format 5 (28 MB of which are XZ / YZ copies). That is intended: what costs is what each visitor downloads and what their graphics card keeps, and format 5 reduces that. Check the free space of the host before converting large datasets.
+**Disk use grows a lot in format 5**: on the demonstration dataset, 9 MB of bricks in format 4 become about 80 MB in format 5 (28 MB of which are XZ / YZ copies). That is intended: what costs is what each visitor downloads and what their graphics card keeps. Format 6 keeps two columns instead of five, so it takes less space than format 5 (its size on the demonstration dataset is not measured here). Check the free space of the host before converting large datasets.
 :::
 
 ::: remember
 - A brick = 64³ useful voxels + 1 border voxel = **66³**, stored as **one lossless WebP image** of 594 × 528 pixels (9 × 8 slices).
 - The bricks are in **packs** (4 × 4 × 4 super-blocks); `index.bin` gives the pack, start and length of each (10 bytes per brick).
 - `planes/` speeds up XY slices, `mips/` projections.
-- Current format = **5**: levels at 256 · 2^k^ that keep every slice, five compressions per level (lossless, ±2, ±4, light, very light), three re-cut copies for cuts; everything that measures reads the lossless column of the native level.
+- Current format = **6**: levels at 256 · 2^k^ that keep every slice, two compressions per level (lossless, and WebP Q30 for the display), three lossless re-cut copies for cuts. Exports read the lossless column of the displayed level, and plugins that compute numbers read the lossless column of the native level.
 :::

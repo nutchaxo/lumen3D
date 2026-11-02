@@ -3,7 +3,7 @@
 ::: chapter-intro
 - Every pixel on the screen is computed by **one ray** that travels through the volume: this is **ray marching**, and it runs on the graphics card.
 - **Three.js** provides the scene, the camera and the textures; the part that matters for the science (the three render modes) is **custom-written** and stays readable.
-- While you rotate the embryo, sharpness drops for a moment to keep things smooth; at rest, everything returns to full quality.
+- The picture is the same while you turn the embryo and when it rests: the viewer never trades sharpness for speed. Only a very slow graphics card makes it take a slightly coarser step on the longest rays (section 9.9).
 :::
 
 ## 9.1 Two brains: the processor and the graphics card
@@ -31,7 +31,7 @@ In Lumen3D, the "recipe" is called a **shader**: a small program written once an
 | The drawing engine (the "renderer"), the scene | The ray-marching **shaders** (3 render modes) |
 | The perspective camera (45° field of view) | The brick **atlas** and its page table |
 | The **cube** (a six-faced box that is the starting point of the rays) | Brick **streaming** (chapter 10) |
-| Matrices, quaternions, vectors | Adaptive quality and the memory budget |
+| Matrices, quaternions, vectors | The GPU memory budget and the choice of level |
 | The wrapper around 3D textures | Depth reading under the mouse (measurements) |
 | The 3D model loader (cell-tracking surface) | Channels, histograms, Gaussian filter |
 
@@ -60,25 +60,28 @@ The volume is an enormous array of values. To turn it into an image, we work **p
 
 ### One sample per voxel
 
-At rest, the viewer takes **exactly one sample per voxel length**, whatever the direction of the ray. This guarantees that **a structure one voxel wide never slips through the net**.
+Moving or at rest, the viewer takes **exactly one sample per voxel length** along the ray, whatever its direction (in Fluorescence mode, one sample per voxel of depth). This guarantees that **a structure one voxel wide never slips through the net**.
 
 ::: example
 The E9.5 demo dataset is 768 × 576 × 112 voxels. A ray crossing the whole cube lengthwise (X axis) therefore takes **768 samples**. A diagonal ray, which is longer (√(768² + 576² + 112²) ≈ 966 voxels), takes **about 966**.
 :::
 
 ::: tech
-The step (in cube units) is `delta = 1 / (rate × nu)`, where `nu = ‖direction × (number of voxels of the level)‖` measures how many voxels the ray crosses per unit of length and `rate = 1.0` at rest. The step is therefore uniform in voxels, not in micrometres. If a ray would need more than 4,096 steps, they are spread out more widely (see 9.9).
+The step (in cube units) is `delta = 1 / (rate × nu)`, where `nu = ‖direction × (number of voxels of the level)‖` measures how many voxels the ray crosses per unit of length, and `rate = 1.0`, always. The step is therefore uniform in voxels, not in micrometres. If a ray needs more samples than the cap of the frame (between 256 and 4,096, see 9.9), the samples are spread evenly over that cap.
 :::
 
 ## 9.4 Random grain against banding
 
 With a fixed step, all neighbouring rays sample at the **same depth**. The result is **rings** ("banding"), like the contour lines of a map. They do not exist in the specimen: they are created by the calculation.
 
-The remedy is simple: the **first sample of each ray is shifted** by a random fraction of the step (a pseudo-random number computed from the pixel's position). The rings turn into a **fine grain**, which the eye averages out and ignores.
+The remedy depends on the render mode:
 
-![Simulation: uniform sphere, one sample every 14 pixels. On the left, the rings; in the middle, the grain after random offset.](img-en/ch09/jitter.png){width=100%}
+- **Natural Fluorescence and Structure (DVR)**: the **first sample of each ray is shifted** by a random fraction of the step (a pseudo-random number computed from the pixel's position). The rings turn into a **fine grain**, which the eye averages out and ignores.
+- **Fluorescence mode**: a random shift would make the brightest value flicker from one pixel to the next, and show as black pinholes inside bright structures. Its samples sit instead on fixed planes perpendicular to the view, at the same distance from the camera, so neighbouring rays read the same depth.
 
-The same offset is used when exporting an image: it carries on from one tile to the next, with no visible seam.
+![Simulation of the accumulating modes: uniform sphere, one sample every 14 pixels. On the left, the rings; in the middle, the grain after random offset.](img-en/ch09/jitter.png){width=100%}
+
+In the accumulating modes, the same random offset is used when exporting an image: it carries on from one tile to the next, with no visible seam.
 
 ## 9.5 Skipping the empty space
 
@@ -86,11 +89,13 @@ An embryo fills only part of its box. Bricks with no signal are not even stored 
 
 ![The ray crosses three empty bricks without reading a single voxel.](img-en/ch09/saut-briques.svg){width=95%}
 
-The jump follows the same random grid as the rest of the ray: the image does not change, it is just computed faster.
+The jump lands on the same sample lattice as the rest of the ray: the image does not change, it is just computed faster.
 
 ::: note
 An absent brick reads as **zeros**: black that costs almost nothing, not a hole in space.
 :::
+
+Inside a stored brick, the viewer also skips empty **8 × 8 × 8 voxel cells**. Each cell keeps the largest raw value of its voxels, so a ray jumps over a cell that cannot show anything with the current window. Moving a slider recomputes nothing. On a native test dataset (1,946 × 1,946 × 72 voxels), the maximum projection took 14.7 → 11.3 ms looking along Z and 44 → 32 ms from the side; timings vary by about ±20 % between runs (changelog 1.74.0).
 
 ## 9.6 The three render modes
 
@@ -101,7 +106,7 @@ The [Render mode]{.ui} menu (left-hand panel) offers three ways of summarising t
 ![[Fluorescence (Imaris-like)]{.ui}](img-en/ch09/mode-fluorescence.png){.shot}
 :::
 ::: col
-![[Natural fluorescence (depth)]{.ui}](img-en/ch09/mode-naturelle.png){.shot}
+![[Natural Fluorescence]{.ui}](img-en/ch09/mode-naturelle.png){.shot}
 :::
 ::: col
 ![[Structure (DVR)]{.ui}](img-en/ch09/mode-structure.png){.shot}
@@ -118,7 +123,7 @@ The middle and right-hand captures are lit with a higher [Visibility (exposure)]
 | **Natural fluorescence** | every point **glows**; what is in front **darkens** what is behind | yes |
 | **Structure (DVR)** | stacks **semi-transparent** layers from front to back | yes |
 
-### Mode 1: Fluorescence (the maximum)
+### Mode 1: Fluorescence (Imaris-like)
 
 This is the "classic" rendering of microscopy software. For **each channel separately**, the viewer keeps the **maximum value** met along the ray. The channel colours are then **added together**.
 
@@ -128,6 +133,10 @@ A ray crosses green at 0.85 and then magenta at 0.75. The pixel receives 0.85 of
 
 ::: tech
 `mip = max(mip, v)` for each channel; final colour = Σ `mip_i × colour_i` × exposure. The ray stops early when **every** active channel has reached its ceiling (opacity × 0.999). A pixel whose maximum is below 0.004 stays transparent.
+:::
+
+::: note
+**Changing the window costs no new march.** In this mode the viewer keeps the largest **raw** value of each channel along each ray, in one pass, then recolours that buffer in a second, cheap pass. The window, gamma, opacity, colour and channel switches only recolour. On a native test dataset (screen 1,280 × 793), a slider change costs about 1.2 ms instead of about 35 ms, and the picture stays within 3 grey levels out of 255 of the direct computation (changelog 1.75.0). The march runs again only when something that changes the maxima moves: the camera, the pose, the clip box, the bricks arriving. The buffer takes 8 bytes per screen pixel. Natural Fluorescence, Structure (DVR), image exports and the depth pick keep the single pass.
 :::
 
 ### Mode 2: Natural fluorescence (emission and absorption)
@@ -171,29 +180,27 @@ Imagine a ray that first meets a green cloud and then, a little further back, a 
 
 ## 9.7 Smoothing between voxels
 
-Between two voxels, the viewer does not show staircase steps: it **interpolates**. On **format 4** (the one used by all the demo datasets), the graphics card blends the eight neighbouring voxels: this is **trilinear interpolation**.
+Between two voxels, the viewer does not show staircase steps: it **interpolates**. On **formats 4 to 6** (the bricks of the demo datasets), the graphics card blends the eight neighbouring voxels: this is **trilinear interpolation**.
 
 So that this blending never spills from one brick into its neighbour, each brick is stored with a **1-voxel border** (66³ instead of 64³). At the boundaries between bricks the image is therefore continuous, with no seam.
 
 ::: remember
-- **Format 4** and a full 3D texture: trilinear interpolation (smooth).
-- **Old format 2**, when the atlas is split into bricks: the nearest voxel is displayed as it is (blocks visible when zoomed in).
+- **Formats 4 to 6**: trilinear interpolation (smooth).
+- **Bricks without a border** (formats 1 to 3): the nearest voxel is displayed as it is (blocks visible when zoomed in).
 :::
 
-## 9.8 Smooth when you move, sharp when you stop
+## 9.8 The same picture, moving or at rest
 
-Rotating a volume at 60 frames per second means computing each frame in under **16.7 ms**. The viewer times every frame while you drag and **adjusts two settings** to stay within that budget.
+Earlier versions drew a lighter picture while you dragged the view, then a sharper one when it rested. That is gone (platform 1.74.0): **the picture does not depend on the interaction**. Every frame, moving or resting, uses the same three settings:
 
-![While dragging, the image definition and the number of samples are tuned continuously; as soon as you stop, everything returns to maximum quality.](img-en/ch09/adaptatif.svg){width=100%}
-
-| Setting | While dragging | At rest |
+| Setting | Value | Why |
 |---|---|---|
-| Image definition | from ×0.25 to ×1 (start ×0.75) | 1 screen pixel (up to ×2) |
-| Samples per voxel | from 0.1 to 0.75 (start 0.35) | **1.0** |
+| Pixels per CSS pixel | the screen's density, at most **2** (`min(devicePixelRatio, 2)`) | a phone at 3× is drawn at 2×, which is already sharp |
+| Samples per voxel | **1.0** | a structure one voxel wide is never skipped |
+| Samples per ray | the cap of section 9.9 | one frame stays well under the graphics card's time limit |
 
-- Interaction is considered finished **250 ms** after the last movement.
-- If a frame takes more than 1.3 × 16.7 ms, the definition is lowered first, then the samples; if it stays under 1.1 ×, they are raised gently.
-- Time is measured by the **graphics card's timer** when the browser offers one, otherwise by the interval between two frames.
+- The only thing that can change a frame's sample count is the **watchdog** of section 9.9, and only when the graphics card measured that frame past 200 ms.
+- While bricks arrive, the redraws are grouped: at most one every **250 ms**.
 
 ::: note
 Nothing is drawn continuously: the viewer computes a frame only when something changes (camera, setting, arrival of bricks). During loading, redraws caused by new bricks are grouped **at most every 250 ms**.
@@ -204,9 +211,9 @@ Nothing is drawn continuously: the viewer computes a frame only when something c
 On Windows, if a single graphics-card computation lasts more than about **2 seconds**, the system resets the card: this is a "TDR" and the screen flickers. The viewer protects itself against it.
 
 ::: tech
-For an image **at rest**, the maximum number of samples per ray is `clamp(⌊6 × 10⁹ / number of pixels⌋, 256, 4096)`. Example: a 1,920 × 1,080 screen gives ⌊6 × 10⁹ / 2,073,600⌋ = **2,893** samples at most per ray; the same screen with doubled pixels (Retina, 8.3 million pixels) gives 723.
+For every frame, the maximum number of samples per ray is `clamp(⌊k × 6 × 10⁹ / number of drawing-buffer pixels⌋, 256, 4096)`, where `k` starts at 1. Example: a 1,920 × 1,080 screen at a pixel ratio of 1 gives ⌊6 × 10⁹ / 2,073,600⌋ = **2,893** samples at most per ray; the same screen at a pixel ratio of 2 (8.3 million pixels) gives **723**.
 
-This ceiling is adjusted during use: multiplied by `max(0.5; 150 / duration)` if an image at rest takes more than 200 ms, raised by 10% if it stays under 60 ms, and halved after a graphics context loss (chapter 10). During a drag, it is one tenth of this value.
+`k` is adjusted from the frames the graphics card times (it needs the `EXT_disjoint_timer_query_webgl2` extension; without it, `k` stays at 1): a frame that takes more than 200 ms multiplies `k` by `max(0.5; 150 / duration)`, a frame under 60 ms raises it by 10 %, never above 1. A graphics context loss halves `k` (chapter 10).
 :::
 
 For you, this means that an exceptionally long ray may, on a very large screen, be sampled a little more coarsely than once per voxel. In normal use (volumes of a few hundred voxels), the ceiling is never reached.

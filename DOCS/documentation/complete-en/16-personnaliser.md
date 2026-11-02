@@ -2,7 +2,7 @@
 
 ::: chapter-intro
 - Lumen3D **repaints itself in your colours without a line of code**: name, vocabulary, theme, pages, legal notices. It all fits in a few small JSON files in the `config/` folder.
-- The site speaks **four languages** (English, French, Spanish, Dutch) with **1,943 texts** per language; adding a fifth language means dropping in a file.
+- The site speaks **four languages** (English, French, Spanish, Dutch) with **2,275 texts** per language; adding a fifth language means dropping in a file.
 - The site also looks after its visitors: a **light or dark theme** with no flicker, **colour-blindness simulation**, use on a phone, and **statistics with no personal data**.
 :::
 
@@ -213,7 +213,7 @@ This is not a fault, it is the fallback working: the fix is to fill in the **NL*
 | 2 | **Terminology** card: the word for your objects of study, singular and plural. |
 | 3 | **Tagline & SEO** card: tagline, description and keywords, per language. |
 | 4 | **Footer** card: copyright (per language) and links, shown in the public footer (see 16.2). |
-| 5 | **Navigation** card: one box per entry of the public menu. [Show "Legal"]{.ui} is unticked by default. |
+| 5 | **Navigation** card: one box per entry of the public menu. [Show "Legal"]{.ui} is ticked on a fresh installation. |
 | 6 | [Save]{.ui}: active only when a field has changed. |
 | 7 | A **multilingual** field: one line per available language. Here the **NL** line is empty. |
 :::
@@ -527,7 +527,7 @@ A public site needs a **publisher**, a **host**, a **data** policy. The [Legal]{
 
 - As long as you have published nothing, the page shows the shipped **neutral template** (publisher, data protection, cookies and local storage, intellectual property, disclaimer, contact). It is written in **English, French, Spanish and Dutch**.
 - The text is displayed with `textContent`: no HTML, no formatting, one section per block.
-- The link appears in the footer only if the [Show "Legal"]{.ui} box is ticked (unticked by default).
+- The link appears in the footer only if the [Show "Legal"]{.ui} box is ticked: it is on a fresh installation, so the link is visible from the start and the page shows the six template sections, whose `[square brackets]` are to be replaced.
 
 ::: warning
 These texts are **starting points**, not legal advice. Have them reviewed for your country. Remember that a web server generally keeps an **access log** (IP addresses) depending on its configuration: this is your host's business, and it is declared here (see 16.11).
@@ -586,20 +586,21 @@ The public site, the viewer, the administration and even the words of each tool 
 | | |
 |---|---|
 | languages shipped | **4**: English, French, Spanish, Dutch |
-| texts per language | **1,943** (measured on the four `lang/*.json` files) |
-| tool dictionaries | **28**, i.e. 240 texts in English |
+| texts per language | **2,275** (counted on the four `lang/*.json` files: one text per key) |
+| tool dictionaries | **28** files, i.e. **248** texts in English |
 | fallback language | **English**, always |
 
-The 1,943 texts are distributed as follows:
+The 2,275 texts are distributed as follows (English file):
 
 | Key family | Texts | What it contains |
 |--------|---|------------|
-| `pages` | 485 | the page editor |
-| `admin` | 365 | the administration panel |
-| `viewer` | 182 | the viewer |
-| `dupd` | 119 | the Data updates tab |
-| `upl` + `upload` | 104 | the import |
-| `compare`, `about`, `studio`, `tips`… | 688 | the rest |
+| `pages` | 569 | the page editor |
+| `admin` | 393 | the administration panel |
+| `viewer` | 235 | the viewer |
+| `dupd` | 139 | the Data updates tab |
+| `dint` | 92 | the Data integrity tab |
+| `upl` + `upload` | 107 | the import |
+| `compare`, `about`, `studio`, `tips`… | 740 | the rest |
 
 ::: remember
 A key of one language **exists in all four**, with the **same `{…}` tokens**. An automatic test checks it at every version (`tests/js/test_build_lang_parity.mjs`): a missing or empty key, or one whose tokens change, makes the delivery fail.
@@ -900,7 +901,7 @@ Only the viewer page loads `PerfTelemetry`. The progress line you see while load
 | Observation | Explanation |
 |-----------|-------------|
 | "My Appearance change does not show" | it is applied only after [Save]{.ui}; clear the cache if the browser keeps the old `theme.css` |
-| "The Legal link has disappeared" | the box is unticked by default in [Identity]{.ui} |
+| "The Legal link has disappeared" | the box may have been unticked in [Identity]{.ui} (it is ticked on a fresh installation) |
 | "The Dutch talks about embryos" | the **NL** line of *Terminology* is empty |
 | "My page is saved but invisible" | the draft is saved; you must [Publish]{.ui} |
 | "The editor says the page is open elsewhere" | another tab is editing it: take back control or close the other |

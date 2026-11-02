@@ -919,6 +919,18 @@ Le bouton principal s'appelle [Réparer]{.ui} si le dataset se dit à jour mais 
 
 ## 5.7. Pendant la conversion
 
+![L’onglet Mises à jour des données au repos : le test de vitesse, et pour chaque dataset son format, son nombre d’unités et sa taille.](img/tab-dataupdates.png){.shot width=88%}
+
+::: legend
+| n | ce que c'est |
+|-|----------------------|
+| 1 | Bouton [Tout mettre à jour]{.ui} (19) |
+| 2 | Bouton [Lancer le test]{.ui} (5 s), le test de vitesse |
+| 3 | Case « Conserver la version précédente » |
+| 4 | Ligne d'un dataset : format 5 → 6, 177 unités, 125 Mo (taille gardée sur la ligne) |
+| 5 | Choix de l'exécuteur : Ce navigateur / Le serveur |
+:::
+
 États affichés : **En attente de son tour** (« prochain sur le serveur »), **En cours**, **Mise en pause…**, **En pause** (avec la cause : onglet quitté, page fermée, session expirée, serveur injoignable), **Assemblage** (« Assemblage des plans x/y », « assemblage et publication… »), **Échec** (avec la cause).
 
 - **[Pause]{.ui}** met toutes les files en pause ; **[Reprendre]{.ui}** repart là où elles s'étaient arrêtées.
@@ -1072,11 +1084,22 @@ Cet onglet répond à une question : **où part la place du disque ?** Il ne mod
 
 Les textes de cet onglet apparaissent pour l'instant en français, dans toutes les langues de l'interface, faute de traduction.
 
-::: tldr
-**En 30 secondes**
+::: chapter-intro
 - Une barre découpe la place du volume en **cinq** parts, et des cartes détaillent chacune.
 - Les calculs sont faits par le serveur et **gardés 10 minutes** ; [Recalculer]{.ui} relance le calcul.
 - La place libre est celle du **disque** : un quota plus strict de l'hébergeur n'apparaît pas.
+:::
+
+![L’onglet Stockage : la barre du volume, les cartes et le tableau par dataset.](img/tab-storage.png){.shot width=74%}
+
+::: legend
+| n | ce que c'est |
+|-|----------------------|
+| 1 | Bouton [Recalculer]{.ui} |
+| 2 | Barre de répartition du volume |
+| 3 | Carte **Capacité totale** |
+| 4 | Carte **Données publiées** (3D, 2D, autres, live) |
+| 5 | Tableau **Par dataset** (en-tête et premières lignes) |
 :::
 
 ### Les cinq parts de la barre
@@ -1120,11 +1143,22 @@ Cet onglet est affiché **en français**, quelle que soit la langue du panneau.
 
 Cet onglet vérifie que **chaque jeu de données**, publié ou en cours d'import, contient ce qu'il doit contenir, et qu'il est au **format courant (6)**.
 
-::: tldr
-**En 30 secondes**
+::: chapter-intro
 - Un diagnostic **par dataset**, avec des constats écrits en clair et une correction proposée.
+- Rien ne se lance tout seul : vous démarrez le contrôle avec [Lancer le diagnostic]{.ui} (puis [Relancer]{.ui}).
 - Trois compteurs : **Sains**, **Avertissements**, **Erreurs**.
 - [Revérifier]{.ui} relance le contrôle d'un seul dataset.
+:::
+
+![L’onglet Intégrité des données : le résumé et le tableau des datasets.](img/tab-integrity.png){.shot width=88%}
+
+::: legend
+| n | ce que c'est |
+|-|----------------------|
+| 1 | Bouton [Relancer]{.ui} |
+| 2 | Case « Seulement les datasets avec des constats » |
+| 3 | Pastille d'état « 1 constat(s) » (avertissement) |
+| 4 | Bouton [Revérifier]{.ui} (un seul dataset) |
 :::
 
 ### Ce qui est vérifié

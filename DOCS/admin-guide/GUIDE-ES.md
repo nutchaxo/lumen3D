@@ -945,6 +945,18 @@ El botón principal se llama [Reparar]{.ui} si el dataset se declara al día per
 
 ## 5.7. Durante la conversión
 
+![La pestaña Actualizaciones de datos en reposo: la prueba de velocidad y, por dataset, su formato, su número de unidades y su tamaño.](img-es/tab-dataupdates.png){.shot width=88%}
+
+::: legend
+| n | qué es |
+|-|----------------------|
+| 1 | Botón [Actualizar todo]{.ui} (19) |
+| 2 | Botón [Lanzar la prueba]{.ui} (5 s), la prueba de velocidad |
+| 3 | Casilla «Conservar la versión anterior» |
+| 4 | Fila de dataset: formato 5 → 6, 177 unidades, 125 MB (tamaño conservado en la fila) |
+| 5 | Ejecutor: Este navegador / El servidor |
+:::
+
 Estados mostrados: **Esperando su turno** («siguiente en el servidor»), **En curso**, **Pausando…**, **En pausa** (con la causa: pestaña abandonada, página cerrada, sesión caducada, servidor inalcanzable), **Ensamblando** («Ensamblando planos x/y», «ensamblando y publicando…»), **Error** (con la causa) y **En otra pestaña** (otra pestaña de este navegador actualiza el dataset).
 
 - **[Pausa]{.ui}** pone en pausa todas las colas; **[Reanudar]{.ui}** retoma donde se habían detenido.
@@ -1077,6 +1089,18 @@ La tabla «Por dataset» da vistas, descargas y última consulta. Sin datos: «A
 **Nombres en la interfaz.** La pestaña se titula «Stockage» y su botón «Recalculer». La plataforma no tiene todavía una traducción española para ellos (ni en `lang/es.json` ni en los demás idiomas), así que el panel los muestra en francés. Se citan aquí tal como aparecen.
 :::
 
+![La pestaña Almacenamiento: la barra del volumen, las tarjetas y la tabla por dataset.](img-es/tab-storage.png){.shot width=74%}
+
+::: legend
+| n | qué es |
+|-|----------------------|
+| 1 | Botón [Recalculer]{.ui} (etiqueta francesa) |
+| 2 | Barra de capacidad del volumen |
+| 3 | Tarjeta **Capacidad total** (etiqueta francesa) |
+| 4 | Tarjeta **Datos publicados** (etiqueta francesa) |
+| 5 | Tabla **Por dataset** (encabezado y primeras filas) |
+:::
+
 ### La barra del volumen
 
 La barra reparte la capacidad del volumen en cinco partes:
@@ -1119,6 +1143,17 @@ Un dataset que ocupa mucho suele deber su peso a `download/` (los originales que
 :::
 
 Esta pestaña responde a una pregunta: ¿está este dataset completo y utilizable? Se lanza a petición suya y no toca ningún archivo.
+
+![La pestaña Integridad de datos: el resumen y la tabla de datasets.](img-es/tab-integrity.png){.shot width=88%}
+
+::: legend
+| n | qué es |
+|-|----------------------|
+| 1 | Botón [Repetir]{.ui} |
+| 2 | Casilla «Solo datasets con hallazgos» |
+| 3 | Pastilla de estado «1 hallazgo(s)» (aviso) |
+| 4 | Botón [Volver a comprobar]{.ui} (un dataset) |
+:::
 
 ### Qué se comprueba
 

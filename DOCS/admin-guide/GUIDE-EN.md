@@ -909,6 +909,18 @@ The main button is called [Repair]{.ui} if the dataset says it is up to date but
 
 ## 5.7. During the conversion
 
+![The Data updates tab at rest: the speed test, and for each dataset its format, its number of units and its size.](img-en/tab-dataupdates.png){.shot width=88%}
+
+::: legend
+| n | what it is |
+|-|----------------------|
+| 1 | [Update all]{.ui} (19) button |
+| 2 | [Run the test]{.ui} (5 s) button, the speed test |
+| 3 | “Keep the previous version” checkbox |
+| 4 | Dataset row: format 5 → 6, 177 units, 125 MB (size kept on the row) |
+| 5 | Executor choice: This browser / The server |
+:::
+
 States shown: **Waiting for its turn** ("next on the server"), **Running**, **Pausing…**, **Paused** (with the cause: tab left, page closed, session expired, server unreachable), **Assembling** ("Assembling planes x/y", "assembling and publishing…"), **Failed** (with the cause).
 
 - **Workers.** This browser runs up to **four** conversion workers: **two** on a computer with less than 8 GB of memory, and never more than half of its processor cores.
@@ -1051,6 +1063,18 @@ The "By dataset" table gives views, downloads and last visit. With no data: "No 
 **The labels of this tab are still in French in this version**: no English translation exists yet. The names below are the English meanings; the French names are given in brackets so that you can match them with the screen.
 :::
 
+![The Storage tab: the volume bar, the cards and the table per dataset.](img-en/tab-storage.png){.shot width=74%}
+
+::: legend
+| n | what it is |
+|-|----------------------|
+| 1 | [Recalculer]{.ui} button (French label) |
+| 2 | Capacity bar of the volume |
+| 3 | **Total capacity** card (French label) |
+| 4 | **Published data** card (French label) |
+| 5 | **Per dataset** table (header and first rows) |
+:::
+
 ### The bar: five parts
 
 | Part | What it counts |
@@ -1091,6 +1115,17 @@ The count is kept in memory by the Python server, and in a `storage-scan.json` f
 
 ::: analogy
 **A building inspector's round.** The inspector goes through every flat, notes what is missing or out of place, and leaves a card saying what to do. The inspector does not move the furniture.
+:::
+
+![The Data integrity tab: the summary and the table of datasets.](img-en/tab-integrity.png){.shot width=88%}
+
+::: legend
+| n | what it is |
+|-|----------------------|
+| 1 | [Run again]{.ui} button |
+| 2 | Checkbox “Only datasets with findings” |
+| 3 | Status pill “1 finding(s)” (warning) |
+| 4 | [Recheck]{.ui} button (one dataset) |
 :::
 
 ### What is checked

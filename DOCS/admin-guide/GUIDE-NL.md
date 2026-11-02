@@ -942,7 +942,17 @@ De hoofdknop heet [Herstellen]{.ui} als de dataset zegt up-to-date te zijn maar 
 
 ## 5.7. Tijdens de conversie
 
-![Het tabblad Data-updates tijdens een update: de voortgang start bij 0 % en de rijen tonen de grootte.](img-nl/tab-dataupdates.png){.shot width=88%}
+![Het tabblad Data-updates in rust: de snelheidstest en per dataset het formaat, het aantal eenheden en de grootte.](img-nl/tab-dataupdates.png){.shot width=88%}
+
+::: legend
+| n | wat het is |
+|-|----------------------|
+| 1 | Knop [Alles bijwerken]{.ui} (19) |
+| 2 | Knop [Test starten]{.ui} (5 s), de snelheidstest |
+| 3 | Vinkje “Vorige versie bewaren” |
+| 4 | Datasetrij: formaat 5 → 6, 177 eenheden, 125 MB (grootte blijft op de rij) |
+| 5 | Uitvoerder: Deze browser / De server |
+:::
 
 Getoonde statussen: **Wacht op zijn beurt** (“volgende op de server”), **Bezig**, **Pauzeren…**, **Gepauzeerd** (met de oorzaak: tabblad verlaten, pagina gesloten, sessie verlopen, server onbereikbaar), **Samenstellen** (“Vlakken samenstellen x/y”, “samenstellen en publiceren…”), **Mislukt** (met de oorzaak), en **In een ander tabblad** (zie hieronder).
 
@@ -1091,7 +1101,17 @@ Dit tabblad beantwoordt één vraag: **waar gaat de schijfruimte naartoe?** Het 
 
 ### De vijf delen van de balk
 
-![Het tabblad Opslag: de balk van het volume, de kaarten en de tabel per dataset.](img-nl/tab-storage.png){.shot width=88%}
+![Het tabblad Opslag: de balk van het volume, de kaarten en de tabel per dataset.](img-nl/tab-storage.png){.shot width=74%}
+
+::: legend
+| n | wat het is |
+|-|----------------------|
+| 1 | Knop [Recalculer]{.ui} (Franse tekst) |
+| 2 | Capaciteitsbalk van het volume |
+| 3 | Kaart **Totale capaciteit** (Franse tekst) |
+| 4 | Kaart **Gepubliceerde gegevens** (Franse tekst) |
+| 5 | Tabel **Per dataset** (kop en eerste rijen) |
+:::
 
 De bovenste kaart toont het volume waarop de installatie staat: de **totale capaciteit**, de **bezette** ruimte en de **vrije** ruimte. Eronder verdeelt een balk de ruimte in vijf delen:
 
@@ -1161,6 +1181,15 @@ Een import die **nog bezig is**, wordt gecontroleerd tot wat er is aangekomen. D
 ### Het scherm
 
 ![Het tabblad Data-integriteit: de samenvatting en de tabel met de datasets.](img-nl/tab-integrity.png){.shot width=88%}
+
+::: legend
+| n | wat het is |
+|-|----------------------|
+| 1 | Knop [Opnieuw uitvoeren]{.ui} |
+| 2 | Vinkje “Alleen datasets met bevindingen” |
+| 3 | Statuspil “1 bevinding(en)” (waarschuwing) |
+| 4 | Knop [Opnieuw controleren]{.ui} (één dataset) |
+:::
 
 - Bovenaan vier kaarten: **In orde**, **Waarschuwingen**, **Fouten** en **Nieuwste formaat**.
 - [Controle starten]{.ui} begint de controle van alle datasets. Daarna heet de knop [Opnieuw uitvoeren]{.ui}. De tabel vult zich naarmate de resultaten binnenkomen.

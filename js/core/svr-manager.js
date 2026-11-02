@@ -1200,6 +1200,7 @@ class SVRManager {
   }
 
   _finishUpload(bx, by, bz, slotIndex, ptIdx, result) {
+    SVRManager.contentVersion++;
     if (result === false) {
       this.pageData[ptIdx + 3] = 0;
       this.pageTable.needsUpdate = true;
@@ -1443,6 +1444,7 @@ class SVRManager {
   }
 }
 
+SVRManager.contentVersion = 0;   // bumped by every brick write: a cache of the picture keys on it
 SVRManager.MAX_PAGES = 8;   // the shader's svrAtlas0..7
 SVRManager.BRICK_INTERIOR = 64;
 // Slots per side of a page: 4, 8 or 16 (256/512/1024 texels at stride 64).

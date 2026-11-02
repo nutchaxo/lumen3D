@@ -231,6 +231,25 @@ function* product(axes) {
   }
 }
 
+// ── The raw-maximum variants (maximum projection cache) ───────────────────────
+{
+  const axes = { ENABLE_SVR: [undefined, 1], CELL_SKIP: [undefined, 1], VOLUME_WARP: [undefined, 1], ENABLE_CHANNEL_0: [0, 1], ENABLE_CHANNEL_1: [0, 1], ENABLE_CHANNEL_2: [0, 1], ENABLE_CHANNEL_3: [0, 1] };
+  const failures = [];
+  let n = 0;
+  for (const variant of ['RAW_OUT', 'RAW_READ']) {
+    for (const defines of product(axes)) {
+      n++;
+      try {
+        const { code, macros } = preprocess(VIEWER_FRAG, { ...defines, [variant]: 1 });
+        const res = check(code, macros);
+        if (res.errors.length) failures.push(`${variant} ${JSON.stringify(defines)}: ${res.errors.join('; ')}`);
+      } catch (e) { failures.push(`${variant}: ${e.message}`); }
+    }
+  }
+  assert.equal(failures.length, 0, 'raw-maximum shader permutations failing: ' + failures.slice(0, 8).join(' | '));
+  console.log(`raw-maximum shader variants: ${n} permutations resolve: OK`);
+}
+
 // ── The ray-march shader: every permutation ──────────────────────────────────
 {
   const axes = {

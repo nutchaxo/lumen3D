@@ -636,6 +636,11 @@ const VolumeViewer = (() => {
     #endif
     #endif
 
+    #ifdef RAW_READ
+    // The recolour pass of the maximum projection: the per-pixel raw maxima written by the
+    // RAW_OUT march, in a half-float target of the drawing buffer's size.
+    uniform sampler2D rawMip;
+    #endif
     uniform int numChannels;
     // Sample cap per ray, and samples per voxel length (see delta in main()).
     uniform int steps;
@@ -866,7 +871,11 @@ const VolumeViewer = (() => {
       if (any(notEqual(fcell, gFineCell))) {
         gFineCell = fcell;
         vec4 cellMax = textureLod(cellMap, (fcell + vec3(0.5)) / cellDim, 0.0);
+        #ifdef RAW_OUT
+        gFineEmpty = all(lessThanEqual(cellMax, vec4(0.0)));
+        #else
         gFineEmpty = all(lessThanEqual(channelValues(cellMax), vec4(fineThreshold())));
+        #endif
       }
       if (gFineEmpty) {
         skip = fineCellExit(uvw, dirTex, fcell);
@@ -930,6 +939,19 @@ const VolumeViewer = (() => {
     #endif
 
     void main() {
+      #ifdef RAW_READ
+      // mip_c = v_c(max over the ray of the raw value): channelValues is non-decreasing in
+      // the raw value, so the projection of the DISPLAYED values is the display of the
+      // projected RAW values. Moving a window, gamma, colour, opacity, exposure or a channel
+      // switch therefore recolours this pixel without marching again.
+      vec4 rawMax = texelFetch(rawMip, ivec2(gl_FragCoord.xy), 0);
+      vec4 mipV = channelValues(rawMax);
+      float mipTotal = max(max(mipV.x, mipV.y), max(mipV.z, mipV.w));
+      if (mipTotal < 0.004) discard;
+      vec3 mipRGB = (mipV.x * color0 + mipV.y * color1 + mipV.z * color2 + mipV.w * color3) * exposure;
+      fragColor = vec4(mipRGB, fragAlpha(mipRGB, 0.0));
+      return;
+      #endif
       vec3 rayDir = normalize(vDirection);
       #ifdef VOLUME_WARP
       vec2 bounds = hitBoxWarped(vOrigin, rayDir);
@@ -1126,6 +1148,12 @@ const VolumeViewer = (() => {
           t = jitter + k * delta;
           continue;
         }
+        #ifdef RAW_OUT
+        mip = max(mip, val);
+        k += 1.0;
+        t = jitter + k * delta;
+        continue;
+        #endif
         vec4 v = channelValues(val);
 
         if (renderMode == 1) {
@@ -1165,6 +1193,11 @@ const VolumeViewer = (() => {
         k += 1.0;
         t = jitter + k * delta;
       }
+
+      #ifdef RAW_OUT
+      fragColor = mip;
+      return;
+      #endif
 
       // ── Natural Fluorescence (mode 2): luminance-only Reinhard + chroma lock ──
       if (renderMode == 2) {
@@ -1313,6 +1346,7 @@ const VolumeViewer = (() => {
         brickSize: { value: VOLUME_BRICK_SIZE },
         cellMap: { value: null },
         cellDim: { value: new THREE.Vector3(1, 1, 1) },
+        rawMip: { value: null },
         // Atlas slot layout (SVRManager.updateUniforms): slot edge, border, components.
         slotStride: { value: VOLUME_BRICK_SIZE },
         brickApron: { value: 0 },
@@ -1459,7 +1493,7 @@ const VolumeViewer = (() => {
       if (i === warmup) t0 = performance.now();
       cube.quaternion.premultiply(dq);
       cube.updateMatrixWorld(true);
-      renderer.render(scene, camera);
+      _renderFrame();
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     }
     const ms = (performance.now() - t0) / frames;
@@ -1486,7 +1520,7 @@ const VolumeViewer = (() => {
     _syncGridRotation();
     if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
     _updateMeasurementLabelPositions(false, _activeDragSprite);
-    renderer.render(scene, camera);
+    _renderFrame();
     return true;
   }
 
@@ -2209,7 +2243,7 @@ const VolumeViewer = (() => {
         console.warn('[VolumeViewer] Error in pre-render update:', err);
       }
       const query = _beginGpuTimer();
-      renderer.render(scene, camera);
+      _renderFrame();
       _endGpuTimer(query);
       if (_onPostRender) _onPostRender();
       _lastCameraPos.copy(camera.position);
@@ -3537,6 +3571,7 @@ const VolumeViewer = (() => {
   /** Upload every channel of `entry.channelData` back into its texture, in slabs of
    *  ≤ 16 MiB interleaved between macrotasks. false when superseded or released. */
   async function _uploadEntryChannels(entry, isCurrent) {
+    _dataVersion++;
     const { width: w, height: h, depth: d } = entry;
     const stride = entry.stride || RGBA_TEXTURE_BYTES_PER_VOXEL;
     const slice = w * h;
@@ -5040,6 +5075,166 @@ const VolumeViewer = (() => {
   // slab, warp and bricks), into a 1×1 target windowed onto the clicked pixel.
   let _pick = null;
 
+  // ── Maximum projection: raw-maximum cache ──────────────────────────────────
+  // In the maximum projection (renderMode 1) a pixel is v_c(max over the ray of the raw
+  // value of channel c): channelValues (window, gamma, opacity) is non-decreasing, so
+  // the projection of the displayed values equals the display of the projected raw values
+  // (shader: RAW_OUT / RAW_READ). A frame is two passes — a march that writes the raw
+  // maxima of every channel (ignoring the display settings) into a half-float target,
+  // then the cube drawn again by a cheap shader that recolours them — and the march is
+  // redone only when something that changes the maxima changed. A window, gamma,
+  // colour, opacity, exposure or channel-switch change is a recolour: no march.
+  const RAW_DISPLAY_UNIFORMS = new Set(['exposure']);
+  for (let c = 0; c < 4; c++) for (const n of ['color', 'min', 'max', 'gamma', 'opacity', 'en']) RAW_DISPLAY_UNIFORMS.add(n + c);
+  let _rawCache = null;
+  let _rawCacheEnabled = true;
+  let _rawCacheUnsupported = false;
+  let _dataVersion = 0;          // bumped whenever voxels of the dense texture / entry change
+  const _rawStats = { marches: 0, recolours: 0 };
+
+  function _rawCacheResources() {
+    if (_rawCache) return _rawCache;
+    if (_rawCacheUnsupported) return null;
+    const ext = renderer.extensions;
+    const floatOk = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
+    if (!floatOk) { _rawCacheUnsupported = true; return null; }
+    if (ext.has('EXT_color_buffer_float')) ext.get('EXT_color_buffer_float');
+    const target = new THREE.WebGLRenderTarget(1, 1, {
+      format: THREE.RGBAFormat,
+      type: THREE.HalfFloatType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      generateMipmaps: false,
+      depthBuffer: false,
+      stencilBuffer: false
+    });
+    const common = { glslVersion: THREE.GLSL3, vertexShader, fragmentShader, uniforms: material.uniforms, side: THREE.BackSide, depthWrite: false };
+    const rawMat = new THREE.ShaderMaterial({ ...common, defines: {}, transparent: false, depthTest: false, blending: THREE.NoBlending });
+    const readMat = new THREE.ShaderMaterial({ ...common, defines: {}, transparent: material.transparent, blending: material.blending });
+    const mesh = new THREE.Mesh(cube.geometry, rawMat);
+    mesh.matrixAutoUpdate = false;
+    mesh.frustumCulled = false;
+    const rawScene = new THREE.Scene();
+    rawScene.add(mesh);
+    _rawCache = { target, rawMat, readMat, mesh, scene: rawScene, snapshot: new Map(), valid: false, key: '', width: 0, height: 0 };
+    material.uniforms.rawMip.value = target.texture;
+    return _rawCache;
+  }
+
+  function _disposeRawCache() {
+    if (!_rawCache) return;
+    _rawCache.target.dispose();
+    _rawCache.rawMat.dispose();
+    _rawCache.readMat.dispose();
+    if (material?.uniforms?.rawMip) material.uniforms.rawMip.value = null;
+    _rawCache = null;
+  }
+
+  /** Does the snapshot still describe `value`? Updates it when not. */
+  function _uniformUnchanged(snap, name, value) {
+    const prev = snap.get(name);
+    if (value && typeof value === 'object') {
+      if (value.isTexture) {
+        const same = prev && prev.ref === value && prev.version === value.version;
+        if (!same) snap.set(name, { ref: value, version: value.version });
+        return Boolean(same);
+      }
+      if (typeof value.equals === 'function' && typeof value.clone === 'function') {
+        if (prev && prev.equals(value)) return true;
+        snap.set(name, value.clone());
+        return false;
+      }
+    }
+    if (prev === value) return true;
+    snap.set(name, value);
+    return false;
+  }
+
+  /** Has anything that moves the maxima changed since the cached march? */
+  function _rawMarchNeeded(c, width, height) {
+    let changed = !c.valid || c.width !== width || c.height !== height;
+    const snap = c.snapshot;
+    for (const name of Object.keys(material.uniforms)) {
+      if (RAW_DISPLAY_UNIFORMS.has(name) || name === 'rawMip') continue;
+      if (!_uniformUnchanged(snap, name, material.uniforms[name].value)) changed = true;
+    }
+    if (!_uniformUnchanged(snap, '#cubeWorld', cube.matrixWorld)) changed = true;
+    if (!_uniformUnchanged(snap, '#proj', camera.projectionMatrix)) changed = true;
+    if (!_uniformUnchanged(snap, '#view', camera.matrixWorldInverse)) changed = true;
+    const dataKey = _dataVersion + ':' + (typeof SVRManager !== 'undefined' ? SVRManager.contentVersion : 0);
+    if (!_uniformUnchanged(snap, '#data', dataKey)) changed = true;
+    const defKey = JSON.stringify(material.defines || {});
+    if (!_uniformUnchanged(snap, '#defines', defKey)) changed = true;
+    return changed;
+  }
+
+  function _syncRawDefines(c) {
+    const base = { ...(material.defines || {}) };
+    const set = (mat, extra) => {
+      const want = { ...base, ...extra };
+      const have = mat.defines || {};
+      const same = Object.keys(want).length === Object.keys(have).length && Object.keys(want).every(k => have[k] === want[k]);
+      if (!same) { mat.defines = want; mat.needsUpdate = true; }
+    };
+    set(c.rawMat, { RAW_OUT: 1 });
+    set(c.readMat, { RAW_READ: 1 });
+  }
+
+  /** One frame of the scene; the maximum projection goes through the raw cache. */
+  function _renderFrame() {
+    const useCache = _rawCacheEnabled && !_rawCacheUnsupported && material && cube && !_transitionCube
+      && material.uniforms.renderMode.value === 1 && material.uniforms.exportAlpha.value === 0
+      && !material.defines?.PICK_MODE;
+    const c = useCache ? _rawCacheResources() : null;
+    if (!c) { renderer.render(scene, camera); return; }
+    const size = renderer.getDrawingBufferSize(_frameSize);
+    const width = size.x, height = size.y;
+    if (c.width !== width || c.height !== height) {
+      c.target.setSize(width, height);
+      c.width = width;
+      c.height = height;
+      c.valid = false;
+    }
+    _syncRawDefines(c);
+    cube.updateMatrixWorld(true);
+    camera.updateMatrixWorld();
+    if (_rawMarchNeeded(c, width, height)) {
+      c.mesh.matrix.copy(cube.matrixWorld);
+      c.mesh.matrixWorld.copy(cube.matrixWorld);
+      if (c.mesh.geometry !== cube.geometry) c.mesh.geometry = cube.geometry;
+      const prevTarget = renderer.getRenderTarget();
+      const prevClear = renderer.getClearColor(new THREE.Color());
+      const prevAlpha = renderer.getClearAlpha();
+      try {
+        renderer.setRenderTarget(c.target);
+        renderer.setClearColor(0x000000, 0);
+        renderer.clear(true, false, false);
+        renderer.render(c.scene, camera);
+      } finally {
+        renderer.setRenderTarget(prevTarget);
+        renderer.setClearColor(prevClear, prevAlpha);
+      }
+      c.valid = true;
+      _rawStats.marches++;
+    } else {
+      _rawStats.recolours++;
+    }
+    cube.material = c.readMat;
+    try { renderer.render(scene, camera); } finally { cube.material = material; }
+  }
+
+  /** Switch the raw-maximum cache on or off (a comparison switch); true when it can run. */
+  function setRawCache(on) {
+    _rawCacheEnabled = Boolean(on);
+    if (!_rawCacheEnabled && _rawCache) _rawCache.valid = false;
+    _scheduleFrame();
+    return !_rawCacheUnsupported;
+  }
+
+  function getRawCacheStats() {
+    return { ..._rawStats, enabled: _rawCacheEnabled, unsupported: _rawCacheUnsupported };
+  }
+
   function _pickResources() {
     if (_pick) return _pick;
     const target = new THREE.WebGLRenderTarget(1, 1, {
@@ -6141,6 +6336,8 @@ const VolumeViewer = (() => {
     renderNow,
     measureFrameMs,
     setCellSkip,
+    setRawCache,
+    getRawCacheStats,
     getCapabilities,
     getQualityFootprints,
     getQualityLevels,
@@ -7338,6 +7535,7 @@ const VolumeViewer = (() => {
     _cancelStream(_preloadStreamAbort);
     _releaseAllVolumes();
     _disposePickResources();
+    _disposeRawCache();
     _gpuTimer.pending = [];
     _gpuTimer.ext = undefined;
   }
@@ -7457,6 +7655,7 @@ const VolumeViewer = (() => {
     if (_streamRedrawTimer) { clearTimeout(_streamRedrawTimer); _streamRedrawTimer = null; }
     _releaseAllVolumes();
     _disposePickResources();
+    _disposeRawCache();
     _manifestCache.clear();
     _imageCache.clear();
     for (const taskId of [..._blurAssemblers.keys()]) _failBlurTask(taskId, 'viewer disposed');
@@ -7685,6 +7884,7 @@ const VolumeViewer = (() => {
 
   /** texSubImage3D of a box (tightly packed, 1 or 4 bytes per voxel as the texture). */
   function _updateGPUTextureRegion(tex, dims, ox, oy, oz, bw, bh, bd, brickData) {
+    _dataVersion++;
     if (!renderer || !brickData || !brickData.length) return;
     const properties = renderer.properties.get(tex);
     const webglTexture = properties?.__webglTexture;

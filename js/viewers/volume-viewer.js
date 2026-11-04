@@ -640,6 +640,7 @@ const VolumeViewer = (() => {
     // The recolour pass of the maximum projection: the per-pixel raw maxima written by the
     // RAW_OUT march, in a half-float target of the drawing buffer's size.
     uniform sampler2D rawMip;
+    uniform vec2 rawFullSize;   // the drawing buffer's size in pixels
     #endif
     uniform int numChannels;
     // Sample cap per ray, and samples per voxel length (see delta in main()).
@@ -943,8 +944,11 @@ const VolumeViewer = (() => {
       // mip_c = v_c(max over the ray of the raw value): channelValues is non-decreasing in
       // the raw value, so the projection of the DISPLAYED values is the display of the
       // projected RAW values. Moving a window, gamma, colour, opacity, exposure or a channel
-      // switch therefore recolours this pixel without marching again.
-      vec4 rawMax = texelFetch(rawMip, ivec2(gl_FragCoord.xy), 0);
+      // switch therefore recolours this pixel without marching again. The maxima may have
+      // been marched at a lower resolution than the screen's (see _rawMarchScale): they are
+      // interpolated BEFORE the window and gamma, at this pixel, so the picture keeps the
+      // screen's resolution and the display curve is applied to the interpolated value.
+      vec4 rawMax = texture(rawMip, gl_FragCoord.xy / rawFullSize);
       vec4 mipV = channelValues(rawMax);
       float mipTotal = max(max(mipV.x, mipV.y), max(mipV.z, mipV.w));
       if (mipTotal < 0.004) discard;
@@ -1347,6 +1351,7 @@ const VolumeViewer = (() => {
         cellMap: { value: null },
         cellDim: { value: new THREE.Vector3(1, 1, 1) },
         rawMip: { value: null },
+        rawFullSize: { value: new THREE.Vector2(1, 1) },
         // Atlas slot layout (SVRManager.updateUniforms): slot edge, border, components.
         slotStride: { value: VOLUME_BRICK_SIZE },
         brickApron: { value: 0 },
@@ -1514,13 +1519,19 @@ const VolumeViewer = (() => {
     return Boolean(m.cellMap);
   }
 
-  function renderNow() {
+  /**
+   * Render the view now, for a reader of the canvas in the same task. The maxima are marched
+   * at the screen's resolution (`full`, the default) so a capture never inherits the
+   * lower density the moving view uses; `{ full: false }` renders exactly what the loop shows.
+   */
+  function renderNow({ full = true } = {}) {
     if (!renderer || !scene || !camera || _contextLost) return false;
     _syncRotGizmoTransform();
     _syncGridRotation();
     if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
     _updateMeasurementLabelPositions(false, _activeDragSprite);
-    _renderFrame();
+    _captureFull = full;
+    try { _renderFrame(); } finally { _captureFull = false; }
     return true;
   }
 
@@ -2245,6 +2256,7 @@ const VolumeViewer = (() => {
       const query = _beginGpuTimer();
       _renderFrame();
       _endGpuTimer(query);
+      if (_perfOverlayWanted()) _updatePerfOverlay(now);
       if (_onPostRender) _onPostRender();
       _lastCameraPos.copy(camera.position);
       _lastCameraQuat.copy(camera.quaternion);
@@ -5084,7 +5096,7 @@ const VolumeViewer = (() => {
   // then the cube drawn again by a cheap shader that recolours them — and the march is
   // redone only when something that changes the maxima changed. A window, gamma,
   // colour, opacity, exposure or channel-switch change is a recolour: no march.
-  const RAW_DISPLAY_UNIFORMS = new Set(['exposure']);
+  const RAW_DISPLAY_UNIFORMS = new Set(['exposure', 'rawFullSize']);
   for (let c = 0; c < 4; c++) for (const n of ['color', 'min', 'max', 'gamma', 'opacity', 'en']) RAW_DISPLAY_UNIFORMS.add(n + c);
   let _rawCache = null;
   let _rawCacheEnabled = true;
@@ -5102,8 +5114,8 @@ const VolumeViewer = (() => {
     const target = new THREE.WebGLRenderTarget(1, 1, {
       format: THREE.RGBAFormat,
       type: THREE.HalfFloatType,
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
       generateMipmaps: false,
       depthBuffer: false,
       stencilBuffer: false
@@ -5188,7 +5200,9 @@ const VolumeViewer = (() => {
     const c = useCache ? _rawCacheResources() : null;
     if (!c) { renderer.render(scene, camera); return; }
     const size = renderer.getDrawingBufferSize(_frameSize);
-    const width = size.x, height = size.y;
+    material.uniforms.rawFullSize.value.set(size.x, size.y);
+    const k = _rawMarchScale();
+    const width = Math.max(1, Math.ceil(size.x * k)), height = Math.max(1, Math.ceil(size.y * k));
     if (c.width !== width || c.height !== height) {
       c.target.setSize(width, height);
       c.width = width;
@@ -5223,6 +5237,92 @@ const VolumeViewer = (() => {
     try { renderer.render(scene, camera); } finally { cube.material = material; }
   }
 
+  // Resolution of the maxima march, as a fraction of the drawing buffer's. The picture is
+  // 2D bandlimited by the voxel grid: once the screen holds more than ~RAW_PX_PER_VOXEL
+  // pixels per voxel footprint (2: Nyquist), the extra rays only re-sample the same interpolated
+  // voxels. The maxima are marched at that density and interpolated up to the screen's
+  // by the recolour pass (which stays at full resolution, as do the overlays and the
+  // exports). Measured against the full-resolution march on F6TEST-E85: 46–49 dB at 2 px per
+  // voxel, 53 dB where this picks a milder scale. A function of the view and the data alone — the same moving and at rest.
+  // 'native' (or setRawMarchScale(1)) marches at the screen's resolution.
+  const RAW_PX_PER_VOXEL = 2;
+  const RAW_SCALE_STEP = 1 / 16;
+  const RAW_SCALE_MIN = 0.25;
+  let _rawScaleOverride = (() => {
+    try {
+      const v = new URLSearchParams(window.location.search).get('renderScale') || localStorage.getItem('lumen3d.renderScale');
+      if (v === 'native') return 1;
+      const n = Number(v);
+      return n > 0 && n <= 1 ? n : null;
+    } catch (_) { return null; }
+  })();
+  let _rawScaleAuto = 1;
+  let _captureFull = false;
+
+  function _autoRawScale() {
+    const e = _activeVolumeEntry;
+    if (!e || !camera || !cube || !renderer || !(e.width > 0) || !(e.height > 0)) return 1;
+    // World size of a lateral voxel; the distance is taken to the far side of the box, where
+    // the voxel footprint is smallest, so the density asked for holds everywhere.
+    const vox = Math.max(cube.scale.x / e.width, cube.scale.y / e.height);
+    const far = Math.max(0.05, camera.position.distanceTo(cube.position) + 0.5 * Math.max(cube.scale.x, cube.scale.y, cube.scale.z));
+    const h = renderer.getDrawingBufferSize(_frameSize).y;
+    const pxPerVoxel = (vox / (2 * far * Math.tan((camera.fov * Math.PI / 180) / 2))) * h;
+    if (!(pxPerVoxel > 0)) return 1;
+    const want = Math.min(1, Math.max(RAW_SCALE_MIN, RAW_PX_PER_VOXEL / pxPerVoxel));
+    const up = Math.min(1, Math.ceil(want / RAW_SCALE_STEP) * RAW_SCALE_STEP);
+    // Hysteresis: the target is reallocated on a change, so a hair's difference is ignored.
+    return Math.abs(up - _rawScaleAuto) < RAW_SCALE_STEP * 1.01 && up < 1 && _rawScaleAuto < 1 ? _rawScaleAuto : up;
+  }
+
+  function _rawMarchScale() {
+    if (_captureFull) return 1;
+    if (_rawScaleOverride !== null) return _rawScaleOverride;
+    _rawScaleAuto = _autoRawScale();
+    return _rawScaleAuto;
+  }
+
+  function setRawMarchScale(value) {
+    _rawScaleOverride = value === null || value === undefined ? null : Math.max(0.1, Math.min(1, Number(value) || 1));
+    _scheduleFrame();
+    return _rawMarchScale();
+  }
+
+  // ?perf=1 — a small readout for measuring on a device: time between rendered frames,
+  // drawing-buffer size, the maxima march's scale, the volume's path.
+  let _perfOverlay = null;
+  const _perfState = { last: 0, ema: 0, shown: 0 };
+  function _perfOverlayWanted() {
+    try { return new URLSearchParams(window.location.search).get('perf') === '1'; } catch (_) { return false; }
+  }
+  function _updatePerfOverlay(now) {
+    if (!_perfOverlay) {
+      _perfOverlay = document.createElement('div');
+      _perfOverlay.setAttribute('aria-hidden', 'true');
+      _perfOverlay.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99999;padding:6px 8px;background:rgba(0,0,0,.7);color:#9f9;font:11px/1.35 monospace;white-space:pre;pointer-events:none;border-radius:4px';
+      document.body.appendChild(_perfOverlay);
+    }
+    if (_perfState.last) {
+      const dt = now - _perfState.last;
+      if (dt < 500) _perfState.ema = _perfState.ema ? _perfState.ema * 0.9 + dt * 0.1 : dt;
+    }
+    _perfState.last = now;
+    if (now - _perfState.shown < 400) return;
+    _perfState.shown = now;
+    const size = renderer.getDrawingBufferSize(_frameSize);
+    const e = _activeVolumeEntry;
+    const m = e && e.svrManager;
+    const path = m ? `atlas ${m.compressed ? 'BC' : m.split ? 'split' : 'RGBA'}${m.cellMap ? ' +cells' : ''}` : 'dense';
+    const st = getRawCacheStats();
+    _perfOverlay.textContent = `${_perfState.ema.toFixed(1)} ms  (${(1000 / Math.max(1, _perfState.ema)).toFixed(0)} fps between frames)
+`
+      + `buffer ${size.x}x${size.y}  ratio ${renderer.getPixelRatio().toFixed(2)}
+`
+      + `mode ${material.uniforms.renderMode.value}  march ${st.marchScale ? (st.marchScale * 100).toFixed(0) + '%' : '-'}  ${path}
+`
+      + `volume ${e ? `${e.width}x${e.height}x${e.depth}` : '-'}  marches ${st.marches}  recolours ${st.recolours}`;
+  }
+
   /** Switch the raw-maximum cache on or off (a comparison switch); true when it can run. */
   function setRawCache(on) {
     _rawCacheEnabled = Boolean(on);
@@ -5232,7 +5332,9 @@ const VolumeViewer = (() => {
   }
 
   function getRawCacheStats() {
-    return { ..._rawStats, enabled: _rawCacheEnabled, unsupported: _rawCacheUnsupported };
+    return { ..._rawStats, enabled: _rawCacheEnabled, unsupported: _rawCacheUnsupported,
+      marchScale: _rawCache && renderer ? _rawCache.width / Math.max(1, renderer.getDrawingBufferSize(_frameSize).x) : null,
+      autoScale: _rawScaleAuto };
   }
 
   function _pickResources() {
@@ -6338,6 +6440,7 @@ const VolumeViewer = (() => {
     setCellSkip,
     setRawCache,
     getRawCacheStats,
+    setRawMarchScale,
     getCapabilities,
     getQualityFootprints,
     getQualityLevels,

@@ -41,7 +41,7 @@ const display = (raw, st) => {
 }
 
 const frag = VV.slice(VV.indexOf('const fragmentShader = `'), VV.indexOf('`;', VV.indexOf('const fragmentShader = `')));
-assert.match(frag, /#ifdef RAW_READ[\s\S]*?vec4 rawMax = texelFetch\(rawMip, ivec2\(gl_FragCoord\.xy\), 0\);/, 'recolour pass reads the raw maxima');
+assert.match(frag, /#ifdef RAW_READ[\s\S]*?vec4 rawMax = texture\(rawMip, gl_FragCoord\.xy \/ rawFullSize\);/, 'recolour pass reads the raw maxima');
 assert.match(frag, /vec4 mipV = channelValues\(rawMax\);/);
 assert.match(frag, /#ifdef RAW_OUT\s+mip = max\(mip, val\);/, 'raw march keeps the undisplayed value');
 assert.match(frag, /#ifdef RAW_OUT\s+fragColor = mip;\s+return;\s+#endif/, 'raw march writes the maxima');
@@ -52,7 +52,7 @@ assert.match(frag, /\* exposure;\s+fragColor = vec4\(mipRGB, fragAlpha\(mipRGB, 
 assert.match(frag, /if \(totalMIP < 0\.004\) discard;/, 'same discard threshold as the march');
 
 // The display uniforms are exactly the ones a recolour may change.
-const set = /const RAW_DISPLAY_UNIFORMS = new Set\(\['exposure'\]\);\n\s+for \(let c = 0; c < 4; c\+\+\) for \(const n of \[([^\]]+)\]\)/.exec(VV);
+const set = /const RAW_DISPLAY_UNIFORMS = new Set\(\['exposure', 'rawFullSize'\]\);\n\s+for \(let c = 0; c < 4; c\+\+\) for \(const n of \[([^\]]+)\]\)/.exec(VV);
 assert.ok(set, 'RAW_DISPLAY_UNIFORMS');
 assert.deepEqual(set[1].split(',').map((x) => x.trim().replace(/'/g, '')), ['color', 'min', 'max', 'gamma', 'opacity', 'en']);
 for (const u of ['steps', 'sampleRate', 'clipMin', 'clipMax', 'volumeWarp', 'renderMode']) {

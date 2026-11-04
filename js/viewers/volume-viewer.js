@@ -561,13 +561,6 @@ const VolumeViewer = (() => {
     // exactly zero. Bounding the index against the live page count turns any such
     // inconsistent state back into "no brick" -- an empty view, never wrong voxels.
     uniform int svrPageCount;
-    #ifdef CELL_SKIP
-    // Fine empty-space cells (cell-max.js): RGBA8, one texel per 8³ cell, the raw maximum
-    // of each channel over every voxel a sample inside the cell can read. cellDim = cells
-    // per axis (page-table cells × 8).
-    uniform sampler3D cellMap;
-    uniform vec3 cellDim;
-    #endif
 
     // textureLod everywhere in the march: the atlases have no mipmaps, so level 0 is
     // what texture() returns, without needing derivatives inside divergent control
@@ -641,6 +634,13 @@ const VolumeViewer = (() => {
     // RAW_OUT march, in a half-float target of the drawing buffer's size.
     uniform sampler2D rawMip;
     uniform vec2 rawFullSize;   // the drawing buffer's size in pixels
+    #endif
+    #ifdef CELL_SKIP
+    // Fine empty-space cells (cell-max.js): RGBA8, one texel per 8³ cell, the raw maximum
+    // of each channel over every voxel a sample inside the cell can read. cellDim = cells
+    // per axis (page-table cells × 8).
+    uniform sampler3D cellMap;
+    uniform vec3 cellDim;
     #endif
     uniform int numChannels;
     // Sample cap per ray, and samples per voxel length (see delta in main()).
@@ -814,7 +814,7 @@ const VolumeViewer = (() => {
       return v;
     }
 
-    #if defined(ENABLE_SVR) && defined(CELL_SKIP) && !defined(PICK_MODE)
+    #if defined(CELL_SKIP) && !defined(PICK_MODE)
     // Fine empty-space skip. A cell (8³ voxels) is empty when the displayed value of its
     // raw per-channel maximum is at or below what the mode ignores anyway: channelValues
     // is non-decreasing in the raw value (clamp, pow with gamma > 0, opacity >= 0), so no
@@ -824,8 +824,19 @@ const VolumeViewer = (() => {
     // opacity and channel switches by itself — nothing is recomputed when a slider moves.
     // The picking march keeps the brick-level skip: its crossing interpolation reads the
     // values of the samples around it.
+    //
+    // Raw maxima march (RAW_OUT, the maximum projection cache): the same cell is also
+    // skipped when no channel of it can raise the maximum the ray already holds. A sample
+    // of the cell is an interpolation of voxels no brighter than the cell's maximum, so a
+    // cell whose maximum is under the ray's running maximum in every channel changes
+    // nothing — in a dense specimen a ray soon holds a bright value and jumps over most
+    // of what follows. Exact; RAW_SKIP_MARGIN (half a level) absorbs a filtering unit that
+    // rounds its weights, and a compressed brick's maxima already carry their own margin.
     vec3 gFineCell = vec3(-1.0);
     bool gFineEmpty = false;
+    vec4 gFineMax = vec4(1.0);
+    vec4 gRayMax = vec4(0.0);
+    #define RAW_SKIP_MARGIN 0.002
 
     float fineThreshold() {
       return renderMode == 1 ? 0.0 : (renderMode == 2 ? 0.0025 : 0.01);
@@ -842,6 +853,31 @@ const VolumeViewer = (() => {
       // this empty cell is simply taken (it adds nothing).
       float exitT = min(tt.x, min(tt.y, tt.z));
       return max(0.0, exitT - (exitT * 2e-5 + 2e-6));
+    }
+
+    // True, with skip the ray parameter to the cell's exit, when the cell at uvw adds
+    // nothing to this ray.
+    bool fineCellSkips(vec3 uvw, vec3 dirTex, out float skip) {
+      skip = 0.0;
+      vec3 fcell = floor(clamp(uvw * volumeVoxels, vec3(0.0), volumeVoxels - vec3(1.0)) / 8.0);
+      if (any(notEqual(fcell, gFineCell))) {
+        gFineCell = fcell;
+        gFineMax = textureLod(cellMap, (fcell + vec3(0.5)) / cellDim, 0.0);
+        #ifdef RAW_OUT
+        gFineEmpty = false;
+        #else
+        gFineEmpty = all(lessThanEqual(channelValues(gFineMax), vec4(fineThreshold())));
+        #endif
+      }
+      #ifdef RAW_OUT
+      // Re-tested at every sample: the running maximum grows as the ray goes on.
+      bool empty = all(lessThanEqual(gFineMax, vec4(0.0))) || all(lessThanEqual(gFineMax + vec4(RAW_SKIP_MARGIN), gRayMax));
+      #else
+      bool empty = gFineEmpty;
+      #endif
+      if (!empty) return false;
+      skip = fineCellExit(uvw, dirTex, fcell);
+      return true;
     }
     #endif
 
@@ -868,20 +904,7 @@ const VolumeViewer = (() => {
         return false;
       }
       #if defined(CELL_SKIP) && !defined(PICK_MODE)
-      vec3 fcell = floor(clamp(uvw * volumeVoxels, vec3(0.0), volumeVoxels - vec3(1.0)) / 8.0);
-      if (any(notEqual(fcell, gFineCell))) {
-        gFineCell = fcell;
-        vec4 cellMax = textureLod(cellMap, (fcell + vec3(0.5)) / cellDim, 0.0);
-        #ifdef RAW_OUT
-        gFineEmpty = all(lessThanEqual(cellMax, vec4(0.0)));
-        #else
-        gFineEmpty = all(lessThanEqual(channelValues(cellMax), vec4(fineThreshold())));
-        #endif
-      }
-      if (gFineEmpty) {
-        skip = fineCellExit(uvw, dirTex, fcell);
-        return false;
-      }
+      if (fineCellSkips(uvw, dirTex, skip)) return false;
       #endif
       val = keepComponents(sampleSVRAtlas(slotCoord(uvw * volumeDim, cell, cachedPage.xyz, volumeDim, slotStride, brickApron, atlasDim), cachedPage.w), SVR_COMPONENTS);
       return true;
@@ -899,6 +922,9 @@ const VolumeViewer = (() => {
           skip = brickExit(uvw, dirTex, cell);
           return false;
         }
+        #endif
+        #if defined(CELL_SKIP) && !defined(PICK_MODE)
+        if (fineCellSkips(uvw, dirTex, skip)) return false;
         #endif
       val = textureLod(svrAtlas0, uvw, 0.0);
       return true;
@@ -1154,6 +1180,9 @@ const VolumeViewer = (() => {
         }
         #ifdef RAW_OUT
         mip = max(mip, val);
+        #if defined(CELL_SKIP) && !defined(PICK_MODE)
+        gRayMax = mip;
+        #endif
         k += 1.0;
         t = jitter + k * delta;
         continue;
@@ -1510,13 +1539,29 @@ const VolumeViewer = (() => {
   }
 
   /** Turn the fine 8³ empty-space skip on or off for the volume on screen (a comparison switch). */
+  // Measured on a desktop GPU the dense volume's cells cost more than they save (the dense fetch
+  // is already cheap); a device where texture reads dominate may differ, so they are opt-in:
+  // ?denseCells=1. ?rawCache=0 turns the maxima cache off (the classic single pass).
+  const _urlFlag = (name) => { try { return new URLSearchParams(window.location.search).get(name); } catch (_) { return null; } };
+  let _denseCellSkipEnabled = _urlFlag('denseCells') === '1';
   function setCellSkip(on) {
-    const m = _activeVolumeEntry?.svrManager;
-    if (!m) return false;
-    m.cellSkipEnabled = Boolean(on);
-    m.updateUniforms();
+    const e = _activeVolumeEntry;
+    if (!e) return false;
+    if (e.svrManager) {
+      const m = e.svrManager;
+      m.cellSkipEnabled = Boolean(on);
+      m.updateUniforms();
+      _scheduleFrame();
+      return Boolean(m.cellMap);
+    }
+    _denseCellSkipEnabled = Boolean(on);
+    if (e.denseCells && material) {
+      if (_denseCellSkipEnabled) { material.defines.CELL_SKIP = 1; material.uniforms.cellMap.value = e.denseCells.map; material.uniforms.cellDim.value.copy(e.denseCells.dim); }
+      else { delete material.defines.CELL_SKIP; material.uniforms.cellMap.value = null; }
+      material.needsUpdate = true;
+    }
     _scheduleFrame();
-    return Boolean(m.cellMap);
+    return Boolean(e.denseCells);
   }
 
   /**
@@ -2959,6 +3004,17 @@ const VolumeViewer = (() => {
         material.uniforms.mapOccupancy.value = null;
       }
     }
+    if (!entry.svrManager) {
+      // A dense volume's fine cells (an atlas published its own through updateUniforms).
+      if (entry.denseCells && _denseCellSkipEnabled) {
+        material.defines.CELL_SKIP = 1;
+        material.uniforms.cellMap.value = entry.denseCells.map;
+        material.uniforms.cellDim.value.copy(entry.denseCells.dim);
+      } else {
+        delete material.defines.CELL_SKIP;
+        material.uniforms.cellMap.value = null;
+      }
+    }
     material.needsUpdate = true;
     material.uniforms.numChannels.value = Math.min(channels, 4);
 
@@ -3050,6 +3106,16 @@ const VolumeViewer = (() => {
       _transitionMaterial.uniforms.svrPageCount.value = 0;
     }
     _transitionMaterial.uniforms.volumeVoxels.value.set(Math.max(1, entry.width || 1), Math.max(1, entry.height || 1), Math.max(1, entry.depth || 1));
+    if (!entry.svrManager) {
+      if (entry.denseCells && _denseCellSkipEnabled) {
+        _transitionMaterial.defines.CELL_SKIP = 1;
+        _transitionMaterial.uniforms.cellMap.value = entry.denseCells.map;
+        _transitionMaterial.uniforms.cellDim.value.copy(entry.denseCells.dim);
+      } else {
+        delete _transitionMaterial.defines.CELL_SKIP;
+        _transitionMaterial.uniforms.cellMap.value = null;
+      }
+    }
     if (entry.occupancyMap) {
       _transitionMaterial.defines.HAS_OCCUPANCY = 1;
       _transitionMaterial.uniforms.mapOccupancy.value = entry.occupancyMap;
@@ -3152,6 +3218,8 @@ const VolumeViewer = (() => {
     if (Array.isArray(entry.textures) && !entry.svrManager) entry.textures.forEach(t => t?.dispose?.());
     entry.occupancyMap?.dispose?.();
     entry.occupancyMap = null;
+    entry.denseCells?.dispose?.();
+    entry.denseCells = null;
     entry.data = null;
     entry.rawChannelData = null;
     entry.channelData = null;
@@ -5099,7 +5167,7 @@ const VolumeViewer = (() => {
   const RAW_DISPLAY_UNIFORMS = new Set(['exposure', 'rawFullSize']);
   for (let c = 0; c < 4; c++) for (const n of ['color', 'min', 'max', 'gamma', 'opacity', 'en']) RAW_DISPLAY_UNIFORMS.add(n + c);
   let _rawCache = null;
-  let _rawCacheEnabled = true;
+  let _rawCacheEnabled = (() => { try { return new URLSearchParams(window.location.search).get('rawCache') !== '0'; } catch (_) { return true; } })();
   let _rawCacheUnsupported = false;
   let _dataVersion = 0;          // bumped whenever voxels of the dense texture / entry change
   const _rawStats = { marches: 0, recolours: 0 };
@@ -5312,13 +5380,13 @@ const VolumeViewer = (() => {
     const size = renderer.getDrawingBufferSize(_frameSize);
     const e = _activeVolumeEntry;
     const m = e && e.svrManager;
-    const path = m ? `atlas ${m.compressed ? 'BC' : m.split ? 'split' : 'RGBA'}${m.cellMap ? ' +cells' : ''}` : 'dense';
+    const path = m ? `atlas ${m.compressed ? 'BC' : m.split ? 'split' : 'RGBA'}${m.cellMap ? ' +cells' : ''}` : (e && e.denseCells && _denseCellSkipEnabled ? 'dense +cells' : 'dense');
     const st = getRawCacheStats();
     _perfOverlay.textContent = `${_perfState.ema.toFixed(1)} ms  (${(1000 / Math.max(1, _perfState.ema)).toFixed(0)} fps between frames)
 `
       + `buffer ${size.x}x${size.y}  ratio ${renderer.getPixelRatio().toFixed(2)}
 `
-      + `mode ${material.uniforms.renderMode.value}  march ${st.marchScale ? (st.marchScale * 100).toFixed(0) + '%' : '-'}  ${path}
+      + `mode ${material.uniforms.renderMode.value}  march ${st.marchScale ? (st.marchScale * 100).toFixed(0) + '%' : '-'}  ${path}  cache ${st.enabled ? 'on' : 'off'}
 `
       + `volume ${e ? `${e.width}x${e.height}x${e.depth}` : '-'}  marches ${st.marches}  recolours ${st.recolours}`;
   }
@@ -6940,6 +7008,8 @@ const VolumeViewer = (() => {
         // maps a texture coordinate to the grid so a cell is exactly a brick.
         occScale = new THREE.Vector3(width / (bs * occNx), height / (bs * occNy), depth / (bs * occNz));
       }
+      // A dense volume gets fine empty-space cells too (an atlas has them in SVRManager).
+      const denseCells = !streamSvrManager && _urlFlag('denseCells') === '1' ? _createDenseCells(width, height, depth, orderedBricks) : null;
 
       const floors = _floorsFromManifest(tpSelection.manifest, channels, tpSelection.histograms);
       const floorLuts = _floorLuts(floors, channels);
@@ -6952,6 +7022,7 @@ const VolumeViewer = (() => {
         data: null,
         occupancyMap: occTex,
         occupancyScale: occScale,
+        denseCells,
         width,
         height,
         depth,
@@ -7086,7 +7157,8 @@ const VolumeViewer = (() => {
             // reads (widened to whole blocks and raised by the measured overshoot when BC).
             cells: streamSvrManager?.cellMap && typeof CellMax !== 'undefined'
               ? { apron: bordered ? 1 : 0, margin: streamSvrManager.compressed ? CellMax.BC_MARGIN : 0, blocks: Boolean(streamSvrManager.compressed) }
-              : null
+              // A dense brick is delivered as its interior box: cells of that box alone.
+              : (denseCells ? { apron: 0, margin: 0, blocks: false, interior: true } : null)
           },
           onBrickError: ({ bx, by, bz, channel, error } = {}) => {
             // BUG-011 (Rule 1.1): a dropped brick surfaces in the status, not silently.
@@ -7108,6 +7180,7 @@ const VolumeViewer = (() => {
               ok = streamSvrManager.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd, row.cellMax);
             } else {
               _updateGPUTextureRegion(texture3D, dims, row.bx * bs, row.by * bs, row.bz * bs, bw, bh, bd, row.data);
+              denseCells?.set(row.bx, row.by, row.bz, row.cellMax);
               ok = true;
             }
             if (!ok) uploadFailed.add(brickKey(row));
@@ -7333,6 +7406,79 @@ const VolumeViewer = (() => {
       renderer?.properties?.remove?.(tex);
     });
     return tex;
+  }
+
+  /**
+   * Fine empty-space cells of a DENSE volume (an atlas keeps them in SVRManager). One RGBA8
+   * texel per 8³ voxels holding the raw per-channel maximum of every voxel a trilinear
+   * sample inside the cell can read. A dense brick arrives as its interior box alone, so
+   * its cells (CellMax, no apron) see only their own voxels; the footprint of a sample
+   * reaches one voxel into the neighbouring cell, so the published texture is the cell
+   * maxima dilated by one cell in each direction (3×3×3). A brick still in flight reads
+   * 255 (never skipped); a brick the level does not store reads 0 (empty).
+   */
+  function _createDenseCells(width, height, depth, activeBricks) {
+    if (typeof CellMax === 'undefined') return null;
+    const n = CellMax.CELL;
+    const cnx = Math.max(1, Math.ceil(width / n)), cny = Math.max(1, Math.ceil(height / n)), cnz = Math.max(1, Math.ceil(depth / n));
+    const raw = new Uint8Array(cnx * cny * cnz * 4);
+    const data = new Uint8Array(cnx * cny * cnz * 4);
+    const per = VOLUME_BRICK_SIZE / n;
+    const fill = (bx, by, bz, value) => {
+      for (let z = bz * per; z < Math.min(cnz, (bz + 1) * per); z++)
+        for (let y = by * per; y < Math.min(cny, (by + 1) * per); y++)
+          for (let x = bx * per; x < Math.min(cnx, (bx + 1) * per); x++) {
+            const o = ((z * cny + y) * cnx + x) * 4;
+            raw[o] = raw[o + 1] = raw[o + 2] = raw[o + 3] = value;
+          }
+    };
+    for (const b of activeBricks) fill(b.bx, b.by, b.bz, 255);
+    const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
+    const map = new TextureClass(data, cnx, cny, cnz);
+    map.format = THREE.RGBAFormat;
+    map.type = THREE.UnsignedByteType;
+    map.minFilter = THREE.NearestFilter;
+    map.magFilter = THREE.NearestFilter;
+    map.unpackAlignment = 1;
+    let timer = null;
+    let disposed = false;
+    const publish = () => {
+      timer = null;
+      if (disposed) return;
+      for (let z = 0; z < cnz; z++) for (let y = 0; y < cny; y++) for (let x = 0; x < cnx; x++) {
+        const o = ((z * cny + y) * cnx + x) * 4;
+        let r = 0, g = 0, b = 0, a = 0;
+        for (let dz = Math.max(0, z - 1); dz <= Math.min(cnz - 1, z + 1); dz++)
+          for (let dy = Math.max(0, y - 1); dy <= Math.min(cny - 1, y + 1); dy++)
+            for (let dx = Math.max(0, x - 1); dx <= Math.min(cnx - 1, x + 1); dx++) {
+              const q = ((dz * cny + dy) * cnx + dx) * 4;
+              if (raw[q] > r) r = raw[q];
+              if (raw[q + 1] > g) g = raw[q + 1];
+              if (raw[q + 2] > b) b = raw[q + 2];
+              if (raw[q + 3] > a) a = raw[q + 3];
+            }
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = a;
+      }
+      map.needsUpdate = true;
+      _scheduleFrame();
+    };
+    return {
+      map, dim: new THREE.Vector3(cnx, cny, cnz),
+      /** A brick's cells (null: the brick stays at 255). Published at most every 250 ms. */
+      set(bx, by, bz, cells) {
+        if (cells instanceof Uint8Array && cells.length === per * per * per * 4) {
+          for (let z = 0; z < per; z++) for (let y = 0; y < per; y++) for (let x = 0; x < per; x++) {
+            const gx = bx * per + x, gy = by * per + y, gz = bz * per + z;
+            if (gx >= cnx || gy >= cny || gz >= cnz) continue;
+            const o = ((gz * cny + gy) * cnx + gx) * 4, q = ((z * per + y) * per + x) * 4;
+            raw[o] = cells[q]; raw[o + 1] = cells[q + 1]; raw[o + 2] = cells[q + 2]; raw[o + 3] = cells[q + 3];
+          }
+        }
+        if (!timer) timer = setTimeout(publish, 250);
+      },
+      flush() { if (timer) clearTimeout(timer); publish(); },
+      dispose() { disposed = true; if (timer) clearTimeout(timer); map.dispose(); }
+    };
   }
 
   /**

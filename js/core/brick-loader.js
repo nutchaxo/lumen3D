@@ -2548,7 +2548,8 @@ const BrickLoader = (() => {
     }
     const encodeMsg = compose.encode ? { format: 'bc', channels: compose.channels, w: box.w, h: box.h, d: box.d } : null;
     // Cell maxima describe a box from the brick's origin; a sub-box from elsewhere has none.
-    const cellsMsg = compose.cells && (!region || (region.x0 === 0 && region.y0 === 0 && region.z0 === 0))
+    // (`interior`: the region IS the interior box of a dense brick, whose origin is the cells'.)
+    const cellsMsg = compose.cells && (compose.cells.interior || !region || (region.x0 === 0 && region.y0 === 0 && region.z0 === 0))
       ? { w: box.w, h: box.h, d: box.d, apron: compose.cells.apron ? 1 : 0, margin: compose.cells.margin | 0, blocks: Boolean(compose.cells.blocks) }
       : null;
     for (let restart = 0; restart < RETRY_ATTEMPTS; restart++) {

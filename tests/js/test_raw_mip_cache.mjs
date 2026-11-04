@@ -45,7 +45,9 @@ assert.match(frag, /#ifdef RAW_READ[\s\S]*?vec4 rawMax = texture\(rawMip, gl_Fra
 assert.match(frag, /vec4 mipV = channelValues\(rawMax\);/);
 assert.match(frag, /#ifdef RAW_OUT\s+mip = max\(mip, val\);/, 'raw march keeps the undisplayed value');
 assert.match(frag, /#ifdef RAW_OUT\s+fragColor = mip;\s+return;\s+#endif/, 'raw march writes the maxima');
-assert.match(frag, /#ifdef RAW_OUT\s+gFineEmpty = all\(lessThanEqual\(cellMax, vec4\(0\.0\)\)\);/, 'raw march: a cell is empty only at raw 0, whatever the window');
+assert.match(frag, /bool empty = all\(lessThanEqual\(gFineMax, vec4\(0\.0\)\)\) \|\| all\(lessThanEqual\(gFineMax \+ vec4\(RAW_SKIP_MARGIN\), gRayMax\)\);/, 'raw march: a cell is empty at raw 0 or when it cannot raise the ray maximum, whatever the window');
+assert.match(frag, /#define RAW_SKIP_MARGIN 0\.002/);
+assert.match(frag, /mip = max\(mip, val\);\s+#if defined\(CELL_SKIP\) && !defined\(PICK_MODE\)\s+gRayMax = mip;/, 'the ray maximum is visible to the cell test');
 // The recolour must end exactly like the march does in mode 1.
 assert.match(frag, /if \(mipTotal < 0\.004\) discard;/);
 assert.match(frag, /\* exposure;\s+fragColor = vec4\(mipRGB, fragAlpha\(mipRGB, 0\.0\)\);/);

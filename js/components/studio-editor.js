@@ -543,7 +543,7 @@ const StudioEditor = (() => {
             <i data-lucide="rotate-ccw"></i>
           </button>
           <input type="range" id="studio-rotation-slider" min="-180" max="180" step="1" value="0" style="flex: 0 0 148px; min-width: 148px;">
-          <span class="text-xs font-mono" id="studio-rotation-val" style="width: 68px; min-width: 68px; text-align: right; display: inline-block; flex-shrink: 0;">0 deg</span>
+          <span class="text-xs font-mono" id="studio-rotation-val" style="width: 68px; min-width: 68px; text-align: right; display: inline-block; flex-shrink: 0;">0°</span>
         </div>
       `);
       document.getElementById('studio-undo')?.addEventListener('click', _undo);
@@ -554,13 +554,13 @@ const StudioEditor = (() => {
         _doc.viewport.rotation = 0;
         const slider = document.getElementById('studio-rotation-slider');
         if (slider) slider.value = 0;
-        document.getElementById('studio-rotation-val').textContent = '0 deg';
+        document.getElementById('studio-rotation-val').textContent = '0°';
         _viewportChanged();
       });
       document.getElementById('studio-rotation-slider')?.addEventListener('input', (event) => {
         if (!_doc) return;
         _doc.viewport.rotation = (Number(event.target.value) || 0) * Math.PI / 180;
-        document.getElementById('studio-rotation-val').textContent = `${event.target.value} deg`;
+        document.getElementById('studio-rotation-val').textContent = `${event.target.value}°`;
         _viewportChanged(true);
       });
     }
@@ -622,7 +622,7 @@ const StudioEditor = (() => {
     const slider = document.getElementById('studio-rotation-slider');
     const label = document.getElementById('studio-rotation-val');
     if (slider) slider.value = 0;
-    if (label) label.textContent = '0 deg';
+    if (label) label.textContent = '0°';
   }
 
   function _renderAll() {
@@ -1349,7 +1349,7 @@ const StudioEditor = (() => {
       const deg = Math.round((_doc.viewport.rotation * 180 / Math.PI));
       if (slider) slider.value = String(((deg + 540) % 360) - 180);
       const label = document.getElementById('studio-rotation-val');
-      if (label) label.textContent = `${Math.round(_doc.viewport.rotation * 180 / Math.PI)} deg`;
+      if (label) label.textContent = `${Math.round(_doc.viewport.rotation * 180 / Math.PI)}°`;
       _viewportChanged(true);
       return;
     }
@@ -1747,13 +1747,13 @@ const StudioEditor = (() => {
       ${['line', 'arrow', 'distance', 'scalebar'].includes(layer.type) ? _capControls(style) : ''}
       ${layer.type === 'scalebar' ? _scaleBarControls(layer) : ''}
       <div class="studio-property-row">
-        <button class="btn btn-outline btn-sm" id="prop-align-left">Align L</button>
-        <button class="btn btn-outline btn-sm" id="prop-align-center">Center</button>
-        <button class="btn btn-outline btn-sm" id="prop-align-right">Align R</button>
+        <button class="btn btn-outline btn-sm" id="prop-align-left" data-i18n="studio.alignLeft">Left</button>
+        <button class="btn btn-outline btn-sm" id="prop-align-center" data-i18n="studio.alignCenter">Center</button>
+        <button class="btn btn-outline btn-sm" id="prop-align-right" data-i18n="studio.alignRight">Right</button>
       </div>
       <div class="studio-property-row">
-        <button class="btn btn-outline btn-sm" id="prop-group">Group</button>
-        <button class="btn btn-outline btn-sm" id="prop-delete"><i data-lucide="trash-2"></i></button>
+        <button class="btn btn-outline btn-sm" id="prop-group" data-i18n="studio.group">Group</button>
+        <button class="btn btn-outline btn-sm" id="prop-delete" title="Delete" aria-label="Delete" data-i18n-title="studio.deleteLayer" data-i18n-aria="studio.deleteLayer"><i data-lucide="trash-2"></i></button>
       </div>
       <div class="studio-measurement-readout">${_escape(_measurementLabel(layer) || '')}</div>
     `;

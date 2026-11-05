@@ -62,12 +62,12 @@
         <div class="adm-field"><label class="adm-field-label" for="setup-name" data-i18n="wizard.instanceName">Nom de l'instance</label>
           <input type="text" id="setup-name" class="adm-field-input" placeholder="Lumen3D"></div>
         <div class="adm-field"><label class="adm-field-label" for="setup-org" data-i18n="wizard.org">Organisation (option.)</label>
-          <input type="text" id="setup-org" class="adm-field-input" placeholder="Mon laboratoire"></div>
+          <input type="text" id="setup-org" class="adm-field-input" placeholder="Your organization" data-i18n-placeholder="wizard.orgPlaceholder"></div>
         <div style="display:flex;gap:10px">
           <div class="adm-field" style="flex:1"><label class="adm-field-label" for="setup-spec-s" data-i18n="wizard.specimenSingular">Objet (singulier)</label>
-            <input type="text" id="setup-spec-s" class="adm-field-input" placeholder="sample"></div>
+            <input type="text" id="setup-spec-s" class="adm-field-input" placeholder="sample" data-i18n-placeholder="wizard.specimenSingularPlaceholder"></div>
           <div class="adm-field" style="flex:1"><label class="adm-field-label" for="setup-spec-p" data-i18n="wizard.specimenPlural">Objet (pluriel)</label>
-            <input type="text" id="setup-spec-p" class="adm-field-input" placeholder="samples"></div>
+            <input type="text" id="setup-spec-p" class="adm-field-input" placeholder="samples" data-i18n-placeholder="wizard.specimenPluralPlaceholder"></div>
         </div>
       </div>
     </div>
@@ -83,9 +83,9 @@
       <p class="adm-gate-intro" data-i18n="wizard.textsIntro">Derniers réglages : accroche et mention de pied de page.</p>
       <div class="adm-gate-form">
         <div class="adm-field"><label class="adm-field-label" for="setup-tagline" data-i18n="wizard.tagline">Accroche</label>
-          <input type="text" id="setup-tagline" class="adm-field-input" placeholder="3D Imaging Data Viewer"></div>
+          <input type="text" id="setup-tagline" class="adm-field-input" placeholder="A short tagline" data-i18n-placeholder="wizard.taglinePlaceholder"></div>
         <div class="adm-field"><label class="adm-field-label" for="setup-copyright" data-i18n="wizard.copyright">Pied de page</label>
-          <input type="text" id="setup-copyright" class="adm-field-input" placeholder="© Mon organisation"></div>
+          <input type="text" id="setup-copyright" class="adm-field-input" placeholder="© Your organization" data-i18n-placeholder="wizard.copyrightPlaceholder"></div>
       </div>
     </div>
 
@@ -356,7 +356,7 @@
           <div class="preview-frame-wrap" id="preview-frame-wrap" style="display:none">
             <!-- SEC-009: same-origin first-party viewer; allow-scripts + allow-same-origin
                  required (ES modules + localStorage). allow-forms/popups withheld. -->
-            <iframe class="preview-iframe" id="preview-frame" title="Dataset Preview"
+            <iframe class="preview-iframe" id="preview-frame" title="Dataset preview" data-i18n-title="admin.previewFrameTitle"
                     sandbox="allow-scripts allow-same-origin"></iframe>
           </div>
 
@@ -416,7 +416,7 @@
                 <div class="config-section-title" data-i18n="admin.secIdentification">Identification</div>
                 <div class="config-field">
                   <label class="config-label" for="f-name" data-i18n="admin.displayName">Nom d'affichage</label>
-                  <input class="config-input" type="text" id="f-name" placeholder="Ex: Egfl7-eGFP E8.5 Em1">
+                  <input class="config-input" type="text" id="f-name" placeholder="e.g. Sample A, replicate 1" data-i18n-placeholder="admin.displayNamePlaceholder">
                 </div>
                 <div class="config-row">
                   <div class="config-field">
@@ -644,7 +644,7 @@
      underneath. Rendered by js/pages/admin/upload-dock.js; hidden whenever there
      is no import to report. -->
 <div id="upload-dock" class="upload-dock" data-size="bar" hidden
-     role="region" aria-live="polite" aria-label="Import de datasets"></div>
+     role="region" aria-live="polite" aria-label="Dataset import" data-i18n-aria="upl.dockTitle"></div>
 
 <!-- Exit guard: shown when an in-app navigation would kill a running transfer. -->
 <div id="upload-exit-overlay" class="upl-exit" hidden role="alertdialog"

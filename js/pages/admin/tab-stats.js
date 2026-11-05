@@ -8,9 +8,10 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, el, refreshIcons } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, el, refreshIcons, toast } from './shared.js';
 
 let _stats = null;
+let _failed = false;
 let _sortKey = 'total';
 let _sortDir = -1;
 
@@ -58,6 +59,13 @@ function fmtDate(iso) {
 function render() {
   const root = el('stats-root');
   if (!root) return;
+  if (!_stats && _failed) {
+    root.innerHTML = `<div class="adm-loading" role="alert">
+      <p class="adm-muted">${escHtml(t('admin.statsLoadFailed', 'Could not load the statistics.'))}</p>
+      <button class="adm-btn" id="stats-retry">${escHtml(t('admin.retry', 'Retry'))}</button></div>`;
+    el('stats-retry')?.addEventListener('click', () => { _failed = false; render(); load(); });
+    return;
+  }
   if (!_stats) { root.innerHTML = `<div class="adm-loading"><span class="spinner spinner-lg"></span></div>`; return; }
 
   const g = _stats.global || {};
@@ -133,7 +141,12 @@ function render() {
 
 async function load() {
   const data = await apiFetch(`${API_ADMIN}?action=stats`);
-  if (data) _stats = data;
+  if (data && typeof data === 'object' && !data.error) { _stats = data; _failed = false; }
+  else {
+    _failed = true;
+    // Figures already on screen stay, but may now be stale: say so.
+    if (_stats) toast(t('admin.statsLoadFailed', 'Could not load the statistics.'), 'error');
+  }
   render();
 }
 

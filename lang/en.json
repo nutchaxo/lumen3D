@@ -12,7 +12,22 @@
     "download": "Download",
     "search": "Search...",
     "noResults": "No results found",
-    "backToHome": "Back to home"
+    "backToHome": "Back to home",
+    "errNetwork": "The server could not be reached. Check the connection and try again.",
+    "errNotFound": "Some of this dataset's files are missing on the server.",
+    "errAccess": "The server refused access to this dataset.",
+    "errServer": "The server ran into a problem. Try again in a moment.",
+    "errDamaged": "This dataset's files are damaged or incomplete. Its administrator needs to check it.",
+    "errMetadata": "This dataset's description is invalid.",
+    "errGpuMemory": "Not enough GPU memory for this quality. Choose a lower quality or close other tabs.",
+    "errGpuLost": "The graphics card stopped responding. Reload the page.",
+    "errNoBricks": "No part of the volume could be loaded at this quality.",
+    "errReadFailed": "Part of the dataset could not be read. Check the connection and try again.",
+    "errTimepoint": "This time point could not be loaded.",
+    "errBusy": "Another operation is still running. Try again when it has finished.",
+    "errSaveRefused": "The browser refused to save the file. Choose another location or allow downloads for this site.",
+    "errDiskFull": "There is not enough free disk space to save the file.",
+    "errUnknown": "Something went wrong. Try again; if it keeps happening, reload the page."
   },
   "types": {
     "3d": {
@@ -61,7 +76,8 @@
     "invalidStudioJson": "Invalid Studio JSON.",
     "maxPanels": "Maximum of {count} panels reached.",
     "noMultiChannel": "Dataset does not have multiple channels to decompose.",
-    "workspaceSaveFailed": "Workspace could not be saved (browser storage is full or blocked). Use \"Export workspace\" instead."
+    "workspaceSaveFailed": "Workspace could not be saved (browser storage is full or blocked). Use \"Export workspace\" instead.",
+    "workspaceRestoreFailed": "This saved workspace could not be applied."
   },
   "download": {
     "title": "Download Center",
@@ -165,7 +181,9 @@
     "typesTitle": "Data Types",
     "typesSubtitle": "Navigate across our dataset collection",
     "browseAll": "Browse All",
-    "viewCollection": "View Collection"
+    "viewCollection": "View Collection",
+    "loadFailed": "Could not load the datasets",
+    "retry": "Retry"
   },
   "explorer": {
     "title": "Data Explorer",
@@ -200,7 +218,12 @@
     "sortNameAsc": "Name (A-Z)",
     "sortNameDesc": "Name (Z-A)",
     "sortNewest": "Newest first",
-    "sortStage": "Stage (earliest)"
+    "sortStage": "Stage (earliest)",
+    "loadFailed": "Could not load the datasets",
+    "loadFailedHint": "The catalog is unreachable right now. Check your connection and try again.",
+    "retry": "Retry",
+    "noDatasets": "No datasets yet",
+    "noDatasetsHint": "Datasets will appear here once they are published."
   },
   "viewer": {
     "controls": "Controls",
@@ -455,7 +478,18 @@
       "summaryQ30": "{res} · WebP Q30: {size}"
     },
     "resDowngradeHeld": "The other {held} MB of the {total} MB budget hold volumes that stay loaded.",
-    "errNoWebgl": "This browser refused to give the page a 3D (WebGL) context. After a graphics driver crash, a browser blocks WebGL for the site until it is fully restarted: close the browser completely (on Android: Settings › Apps › Chrome › Force stop) and open the page again. If it persists, check that hardware acceleration is on."
+    "errNoWebgl": "This browser refused to give the page a 3D (WebGL) context. After a graphics driver crash, a browser blocks WebGL for the site until it is fully restarted: close the browser completely (on Android: Settings › Apps › Chrome › Force stop) and open the page again. If it persists, check that hardware acceleration is on.",
+    "menu": "Menu",
+    "zstackRange": "Range",
+    "zstackInterval": "Interval",
+    "denoising": "Denoising…",
+    "workspaceNotApplied": "This saved view could not be applied: the dataset is shown as it was opened.",
+    "tierMax": "Max",
+    "tierExtra": "Extra",
+    "tierHigh": "High",
+    "tierMedium": "Medium",
+    "tierLow": "Low",
+    "tierQ30": "Q30"
   },
   "compare": {
     "title": "Comparison Mode",
@@ -521,7 +555,8 @@
     "unknownDataset": "Dataset \"{id}\" is not in the catalog.",
     "uncalibrated": "uncalibrated",
     "retry": "Retry",
-    "noDatasets": "The catalog has no dataset yet."
+    "noDatasets": "The catalog has no dataset yet.",
+    "loadFailed": "Could not load the datasets."
   },
   "upload": {
     "title": "Upload and View",
@@ -823,7 +858,12 @@
     "exportCurrent": "This picture",
     "loadingNativeExport": "Loading the native lossless picture…",
     "nativeExportFailed": "The native picture could not be loaded; nothing was exported.",
-    "loadingLosslessExport": "Loading the lossless picture…"
+    "loadingLosslessExport": "Loading the lossless picture…",
+    "alignLeft": "Left",
+    "alignCenter": "Center",
+    "alignRight": "Right",
+    "group": "Group",
+    "deleteLayer": "Delete layer"
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -1218,7 +1258,75 @@
     "lockoutStore": "Sign-in is unavailable: the server cannot record attempts. Check the permissions of the api/ folder.",
     "statVisitsHint": "One per browser tab, on any public page (admin panel and embedded pages excluded).",
     "statViewsHint": "One per dataset opened in a browser tab.",
-    "statDownloadsHint": "One per complete download of a file from a dataset's download/ folder."
+    "statDownloadsHint": "One per complete download of a file from a dataset's download/ folder.",
+    "navStorage": "Storage",
+    "close": "Close",
+    "storageUnits": "B|KB|MB|GB|TB",
+    "storageAgeNow": "just now",
+    "storageAgeMin": "{n} min ago",
+    "storageBarAria": "Volume breakdown",
+    "storageSegData": "Published data",
+    "storageSegUploads": "Imports & trash",
+    "storageSegCode": "Platform & code",
+    "storageSegOther": "Other on the volume",
+    "storageSegFree": "Available",
+    "storageVolume": "Platform volume",
+    "storageScanned": "measured",
+    "storageTotal": "Total capacity",
+    "storageUsed": "Used",
+    "storageOfVolume": "of capacity",
+    "storageFree": "Available",
+    "storageNote": "The volume is the one hosting the installation. If it is shared with other services, \"Other on the volume\" groups them, and \"Available\" is the real free space of the volume (a stricter hosting quota does not show here). Hard-linked files are counted once.",
+    "storageDatasets": "dataset(s)",
+    "storageDataCard": "Published data",
+    "storageEmpty": "No data.",
+    "storageUploadsCard": "Imports & trash",
+    "storageCodeCard": "Platform & code",
+    "storageNoDataset": "No published dataset.",
+    "storageByDataset": "By dataset",
+    "storageColType": "Type",
+    "storageColSize": "Size",
+    "storageColFiles": "Files",
+    "storageColShare": "Share",
+    "storageColParts": "Breakdown by folder",
+    "storageMeasuring": "Measuring storage…",
+    "storageRefresh": "Recompute",
+    "storageOtherData": "Other files",
+    "storageLoadFailed": "Could not measure the storage.",
+    "storageRetry": "Retry",
+    "storageCodeModules": "Plugins",
+    "storageCodeVendor": "Bundled libraries",
+    "storageCodeScripts": "Scripts",
+    "storageCodeCss": "Stylesheets",
+    "storageCodeApi": "Server API",
+    "storageCodeLang": "Translations",
+    "storageCodeConfig": "Configuration",
+    "storageCodeChangelog": "Release notes",
+    "storageCodeDocs": "Documentation",
+    "storageCodePreprocess": "Preprocessing pipeline",
+    "storageCodeScriptsDir": "Pipeline scripts",
+    "storageCodeTools": "Build tools",
+    "storageCodeTests": "Tests",
+    "storageCodeMarketplace": "Signed plugin catalog",
+    "storageCodeLogs": "Server logs",
+    "storageCodeGit": "Git history",
+    "storageCodeVenv": "Local Python environment",
+    "storageCodePycache": "Python cache",
+    "storageCodeAssets": "Graphic assets",
+    "storageCodeDist": "Generated packages",
+    "storageCodeAudits": "Audits",
+    "storageCodeRoot": "Files at the root",
+    "storageUpStaging": "Imports in progress",
+    "storageUpTrash": "Trash (60 days)",
+    "storageUpMigrations": "Data migrations",
+    "storageUpState": "Import journals",
+    "storageUpOther": "Other",
+    "statsLoadFailed": "Could not load the statistics.",
+    "loginNetworkError": "Cannot reach the server. Check the connection and try again.",
+    "loginServerError": "The server could not process the sign-in (HTTP {status}). Try again, or check the server logs.",
+    "sessionChanged": "Your session changed in another tab. Reload this page and try again.",
+    "previewFrameTitle": "Dataset preview",
+    "displayNamePlaceholder": "e.g. Sample A, replicate 1"
   },
   "upl": {
     "title": "Import datasets",
@@ -2083,7 +2191,12 @@
     "plTools": "Tools",
     "installing2": "Installing plugins…",
     "installedN": "{n} plugin(s) installed.",
-    "failed": "failed"
+    "failed": "failed",
+    "orgPlaceholder": "Your organization",
+    "specimenSingularPlaceholder": "sample",
+    "specimenPluralPlaceholder": "samples",
+    "taglinePlaceholder": "A short tagline",
+    "copyrightPlaceholder": "© Your organization"
   },
   "mkt": {
     "title": "Plugin catalog",

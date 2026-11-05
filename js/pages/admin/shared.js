@@ -31,7 +31,7 @@ export const API_SITE      = 'api/site.php';   // white-label config (instance/t
 export const API_MEDIA     = 'api/media.php';  // media library (operator image uploads)
 export const API_UPLOAD    = 'api/upload.php'; // dataset import (staging, chunked + resumable)
 
-// Translated string for `k`, or `def` (the original French) on miss / no I18n.
+// Translated string for `k`, or `def` on miss / no I18n.
 export function t(k, def, params) {
   if (!_I18n || typeof _I18n.t !== 'function') return def;
   const v = _I18n.t(k, params);
@@ -67,14 +67,71 @@ function _requestInit(options) {
   };
 }
 
+// A write refused for its CSRF token (another tab signed in again and rotated it)
+// is retried ONCE with the current token when the body can be re-sent as is.
+// Streams, Blobs and raw buffers are never replayed.
+function _isCsrfRefusal(status, text) {
+  return status === 403 && /csrf/i.test(text);
+}
+
+function _replayable(options) {
+  const b = options && options.body;
+  return b === undefined || b === null || typeof b === 'string';
+}
+
+let _csrfRefresh = null;
+// 'renewed' | 'signed-out' | 'failed'
+function _refreshCsrf() {
+  if (!_csrfRefresh) {
+    _csrfRefresh = (async () => {
+      try {
+        const res = await fetch(`${API_AUTH}?action=status`, { credentials: 'same-origin' });
+        const data = JSON.parse(await res.text());
+        if (data && data.authenticated && data.csrf) { setCsrf(data.csrf); return 'renewed'; }
+        if (data && data.authenticated === false) return 'signed-out';
+      } catch { /* offline or non-JSON: nothing to renew */ }
+      return 'failed';
+    })().finally(() => { _csrfRefresh = null; });
+  }
+  return _csrfRefresh;
+}
+
+let _csrfNoticeAt = 0;
+function _csrfLostNotice() {
+  const now = Date.now();
+  if (now - _csrfNoticeAt < 5000) return;
+  _csrfNoticeAt = now;
+  try { toast(t('admin.sessionChanged', 'Your session changed in another tab. Reload this page and try again.'), 'error'); } catch { /* no DOM: the caller still sees the 403 */ }
+}
+
+async function _request(url, options) {
+  let res = await fetch(url, _requestInit(options));
+  let text = await res.text();
+  if (_isCsrfRefusal(res.status, text)) {
+    if (_replayable(options)) {
+      const before = _csrf;
+      const state = await _refreshCsrf();
+      if (state === 'signed-out') {
+        if (typeof _onUnauthorized === 'function') _onUnauthorized();
+        return { res, text };
+      }
+      if (state === 'renewed' && _csrf !== before) {
+        res = await fetch(url, _requestInit(options));
+        text = await res.text();
+      }
+    }
+    if (_isCsrfRefusal(res.status, text)) _csrfLostNotice();
+  }
+  return { res, text };
+}
+
 export async function apiFetch(url, options = {}) {
   try {
-    const res = await fetch(url, _requestInit(options));
+    const { res, text } = await _request(url, options);
     if (res.status === 401) {
       if (typeof _onUnauthorized === 'function') _onUnauthorized();
       return null;
     }
-    const text = await res.text();
     if (!res.ok) console.warn('API: HTTP', res.status, url);
     try {
       return JSON.parse(text);
@@ -96,10 +153,10 @@ export async function apiFetch(url, options = {}) {
 // elsewhere: sent back as ?rev= on a save, it turns a lost update into a 409.
 export async function apiFetchStatus(url, options = {}) {
   try {
-    const res = await fetch(url, _requestInit(options));
+    const { res, text } = await _request(url, options);
     if (res.status === 401 && typeof _onUnauthorized === 'function') _onUnauthorized();
     let data = null;
-    try { data = JSON.parse(await res.text()); } catch { /* non-JSON */ }
+    try { data = JSON.parse(text); } catch { /* non-JSON */ }
     const rev = (res.headers && typeof res.headers.get === 'function') ? res.headers.get('X-Lumen-Rev') : null;
     return { ok: res.ok, status: res.status, data, rev: rev || null };
   } catch (err) {

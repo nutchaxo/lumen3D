@@ -129,11 +129,43 @@ function initNavbarScroll() {
   check();
 }
 
+/* ── Catalog state ───────────────────────────────────────── */
+// A catalog that failed to load and one that is empty both hold no dataset, but only
+// the second is a fact about the collection: counters and cards must not claim "0".
+function catalogUnavailable() {
+  return Boolean(Catalog.getLoadError()) || Catalog.getAll().length === 0;
+}
+
+// A key the dictionary does not have yet reads as the English text, not as the key.
+function _landingTr(key, fallback) {
+  const v = I18n.t(key);
+  return v && v !== key ? v : fallback;
+}
+
+/** Retry button of the featured section: reload the catalog, then redraw what depends on it. */
+async function retryCatalog() {
+  const btn = document.querySelector('#featured-grid [data-catalog-retry]');
+  if (btn) btn.disabled = true;
+  await Catalog.load({ force: true });
+  populateStats();
+  populateTypeCards();
+  populateFeatured();
+  if (window.lucide) lucide.createIcons();
+}
+
 /* ── Stats Counters ──────────────────────────────────────── */
+let _statsObserver = null;
+
 function populateStats() {
+  if (_statsObserver) { _statsObserver.disconnect(); _statsObserver = null; }
+  const ids = ['stat-datasets', 'stat-embryos', 'stat-cells', 'stat-regions'];
+  if (catalogUnavailable()) {
+    ids.forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
+    return;
+  }
   const stats = Catalog.getStats();
 
-  const observer = new IntersectionObserver((entries) => {
+  const observer = _statsObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
         Utils.animateCounter(document.getElementById('stat-datasets'), stats.totalDatasets);
@@ -157,10 +189,14 @@ function populateStats() {
 function populateTypeCards() {
   Utils.applyDatasetTypeLabels(document);
 
+  const unavailable = catalogUnavailable();
   const byType = Catalog.getStats().byType;
   Utils.DATASET_TYPES.forEach(type => {
     const countEl = document.getElementById(`count-${type}`);
-    if (countEl) countEl.textContent = I18n.t('explorer.resultsCount', { count: byType[type] || 0 });
+    if (!countEl) return;
+    // The card stays (it links to the explorer); only its count would be a false claim.
+    countEl.hidden = unavailable;
+    countEl.textContent = unavailable ? '' : I18n.t('explorer.resultsCount', { count: byType[type] || 0 });
   });
 }
 
@@ -168,6 +204,29 @@ function populateTypeCards() {
 function populateFeatured() {
   const grid = document.getElementById('featured-grid');
   if (!grid) return;
+
+  const section = grid.closest('section');
+  const header = section && section.querySelector('.section-header');
+  const failed = Boolean(Catalog.getLoadError());
+  if (catalogUnavailable()) {
+    if (!failed) {
+      // Genuinely empty: nothing to feature, so no heading over an empty grid.
+      if (section) section.hidden = true;
+      grid.innerHTML = '';
+      return;
+    }
+    if (section) section.hidden = false;
+    if (header) header.hidden = true;
+    grid.innerHTML = `
+      <div class="featured-empty" style="grid-column:1/-1;text-align:center;color:var(--text-muted)">
+        <p>${Utils.escapeHtml(_landingTr('landing.loadFailed', 'Could not load the datasets'))}</p>
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:var(--space-3)" data-catalog-retry>${Utils.escapeHtml(_landingTr('landing.retry', 'Retry'))}</button>
+      </div>`;
+    grid.querySelector('[data-catalog-retry]').addEventListener('click', retryCatalog);
+    return;
+  }
+  if (section) section.hidden = false;
+  if (header) header.hidden = false;
 
   const all = Catalog.getAll();
   const newest = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || ''));

@@ -39,12 +39,12 @@
           <i data-lucide="arrow-left"></i>
         </a>
         <div>
-          <div class="viewer-title" id="dataset-title">Loading Dataset...</div>
+          <div class="viewer-title" id="dataset-title">…</div>
           <div class="viewer-subtitle" id="dataset-subtitle">--</div>
         </div>
       </div>
       <!-- Hamburger Menu Button -->
-      <button class="btn btn-icon btn-ghost hamburger-menu-btn" id="btn-hamburger" title="Menu" aria-label="Toggle menu" style="display: none;">
+      <button class="btn btn-icon btn-ghost hamburger-menu-btn" id="btn-hamburger" title="Menu" aria-label="Menu" data-i18n-title="viewer.menu" data-i18n-aria="viewer.menu" style="display: none;">
         <i data-lucide="menu"></i>
       </button>
       <div class="viewer-header-right viewer-toolbar" id="viewer-toolbar">
@@ -106,7 +106,7 @@
         <!-- Sidebar header with collapse button -->
         <div class="sidebar-topbar">
           <span class="sidebar-topbar-title" data-i18n="viewer.controls">Controls</span>
-          <button class="btn btn-icon btn-ghost btn-sm" id="btn-collapse-sidebar" title="Hide sidebar" aria-label="Hide sidebar">
+          <button class="btn btn-icon btn-ghost btn-sm" id="btn-collapse-sidebar" title="Hide sidebar" aria-label="Hide sidebar" data-i18n-title="2d.hideSidebar" data-i18n-aria="2d.hideSidebar">
             <i data-lucide="panel-left-close"></i>
           </button>
         </div>
@@ -295,7 +295,7 @@
                opening pose landed on — the smallest turn from where the volume was. -->
           <div class="zstack-spin-row">
             <span class="zstack-spin-label" id="zstack-spin-label">Rotation</span>
-            <input type="range" class="zstack-spin" id="zstack-spin" min="0" max="360" step="1" value="0" aria-label="Rotation">
+            <input type="range" class="zstack-spin" id="zstack-spin" min="0" max="360" step="1" value="0" aria-labelledby="zstack-spin-label">
             <span class="zstack-spin-deg" id="zstack-spin-deg">0°</span>
           </div>
           <div class="zstack-crop-row zs-full" id="zstack-crop-row">
@@ -307,8 +307,8 @@
           <div class="panel-title" style="margin-bottom:8px;" data-i18n="viewer.stackInfo">Stack Info</div>
           <div class="zstack-info" id="zstack-info">
             <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.slices">Slices</span><span class="zstack-info-value" id="zstack-total-slices">—</span></div>
-            <div class="zstack-info-row"><span class="zstack-info-label">Range</span><span class="zstack-info-value" id="zstack-range">—</span></div>
-            <div class="zstack-info-row"><span class="zstack-info-label">Interval</span><span class="zstack-info-value" id="zstack-interval">—</span></div>
+            <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.zstackRange">Range</span><span class="zstack-info-value" id="zstack-range">—</span></div>
+            <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.zstackInterval">Interval</span><span class="zstack-info-value" id="zstack-interval">—</span></div>
             <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.voxelZ">Voxel Z</span><span class="zstack-info-value" id="zstack-voxel-z">—</span></div>
             <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.channels">Channels</span><span class="zstack-info-value" id="zstack-channels">—</span></div>
           </div>
@@ -325,7 +325,7 @@
       <!-- Canvas Area -->
       <div class="viewer-canvas-container" style="position: relative;">
         <!-- Floating button to reopen the sidebar when collapsed -->
-        <button class="sidebar-reopen-btn" id="btn-reopen-sidebar" title="Show sidebar" aria-label="Show sidebar" style="display:none;">
+        <button class="sidebar-reopen-btn" id="btn-reopen-sidebar" title="Show sidebar" aria-label="Show sidebar" data-i18n-title="2d.showSidebar" data-i18n-aria="2d.showSidebar" style="display:none;">
           <i data-lucide="panel-left-open"></i>
         </button>
         <canvas id="webgl-canvas"></canvas>
@@ -413,7 +413,7 @@
 
         <!-- Quality loading progress (bottom-left) -->
         <div class="quality-stream-progress hidden" id="quality-stream-progress" aria-live="polite">
-          <div class="quality-stream-progress-text" id="quality-stream-progress-text">Medium 0%</div>
+          <div class="quality-stream-progress-text" id="quality-stream-progress-text">0%</div>
           <div class="quality-stream-progress-track">
             <div class="quality-stream-progress-fill" id="quality-stream-progress-fill"></div>
           </div>
@@ -423,7 +423,7 @@
         <div class="blur-progress-toast hidden" id="blur-progress-toast" aria-live="polite">
           <i data-lucide="sparkles" class="blur-progress-icon"></i>
           <div class="blur-progress-body">
-            <div class="blur-progress-label">Denoising...</div>
+            <div class="blur-progress-label" data-i18n="viewer.denoising">Denoising…</div>
             <div class="blur-progress-track">
               <div class="blur-progress-fill" id="blur-progress-fill"></div>
             </div>

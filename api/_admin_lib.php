@@ -416,6 +416,17 @@ function lumen_request_json(): ?array {
     return $d;
 }
 
+/** A value decoded by lumen_json_decode_doc that was a JSON OBJECT (Python dict). */
+function lumen_json_is_object($v): bool {
+    return $v instanceof stdClass
+        || (is_array($v) && $v && array_keys($v) !== range(0, count($v) - 1));
+}
+
+/** A value decoded by lumen_json_decode_doc that was a JSON ARRAY (Python list). */
+function lumen_json_is_list($v): bool {
+    return is_array($v) && (!$v || array_keys($v) === range(0, count($v) - 1));
+}
+
 /** A scalar request field as a string, or null when it is absent or not a string. */
 function lumen_str($v): ?string {
     return is_string($v) ? $v : null;

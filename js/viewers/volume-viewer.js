@@ -373,7 +373,7 @@ const VolumeViewer = (() => {
     if (hit) return hit;
     const p = fetch(`${dir}/manifest.json`, { cache: 'no-cache' })
       .then(resp => {
-        if (!resp.ok) throw new Error(`No brick manifest (${resp.status})`);
+        if (!resp.ok) throw Object.assign(new Error(`No brick manifest (${resp.status})`), { code: 'BRICKS_MANIFEST_HTTP', status: resp.status });
         return resp.json();
       })
       .catch(err => { _manifestCache.delete(dir); throw err; });
@@ -2232,7 +2232,35 @@ const VolumeViewer = (() => {
     }
   }
 
+  let _frameErrorCount = 0;
+  let _frameErrorLast = '';
+
+  /** First occurrence of an error is logged, then every 100th: a persistent fault must not flood the console at 60 Hz. */
+  function _reportFrameError(err) {
+    const text = String(err?.message || err);
+    if (text !== _frameErrorLast) { _frameErrorLast = text; _frameErrorCount = 0; }
+    if (_frameErrorCount % 100 === 0) {
+      console.error(`[VolumeViewer] Frame failed${_frameErrorCount ? ` (${_frameErrorCount} times)` : ''}:`, err);
+    }
+    _frameErrorCount++;
+  }
+
+  // A throw inside a frame used to leave animationId set with no requestAnimationFrame
+  // pending, so _scheduleFrame never woke the loop again: the viewer froze for good.
   function _animate() {
+    try {
+      _animateFrame();
+    } catch (err) {
+      _reportFrameError(err);
+      // The failed frame did not reach its own re-arm. Count it as idle so a fault that
+      // never clears lets the loop sleep, and the next _scheduleFrame tries once more.
+      _idleFrameCount++;
+      if (_contextLost || !renderer || !scene || !camera || !cube || _idleFrameCount >= IDLE_SLEEP_FRAMES) animationId = null;
+      else animationId = requestAnimationFrame(_animate);
+    }
+  }
+
+  function _animateFrame() {
     if (_contextLost) { animationId = null; return; }   // ELE-18: never draw on a lost context
     if (!renderer || !scene || !camera || !cube) { animationId = null; return; }   // disposed
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -6735,7 +6763,7 @@ const VolumeViewer = (() => {
       const perfId = _perf()?.start('volume.load.bricks', { quality, timepoint });
       if (typeof BrickLoader === 'undefined') {
         _perf()?.end(perfId, { status: 'unavailable', reason: 'BrickLoader unavailable' });
-        return { available: false, reason: 'BrickLoader unavailable' };
+        return { available: false, reason: 'BrickLoader unavailable', code: 'BRICKS_LOADER_UNAVAILABLE' };
       }
       if (!preload && !isPreview) _qualityTarget = quality;
       const cacheKey = _volumeCacheKey(basePath, quality, timepoint);
@@ -6783,7 +6811,7 @@ const VolumeViewer = (() => {
         manifest = await _fetchBrickManifest(`${basePath}/${brickDir}`);
       } catch (err) {
         _perf()?.end(perfId, { status: 'unavailable', quality, reason: err.message || String(err) });
-        return { available: false, reason: err.message || String(err) };
+        return { available: false, reason: err.message || String(err), code: err?.code || 'BRICKS_MANIFEST_UNAVAILABLE', status: err?.status };
       }
       if (loadId !== _loadCounter) {
         _perf()?.end(perfId, { status: 'stale', quality });
@@ -6793,7 +6821,7 @@ const VolumeViewer = (() => {
       const tpSelection = _selectBrickManifestForTimepoint(manifest, timepoint);
       if (!tpSelection.available) {
         _perf()?.end(perfId, { status: 'unavailable', quality, reason: tpSelection.reason });
-        return { available: false, reason: tpSelection.reason };
+        return { available: false, reason: tpSelection.reason, code: tpSelection.code };
       }
       const treePath = `${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`;
       BrickLoader.configure?.({
@@ -6809,7 +6837,7 @@ const VolumeViewer = (() => {
         // contract (Rule 1.1/1.4) instead of an opaque throw.
         console.error('[VolumeViewer] Brick manifest rejected:', err);
         _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
-        return { available: false, reason: err.message };
+        return { available: false, reason: err.message, code: err?.code || 'BRICKS_MANIFEST_INVALID' };
       }
       if (loadId !== _loadCounter) {
         _perf()?.end(perfId, { status: 'stale', quality });
@@ -6968,7 +6996,7 @@ const VolumeViewer = (() => {
           if (lod >= levelCount) {
             _perf()?.end(perfId, { status: 'unavailable', quality, reason: 'Out of GPU memory' });
             emitState({ message: `${quality}: out of GPU memory at every level` });
-            return { available: false, reason: 'Insufficient GPU memory for every level', budgetBytes: budget };
+            return { available: false, reason: 'Insufficient GPU memory for every level', code: 'GPU_MEMORY', budgetBytes: budget };
           }
         }
       }
@@ -7264,7 +7292,7 @@ const VolumeViewer = (() => {
         }
         emitState({ active: shownQuality, mode: 'bricks', progress: 0, message: `${quality} bricks unavailable` });
         _perf()?.end(perfId, { status: 'unavailable', quality, reason: 'No brick payload could be loaded' });
-        return { available: false, reason: 'No brick payload could be loaded' };
+        return { available: false, reason: 'No brick payload could be loaded', code: 'BRICKS_NONE_LOADED' };
       }
 
       _scheduleFrame();
@@ -8260,7 +8288,7 @@ const VolumeViewer = (() => {
    */
   function _selectBrickManifestForTimepoint(manifest, timepoint) {
     if (!manifest || typeof manifest !== 'object') {
-      return { available: false, reason: 'Invalid brick manifest payload' };
+      return { available: false, reason: 'Invalid brick manifest payload', code: 'BRICKS_MANIFEST_INVALID' };
     }
     const memoKey = manifest.timepoints ? (Number.isFinite(Number(timepoint)) ? Number(timepoint) : 0) : 'root';
     let memo = _tpManifestMemo.get(manifest);
@@ -8280,7 +8308,7 @@ const VolumeViewer = (() => {
       const row = manifest.timepoints.find(r => r && r.path === name) || manifest.timepoints[tp] || null;
       const sub = row ? String(row.path || name).replace(/^\/+|\/+$/g, '') : '';
       const cols = row && row.index && row.index.columns;
-      if (!sub || !cols || typeof cols !== 'object') return { available: false, reason: `No bricks for requested timepoint ${tp}` };
+      if (!sub || !cols || typeof cols !== 'object') return { available: false, reason: `No bricks for requested timepoint ${tp}`, code: 'TIMEPOINT_MISSING' };
       const strip = (ref) => {
         const url = String(ref && ref.url || '').replace(/^\/+/, '');
         return url.startsWith(`${sub}/`) ? { ...ref, url: url.slice(sub.length + 1) } : null;
@@ -8288,7 +8316,7 @@ const VolumeViewer = (() => {
       const columns = {};
       for (const id of Object.keys(cols)) {
         const r = strip(cols[id]);
-        if (!r) return { available: false, reason: `Timepoint ${tp}: index of column ${id} is not inside its tree ${sub}/` };
+        if (!r) return { available: false, reason: `Timepoint ${tp}: index of column ${id} is not inside its tree ${sub}/`, code: 'BRICKS_MANIFEST_INVALID' };
         columns[id] = r;
       }
       const cuts = Array.isArray(row.index.cuts) ? row.index.cuts.map(strip) : [];
@@ -8307,12 +8335,12 @@ const VolumeViewer = (() => {
       const name = `t${String(tp).padStart(3, '0')}`;
       const row = manifest.timepoints.find(r => r && r.path === name) || manifest.timepoints[tp] || null;
       if (!row || !row.index || typeof row.index.url !== 'string') {
-        return { available: false, reason: `No bricks for requested timepoint ${tp}` };
+        return { available: false, reason: `No bricks for requested timepoint ${tp}`, code: 'TIMEPOINT_MISSING' };
       }
       const sub = String(row.path || name).replace(/^\/+|\/+$/g, '');
       const url = String(row.index.url).replace(/^\/+/, '');
       if (!sub || !url.startsWith(`${sub}/`)) {
-        return { available: false, reason: `Timepoint ${tp}: index ${url} is not inside its tree ${sub}/` };
+        return { available: false, reason: `Timepoint ${tp}: index ${url} is not inside its tree ${sub}/`, code: 'BRICKS_MANIFEST_INVALID' };
       }
       // The frame's own histograms (SPEC §13.3 `timepointHistograms`), as a v2 row's:
       // they set the frame's background floor, so the picture matches the v2 one.
@@ -8345,7 +8373,7 @@ const VolumeViewer = (() => {
       }
     }
     if (!row) {
-      return { available: false, reason: `No bricks for requested timepoint ${tp}` };
+      return { available: false, reason: `No bricks for requested timepoint ${tp}`, code: 'TIMEPOINT_MISSING' };
     }
     return {
       available: true,

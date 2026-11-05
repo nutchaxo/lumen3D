@@ -293,3 +293,11 @@
     gap: var(--space-4);
   }
 }
+
+/* A section, heading or counter the script hides while the catalog is failed or empty:
+   the component classes set `display`, which would otherwise outrank [hidden]. */
+.section[hidden],
+.section-header[hidden],
+.type-card-count[hidden] {
+  display: none;
+}

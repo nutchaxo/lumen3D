@@ -14,7 +14,7 @@ const MeasurementStore = (() => {
   }
 
   function setAll(datasetId, scope = 'viewer', items = []) {
-    const normalized = Array.isArray(items) ? items.map(_normalize) : [];
+    const normalized = Array.isArray(items) ? items.filter(it => it && typeof it === 'object').map(_normalize) : [];
     _state.set(key(datasetId, scope), normalized);
     return list(datasetId, scope);
   }

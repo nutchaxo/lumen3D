@@ -675,7 +675,9 @@ export async function publish(key, { overwrite = false, hidden = true } = {}) {
 
 export async function refreshStaged() {
   const data = await apiFetch(`${API_UPLOAD}?action=list`);
-  _state.staged = (data && Array.isArray(data.datasets)) ? data.datasets : [];
+  // A failed refresh (network blip, 429, expired session) keeps the last good list:
+  // replacing it with [] made every staged dataset vanish from the console.
+  if (data && Array.isArray(data.datasets)) _state.staged = data.datasets;
   // Fold the server's view back into any live entry so a dataset that finished
   // while the tab was elsewhere shows the right state.
   _state.staged.forEach((s) => {

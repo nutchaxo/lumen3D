@@ -34,6 +34,8 @@
  */
 
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
 
 if (lumen_migration_dirs_pending()) lumen_migrate_dataset_types();

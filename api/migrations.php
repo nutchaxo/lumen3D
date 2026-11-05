@@ -31,6 +31,8 @@
  * unit_put requests in flight, and a unit_run holds its request for up to 20 s.
  */
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 
 require_once __DIR__ . '/_migrations_lib.php';
 

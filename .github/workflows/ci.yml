@@ -52,3 +52,24 @@ jobs:
         run: |
           if grep -RnE "<script[^>]+src=[\"']https?://" *.html; then
             echo "::error::a CDN <script src> would be blocked by the enforced script-src 'self'"; exit 1; fi
+
+  # install.php and api/ advertise PHP 7.4 while the full suite runs on 8.1: a syntax-only
+  # check of every PHP file on both ends of the range (no test jobs, nothing to be flaky).
+  php-lint:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+      - name: php -l on every entry point and include
+        run: |
+          fail=0
+          for f in api/*.php install.php router.php _serve.php; do
+            php -l "$f" > /dev/null || fail=1
+          done
+          exit $fail

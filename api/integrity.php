@@ -10,6 +10,8 @@
  * decided, like the other entry points). Engine: api/_integrity_lib.php.
  */
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 
 require_once __DIR__ . '/_integrity_lib.php';
 
@@ -38,6 +40,7 @@ register_shutdown_function(function () {
     $e = error_get_last();
     if (!$e || !in_array($e['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) return;
     if (($_GET['action'] ?? '') !== 'check') return;
+    $GLOBALS['lumen_fatal_answered'] = true;   // api/_bootstrap.php must not replace this answer with its 500
     while (ob_get_level() > 0) @ob_end_clean();
     if (!headers_sent()) { http_response_code(200); header('Content-Type: application/json; charset=utf-8'); }
     echo json_encode(['ok' => true, 'result' => ['id' => (string)($_GET['dataset'] ?? ''), 'name' => (string)($_GET['dataset'] ?? ''),

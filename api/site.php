@@ -25,6 +25,8 @@
  */
 
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
 
 // Library mode (tests): the helpers below are defined, nothing is routed and no
@@ -399,6 +401,38 @@ function site_save_draft(string $doc, $body, ?string $rev): array {
     });
 }
 
+/**
+ * null when $data (decoded by lumen_json_decode_doc, so objects and lists stay apart)
+ * may be written as global site doc $doc (instance, theme, legal), else the error.
+ * A wrong type on a structural key breaks every page that reads the doc; an empty
+ * list stands for an empty object (what this backend wrote before
+ * lumen_json_decode_doc). Pages have their own gate. Twin of _site_doc_shape_error.
+ */
+function site_doc_shape_error(string $doc, $data, ?array $merge): ?string {
+    static $objectKeys = [
+        'instance' => ['brand', 'specimen', 'datasetTypes', 'org', 'seo', 'pageTitles', 'footer', 'nav'],
+        'theme'    => ['tokens', 'dark', 'light'],
+        'legal'    => [],
+    ];
+    static $listKeys = [
+        'instance' => ['channelColorPresets'],
+        'theme'    => [],
+        'legal'    => ['sections'],
+    ];
+    $doc = trim($doc);
+    if (!isset($objectKeys[$doc])) return null;
+    if (!lumen_json_is_object($data)) return 'Invalid JSON body';
+    $fields = $data instanceof stdClass ? get_object_vars($data) : $data;
+    if (!$fields && $merge === null) return 'empty_doc';   // a whole-doc save of {} would wipe it
+    foreach ($objectKeys[$doc] as $k) {
+        if (array_key_exists($k, $fields) && !(lumen_json_is_object($fields[$k]) || $fields[$k] === [])) return "Invalid '$k'";
+    }
+    foreach ($listKeys[$doc] as $k) {
+        if (array_key_exists($k, $fields) && !lumen_json_is_list($fields[$k])) return "Invalid '$k'";
+    }
+    return null;
+}
+
 if (defined('LUMEN_SITE_LIB')) return;
 
 // The public read is served to every visitor of a custom page: a session is only
@@ -411,9 +445,11 @@ if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 $action = lumen_str($_GET['action'] ?? null) ?? '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$body   = $method === 'POST'
-    ? (json_decode((string)file_get_contents('php://input'), true) ?: [])
-    : [];
+$rawBody = $method === 'POST' ? (string)file_get_contents('php://input') : '';
+$body    = $rawBody !== '' ? (json_decode($rawBody, true) ?: []) : [];
+// The same body with JSON objects kept apart from lists, for the shape checks of a
+// save; null when the request carried no JSON at all.
+$bodyDoc = $rawBody !== '' ? lumen_json_decode_doc($rawBody) : null;
 
 // ── Public read ───────────────────────────────────────────────────────────────
 // Only the operator gets the draft back; everyone else sees published content.
@@ -447,10 +483,13 @@ if (in_array($action, ['save', 'save_draft', 'reset', 'publish', 'delete'], true
             $merge = site_parse_merge(lumen_str($_GET['merge']) ?? '');
             if ($merge === null) admin_json_out(['error' => 'bad_merge'], 400);
         }
+        if (!lumen_json_is_object($bodyDoc)) admin_json_out(['error' => 'Invalid JSON body'], 400);
         if (strncmp($doc, 'pages/', 6) === 0) {
             $verr = site_validate_page($payload);
             if ($verr !== null) admin_json_out(['error' => $verr], 400);
         }
+        $shapeErr = site_doc_shape_error($doc, $bodyDoc, $merge);
+        if ($shapeErr !== null) admin_json_out(['error' => $shapeErr], 400);
         [$code, $out] = site_save_checked($doc, $payload, $rev, $merge);
         admin_json_out($out, $code);
     }

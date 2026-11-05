@@ -7,6 +7,7 @@
  */
 
 declare(strict_types=1);
+if (is_file(__DIR__ . '/api/_bootstrap.php')) require_once __DIR__ . '/api/_bootstrap.php';
 require_once __DIR__ . '/api/_html_server.php';
 
 // Subdirectory-aware (strips the install-dir prefix from REQUEST_URI) so the

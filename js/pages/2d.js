@@ -53,7 +53,11 @@ const App2D = (() => {
       console.error('[App2D] The page could not start.', err);
       let message;
       try { message = t('2d.errorTitle'); } catch (_) { message = 'Could not open this photograph.'; }
-      _showError(err && err.message ? `${message} ${err.message}` : message);
+      let why = '';
+      try { why = Utils.friendlyErrorText(err); } catch (_) { why = ''; }
+      // The technical cause is for the operator previewing the dataset, never the reader.
+      const detail = _isAdmin && err && err.message ? ` (${err.message})` : '';
+      _showError([message, why].filter(Boolean).join(' ') + detail);
     }
   }
 

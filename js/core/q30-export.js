@@ -16,6 +16,13 @@ const Q30Export = (() => {
     if (params && typeof v === 'string') v = v.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? String(params[k]) : m));
     return v;
   }
+  // The reader sees a translated category; the raw cause (HTTP status, URL, parser
+  // message) goes to the console only.
+  function _why(err, context) {
+    let text = '';
+    try { text = (typeof Utils !== 'undefined' && Utils.friendlyErrorText) ? Utils.friendlyErrorText(err, { context }) : ''; } catch (e) { text = ''; }
+    return text || _t('app.errUnknown', 'Something went wrong. Try again; if it keeps happening, reload the page.');
+  }
   const _esc = (s) => (typeof Utils !== 'undefined' && Utils.escapeHtml) ? Utils.escapeHtml(String(s)) : String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
   function _bytes(n) {
@@ -216,7 +223,11 @@ const Q30Export = (() => {
         sink = await OmeZarrExport.openSink(`${name}.q30.zip`);
       } catch (err) {
         if (err && err.name === 'AbortError') return;
-        throw err;
+        console.error('[Q30Export] The destination file could not be opened:', err);
+        q('[data-q30-progress]').hidden = false;
+        q('[data-q30-fill]').style.width = '0%';
+        q('[data-q30-label]').textContent = _t('download.omezarr.failed', 'Export failed: {error}', { error: _why(err, 'save') });
+        return;
       }
       const ac = new AbortController();
       _job = { ac };
@@ -240,9 +251,10 @@ const Q30Export = (() => {
         label.textContent = _t('download.q30.done', 'Done: {size}, {packs} pack(s).', { size: _bytes(r.bytesOut), packs: r.packs });
       } catch (err) {
         await sink.abort?.();
+        if (!err || err.name !== 'AbortError') console.error('[Q30Export] Export failed:', err);
         label.textContent = err && err.name === 'AbortError'
           ? _t('download.omezarr.cancelled', 'Export cancelled.')
-          : _t('download.omezarr.failed', 'Export failed: {error}', { error: String(err && err.message || err) });
+          : _t('download.omezarr.failed', 'Export failed: {error}', { error: _why(err) });
       } finally {
         _job = null;
         q('[data-q30-cancel]').hidden = true;

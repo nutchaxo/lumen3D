@@ -4,7 +4,7 @@
 
 **De l'image brute du microscope `.ims` à un volume 3D fluide dans le navigateur.**
 
-`version 0.22.0` · `Imaris HDF5 → pyramide de briques 64³ WebP` (format 4, format 5 en option) · Python (h5py · numpy · scipy · Pillow)
+`version 0.23.0` · `Imaris HDF5 → pyramide de briques 64³ WebP` (format 4, format 5 en option) · Python (h5py · numpy · scipy · Pillow)
 
 </div>
 
@@ -739,5 +739,5 @@ Pour réimplémenter et obtenir le **même résultat** (format 4) :
 ---
 
 <div align="center">
-<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.22.0</sub>
+<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.23.0</sub>
 </div>

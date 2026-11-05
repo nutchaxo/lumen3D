@@ -256,7 +256,16 @@ const CompareApp = (() => {
       _renderModalTypeChips();
       _renderModalList();
     });
-    document.getElementById('modal-dataset-list').addEventListener('click', (e) => {
+    document.getElementById('modal-dataset-list').addEventListener('click', async (e) => {
+      const retry = e.target.closest('[data-catalog-retry]');
+      if (retry) {
+        retry.disabled = true;
+        await Catalog.load({ force: true });
+        _datasets = Catalog.getAll();
+        _renderModalTypeChips();
+        _renderModalList();
+        return;
+      }
       const card = e.target.closest('.dataset-mini-card');
       if (!card) return;
       _addPanel(card.dataset.id);
@@ -294,6 +303,11 @@ const CompareApp = (() => {
     if (!list) return;
     const shown = _datasets.filter(_modalMatches);
     if (!shown.length) {
+      if (!_datasets.length && Catalog.getLoadError()) {
+        list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(_t('compare.loadFailed', 'Could not load the datasets.'))}
+          <div><button type="button" class="btn btn-outline btn-sm" data-catalog-retry>${Utils.escapeHtml(_t('compare.retry', 'Retry'))}</button></div></div>`;
+        return;
+      }
       const message = _datasets.length ? _t('compare.noMatch', 'No dataset matches.') : _t('compare.noDatasets', 'The catalog has no dataset yet.');
       list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(message)}</div>`;
       return;

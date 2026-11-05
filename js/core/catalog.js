@@ -14,40 +14,60 @@ const Catalog = (() => {
   /**
    * Load the catalog from JSON. Concurrent callers share one request; a failed load is
    * not remembered as "loaded", so the next call retries (see getLoadError()).
+   * `force` refetches even when a catalog is already held (the pages' Retry button).
+   * @param {{force?: boolean}} [opts]
    * @returns {Promise<void>}
    */
-  function load() {
-    if (_loaded) return Promise.resolve();
+  function load(opts) {
+    if (_loaded && !(opts && opts.force)) return Promise.resolve();
     if (!_inflight) _inflight = _fetchCatalog().finally(() => { _inflight = null; });
     return _inflight;
   }
 
-  /** The error of the last failed load, or null. Lets a page say "could not load" instead of "not found". */
+  /**
+   * Why the last load failed, or null when the catalog loaded. Lets a page say
+   * "could not load" instead of "nothing here". `code`: 'http' (status = the HTTP
+   * status), 'network' (status 0), 'parse' (body is not JSON), 'shape' (JSON, but
+   * not a list of datasets). Carries no message text: nothing for a page to print.
+   * @returns {{code: string, status: number}|null}
+   */
   function getLoadError() {
     return _loadError;
   }
 
   async function _fetchCatalog() {
+    let resp;
     try {
       // The index is generated per request from the metadata.json files, so it must be
       // revalidated each time (a dataset that was just published has to show up).
-      const resp = await fetch('./DATA_WEB/catalog.json', { cache: 'no-cache' });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const datasetsArray = Array.isArray(data) ? data : (data.datasets || []);
-      _datasets = datasetsArray.map(dataset => ({
-        ...dataset,
-        volumeSources: typeof VolumeSourceManager !== 'undefined'
-          ? VolumeSourceManager.normalizeSources(dataset)
-          : (dataset.volumeSources || [])
-      }));
-      _loaded = true;
-      _loadError = null;
+      resp = await fetch('./DATA_WEB/catalog.json', { cache: 'no-cache' });
     } catch (err) {
-      console.warn('[Catalog] Failed to load catalog, using embedded data:', err);
-      _datasets = _getEmbeddedCatalog();
-      _loadError = err;
+      return _fail('network', 0, err);
     }
+    if (!resp || !resp.ok) return _fail('http', resp ? Number(resp.status) || 0 : 0, new Error(`HTTP ${resp && resp.status}`));
+    let data;
+    try {
+      data = await resp.json();
+    } catch (err) {
+      return _fail('parse', resp.status, err);
+    }
+    const datasetsArray = Array.isArray(data) ? data : (data && data.datasets === undefined ? [] : data && data.datasets);
+    if (!Array.isArray(datasetsArray)) return _fail('shape', resp.status, new Error('catalog is not a list'));
+    _datasets = datasetsArray.map(dataset => ({
+      ...dataset,
+      volumeSources: typeof VolumeSourceManager !== 'undefined'
+        ? VolumeSourceManager.normalizeSources(dataset)
+        : (dataset.volumeSources || [])
+    }));
+    _loaded = true;
+    _loadError = null;
+  }
+
+  function _fail(code, status, err) {
+    console.warn('[Catalog] Failed to load catalog:', err);
+    _datasets = _getEmbeddedCatalog();
+    _loaded = false;
+    _loadError = { code, status };
   }
 
   /**

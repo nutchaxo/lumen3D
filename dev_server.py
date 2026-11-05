@@ -1070,9 +1070,48 @@ def _merge_paths(current: dict, incoming: dict, paths) -> dict:
     return out
 
 
+# Structural keys of the global site docs: a wrong type there breaks every page that
+# reads the doc (InstanceConfig, the theme compiler, legal.html). An empty list is
+# accepted where an object is expected: PHP hosts before lumen_json_decode_doc wrote
+# an empty map as `[]`, and the editors post back what they read.
+_SITE_DOC_OBJECT_KEYS = {
+    "instance": ("brand", "specimen", "datasetTypes", "org", "seo", "pageTitles", "footer", "nav"),
+    "theme": ("tokens", "dark", "light"),
+    "legal": (),
+}
+_SITE_DOC_LIST_KEYS = {
+    "instance": ("channelColorPresets",),
+    "theme": (),
+    "legal": ("sections",),
+}
+
+
+def _site_doc_shape_error(doc: str, data, merge=None):
+    """None when ``data`` may be written as global site doc ``doc`` (instance, theme,
+    legal), else the error string. Pages have their own gate (_validate_page_doc).
+    Twin: api/site.php site_doc_shape_error."""
+    doc = (doc or "").strip()
+    if doc not in _SITE_DOC_OBJECT_KEYS:
+        return None
+    if not isinstance(data, dict):
+        return "Invalid JSON body"
+    if not data and merge is None:
+        return "empty_doc"          # a whole-doc save of {} would wipe the doc
+    for key in _SITE_DOC_OBJECT_KEYS[doc]:
+        if key in data and not (isinstance(data[key], dict) or data[key] == []):
+            return f"Invalid '{key}'"
+    for key in _SITE_DOC_LIST_KEYS[doc]:
+        if key in data and not isinstance(data[key], list):
+            return f"Invalid '{key}'"
+    return None
+
+
 def _site_save_checked(doc: str, data, rev=None, merge=None):
     """Save under _SITE_LOCK with an optional stale-revision check (``rev``) and an
     optional field merge (``merge``: dotted paths). Returns (status, payload)."""
+    shape_err = _site_doc_shape_error(doc, data, merge)
+    if shape_err:
+        return 400, {"error": shape_err}
     with _SITE_LOCK:
         if _site_doc_path(doc) is None:
             return 400, {"error": "Invalid doc"}
@@ -1179,12 +1218,19 @@ def _media_list():
 
 def _media_upload(body):
     import base64
-    body = body or {}
-    name = _media_safe_name(body.get("filename") or body.get("name") or "")
+    body = body if isinstance(body, dict) else {}
+    # Same precedence as the PHP twin (lumen_str(filename) ?? lumen_str(name) ?? ''):
+    # a field that is not a string is absent, never a 500.
+    fname = body.get("filename")
+    if not isinstance(fname, str):
+        fname = body.get("name")
+    name = _media_safe_name(fname if isinstance(fname, str) else "")
     if not name:
         return {"ok": False, "error": "Type de fichier non supporté (png, jpg, webp, gif, avif)"}
-    data = body.get("data") or ""
-    if isinstance(data, str) and data.startswith("data:"):
+    data = body.get("data")
+    if not isinstance(data, str):
+        data = ""
+    if data.startswith("data:"):
         comma = data.find(",")
         if comma != -1:
             data = data[comma + 1:]
@@ -1216,7 +1262,7 @@ def _media_upload(body):
 
 
 def _media_delete(name: str) -> bool:
-    name = _media_safe_name(name)
+    name = _media_safe_name(name if isinstance(name, str) else "")
     if not name:
         return False
     try:
@@ -4680,6 +4726,25 @@ def _migrations_bind() -> None:
             file_mode=_file_mode())
 
 
+def _dataset_meta_field_error(body):
+    """The name of the first field of a posted metadata.json whose type the viewer or
+    the catalog cannot read, else None. Only gross type errors are refused (values are
+    the viewer's job, see viewer.js _validateDatasetMetadata); an absent field keeps
+    the stored value. Twin: api/datasets.php lumen_dataset_meta_field_error."""
+    for key in ("name", "stage"):
+        if key in body and body[key] is not None and not isinstance(body[key], str):
+            return key
+    for key in ("dimensions", "voxel_size"):
+        if key in body and not isinstance(body[key], dict):
+            return key
+    for key in ("channels", "volumeSources"):
+        if key in body:
+            v = body[key]
+            if not isinstance(v, list) or not all(isinstance(x, dict) for x in v):
+                return key
+    return None
+
+
 def _save_dataset(dataset_id: str, body: dict) -> bool:
     with _META_LOCK:
         return _save_dataset_locked(dataset_id, body)
@@ -5227,7 +5292,22 @@ def _build_catalog() -> list[dict]:
     def _date_key(x):
         d = x.get("date")
         return d if isinstance(d, str) and d not in ("", "Unknown") else "0000-00-00"
-    catalog.sort(key=lambda x: (_date_key(x), x.get("name", "")), reverse=True)
+
+    # A curated `name` can be any JSON value; comparing a str with a number or a list
+    # raises TypeError and dropped catalog.json. Same key as the PHP twin's
+    # `is_scalar ? (string) : ''`.
+    def _name_key(x):
+        n = x.get("name")
+        if isinstance(n, str):
+            return n
+        if isinstance(n, bool):
+            return "1" if n else ""
+        if isinstance(n, int):
+            return str(n)
+        if isinstance(n, float):
+            return repr(int(n)) if n.is_integer() else repr(n)
+        return ""
+    catalog.sort(key=lambda x: (_date_key(x), _name_key(x)), reverse=True)
     return catalog
 
 
@@ -6120,6 +6200,13 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return str(ROOT / "__forbidden__")   # never exists → 404
         return fs
 
+    def handle_one_request(self):
+        # The handler instance lives for the whole kept-alive connection: without the
+        # reset, a route failing on the second request would find the flag left by
+        # the first and send no 500 at all.
+        self._response_started = False
+        super().handle_one_request()
+
     def send_response(self, code, message=None):
         self._response_started = True
         super().send_response(code, message)
@@ -6151,7 +6238,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         clean_path = urllib.parse.unquote(parsed.path).strip("/")
         if clean_path in ("DATA_WEB/catalog.json", "DATA_WEB/catalog.json/"):
-            self._serve_dynamic_catalog()
+            self._guarded(self._serve_dynamic_catalog)
         elif parsed.path == "/api/health":
             # Liveness + version probe: consumed by the pivot supervisor's online
             # gate after an update, and usable by any external monitor. Public and
@@ -6167,11 +6254,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 payload["lastUpdate"] = {"phase": last["phase"], "target": last.get("target")}
             self._json_nostore(200, payload)
         elif parsed.path in ("/api/plugins", "/api/plugins.php"):
-            self._serve_plugins()
+            self._guarded(self._serve_plugins)
         elif parsed.path in ("/api/languages", "/api/languages.php"):
-            self._serve_languages()
+            self._guarded(self._serve_languages)
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
-            self._serve_downloads(parsed)
+            self._guarded(self._serve_downloads, parsed)
         elif parsed.path == "/api/upload.php":
             self._guarded(self._handle_upload, parsed, body=None, raw=None)
         elif parsed.path == "/api/migrations.php":
@@ -6183,13 +6270,13 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         elif _is_forbidden_static(clean_path) or _has_dot_segment(clean_path) or "\x00" in clean_path:
             self._json(404, {"error": "Not found"})
         elif clean_path == "":
-            self._serve_html("index.html")
+            self._guarded(self._serve_html, "index.html")
         elif clean_path.lower().endswith(_HTML_LIKE_EXT):
             # HTML documents get a per-request CSP nonce injected + the enforcing
             # nonce-CSP header (INV-1) — but only the platform's own top-level pages.
-            self._serve_html(clean_path)
+            self._guarded(self._serve_html, clean_path)
         else:
-            self._serve_static(parsed, clean_path)
+            self._guarded(self._serve_static, parsed, clean_path)
 
     def _maybe_count_download(self, clean_path: str):
         """Count a download when a file under DATA_WEB/<type>/<folder>/download/ is
@@ -6662,6 +6749,43 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return None
         return length
 
+    # Actions that need POST + the session's CSRF token, per endpoint (datasets.php
+    # uses _is_write_action). Read by the router and by _pre_body_refusal.
+    _WRITE_ACTIONS = {
+        "/api/site.php": frozenset({"save", "save_draft", "reset", "publish", "delete"}),
+        "/api/media.php": frozenset({"upload", "delete"}),
+        "/api/admin.php": frozenset({"set_plugin", "update_apply", "update_ack",
+                                     "approve_plugin", "revoke_plugin",
+                                     "install_plugin", "update_plugin", "uninstall_plugin",
+                                     "repair_permissions"}),
+    }
+
+    def _is_endpoint_write(self, path: str, action: str) -> bool:
+        if path == "/api/datasets.php":
+            return _is_write_action(action)
+        return action in self._WRITE_ACTIONS.get(path, ())
+
+    def _pre_body_refusal(self, parsed):
+        """(status, payload) when an admin POST must be refused before its body is
+        read, else None: an anonymous peer, or one without the CSRF token of a write,
+        must not make the server buffer up to 16 MiB. auth.php (login/setup) and the
+        telemetry beacon are public; site.php `get` is the public read."""
+        path = parsed.path
+        if path in ("/api/auth.php", "/api/telemetry.php"):
+            return None
+        action = dict(urllib.parse.parse_qsl(parsed.query)).get("action", "")
+        if path == "/api/site.php" and action == "get":
+            return None
+        session = _get_session(self._token())
+        if not session:
+            return 401, {"error": "Not authenticated"}
+        if self._is_endpoint_write(path, action):
+            ok, status, payload = _authorize_write(
+                self.command, session, self.headers.get("X-CSRF-Token"))
+            if not ok:
+                return status, payload
+        return None
+
     def _guarded(self, fn, *args, **kwargs):
         """Run a route; an unexpected exception becomes a 500 JSON answer and a
         closed connection instead of a reset socket and a stderr traceback."""
@@ -6690,6 +6814,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if limit is None:
             self._reject(405, {"error": "Method not allowed"})
             return
+        refusal = self._pre_body_refusal(parsed)
+        if refusal:
+            self._reject(*refusal)
+            return
         length = self._content_length(limit)
         if length is None:
             return
@@ -6707,18 +6835,19 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 return
             self._guarded(self._handle_api, parsed, body={}, raw_image=raw)
             return
-        raw = self._read_exact(length) if length else b"{}"
+        raw = self._read_exact(length) if length else b""
         if raw is None:
             self._reject(400, {"error": "short_body"})
             return
+        # body is None unless the request carried a JSON OBJECT (twin of PHP's
+        # lumen_request_json): handlers that read fields use `(body or {})`, the ones
+        # that store the body refuse None instead of writing an empty document.
         try:
-            body = json.loads(raw.decode("utf-8"))
+            body = json.loads(raw.decode("utf-8")) if raw else None
         except Exception:
-            body = {}
-        # Every handler reads fields with .get(): a JSON array, string or number
-        # is treated as an empty object rather than raising.
+            body = None
         if not isinstance(body, dict):
-            body = {}
+            body = None
         self._guarded(self._handle_api, parsed, body=body)
 
     def _read_upload_post(self, parsed):
@@ -7113,7 +7242,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("save", "save_draft", "reset", "publish", "delete"):
+            if self._is_endpoint_write(path, action):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
@@ -7127,12 +7256,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     if merge is None:
                         self._json(400, {"error": "bad_merge"})
                         return
+                if not isinstance(body, dict):
+                    self._json(400, {"error": "Invalid JSON body"})
+                    return
                 if doc_name.startswith("pages/"):
-                    _vok, _verr = _validate_page_doc(body if isinstance(body, dict) else {})
+                    _vok, _verr = _validate_page_doc(body)
                     if not _vok:
                         self._json(400, {"error": _verr or "Invalid page"})
                         return
-                st, pl = _site_save_checked(doc_name, body or {}, rev=rev, merge=merge)
+                st, pl = _site_save_checked(doc_name, body, rev=rev, merge=merge)
                 self._json(st, pl)
             elif action == "save_draft":
                 st, pl = _site_save_draft(doc_name, body or {}, rev=rev)
@@ -7152,7 +7284,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(200 if ok else 400,
                            {"ok": True, "rev": _site_rev(doc_name)} if ok else {"error": "Invalid doc"})
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         # ── Media library (operator image uploads) ────────────────────────────
@@ -7161,7 +7293,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("upload", "delete"):
+            if self._is_endpoint_write(path, action):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
@@ -7173,10 +7305,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 res = _media_upload(body or {})
                 self._json(200 if res.get("ok") else 400, res)
             elif action == "delete":
-                ok = _media_delete((body or {}).get("name", ""))
+                name = (body or {}).get("name")
+                ok = _media_delete(name if isinstance(name, str) else "")
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid file"})
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         # ── Auth ──────────────────────────────────────────────────────────────
@@ -7203,11 +7336,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 # The attempt is counted BEFORE the password is hashed (proxy-aware
                 # client address), so a burst of parallel guesses cannot all slip
                 # past the lockout check.
+                username = (body or {}).get("username")
+                password = (body or {}).get("password")
+                if not isinstance(username, str) or not isinstance(password, str):
+                    self._json(400, {"error": "bad_request"})
+                    return
+                username = username.strip(" \t\n\r\0\x0b")   # PHP trim()'s set, as the twin
                 ip = self._bf_gate()
                 if ip is None:
                     return
-                username = (body or {}).get("username", "")
-                password = (body or {}).get("password", "")
                 if _check_credentials(username, password):
                     _brute_clear(ip)
                     token = _new_session(username)
@@ -7229,14 +7366,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if self.command != "POST":
                     self._json(405, {"error": "Method not allowed (use POST)"})
                     return
+                # `?? default` in the twin: an absent or null field takes the default.
+                username = (body or {}).get("username")
+                username = DEFAULT_USERNAME if username is None else username
+                password = (body or {}).get("password")
+                password = "" if password is None else password
+                if not isinstance(username, str) or not isinstance(password, str):
+                    self._json(400, {"error": "bad_request"})
+                    return
                 ip = self._bf_gate()
                 if ip is None:
                     return
-                username = (body or {}).get("username") or DEFAULT_USERNAME
-                if not isinstance(username, str):
-                    username = DEFAULT_USERNAME
-                password = (body or {}).get("password", "")
-                ok, status, payload = _setup_credential(username, password)
+                ok, status, payload = _setup_credential(username or DEFAULT_USERNAME, password)
                 if ok:
                     _brute_clear(ip)
                     token = _new_session(payload["username"])
@@ -7257,12 +7398,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if not ok:
                     self._json(status, payload)
                     return
+                cur = (body or {}).get("current")
+                new = (body or {}).get("new")
+                if not isinstance(cur, str) or not isinstance(new, str):
+                    self._json(400, {"error": "bad_request"})
+                    return
                 ip = self._bf_gate()
                 if ip is None:
                     return
-                ok2, st2, pl2 = _change_credential(
-                    (body or {}).get("current", ""), (body or {}).get("new", "")
-                )
+                ok2, st2, pl2 = _change_credential(cur, new)
                 if st2 != 401:          # only a wrong current password counts
                     _brute_clear(ip)
                 if ok2:
@@ -7272,7 +7416,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(st2, pl2)
 
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action."})
             return
 
         # ── Datasets (require auth) ────────────────────────────────────────────
@@ -7340,11 +7484,16 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
             elif action == "save":
                 ds_id = params.get("id", "")
-                if _is_staged_id(ds_id):
+                bad_field = _dataset_meta_field_error(body) if isinstance(body, dict) else None
+                if not isinstance(body, dict):
+                    self._json(400, {"error": "Invalid JSON body"})
+                elif bad_field:
+                    self._json(400, {"error": "Invalid field", "field": bad_field})
+                elif _is_staged_id(ds_id):
                     t, f = _split_staged_id(ds_id)
-                    status, payload = upload_staging.write_staged_metadata(t, f, body or {})
+                    status, payload = upload_staging.write_staged_metadata(t, f, body)
                     self._json(status, payload)
-                elif _save_dataset(ds_id, body or {}):
+                elif _save_dataset(ds_id, body):
                     self._json(200, {"ok": True})
                 else:
                     self._json(400, {"error": "Invalid dataset ID"})
@@ -7368,7 +7517,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     if raw_image is not None:
                         body = {"raw": raw_image, "filename": params.get("filename", ""),
                                 "title": params.get("title", ""), "caption": params.get("caption", "")}
-                    self._json(*_gallery_add(ds_id, body or {}))
+                    if not isinstance(body, dict):
+                        self._json(400, {"error": "Invalid JSON body"})
+                    else:
+                        self._json(*_gallery_add(ds_id, body))
                 elif action == "gallery_thumbs":
                     self._json(*_gallery_thumbs(ds_id))
                 else:
@@ -7388,7 +7540,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self._json(400, {"error": "Invalid dataset ID"})
 
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         # ── Telemetry (public usage beacons, no auth) ──────────────────────────
@@ -7435,10 +7587,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("set_plugin", "update_apply", "update_ack",
-                          "approve_plugin", "revoke_plugin",
-                          "install_plugin", "update_plugin", "uninstall_plugin",
-                          "repair_permissions"):
+            if self._is_endpoint_write(path, action):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
                 )
@@ -7546,7 +7695,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 LAST_UPDATE_FILE.unlink(missing_ok=True)
                 self._json(200, {"ok": True})
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         self._json(404, {"error": "Not found"})

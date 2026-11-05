@@ -13,12 +13,14 @@
     "singular": {
       "en": "embryo",
       "fr": "embryon",
-      "es": "embrión"
+      "es": "embrión",
+      "nl": "embryo"
     },
     "plural": {
       "en": "embryos",
       "fr": "embryons",
-      "es": "embriones"
+      "es": "embriones",
+      "nl": "embryo's"
     }
   },
   "datasetTypes": {},

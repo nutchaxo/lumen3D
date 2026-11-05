@@ -253,6 +253,17 @@ async function _installWizardPlugins() {
 
 // ── Login ──────────────────────────────────────────────────────
 
+// Only a 401 means "wrong user name or password": a fault of the server, a lost
+// connection or a throttle must not make the operator retype a correct password.
+function loginFailureText(r) {
+  const throttled = throttleText(r.data);
+  if (throttled) return throttled;
+  if (r.status === 401) return t('admin.badCreds', 'Incorrect credentials.');
+  if (r.status === 429) return t('admin.tooManyAttempts', 'Too many attempts. Try again later.');
+  if (r.status === 0 || (r.status >= 200 && r.status < 300)) return t('admin.loginNetworkError', 'Cannot reach the server. Check the connection and try again.');
+  return t('admin.loginServerError', 'The server could not process the sign-in (HTTP {status}). Try again, or check the server logs.', { status: r.status });
+}
+
 async function doLogin() {
   const username = (el('login-username').value || '').trim();
   const password = el('login-password').value || '';
@@ -261,19 +272,20 @@ async function doLogin() {
   err.style.display = 'none';
   const btn = el('btn-login');
   btn.disabled = true;
-  btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.signingIn', 'Connexion…')}`;
+  btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.signingIn', 'Signing in…')}`;
 
-  const data = await apiFetch(`${API_AUTH}?action=login`, {
+  const r = await apiFetchStatus(`${API_AUTH}?action=login`, {
     method: 'POST', body: JSON.stringify({ username, password }),
   });
+  const data = r.data;
   btn.disabled = false;
-  btn.textContent = t('admin.signIn', 'Se connecter');
+  btn.textContent = t('admin.signIn', 'Sign in');
 
-  if (data?.ok) {
+  if (r.ok && data?.ok) {
     setCsrf(data.csrf || null);
     enterApp(username);
   } else {
-    el('login-error-msg').textContent = throttleText(data) || t('admin.badCreds', 'Identifiants incorrects.');
+    el('login-error-msg').textContent = loginFailureText(r);
     err.style.display = 'flex';
     el('login-password').value = '';
     el('login-password').focus();
@@ -302,6 +314,31 @@ async function ensureTabModule(tab) {
       .finally(() => { tab._loading = null; });
   }
   return tab._loading;
+}
+
+/** An error card with Retry in place of a tab that failed to load or mount; the next attempt starts from a clean panel. */
+function showTabFailure(id) {
+  const tab = _tabs.get(id);
+  if (tab) tab.mounted = false;
+  toast(t('admin.tabLoadFailed', 'Could not load this tab. Reload the page.'), 'error');
+  const panel = document.querySelector(`.adm-tabpanel[data-tab="${id}"]`);
+  if (!panel) return;
+  clearTabFailure(id);
+  const box = document.createElement('div');
+  box.className = 'adm-tab-failure adm-loading';
+  box.setAttribute('role', 'alert');
+  box.innerHTML = `<p class="adm-muted">${escHtml(t('admin.tabLoadFailed', 'Could not load this tab. Reload the page.'))}</p>
+    <button type="button" class="adm-btn">${escHtml(t('admin.retry', 'Retry'))}</button>`;
+  box.querySelector('button').addEventListener('click', () => {
+    box.remove();
+    if (tab) { tab.impl = undefined; }
+    switchTab(id, true);
+  });
+  panel.prepend(box);
+}
+
+function clearTabFailure(id) {
+  document.querySelectorAll(`.adm-tabpanel[data-tab="${id}"] > .adm-tab-failure`).forEach((n) => n.remove());
 }
 
 function switchTab(id, force = false) {
@@ -336,12 +373,19 @@ function switchTab(id, force = false) {
     ensureTabModule(tab).then((impl) => {
       // The operator may have moved on while the module was downloading.
       if (_activeTab !== id) return;
-      if (!tab.mounted) { try { impl.mount?.(); } catch (e) { console.error(e); } tab.mounted = true; }
+      if (!tab.mounted) {
+        try { impl.mount?.(); tab.mounted = true; clearTabFailure(id); }
+        catch (e) {
+          console.error('Admin tab failed to mount:', id, e);
+          showTabFailure(id);
+          return;
+        }
+      }
       try { impl.activate?.(); } catch (e) { console.error(e); }
       refreshIcons();
     }).catch((e) => {
       console.error('Admin tab failed to load:', id, e);
-      toast(t('admin.tabLoadFailed', "Impossible de charger cet onglet. Rechargez la page."), 'error');
+      showTabFailure(id);
     });
   }
   closeMobileSidebar();

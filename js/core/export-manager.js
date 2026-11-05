@@ -141,7 +141,16 @@ const ExportManager = (() => {
       _toast(_t('toast.noWorkspace', 'No saved workspace found'));
       return null;
     }
-    _ctx.applyWorkspaceState?.(payload.state || {});
+    let applied;
+    try {
+      applied = _ctx.applyWorkspaceState?.(payload.state || {});
+    } catch (err) {
+      console.warn('[ExportManager] Workspace could not be applied:', err);
+      _toast(_t('toast.workspaceRestoreFailed', 'This saved workspace could not be applied.'));
+      return null;
+    }
+    // The viewer reports a state it cannot apply itself (false) and has already said so.
+    if (applied === false) return null;
     _toast(_t('toast.workspaceRestored', 'Workspace restored'));
     return payload;
   }
@@ -189,8 +198,28 @@ const ExportManager = (() => {
       else if (action === 'workspace-json') exportWorkspace();
       else if (action === 'save-workspace') saveWorkspace();
       else if (action === 'restore-workspace') restoreWorkspace();
-      else { const custom = _customExports.find(item => item.action === action); if (custom?.handler) custom.handler(); }
+      else { const custom = _customExports.find(item => item.action === action); if (custom?.handler) _runCustomExport(custom); }
     });
+  }
+
+  // A page or plugin export may throw or reject (file picker refused, worker failed):
+  // the reader gets a translated toast, the console the cause; a user cancel is silent.
+  function _runCustomExport(item) {
+    const fail = (err) => {
+      if (err && err.name === 'AbortError') return;
+      console.error(`[ExportManager] Export "${item.action}" failed:`, err);
+      let why = '';
+      try { why = (typeof Utils !== 'undefined' && Utils.friendlyErrorText) ? Utils.friendlyErrorText(err, { context: 'save' }) : ''; } catch (e) { why = ''; }
+      _toast(_t('download.omezarr.failed', 'Export failed: {error}', {
+        error: why || _t('app.errUnknown', 'Something went wrong. Try again; if it keeps happening, reload the page.')
+      }));
+    };
+    try {
+      const result = item.handler();
+      if (result && typeof result.then === 'function') result.then(null, fail);
+    } catch (err) {
+      fail(err);
+    }
   }
 
   function _renderDownloads() {

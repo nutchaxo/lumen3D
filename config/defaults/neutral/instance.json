@@ -10,8 +10,18 @@
     "organization": ""
   },
   "specimen": {
-    "singular": "sample",
-    "plural": "samples"
+    "singular": {
+      "en": "sample",
+      "fr": "échantillon",
+      "es": "muestra",
+      "nl": "monster"
+    },
+    "plural": {
+      "en": "samples",
+      "fr": "échantillons",
+      "es": "muestras",
+      "nl": "monsters"
+    }
   },
   "datasetTypes": {},
   "org": {

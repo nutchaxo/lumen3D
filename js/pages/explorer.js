@@ -77,12 +77,14 @@ const Explorer = (() => {
   }
 
   function _populateStageFilter() {
-    const stages = Catalog.getStages();
     const group = document.getElementById('filter-stage-group');
-    if (!group || stages.length === 0) return;
+    if (!group) return;
+    // A retried catalog repopulates the list: drop what an earlier pass added.
+    group.querySelectorAll('label[data-dynamic-stage]').forEach(el => el.remove());
+    const stages = Catalog.getStages();
 
     stages.forEach(stage => {
-      const label = Utils.el('label', { class: 'filter-option' });
+      const label = Utils.el('label', { class: 'filter-option', 'data-dynamic-stage': '1' });
       const input = Utils.el('input', { type: 'radio', name: 'filter-stage', value: stage });
       const span = Utils.el('span', {}, Utils.formatStage(stage));
       label.appendChild(input);
@@ -117,15 +119,14 @@ const Explorer = (() => {
       _render();
     }, 300));
 
-    // Radio Filters
-    document.querySelectorAll('input[type="radio"]').forEach(radio => {
-      radio.addEventListener('change', (e) => {
-        const name = e.target.name;
-        const value = e.target.value;
-        if (name === 'filter-type') _filters.type = value;
-        if (name === 'filter-stage') _filters.stage = value;
-        _render();
-      });
+    // Radio Filters. Delegated: the stage radios are rebuilt when the catalog is retried.
+    document.addEventListener('change', (e) => {
+      const radio = e.target;
+      if (!radio || radio.type !== 'radio') return;
+      if (radio.name === 'filter-type') _filters.type = radio.value;
+      else if (radio.name === 'filter-stage') _filters.stage = radio.value;
+      else return;
+      _render();
     });
 
     // Sort Select
@@ -145,6 +146,11 @@ const Explorer = (() => {
     });
 
     document.getElementById('dataset-container')?.addEventListener('click', (e) => {
+      if (e.target.closest('[data-catalog-retry]')) {
+        e.preventDefault();
+        _retryCatalog();
+        return;
+      }
       const btn = e.target.closest('[data-download-id]');
       const compare = e.target.closest('[data-compare-id]');
       if (btn) {
@@ -183,13 +189,33 @@ const Explorer = (() => {
     const [sortField, sortDir] = _sortBy.split('_');
     filtered = Catalog.sort(filtered, sortField, sortDir === 'asc');
 
+    // A failed catalog and an empty one both list nothing, but they are not the same
+    // news: "0 datasets" would tell the visitor the collection is empty.
+    const failed = Catalog.getLoadError();
+    const empty = !failed && Catalog.getAll().length === 0;
+
     // Update count
     if (resultsCount) {
-      resultsCount.textContent = I18n.t('explorer.resultsCount', { count: filtered.length });
+      resultsCount.textContent = failed || empty ? '' : I18n.t('explorer.resultsCount', { count: filtered.length });
     }
 
     // Render HTML
-    if (filtered.length === 0) {
+    if (failed) {
+      container.className = 'empty-state';
+      container.innerHTML = `
+        <i data-lucide="cloud-off"></i>
+        <h3>${esc(_tr('explorer.loadFailed', 'Could not load the datasets'))}</h3>
+        <p style="margin-top:var(--space-2)">${esc(_tr('explorer.loadFailedHint', 'The catalog is unreachable right now. Check your connection and try again.'))}</p>
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:var(--space-4)" data-catalog-retry>${esc(_tr('explorer.retry', 'Retry'))}</button>
+      `;
+    } else if (empty) {
+      container.className = 'empty-state';
+      container.innerHTML = `
+        <i data-lucide="database"></i>
+        <h3>${esc(_tr('explorer.noDatasets', 'No datasets yet'))}</h3>
+        <p style="margin-top:var(--space-2)">${esc(_tr('explorer.noDatasetsHint', 'Datasets will appear here once they are published.'))}</p>
+      `;
+    } else if (filtered.length === 0) {
       container.className = 'empty-state';
       container.innerHTML = `
         <i data-lucide="search-x"></i>
@@ -303,6 +329,14 @@ const Explorer = (() => {
     if (dataset.path) badges.push(`<span class="availability-badge">${esc(_tr('explorer.badgeWeb', 'Web'))}</span>`);
     if (hasTracking) badges.push(`<span class="availability-badge">${Utils.escapeHtml(I18n.t('explorer.tracked'))}</span>`);
     return badges.join('');
+  }
+
+  async function _retryCatalog() {
+    const btn = document.querySelector('#dataset-container [data-catalog-retry]');
+    if (btn) btn.disabled = true;
+    await Catalog.load({ force: true });
+    _populateStageFilter();
+    _render();
   }
 
   function refresh() {

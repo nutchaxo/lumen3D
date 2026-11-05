@@ -498,6 +498,134 @@ const Utils = (() => {
       : '*';
   }
 
+  // ─── Errors shown to a reader ───────────────────────────────────────────────
+  // What reaches the screen is one translated sentence per category; the raw text
+  // (URLs, HTTP statuses, parser messages) stays in the console. `null` = silent.
+  const _ERROR_TEXT = {
+    cancelled: null,
+    network: ['app.errNetwork', 'The server could not be reached. Check the connection and try again.'],
+    notFound: ['app.errNotFound', 'Some of this dataset\'s files are missing on the server.'],
+    access: ['app.errAccess', 'The server refused access to this dataset.'],
+    server: ['app.errServer', 'The server ran into a problem. Try again in a moment.'],
+    damaged: ['app.errDamaged', 'This dataset\'s files are damaged or incomplete. Its administrator needs to check it.'],
+    metadata: ['app.errMetadata', 'This dataset\'s description is invalid.'],
+    gpuMemory: ['app.errGpuMemory', 'Not enough GPU memory for this quality. Choose a lower quality or close other tabs.'],
+    gpuLost: ['app.errGpuLost', 'The graphics card stopped responding. Reload the page.'],
+    webgl: ['viewer.errNoWebgl', 'This browser refused to give the page a 3D (WebGL) context. Restart the browser completely and open the page again; if it persists, check that hardware acceleration is on.'],
+    noBricks: ['app.errNoBricks', 'No part of the volume could be loaded at this quality.'],
+    readFailed: ['app.errReadFailed', 'Part of the dataset could not be read. Check the connection and try again.'],
+    timepoint: ['app.errTimepoint', 'This time point could not be loaded.'],
+    busy: ['app.errBusy', 'Another operation is still running. Try again when it has finished.'],
+    saveRefused: ['app.errSaveRefused', 'The browser refused to save the file. Choose another location or allow downloads for this site.'],
+    diskFull: ['app.errDiskFull', 'There is not enough free disk space to save the file.'],
+    unknown: ['app.errUnknown', 'Something went wrong. Try again; if it keeps happening, reload the page.'],
+  };
+
+  const _ERROR_CODES = {
+    cancelled: 'cancelled', aborted: 'cancelled', ABORTED: 'cancelled', BRICKS_MOUNT_CHANGED: 'cancelled',
+    BRICKS_MANIFEST_INVALID: 'damaged', BRICKS_INDEX_INVALID: 'damaged', BRICKS_COLUMN_UNKNOWN: 'damaged',
+    BRICKS_HASH_MISMATCH: 'damaged', BRICKS_READ_FAILED: 'damaged', BRICKS_DECODE_FAILED: 'damaged',
+    READ_FAILED: 'readFailed',
+    BRICKS_RANGE_INVALID: 'server',
+    METADATA_INVALID: 'metadata', METADATA_MISSING: 'metadata', DATASET_INVALID: 'metadata',
+    SVR_OVER_BUDGET: 'gpuMemory', SVR_ALLOC_FAILED: 'gpuMemory', GPU_MEMORY: 'gpuMemory',
+    'gpu-memory': 'gpuMemory', 'vram-budget': 'gpuMemory', 'alloc-failed': 'gpuMemory', budget: 'gpuMemory',
+    'context-lost': 'gpuLost', CONTEXT_LOST: 'gpuLost',
+    BRICKS_NONE_LOADED: 'noBricks', TIMEPOINT_MISSING: 'timepoint',
+    busy: 'busy',
+  };
+
+  // Ordered: the first pattern that matches wins. Conservative on purpose — an
+  // unrecognised message falls to `unknown`, never to a guessed category.
+  const _ERROR_PATTERNS = [
+    [/creating WebGL context|WebGL.*(not supported|unavailable|disabled)/i, 'webgl'],
+    [/context (was )?lost|CONTEXT_LOST_WEBGL/i, 'gpuLost'],
+    [/Insufficient GPU memory|out of GPU memory|SVR_OVER_BUDGET|SVR_ALLOC_FAILED|GL_OUT_OF_MEMORY/i, 'gpuMemory'],
+    [/No brick payload/i, 'noBricks'],
+    [/No bricks for requested timepoint/i, 'timepoint'],
+    [/Failed to fetch|NetworkError|Load failed|network error|ERR_[A-Z_]+|timed out|fetch stalled/i, 'network'],
+    [/Unexpected token|Unexpected end of (JSON|input)|is not valid JSON|JSON\.parse/i, 'damaged'],
+    [/hash mismatch|Manifest rejected|Invalid brick manifest|index(\.bin)? rejected|bad magic|corrupt|BRICKS_INDEX_/i, 'damaged'],
+  ];
+
+  function _categoryForStatus(status) {
+    const s = Number(status);
+    if (!Number.isFinite(s)) return null;
+    if (s === 0) return 'network';
+    if (s === 404 || s === 410) return 'notFound';
+    if (s === 401 || s === 403) return 'access';
+    if (s === 408 || s === 429 || s >= 500) return 'server';
+    if (s >= 400) return 'damaged';
+    return null;
+  }
+
+  /**
+   * An error meant for a reader, built where the failure is understood. The message
+   * stays technical (logs); the UI reads `i18nKey` through friendlyError.
+   */
+  function userError(code, key, fallback, detail, params) {
+    return Object.assign(new Error(detail || fallback || code), {
+      code, i18nKey: key, i18nFallback: fallback, i18nParams: params || null,
+    });
+  }
+
+  /**
+   * err (Error, DOMException, loader result `{ reason, code, status }` or a bare
+   * reason string) → `{ category, key, fallback, params, silent, detail }`. `key` /
+   * `fallback` are null for a silent category. `options.context === 'save'` reads a
+   * SecurityError / NotAllowedError as the browser refusing the file picker.
+   */
+  function friendlyError(err, options = {}) {
+    const isObj = err && typeof err === 'object';
+    const name = isObj ? String(err.name || '') : '';
+    const code = isObj ? (err.code != null ? String(err.code) : '') : String(err || '');
+    const message = isObj ? String(err.message || err.reason || '') : String(err || '');
+    const detail = [name && name !== 'Error' ? name : '', code && code !== message ? code : '', message]
+      .filter(Boolean).join(': ');
+    const build = (category, key, fallback, params) => {
+      const known = key ? null : _ERROR_TEXT[category];
+      return {
+        category,
+        key: key || (known ? known[0] : null),
+        fallback: fallback || (known ? known[1] : null),
+        params: params || {},
+        silent: !key && known === null,
+        detail,
+      };
+    };
+    if (isObj && typeof err.i18nKey === 'string' && err.i18nKey) {
+      return build(err.category || _ERROR_CODES[code] || 'known', err.i18nKey, err.i18nFallback || null, err.i18nParams || null);
+    }
+    if (name === 'AbortError' || (isObj && (err.cancelled === true || err.stale === true))) return build('cancelled');
+    if (code && _ERROR_CODES[code]) return build(_ERROR_CODES[code]);
+    if (name === 'QuotaExceededError') return build('diskFull');
+    if ((name === 'SecurityError' || name === 'NotAllowedError') && options.context === 'save') return build('saveRefused');
+    const byStatus = _categoryForStatus(isObj ? err.status : undefined);
+    if (byStatus) return build(byStatus);
+    const http = /\bHTTP[\s/]*(\d{3})\b/i.exec(message) || /\bmanifest \((\d{3})\)/i.exec(message);
+    if (http) {
+      const c = _categoryForStatus(http[1]);
+      if (c) return build(c);
+    }
+    for (const [rx, category] of _ERROR_PATTERNS) {
+      if (rx.test(message) || rx.test(code)) return build(category);
+    }
+    if (name === 'TypeError' && /fetch/i.test(message)) return build('network');
+    return build('unknown');
+  }
+
+  /** The translated sentence for err ('' when its category is silent). */
+  function friendlyErrorText(err, options = {}) {
+    const f = friendlyError(err, options);
+    if (f.silent || !f.key) return '';
+    if (typeof I18n !== 'undefined' && typeof I18n.t === 'function') {
+      const text = I18n.t(f.key, f.params);
+      if (text && text !== f.key) return text;
+    }
+    const fallback = f.fallback || _ERROR_TEXT.unknown[1];
+    return fallback.replace(/\{([A-Za-z0-9_]+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(f.params, k) ? String(f.params[k]) : m));
+  }
+
   return {
     formatFileSize,
     formatDate,
@@ -521,6 +649,9 @@ const Utils = (() => {
     escapeHtml,
     isTrustedMessageOrigin,
     trustedTargetOrigin,
+    userError,
+    friendlyError,
+    friendlyErrorText,
     DATASET_TYPES,
     VOLUME_DATASET_TYPES,
     isDatasetType,

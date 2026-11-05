@@ -256,7 +256,7 @@ const BrickLoader = (() => {
    * N'inspecte PAS nonEmpty/occupiedRatio : une brick vide (ESS) est un état légitime.
    */
   function _validateManifest(manifest) {
-    const reject = (msg) => { throw new Error('[BrickLoader] Manifest rejected: ' + msg); };
+    const reject = (msg) => { throw Object.assign(new Error('[BrickLoader] Manifest rejected: ' + msg), { code: 'BRICKS_MANIFEST_INVALID' }); };
     if (!manifest || typeof manifest !== 'object') reject('manifest is not an object.');
     if (_isV3(manifest)) { _validateManifestV3(manifest, reject); return; }
     if (_isV5(manifest)) { _validateManifestV5(manifest, reject); return; }
@@ -541,7 +541,7 @@ const BrickLoader = (() => {
     }
     p = (async () => {
       const resp = await fetch(url, signal ? { signal } : undefined);
-      if (!resp.ok) throw Object.assign(new Error(`[BrickLoader] index.bin: HTTP ${resp.status} for ${url}`), { code: 'BRICKS_INDEX_HTTP' });
+      if (!resp.ok) throw Object.assign(new Error(`[BrickLoader] index.bin: HTTP ${resp.status} for ${url}`), { code: 'BRICKS_INDEX_HTTP', status: resp.status });
       const bytes = new Uint8Array(await resp.arrayBuffer());
       if (bytes.length !== ix.bytes) throw _v3IndexError(`${bytes.length} bytes ≠ index.bytes ${ix.bytes}`);
       const digest = await _sha256HexAny(bytes);
@@ -1175,7 +1175,7 @@ const BrickLoader = (() => {
    */
   async function loadBrickTasks(tasks, options = {}) {
     if (_pendingInit) await _pendingInit;
-    if (!_mount) throw new Error('BrickLoader not initialized.');
+    if (!_mount) throw Object.assign(new Error('BrickLoader not initialized.'), { code: 'BRICKS_NOT_INITIALIZED' });
     // A caller that planned its tasks on one tree names it: another tree mounted
     // meanwhile (a timepoint prefetch, the detail streaming re-mounting the frame on
     // screen, a v3 index landing) must not silently serve these coordinates.
@@ -1531,7 +1531,7 @@ const BrickLoader = (() => {
       const url = `${mount.basePath}/${rel}`;
       const resp = await fetch(url, { signal: batch.signal });
       // ELE-20: 404 sur un fetch direct -> échec tracé (retry + drop), jamais des zéros.
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + url);
+      if (!resp.ok) throw Object.assign(new Error('HTTP ' + resp.status + ' for ' + url), { code: 'BRICKS_HTTP', status: resp.status });
       bytes = await resp.arrayBuffer();
       if (!enc && _settings.verifyHashes) await _verifyBrickHash(mount, t.rel, bytes);
     }
@@ -1660,7 +1660,7 @@ const BrickLoader = (() => {
     _withFetchSlot(async () => {
       _stats.packFetches++;
       const resp = await fetch(url, { signal });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+      if (!resp.ok) throw Object.assign(new Error(`HTTP ${resp.status} for ${url}`), { code: 'BRICKS_HTTP', status: resp.status });
       const buffer = await _readBody(resp, entry, size);
       if (hash && _settings.verifyHashes) await _verifyPackHash(url, buffer, hash);
       return buffer;
@@ -1818,14 +1818,14 @@ const BrickLoader = (() => {
         if (contentRange) {
           const cr = _parseContentRange(contentRange);
           if (!cr || cr.end - cr.start !== body.length) {
-            throw new Error(`Range answer of ${url}: Content-Range "${contentRange}" for ${body.length} bytes`);
+            throw Object.assign(new Error(`Range answer of ${url}: Content-Range "${contentRange}" for ${body.length} bytes`), { code: 'BRICKS_RANGE_INVALID' });
           }
           return { parts: [{ start: cr.start, end: cr.end, bytes: body }] };
         }
         if (live.length === 1) {
           const e = live[0];
           if (body.length !== e.end - e.start) {
-            throw new Error(`Range ${e.start}-${e.end - 1} of ${url} answered ${body.length} bytes`);
+            throw Object.assign(new Error(`Range ${e.start}-${e.end - 1} of ${url} answered ${body.length} bytes`), { code: 'BRICKS_RANGE_INVALID' });
           }
           return { parts: [{ start: e.start, end: e.end, bytes: body }] };
         }
@@ -1847,7 +1847,7 @@ const BrickLoader = (() => {
         return { adopt: pack };
       }
       const what = live.length === 1 ? `range ${live[0].start}-${live[0].end - 1}` : `${live.length} ranges`;
-      throw new Error(`HTTP ${resp.status} for ${url} (${what})`);
+      throw Object.assign(new Error(`HTTP ${resp.status} for ${url} (${what})`), { code: 'BRICKS_HTTP', status: resp.status });
     }, ctrl.signal).then(
       (got) => {
         live.forEach(_endProbe);
@@ -1871,7 +1871,7 @@ const BrickLoader = (() => {
         if (!missing.length) return;
         if (live.length === 1) {
           const e = missing[0];
-          _settleFailed(e, new Error(`Range ${e.start}-${e.end - 1} of ${url} answered another range`));
+          _settleFailed(e, Object.assign(new Error(`Range ${e.start}-${e.end - 1} of ${url} answered another range`), { code: 'BRICKS_RANGE_INVALID' }));
           return;
         }
         if (missing.length === live.length) _multiRangeBadHosts.add(host);
@@ -2206,7 +2206,7 @@ const BrickLoader = (() => {
         const got = await _awaitWithSignal(_awaitPrefix(entry, offset + length), batch.signal);
         const at = offset - got.base;
         if (at < 0 || at + length > got.buffer.byteLength) {
-          throw new Error(`brick ${t.rel} lies outside the ${got.buffer.byteLength} bytes fetched for it`);
+          throw Object.assign(new Error(`brick ${t.rel} lies outside the ${got.buffer.byteLength} bytes fetched for it`), { code: 'BRICKS_READ_FAILED' });
         }
         return got.buffer.slice(at, at + length);
       } catch (err) {
@@ -2223,7 +2223,7 @@ const BrickLoader = (() => {
         _maybeRelease(entry);
       }
     }
-    throw new Error(`brick ${t.rel} could not be read`);
+    throw Object.assign(new Error(`brick ${t.rel} could not be read`), { code: 'BRICKS_READ_FAILED' });
   }
 
   // Resolve/reject with `promise`, but reject early (AbortError) if `signal` aborts —
@@ -2258,7 +2258,7 @@ const BrickLoader = (() => {
   async function _verifyPackHash(url, buffer, expected) {
     if (typeof crypto === 'undefined' || !crypto.subtle) return;
     const actual = await _sha256Hex(buffer);
-    if (actual !== String(expected).toLowerCase()) throw new Error('Pack hash mismatch for ' + url);
+    if (actual !== String(expected).toLowerCase()) throw Object.assign(new Error('Pack hash mismatch for ' + url), { code: 'BRICKS_HASH_MISMATCH' });
   }
 
   async function _verifyBrickHash(mount, rel, buffer) {
@@ -2834,7 +2834,7 @@ const BrickLoader = (() => {
         if (value && msg.cellMax) value.cellMax = new Uint8Array(msg.cellMax);
         _settlePending(msg.id, true, value);
       } else {
-        _settlePending(msg.id, false, new Error(msg.message || 'Brick decode failed'));
+        _settlePending(msg.id, false, Object.assign(new Error(msg.message || 'Brick decode failed'), { code: 'BRICKS_DECODE_FAILED' }));
       }
     };
     // A worker that fails to load (404, CSP) or dies (OOM) never answers again: its
@@ -2975,7 +2975,7 @@ const BrickLoader = (() => {
 
   /** A whole pack's bytes through the shared store (held only while awaited). */
   async function _fetchPackBuffer(relativeUrl, signal) {
-    if (!_mount) throw new Error('BrickLoader not initialized.');
+    if (!_mount) throw Object.assign(new Error('BrickLoader not initialized.'), { code: 'BRICKS_NOT_INITIALIZED' });
     const url = _absUrl(_mount, relativeUrl);
     _packRefs.set(url, (_packRefs.get(url) || 0) + 1);
     const entry = _store.get(url) || _createPackEntry(url);

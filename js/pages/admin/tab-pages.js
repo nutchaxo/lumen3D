@@ -1970,7 +1970,14 @@ async function newPage() {
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) { toast(t('pages.badSlug', 'Identifiant invalide.'), 'error'); return; }
   if (_pages.some((p) => p.slug === slug)) { toast(t('pages.dupSlug', 'Cette page existe déjà.'), 'error'); return; }
   const label = prompt(t('pages.newLabel', 'Libellé dans le menu :'), slug) || slug;
-  await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(slug)}`, { method: 'POST', body: JSON.stringify({ title: { [_editLoc]: label }, published: { sections: [] }, draft: { sections: [] } }) });
+  const created = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(slug)}`, { method: 'POST', body: JSON.stringify({ title: { [_editLoc]: label }, published: { sections: [] }, draft: { sections: [] } }) });
+  // Nothing below may run for a page that was not written: the menu entry would
+  // point at a missing file and the editor would open on it.
+  if (!created.ok) {
+    console.error('page creation refused:', created.status, created.data);
+    toast(t('pages.saveError', 'Save failed.'), 'error');
+    return;
+  }
   // Add to nav HIDDEN (show:false): an empty page must not leak into the public
   // menu before it has published content — publish() reveals it. Read-reconcile
   // first so a concurrent Identity edit isn't clobbered.

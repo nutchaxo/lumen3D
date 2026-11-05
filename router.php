@@ -9,6 +9,8 @@
  * built-in server's normal static/script handling.
  */
 
+if (is_file(__DIR__ . '/api/_bootstrap.php')) require_once __DIR__ . '/api/_bootstrap.php';
+
 // Derive the path WITHOUT parse_url(). A request beginning with two slashes makes
 // parse_url() read the first segment as an authority: for '//api/admin_credential.json'
 // it returns host='api', path='/admin_credential.json', which matches no deny rule —

@@ -159,7 +159,6 @@ const ViewerApp = (() => {
     if (!datasetId) {
       _perf()?.end(initPerfId, { status: 'missing-dataset-id' });
       _showLoadingError({ message: I18n.t('viewer.errNoDataset') });
-      if (!_isIframe) setTimeout(() => { window.location.href = 'explorer.html'; }, 1400);
       return;
     }
 
@@ -176,10 +175,22 @@ const ViewerApp = (() => {
       };
     }
 
+    // The catalog could not be fetched (its embedded fallback lists nothing) but the
+    // dataset's own metadata.json was asked for from the URL: mount from that file,
+    // which _mergeDatasetMetadata validates, instead of reporting "not found".
+    if (!datasetMeta && Catalog.getLoadError?.() && earlyPath === datasetId && !datasetId.startsWith(_STAGING_PREFIX)) {
+      datasetMeta = {
+        id: datasetId,
+        path: datasetId,
+        name: datasetId,
+        type: _datasetTypeOf(datasetId),
+        volumeSources: []
+      };
+    }
+
     if (!datasetMeta) {
       _perf()?.end(initPerfId, { status: 'dataset-not-found', datasetId });
       _showLoadingError({ message: I18n.t('viewer.errNotFound') });
-      if (!_isIframe) setTimeout(() => { window.location.href = 'explorer.html'; }, 1400);
       return;
     }
     try {
@@ -187,7 +198,6 @@ const ViewerApp = (() => {
     } catch (err) {
       _perf()?.end(initPerfId, { status: 'invalid-metadata', datasetId });
       _showLoadingError(err);
-      if (!_isIframe) setTimeout(() => { window.location.href = 'explorer.html'; }, 1400);
       return;
     }
     if (!datasetMeta.volumeSources) datasetMeta.volumeSources = [];
@@ -318,7 +328,10 @@ const ViewerApp = (() => {
       _setQualityStatus(_t('viewer.gpuReloading', 'GPU context restored: reloading the volume…'));
       Promise.resolve(info.reload)
         .then(() => _setQualityStatus(_t('viewer.gpuRestored', 'GPU context restored.')))
-        .catch((err) => _setQualityStatus(_tf('viewer.gpuReloadFailed', 'GPU context restored, but the volume could not be reloaded: {message}', { message: String(err?.message || err) })));
+        .catch((err) => {
+          console.error('[ViewerApp] Volume reload after a GPU context restore failed:', err);
+          _setQualityStatus(_tf('viewer.gpuReloadFailed', 'GPU context restored, but the volume could not be reloaded: {message}', { message: Utils.friendlyErrorText(err) || Utils.friendlyErrorText('unknown') }));
+        });
     });
     VolumeViewer.setZDisplayScale(_zDisplayScale, { notify: false });
     _refreshTrackingVisuals();
@@ -514,7 +527,7 @@ const ViewerApp = (() => {
       // TypeError on property access.
       const totalFrames = datasetMeta.dimensions?.t;
       if (!Number.isFinite(totalFrames) || totalFrames <= 0) {
-        volumeP = Promise.reject(new Error('dataset live sans dimensions.t'));
+        volumeP = Promise.reject(Utils.userError('DATASET_INVALID', 'app.errMetadata', "This dataset's description is invalid.", 'live dataset without dimensions.t'));
       } else {
         _playbackFps = _loadPlaybackFps();
         Timeline.init('timeline-panel', {
@@ -996,7 +1009,7 @@ const ViewerApp = (() => {
       && Number.isFinite(datasetMeta.dimensions.z);
     const datasetPath = datasetMeta?.path || datasetMeta?.id;
     if (!datasetPath) {
-      if (!_hasCatalogDims) throw new Error(_t('viewer.errMetadataMissing', 'metadata.json not found and no dimensions in the catalog'));
+      if (!_hasCatalogDims) throw Utils.userError('METADATA_MISSING', 'app.errMetadata', "This dataset's description is invalid.", 'metadata.json not found and no dimensions in the catalog');
       return;
     }
     try {
@@ -1013,14 +1026,14 @@ const ViewerApp = (() => {
         const staged = String(datasetPath).startsWith(_STAGING_PREFIX);
         const transient = fetched.status === 0 || fetched.status >= 500;
         if (!(staged || transient) || !_hasCatalogDims) {
-          throw new Error(_tf('viewer.errMetadataHttp', 'metadata.json unavailable (HTTP {status})', { status: fetched.status }));
+          throw Object.assign(new Error(`metadata.json unavailable (HTTP ${fetched.status})`), { code: 'METADATA_HTTP', status: fetched.status });
         }
         return;
       }
       const meta = fetched.meta;
       const expectLive = datasetMeta?.type === 'live' || meta?.type === 'live';
       const v = _validateDatasetMetadata(meta, expectLive);
-      if (!v.ok) throw new Error(_tf('viewer.errMetadataInvalid', 'Invalid metadata.json: {reason}', { reason: v.reason }));
+      if (!v.ok) throw Utils.userError('METADATA_INVALID', 'app.errMetadata', "This dataset's description is invalid.", `Invalid metadata.json: ${v.reason}`);
       _dropMalformedBlocks(meta);
       datasetMeta = {
         ...datasetMeta,
@@ -1051,7 +1064,10 @@ const ViewerApp = (() => {
   function _bindQualityControls() {
     const select = document.getElementById('select-quality');
     if (!select) return;
-    select.addEventListener('change', () => { _setQualityMode(select.value); });
+    // The failure is already in the status line; the promise must not also reject unhandled.
+    select.addEventListener('change', () => { _setQualityMode(select.value).catch(() => {}); });
+    // Tier names are translated text built into the select and the matrix.
+    if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _updateQualityOptionLabels());
     const matrix = document.getElementById('quality-matrix');
     if (matrix) {
       matrix.addEventListener('click', (e) => {
@@ -1118,7 +1134,8 @@ const ViewerApp = (() => {
         _qualityMode = previous;
         _showQualityInSelect(select, previous);
         VolumeViewer.setQualityTarget?.(previous, previous);
-        _setQualityStatus(`${_qualityLabel(previous)} — ${String(err?.message || err)}`);
+        const why = Utils.friendlyErrorText(err);
+        _setQualityStatus(why ? `${_qualityLabel(previous)} — ${why}` : _qualityLabel(previous));
         throw err;
       });
   }
@@ -1289,29 +1306,34 @@ const ViewerApp = (() => {
   // most faithful first; the guide says what each one stores and what it costs here.
   const QUALITY_TIERS = {
     ll: {
-      name: 'Max',
+      label: ['viewer.tierMax', 'Max'],
       short: ['viewer.qualityMatrix.tier.max.short', 'Exact'],
       long: ['viewer.qualityMatrix.tier.max.long', 'Every voxel as acquired, nothing lost. For measurements, figures and exports.']
     },
     b2: {
-      name: 'Extra',
+      label: ['viewer.tierExtra', 'Extra'],
       short: ['viewer.qualityMatrix.tier.extra.short', '±2 levels'],
       long: ['viewer.qualityMatrix.tier.extra.long', 'Visually lossless: no voxel moves by more than 2 of the 256 grey levels. Hard to tell apart on screen; the default for exploring.']
     },
     b4: {
-      name: 'High',
+      label: ['viewer.tierHigh', 'High'],
       short: ['viewer.qualityMatrix.tier.high.short', '±4 levels'],
       long: ['viewer.qualityMatrix.tier.high.long', 'Near lossless: no voxel moves by more than 4 grey levels. Small enough to be hard to see, even zoomed in.']
     },
     q80: {
-      name: 'Medium',
+      label: ['viewer.tierMedium', 'Medium'],
       short: ['viewer.qualityMatrix.tier.medium.short', 'WebP 80'],
       long: ['viewer.qualityMatrix.tier.medium.long', 'Lossy WebP at quality 80: smaller files, faint texture and noise smoothed, slight artefacts near sharp edges. Good for overviews.']
     },
     q50: {
-      name: 'Low',
+      label: ['viewer.tierLow', 'Low'],
       short: ['viewer.qualityMatrix.tier.low.short', 'WebP 50'],
       long: ['viewer.qualityMatrix.tier.low.long', 'Lossy WebP at quality 50: the lightest. Visible smoothing and loss of fine detail. Only to browse a very large level on a slow link.']
+    },
+    // The one display column of a format 6 tree (its note says what it stores).
+    q30: {
+      label: ['viewer.tierQ30', 'Q30'],
+      long: ['viewer.qualityMatrix.q30Note', 'Every volume is displayed compressed in WebP quality 30. Measurements and exports read the lossless data, at the resolution chosen here.']
     }
   };
   const MBPS_TO_BYTES_PER_SECOND = 125000;   // 1 Mb/s = 10⁶ bit/s = 125 000 byte/s
@@ -1324,7 +1346,8 @@ const ViewerApp = (() => {
   let _qmRateChoice = null;
 
   function _qualityColumnLabel(id) {
-    return QUALITY_TIERS[id]?.name || id;
+    const e = QUALITY_TIERS[id]?.label;
+    return e ? _t(e[0], e[1]) : id;
   }
 
   function _qualityTierText(id, which) {
@@ -2139,7 +2162,7 @@ const ViewerApp = (() => {
       case 'encode':
         return _viewExportText('exportView.errEncode', 'The browser could not encode a PNG this large. Choose a smaller size.');
       default:
-        return _viewExportText('exportView.errGeneric', 'Export failed: {message}', { message: err?.message || String(err) });
+        return _viewExportText('exportView.errGeneric', 'Export failed: {message}', { message: Utils.friendlyErrorText(err) || Utils.friendlyErrorText('unknown') });
     }
   }
 
@@ -3033,7 +3056,7 @@ const ViewerApp = (() => {
   function _updateSliceAngleUi(spec = VolumeViewer.getPlaneSpec()) {
     const readout = document.getElementById('slice-angle-readout');
     if (readout) {
-      readout.textContent = `Yaw ${Math.round(spec.yaw || 0)} / Pitch ${Math.round(spec.pitch || 0)} / Roll ${Math.round(spec.roll || 0)}`;
+      readout.textContent = `${_t('viewer.yaw', 'Yaw')} ${Math.round(spec.yaw || 0)} / ${_t('viewer.pitch', 'Pitch')} ${Math.round(spec.pitch || 0)} / ${_t('viewer.roll', 'Roll')} ${Math.round(spec.roll || 0)}`;
     }
     const handle = document.getElementById('slice-gizmo-handle');
     const rollHandle = document.getElementById('slice-gizmo-roll');
@@ -4812,11 +4835,25 @@ const ViewerApp = (() => {
       _pendingWorkspaceState = state;
       return;
     }
-    _applyWorkspaceStateNow(state);
+    return _applyWorkspaceStateNow(state);
   }
 
-  // Internal: apply immediately (called by init() after volume is loaded)
+  // Internal: apply immediately (called by init() after volume is loaded). A saved
+  // view that cannot be applied (hand-edited #state=, a state of an older build) must
+  // not fail init() under a loaded volume: the dataset stays as it was opened.
   function _applyWorkspaceStateNow(state = {}) {
+    try {
+      if (!state || typeof state !== 'object') throw new Error('workspace state is not an object');
+      _applyWorkspaceStateCore(state);
+      return true;
+    } catch (err) {
+      console.warn('[ViewerApp] Saved view could not be applied:', err);
+      if (typeof ExportManager !== 'undefined') ExportManager.toast?.(_t('viewer.workspaceNotApplied', 'This saved view could not be applied: the dataset is shown as it was opened.'));
+      return false;
+    }
+  }
+
+  function _applyWorkspaceStateCore(state) {
     const ui = state.ui || {};
     const viewerState = state.viewer && Object.keys(state.viewer).length ? state.viewer : state;
 
@@ -5857,7 +5894,11 @@ const ViewerApp = (() => {
     }
 
     if (!result || result.available === false) {
-      throw new Error(result?.reason || _tf('viewer.qualityUnavailable', 'Quality {quality} unavailable', { quality: _qualityLabel(primaryQuality) }));
+      if (result?.reason) {
+        // reason = log detail; code (or a bare reason token such as 'budget') = what the reader is told.
+        throw Object.assign(new Error(result.reason), { code: result.code || result.reason, status: result.status });
+      }
+      throw Utils.userError('QUALITY_UNAVAILABLE', 'viewer.qualityUnavailable', 'Quality {quality} unavailable', null, { quality: _qualityLabel(primaryQuality) });
     }
 
     _currentTimepoint = t;
@@ -6233,9 +6274,6 @@ const ViewerApp = (() => {
       text += ` ${_tf('viewer.resDowngradeBytes', '({needed} MB needed, {budget} MB available for the volume.)', { needed: mb(result.neededBytes), budget: mb(avail) })}`;
       if (avail < Number(result.budgetBytes) - 1024 * 1024) {
         text += ` ${_tf('viewer.resDowngradeHeld', 'The other {held} MB of the {total} MB budget hold volumes that stay loaded.', { held: mb(Number(result.budgetBytes) - avail), total: mb(result.budgetBytes) })}`;
-      }
-      if (VolumeViewer.getGpuBudget?.()?.source === 'heuristic') {
-        text += ` ${_t('viewer.resDowngradeEstimate', 'This budget is an estimate (a browser does not tell the real GPU memory): set yours under Render quality › GPU memory.')}`;
       }
     } else if (result?.downgradeReason === 'alloc-failed') {
       text += ` ${_t('viewer.resDowngradeRefused', '(The GPU refused the allocation.)')}`;
@@ -6940,14 +6978,30 @@ const ViewerApp = (() => {
    * the loader shows the error card — in its own element, so the progress bar and the
    * label every later load writes to are still there.
    */
+  /**
+   * err → the sentence a reader sees. A plain `{ message }` object (not an Error)
+   * already carries a translated sentence; anything else goes through
+   * Utils.friendlyError, its technical text kept for the console and, in the admin
+   * preview (`mode=admin`), for a second line of the error card.
+   */
+  function _loadErrorText(err) {
+    const preTranslated = err && typeof err === 'object' && !(err instanceof Error)
+      && typeof err.message === 'string' && err.message && err.code == null && !err.name;
+    if (preTranslated) return { text: err.message, detail: '', silent: false };
+    const f = Utils.friendlyError(err);
+    if (f.silent) return { text: _t('viewer.errUnknown', 'Unknown loading error'), detail: '', silent: true };
+    const text = Utils.friendlyErrorText(err) || _t('viewer.errUnknown', 'Unknown loading error');
+    let admin = false;
+    try { admin = new URLSearchParams(window.location.search).get('mode') === 'admin'; } catch (e) { admin = false; }
+    return { text, detail: admin && f.detail && f.detail !== text ? f.detail : '', silent: false };
+  }
+
   function _showLoadingError(err) {
     console.error('[ViewerApp] Loading failed:', err);
-    let text = String(err?.message || err || _t('viewer.errUnknown', 'Unknown loading error'));
-    // three.js says this when the browser gives the page no WebGL context at all: usually
-    // the browser blocking WebGL for the site after GPU crashes, not the dataset.
-    if (/creating WebGL context|WebGL.*(not supported|unavailable|disabled)/i.test(text)) {
-      text = _t('viewer.errNoWebgl', 'This browser refused to give the page a 3D (WebGL) context. After a graphics driver crash, a browser blocks WebGL for the site until it is fully restarted: close the browser completely (on Android: Settings › Apps › Chrome › Force stop) and open the page again. If it persists, check that hardware acceleration is on.');
-    }
+    const { text, detail, silent } = _loadErrorText(err);
+    // A superseded or cancelled load says nothing while a volume is on screen; with
+    // none, the card still replaces a spinner that would otherwise never stop.
+    if (silent && _isInitialized && _hasMountedVolume()) return;
     if (_isInitialized && _hasMountedVolume()) {
       const loader = document.getElementById('viewer-loader');
       if (loader) loader.style.display = 'none';
@@ -6976,6 +7030,13 @@ const ViewerApp = (() => {
     message.className = 'viewer-loader-error__message';
     message.textContent = text;
     card.replaceChildren(icon, title, message);
+    if (detail) {
+      // The operator previewing a dataset needs the technical cause; a reader does not.
+      const tech = document.createElement('p');
+      tech.className = 'viewer-loader-error__message viewer-loader-error__detail';
+      tech.textContent = detail;
+      card.appendChild(tech);
+    }
     if (!_isIframe) {
       const back = document.createElement('a');
       back.href = 'explorer.html';
@@ -7377,7 +7438,12 @@ const ViewerApp = (() => {
     } finally {
       // _showLoadingError posts PANEL_ERROR itself before the volume is mounted; when
       // it threw, a host still waiting for PANEL_READY must not wait out its timeout.
-      if (!shown && !_isInitialized) _postToHost({ type: 'PANEL_ERROR', message: String(err?.message || err) });
+      if (!shown && !_isInitialized) {
+        let message = '';
+        // Nothing here may throw again: the host must hear of the failure.
+        try { message = Utils.friendlyErrorText(err) || _t('viewer.errUnknown', 'Unknown loading error'); } catch (e) { message = ''; }
+        _postToHost({ type: 'PANEL_ERROR', message: message || 'Unknown loading error' });
+      }
     }
   }
 

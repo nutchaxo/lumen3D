@@ -183,7 +183,7 @@ window.createChannelPanel = function() {
   function setState(state = [], options = {}) {
     if (!Array.isArray(state)) return;
     state.forEach((item, idx) => {
-      if (!_channels[idx]) return;
+      if (!_channels[idx] || !item || typeof item !== 'object') return;
       // BUG-044: the +0.01 floor was applied AFTER clamping min and never re-clamped,
       // so min===1.0 produced max=1.01 (>1) which propagated unclamped to the shader
       // uniform. Cap min at 0.99 and re-clamp max into [0,1] while keeping max>min.

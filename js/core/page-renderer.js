@@ -112,6 +112,16 @@ const PageRenderer = (() => {
     } catch (_) {}
     return 'No datasets to show yet.';
   }
+  // A translated key, or `fallback` when the key is missing (I18n.t returns the key itself).
+  function _tr(key, fallback) {
+    try {
+      if (typeof I18n !== 'undefined' && I18n.t) {
+        const s = I18n.t(key);
+        if (s && s !== key) return s;
+      }
+    } catch (_) {}
+    return fallback;
+  }
   // Coalesce the per-widget Lucide passes into ONE document scan per frame: a
   // content-rich page used to queue ~1 setTimeout+DOM-scan per icon-bearing
   // widget. createIcons() is idempotent (a replaced <i> loses its data-lucide),
@@ -609,7 +619,7 @@ const PageRenderer = (() => {
       if (variant !== 'lg' && p.size === 'lg') cls += ' btn-lg';
       a.className = cls.trim();
       const iconName = String(p.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
-      const label = _lv(b.text) || 'Button';
+      const label = _lv(b.text) || _tr('pages.block.button', 'Button');
       if (iconName) {
         const ic = document.createElement('i');
         ic.setAttribute('data-lucide', iconName);
@@ -1338,7 +1348,7 @@ const PageRenderer = (() => {
         a.appendChild(badge);
         wrap.appendChild(a);
       } else {
-        wrap.appendChild(_el('div', 'opacity:.5;font-size:13px;padding:20px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px', _lv(b.text) || 'Vidéo'));
+        wrap.appendChild(_el('div', 'opacity:.5;font-size:13px;padding:20px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px', _lv(b.text) || _tr('pages.block.video', 'Video')));
       }
       return wrap;
     },

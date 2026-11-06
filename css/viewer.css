@@ -155,12 +155,19 @@ body {
               border-color 0.25s ease;
 }
 
-.viewer-sidebar.sidebar-hidden {
+.viewer-sidebar.sidebar-hidden,
+html.panel-boot .viewer-sidebar {
   width: 0;
   border-right: none;
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
+}
+
+/* A Compare panel is folded from the first paint (theme-boot.js sets panel-boot) and without
+   the slide: the canvas never starts 320 px narrower and widens while the volume streams in. */
+html.panel-boot .viewer-sidebar {
+  transition: none;
 }
 
 /* ── Sidebar topbar (title + collapse button) ─────────────── */
@@ -913,6 +920,13 @@ body.viewer-iframe .canvas-overlay {
 body.viewer-iframe .scientific-panel {
   right: 8px;
   width: min(360px, calc(100% - 16px));
+}
+
+/* The same for the two side panels that sit beside the canvas (slice inspector, z-stack
+   browser): at 300 px they took half of a Compare panel and left a slice of 250 px. */
+body.viewer-iframe .slice-inspector:not(.hidden),
+body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
+  width: clamp(200px, 34%, 300px);
 }
 
 .quality-status {

@@ -199,6 +199,9 @@ const ViewerApp = (() => {
     _panelIndex = params.get('panelIndex');
     const requestedQuality = _normalizeQualityParam(params.get('quality'));
     if (requestedQuality) _qualityMode = requestedQuality;
+    // A Compare panel shares the machine with its siblings: size the decode pool and the
+    // pack caches for the number of volume panels before the first brick is asked for.
+    if (_isIframe && _panelIndex !== null) _applyPanelResources({ panels: Number(params.get('panels')) || 1 });
 
     const isAdmin = params.get('mode') === 'admin';
     const fallbackPath = isAdmin ? _safeDatasetPath(params.get('path')) : null;
@@ -235,6 +238,8 @@ const ViewerApp = (() => {
       // close: a tool mounted in the sidebar (the cell inspector) needs the very
       // canvas clicks that used to shut it.
       if (!isAdmin) document.querySelector('.viewer-sidebar').classList.add('sidebar-hidden');
+      // The fold held since the first paint (theme-boot.js) is now this class's job.
+      document.documentElement.classList.remove('panel-boot');
     }
     
     if (!datasetId) {
@@ -2395,6 +2400,8 @@ const ViewerApp = (() => {
         }
         renderModeSelect.addEventListener('change', () => {
           PluginRegistry.activate(renderModeSelect.value);
+          // The operator's choice, not a sibling's: only this one is relayed.
+          if (_isIframe && _isInitialized) _postToHost({ type: 'SYNC_RENDER_MODE', value: renderModeSelect.value });
         });
       } else {
         renderModeSelect.addEventListener('change', () => {
@@ -6667,6 +6674,20 @@ const ViewerApp = (() => {
     } else if (data.type === 'PANEL_HELLO') {
       // The host asks for the panel's description (again): answer once ready.
       if (_isInitialized) _postPanelReady();
+    } else if (data.type === 'PANEL_RESOURCES') {
+      _applyPanelResources(data);
+    } else if (data.type === 'SYNC_PLUGIN') {
+      // A sibling's display toggle (grid, axes, hidden volume): same state here, silently —
+      // nothing is posted back, only the operator's own press is relayed.
+      if (typeof PluginRegistry !== 'undefined' && typeof data.id === 'string') {
+        PluginRegistry.applySyncState?.(data.id, data.group, data.state);
+      }
+    } else if (data.type === 'SYNC_RENDER_MODE') {
+      const select = document.getElementById('select-render-mode');
+      if (select && typeof data.value === 'string' && [...select.options].some(o => o.value === data.value)) {
+        select.value = data.value;
+        if (typeof PluginRegistry !== 'undefined') PluginRegistry.activate(data.value);
+      }
     } else if (data.type === 'PLUGIN_ACTIVATE') {
       _activateHostPlugin(data.id);
     } else if (data.type === 'SET_QUALITY') {
@@ -6935,7 +6956,9 @@ const ViewerApp = (() => {
         channels: _channelState.length,
         tracking: Boolean(datasetMeta?.tracking?.tracksPath),
         // GPU bytes each quality's atlas would take, for the host's quality staging.
-        qualityBytes: _qualityBytes()
+        qualityBytes: _qualityBytes(),
+        // What this page would allow itself alone: the host splits the machine's from it.
+        gpuBudgetBytes: _naturalGpuBudgetBytes()
       },
       quality: _qualityBaseOf(_qualityMode),
       tool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'
@@ -7018,6 +7041,50 @@ const ViewerApp = (() => {
     const result = PluginRegistry.activate(id);
     if (entry.meta?.subtype === 'toggle' && result) {
       PluginRegistry.syncToolbarButton(id, { active: !!result.active, icon: result.icon });
+      // A display toggle (compareSync) is the operator's press: the siblings follow it.
+      const shared = PluginRegistry.getSyncState?.(id);
+      if (shared) _postToHost({ type: 'SYNC_PLUGIN', id: shared.id, group: shared.group, state: shared.state });
+    }
+  }
+
+  // ── Resources of a hosted panel ────────────────────────────
+  // One panel is a whole page — its own VRAM budget, decode workers, pack caches and HTTP
+  // slots — and up to four share one machine. The host divides what the machine has
+  // (PanelResources, js/core/panel-resources.js): `?panels=N` at boot, PANEL_RESOURCES
+  // after, carrying the loader settings and the GPU budget this panel may plan against.
+  let _panelResourcesKey = null;
+  let _naturalGpuBudget = null;
+
+  /** What this page would give itself alone, read before a share replaces it (null: unknown). */
+  function _naturalGpuBudgetBytes() {
+    if (_naturalGpuBudget === null) {
+      // Before the renderer exists the card is unknown: read it once it does, not before.
+      if (!VolumeViewer.getRenderer?.()) return null;
+      let bytes = 0;
+      try { bytes = Number(VolumeViewer.getGpuBudget?.()?.bytes) || 0; } catch (err) { bytes = 0; }
+      _naturalGpuBudget = bytes > 0 ? bytes : 0;
+    }
+    return _naturalGpuBudget || null;
+  }
+
+  function _applyPanelResources(data = {}) {
+    if (!_isIframe || _panelIndex === null) return;
+    const natural = _naturalGpuBudgetBytes();
+    const loader = data.loader && typeof data.loader === 'object' ? data.loader
+      : (typeof PanelResources !== 'undefined' && Number(data.panels) > 0
+        ? PanelResources.loaderSettings(Number(data.panels), navigator.hardwareConcurrency) : null);
+    const vram = Number(data.vramBytes) > 0 ? Number(data.vramBytes) : null;
+    const key = JSON.stringify([loader, vram]);
+    if (key === _panelResourcesKey) return;
+    _panelResourcesKey = key;
+    if (loader && typeof BrickLoader !== 'undefined' && typeof BrickLoader.configure === 'function') {
+      try { BrickLoader.configure(loader); } catch (err) { console.warn('[ViewerApp] Loader settings refused:', err); }
+    }
+    if (typeof SVRManager !== 'undefined' && typeof SVRManager.setVramBudget === 'function') {
+      // Never more than the page would allow itself alone; null gives the whole card back.
+      SVRManager.setVramBudget(vram === null ? null : (natural ? Math.min(vram, natural) : vram));
+      // A smaller share is honoured now, not at the next frame that lands.
+      VolumeViewer.trimCache?.();
     }
   }
 

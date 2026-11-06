@@ -1,7 +1,7 @@
 {
   "id": "toggle-volume",
   "name": "Hide / Show 3D Volume",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": "1.x",
   "contexts": [
     "page",
@@ -11,6 +11,7 @@
   "placement": "tools",
   "group": "visuals",
   "subtype": "toggle",
+  "compareSync": "display",
   "icon": "eye-off",
   "order": 30,
   "description": "Toggle volume cube visibility while keeping slice projections visible.",

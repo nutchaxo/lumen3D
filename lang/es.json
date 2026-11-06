@@ -519,6 +519,8 @@
     "syncTitle": "SINCRO",
     "syncCamera": "Cámara / vista",
     "syncChannels": "Canales",
+    "syncDisplay": "Visualización",
+    "syncDisplayHint": "La cuadrícula, los ejes, el volumen oculto y el modo de render pasan de un panel a los demás",
     "channels": "Canales",
     "emptyTitle": "Ningún conjunto de datos seleccionado.",
     "chooseBtn": "Elegir Conjunto de Datos",

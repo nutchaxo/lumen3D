@@ -150,6 +150,7 @@ const cost = { '512x512': 256 * MB, '1024x1024': 1000 * MB, '2048x2048': 3000 * 
   const utilsSrc = read('js/core/utils.js');
   vm.runInContext(utilsSrc + '\n;globalThis.Utils = Utils;', ctx, { filename: 'utils.js' });
   vm.runInContext(read('js/pages/compare-policy.js') + '\n;globalThis.CompareQuality = CompareQuality; globalThis.CompareTimeSync = CompareTimeSync;', ctx);
+  vm.runInContext(read('js/core/panel-resources.js') + '\n;globalThis.PanelResources = PanelResources;', ctx);
   vm.runInContext(read('js/pages/compare.js') + '\n;globalThis.CompareApp = CompareApp;', ctx, { filename: 'compare.js' });
   const App = ctx.CompareApp;
   assert.equal(typeof App.removePanel, 'function', 'a panel can be closed through the API');

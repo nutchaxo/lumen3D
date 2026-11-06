@@ -331,6 +331,7 @@ function assertCloneable(entry, label) {
   };
   const ctx = vm.createContext(sandbox);
   vm.runInContext(read('js/core/utils.js') + '\n;globalThis.Utils = Utils;', ctx);
+  vm.runInContext(read('js/core/panel-resources.js') + '\n;globalThis.PanelResources = PanelResources;', ctx);
   vm.runInContext(read('js/pages/compare-policy.js'), ctx);
   vm.runInContext(compareSrc + '\n;globalThis.CompareApp = CompareApp;', ctx, { filename: 'compare.js' });
   const App = ctx.CompareApp;

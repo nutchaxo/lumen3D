@@ -519,6 +519,8 @@
     "syncTitle": "SYNC",
     "syncCamera": "Camera / view",
     "syncChannels": "Channels",
+    "syncDisplay": "Display",
+    "syncDisplayHint": "Grid, axes, hidden volume and render mode follow from one panel to the others",
     "channels": "Channels",
     "emptyTitle": "No datasets selected for comparison.",
     "chooseBtn": "Choose Dataset",

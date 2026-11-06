@@ -25,7 +25,7 @@ const types = (src, re) => new Set(Array.from(src.matchAll(re), m => m[1]));
 // ── host → panel ──
 const hostSends = new Set([...types(compare, /type: '([A-Z_]+)'/g), ...types(compare, /_rpc\.request\([^,]+, '([A-Z_]+)'/g)]);
 // Volume-only messages: a photograph has no z-stack, channels or quality levels.
-const volumeOnly = new Set(['TOGGLE_ZSTACK', 'ZSTACK_HOVER_STATE', 'SET_CHANNEL_ACTIVE', 'SET_QUALITY', 'SYNC_CAMERA', 'SYNC_TIME', 'SYNC_CHANNELS', 'SYNC_EXPOSURE', 'SYNC_Z', 'SYNC_ZSTACK_SLICE', 'SYNC_SLICER_SPEC']);
+const volumeOnly = new Set(['TOGGLE_ZSTACK', 'ZSTACK_HOVER_STATE', 'SET_CHANNEL_ACTIVE', 'SET_QUALITY', 'SYNC_CAMERA', 'SYNC_TIME', 'SYNC_CHANNELS', 'SYNC_EXPOSURE', 'SYNC_Z', 'SYNC_ZSTACK_SLICE', 'SYNC_SLICER_SPEC', 'SYNC_PLUGIN', 'SYNC_RENDER_MODE', 'PANEL_RESOURCES']);
 // Photograph-only.
 const photoOnly = new Set(['WM_SET_PHYSICAL_VIEW']);
 for (const t of hostSends) {
@@ -36,7 +36,7 @@ for (const t of hostSends) {
   else assert.ok(inViewer && in2d, `both pages receive ${t}`);
 }
 for (const must of ['PANEL_HELLO', 'SET_TOOL', 'PLUGIN_ACTIVATE', 'TOGGLE_SIDEBAR', 'APPLY_WORKSPACE_STATE', 'SET_QUALITY', 'TOGGLE_ZSTACK',
-  'REQUEST_CAPTURE', 'REQUEST_STUDIO_SLICE', 'REQUEST_WORKSPACE_STATE', 'REQUEST_CHANNEL_STATE']) {
+  'REQUEST_CAPTURE', 'REQUEST_STUDIO_SLICE', 'REQUEST_WORKSPACE_STATE', 'REQUEST_CHANNEL_STATE', 'PANEL_RESOURCES']) {
   assert.ok(hostSends.has(must), `host sends ${must}`);
 }
 
@@ -54,7 +54,7 @@ for (const src of [viewer, page2d]) {
     assert.ok(handled.has(t), `compare.js handles ${t}`);
   }
 }
-for (const must of ['PANEL_READY', 'PANEL_ERROR', 'PANEL_DATASET', 'PLUGIN_STATE', 'TOOL_CHANGED', 'QUALITY_STATUS', 'WM_PHYSICAL_VIEW', 'SYNC_CAMERA', 'SYNC_TIME', 'SYNC_CHANNELS', 'SYNC_EXPOSURE', 'SYNC_Z', 'SYNC_ZSTACK_SLICE', 'SYNC_SLICER_SPEC', 'SIDEBAR_CLOSED', 'REQUEST_COMPARE_STUDIO',
+for (const must of ['PANEL_READY', 'PANEL_ERROR', 'PANEL_DATASET', 'PLUGIN_STATE', 'TOOL_CHANGED', 'QUALITY_STATUS', 'WM_PHYSICAL_VIEW', 'SYNC_CAMERA', 'SYNC_TIME', 'SYNC_CHANNELS', 'SYNC_EXPOSURE', 'SYNC_Z', 'SYNC_ZSTACK_SLICE', 'SYNC_SLICER_SPEC', 'SYNC_PLUGIN', 'SYNC_RENDER_MODE', 'SIDEBAR_CLOSED', 'REQUEST_COMPARE_STUDIO',
   'CAPTURE', 'STUDIO_SLICE', 'WORKSPACE_STATE', 'CHANNEL_STATE']) {
   assert.ok(handled.has(must), `compare.js handles ${must}`);
 }
@@ -88,7 +88,7 @@ assert.ok(html.includes('id="lang-dropdown"'), 'compare.html has the language sw
 assert.ok(html.includes('id="compare-tool-chips"') && html.includes('id="compare-quality"') && html.includes('id="btn-compare-studio"'), 'toolbar hooks');
 assert.ok(html.includes('id="modal-search"') && html.includes('id="modal-type-chips"'), 'dataset picker filters');
 assert.ok(!/onclick=/.test(html), 'no inline handlers (CSP)');
-for (const key of ['compare.addDataset', 'compare.decompose', 'compare.export', 'compare.save', 'compare.restore', 'compare.syncZ', 'compare.syncTime', 'compare.syncCamera', 'compare.syncChannels', 'compare.studio', 'compare.qualityAuto']) {
+for (const key of ['compare.addDataset', 'compare.decompose', 'compare.export', 'compare.save', 'compare.restore', 'compare.syncZ', 'compare.syncTime', 'compare.syncCamera', 'compare.syncChannels', 'compare.syncDisplay', 'compare.studio', 'compare.qualityAuto']) {
   assert.ok(html.includes(`data-i18n="${key}"`), `compare.html translates ${key}`);
 }
 

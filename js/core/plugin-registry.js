@@ -810,6 +810,56 @@ const PluginRegistry = (() => {
     return () => { _toolbarStateListeners = _toolbarStateListeners.filter(f => f !== fn); };
   }
 
+  // ─── Compare: keeping a toggle the same in every panel ─────
+  // A plugin that says `"compareSync": "display"` in plugin.json has a state that means
+  // the same thing in every panel (a grid, the axes, a hidden volume): the Compare host
+  // relays what the operator did in one panel to the others. The state travels as the
+  // plugin's own getState() / setState() — the pair the workspace already uses — so a
+  // plugin needs nothing more than the two hooks it has, and its setState must be
+  // silent about being driven (a workspace restore is the same call).
+  const SYNC_GROUPS = ['display'];
+
+  function syncGroupOf(meta) {
+    const g = meta && typeof meta.compareSync === 'string' ? meta.compareSync : null;
+    return g && SYNC_GROUPS.includes(g) ? g : null;
+  }
+
+  /**
+   * The state of a toggle that takes part in a sync group, for the host to relay.
+   * @returns {{ id: string, group: string, state: * } | null} null for a plugin that does not
+   */
+  function getSyncState(id) {
+    const entry = _modules.get(id);
+    if (!entry || !entry.impl || entry.state === 'disposed' || entry.state === 'quarantined' || entry.state === 'registered') return null;
+    const group = syncGroupOf(entry.meta);
+    if (!group || typeof entry.impl.getState !== 'function') return null;
+    try {
+      const state = entry.impl.getState.call(entry.instance || entry.impl);
+      return state === undefined || state === null ? null : { id, group, state };
+    } catch (err) {
+      console.warn(`[PluginRegistry] getState failed for "${id}":`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Apply a sibling panel's state to a toggle of the same sync group. A plugin that is
+   * absent here, is not in that group, or is not initialised yet is left alone.
+   * @returns {boolean} whether the plugin took it
+   */
+  function applySyncState(id, group, state) {
+    const entry = _modules.get(id);
+    if (!entry || !entry.impl || entry.state === 'disposed' || entry.state === 'quarantined' || entry.state === 'registered') return false;
+    if (syncGroupOf(entry.meta) !== group || typeof entry.impl.setState !== 'function') return false;
+    try {
+      entry.impl.setState.call(entry.instance || entry.impl, state);
+      return true;
+    } catch (err) {
+      console.warn(`[PluginRegistry] setState failed for "${id}":`, err);
+      return false;
+    }
+  }
+
   /**
    * What the generated toolbar offers, for a host that cannot see it: the
    * exclusive tools (chips the ToolManager multiplexes) and the toggles, in
@@ -843,7 +893,9 @@ const PluginRegistry = (() => {
         toggles.push({
           ...base,
           active: btn.classList.contains('btn-solid'),
-          icon: (glyph && glyph.getAttribute('data-lucide')) || base.icon
+          icon: (glyph && glyph.getAttribute('data-lucide')) || base.icon,
+          // 'display': the host keeps this toggle the same in every panel (plugin.json#compareSync)
+          sync: syncGroupOf(meta)
         });
       }
     }
@@ -1100,6 +1152,11 @@ const PluginRegistry = (() => {
     // A host that vouched no epoch has no live revocation to watch for; polling it
     // forever cannot ever change anything. Revocation still applies on the next reload.
     if (_trustEpoch === null) return;
+    // Only a sandboxed plugin can be torn down live: with none loaded (the usual case, and
+    // always so in a Compare panel, which runs four pages at once) the poll is a request
+    // every few seconds that can change nothing.
+    const sandboxed = (id) => typeof PluginSandbox !== 'undefined' && PluginSandbox.isSandboxed && PluginSandbox.isSandboxed(id);
+    if (![..._modules.keys()].some(sandboxed)) return;
     _trustWatchTimer = setInterval(_revokeCheck, intervalMs);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) _revokeCheck(); });
   }
@@ -1127,6 +1184,8 @@ const PluginRegistry = (() => {
     syncToolbarButton,
     onToolbarState,
     describeToolbar,
+    getSyncState,
+    applySyncState,
     CONTEXTS,
     bindToolbarButtons,
     disposeAll,

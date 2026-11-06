@@ -519,6 +519,8 @@
     "syncTitle": "SYNC",
     "syncCamera": "Caméra / vue",
     "syncChannels": "Canaux",
+    "syncDisplay": "Affichage",
+    "syncDisplayHint": "La grille, les axes, le masquage du volume et le mode de rendu suivent d'un panneau aux autres",
     "channels": "Canaux",
     "emptyTitle": "Aucun jeu de données sélectionné.",
     "chooseBtn": "Choisir un jeu de données",

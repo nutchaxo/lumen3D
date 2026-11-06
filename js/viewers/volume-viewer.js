@@ -6682,6 +6682,8 @@ const VolumeViewer = (() => {
     // normalising only here would miss every entry.
     hasCachedVolume: (basePath, quality, timepoint) =>
       _volumeCache.has(_volumeCacheKey(basePath, quality, timepoint)),
+    /** Drop cached frames above the current budgets, now (a host lowered this page's share). */
+    trimCache: () => _trimVolumeCache(null),
     /** How many frames of this series fit in the budget (0 = not measurable yet). */
     getBufferCapacity: (basePath, quality) => _bufferCapacity(basePath, quality),
     /** Tell eviction where playback is, so it keeps the frames coming up next. */

@@ -519,6 +519,8 @@
     "syncTitle": "SYNC",
     "syncCamera": "Camera / weergave",
     "syncChannels": "Kanalen",
+    "syncDisplay": "Weergave",
+    "syncDisplayHint": "Raster, assen, verborgen volume en rendermodus volgen van het ene paneel naar de andere",
     "channels": "Kanalen",
     "emptyTitle": "Geen datasets geselecteerd om te vergelijken.",
     "chooseBtn": "Dataset kiezen",

@@ -55,6 +55,17 @@ const PageTemplates = (() => {
     ],
   });
 
+  // A section has no id of its own in the page model, so an in-page link target (the footer's
+  // about.html#contact) is an empty html widget whose span sits `offset` px above the content,
+  // i.e. at the section's top edge (absolute, against the section's positioned inner box).
+  const withAnchor = (column, id, offset) => {
+    column.widgets.push({
+      type: 'html',
+      props: { html: `<span id="${id}" style="position:absolute;top:-${offset}px;left:0;width:0;height:0"></span>` },
+    });
+    return column;
+  };
+
   const counter = (source, label) => ({
     width: 3,
     props: {},
@@ -212,10 +223,10 @@ const PageTemplates = (() => {
 
       // ── 7. Contact ─────────────────────────────────────────────────────────
       SEC({ padY: 96 }, [
-        chapterLabel(
+        withAnchor(chapterLabel(
           { en: 'Contact', fr: 'Contact', es: 'Contacto', nl: 'Contact' },
           { en: 'Get in touch', fr: 'Écrire à l\'équipe', es: 'Escríbenos', nl: 'Neem contact op' },
-        ),
+        ), 'contact', 96),
         { width: 8, props: {}, widgets: [
           { type: 'richtext', props: { align: 'left', markup: true }, text: {
             en: 'For a metadata correction, a reuse request, or a question about a specific dataset, write to the team running this platform.',

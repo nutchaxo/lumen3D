@@ -149,6 +149,9 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .skip-link { position: absolute; left: 8px; top: -48px; z-index: 10000; padding: 8px 14px; border-radius: 6px;
   background: var(--adm-card); color: var(--adm-text); border: 1px solid var(--adm-border-active); text-decoration: none; }
 .skip-link:focus { top: 8px; }
+.noscript-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 100000; padding: 14px 20px; text-align: center;
+  background: var(--adm-card); color: var(--adm-text); border-bottom: 1px solid var(--adm-border-active); }
+.noscript-notice p { margin: 2px 0; }
 
 .adm-topbar {
   height: 58px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 20px;

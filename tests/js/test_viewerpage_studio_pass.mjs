@@ -225,7 +225,7 @@ function makeEnv({ dims = { x: 70, y: 52, z: 41, brickSize: BS, channels: 4 }, l
   `;
   const page = new Function(
     'env', 'document', 'console', 'setTimeout', 'clearTimeout', 'performance', 'navigator', 'THREE', 'Worker', 'Dialog',
-    'BrickLoader', 'SVRManager', 'VolumeSlicer', 'VolumeViewer', 'SliceCompositor', 'StudioEditor', 'StudioPlaneOps', 'DOMException', body,
+    'BrickLoader', 'SVRManager', 'VolumeSlicer', 'VolumeViewer', 'SliceCompositor', 'StudioEditor', 'StudioPlaneOps', 'DOMException', 'Utils', body,
   )(
     env, { createElement: () => ({ getContext: () => null }) }, { warn() {}, log() {} },
     (fn) => { const id = ++timerId; timers.set(id, fn); return id; },
@@ -234,6 +234,7 @@ function makeEnv({ dims = { x: 70, y: 52, z: 41, brickSize: BS, channels: 4 }, l
     { hardwareConcurrency: 8 },
     THREE, undefined, undefined,
     BrickLoader, SVRManager, VolumeSlicer, VolumeViewer, { isRaw: (r) => Boolean(r && r.data && r.width > 0) }, StudioEditor, Ops, globalThis.DOMException,
+    { formatNumber: (v, d) => Number(v).toFixed(d) },
   );
   return { page, calls, setToken: (t) => { token = t; }, dims };
 }

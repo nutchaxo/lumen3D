@@ -27,7 +27,9 @@
     "errBusy": "Hay otra operación en curso. Inténtelo de nuevo cuando haya terminado.",
     "errSaveRefused": "El navegador se ha negado a guardar el archivo. Elija otra ubicación o permita las descargas para este sitio.",
     "errDiskFull": "No hay suficiente espacio libre en el disco para guardar el archivo.",
-    "errUnknown": "Algo ha fallado. Inténtelo de nuevo; si sigue ocurriendo, vuelva a cargar la página."
+    "errUnknown": "Algo ha fallado. Inténtelo de nuevo; si sigue ocurriendo, vuelva a cargar la página.",
+    "notFoundTitle": "Página no encontrada",
+    "notFoundText": "La página que buscas no existe o se ha movido."
   },
   "types": {
     "3d": {
@@ -71,11 +73,11 @@
     "workspaceSaved": "Espacio de trabajo guardado",
     "noWorkspace": "No se encontró ningún espacio de trabajo guardado",
     "workspaceRestored": "Espacio de trabajo restaurado",
-    "renderSliceFirst": "Renderiza un corte antes de abrir el Studio.",
+    "renderSliceFirst": "Renderice un corte antes de abrir el Studio.",
     "renderingNative": "Renderizando la exportación nativa...",
     "invalidStudioJson": "JSON de Studio no válido.",
     "maxPanels": "Máximo de {count} paneles alcanzado.",
-    "noMultiChannel": "El dataset no tiene múltiples canales para descomponer.",
+    "noMultiChannel": "El conjunto de datos no tiene múltiples canales para descomponer.",
     "workspaceSaveFailed": "No se pudo guardar el espacio de trabajo (almacenamiento del navegador lleno o bloqueado). Use «Exportar espacio de trabajo».",
     "workspaceRestoreFailed": "No se pudo aplicar este espacio de trabajo guardado."
   },
@@ -102,13 +104,13 @@
     "largeFile": "archivo grande",
     "recommended": "recomendado",
     "files": "{count} archivos",
-    "filesTitle": "Archivos del dataset",
-    "noDataset": "Abre un dataset para explorar sus archivos descargables.",
+    "filesTitle": "Archivos del conjunto de datos",
+    "noDataset": "Abra un conjunto de datos para explorar sus archivos descargables.",
     "filesRoot": "download",
     "folder": "Carpeta",
     "itemCount": "{count} elementos",
     "explorerLoading": "Cargando archivos…",
-    "explorerEmpty": "No se proporcionaron archivos descargables para este dataset.",
+    "explorerEmpty": "No se proporcionaron archivos descargables para este conjunto de datos.",
     "explorerFolderEmpty": "Esta carpeta está vacía.",
     "explorerError": "Listado de archivos no disponible (se requiere el servidor de la plataforma).",
     "analysisTitle": "Exportaciones de análisis",
@@ -121,7 +123,7 @@
     "noMetadata": "No hay metadatos disponibles",
     "omezarr": {
       "title": "Exportación OME-Zarr (napari, Fiji, Python)",
-      "hint": "Los vóxeles sin pérdidas de los niveles elegidos en un almacén OME-Zarr v0.5 dentro de un zip, calibrado en micrómetros, con los nombres y colores de los canales. Construido en este navegador a partir de los ladrillos del dataset.",
+      "hint": "Los vóxeles sin pérdidas de los niveles elegidos en un almacén OME-Zarr v0.5 dentro de un zip, calibrado en micrómetros, con los nombres y colores de los canales. Construido en este navegador a partir de los ladrillos del conjunto de datos.",
       "liveHint": "Un timelapse exporta el instante en pantalla.",
       "levels": "Niveles",
       "native": "Nativo",
@@ -168,8 +170,8 @@
     "switch": "Idioma"
   },
   "landing": {
-    "heroTitle": "Explora los {specimenPlural}",
-    "heroSubtitle": "Una plataforma interactiva para explorar datos de imagen 3D de {specimenPlural}: visualiza, analiza y compara conjuntos de datos 3D y 4D.",
+    "heroTitle": "Explore los {specimenPlural}",
+    "heroSubtitle": "Una plataforma interactiva para explorar datos de imagen 3D de {specimenPlural}: visualice, analice y compare conjuntos de datos 3D y 4D.",
     "exploreBtn": "Explorar datos",
     "learnMore": "Saber más",
     "statsDatasets": "Conjuntos de datos",
@@ -179,7 +181,7 @@
     "featuredTitle": "Conjuntos de datos destacados",
     "featuredSubtitle": "Selección reciente de nuestra colección de imágenes",
     "typesTitle": "Tipos de datos",
-    "typesSubtitle": "Navega por nuestra colección de datos",
+    "typesSubtitle": "Navegue por nuestra colección de datos",
     "browseAll": "Explorar todo",
     "viewCollection": "Ver colección",
     "loadFailed": "No se pudieron cargar los conjuntos de datos",
@@ -220,7 +222,7 @@
     "sortNewest": "Más recientes primero",
     "sortStage": "Estadio (el más temprano)",
     "loadFailed": "No se pudieron cargar los conjuntos de datos",
-    "loadFailedHint": "El catálogo no está disponible en este momento. Comprueba tu conexión e inténtalo de nuevo.",
+    "loadFailedHint": "El catálogo no está disponible en este momento. Compruebe su conexión e inténtelo de nuevo.",
     "retry": "Reintentar",
     "noDatasets": "Aún no hay conjuntos de datos",
     "noDatasetsHint": "Los conjuntos de datos aparecerán aquí cuando se publiquen."
@@ -263,7 +265,7 @@
     "resDowngrade": "La resolución {requested} supera la memoria GPU disponible — mostrando {actual}.",
     "resDowngradeOk": "OK",
     "roiStats": "Estadísticas de ROI",
-    "errNoDataset": "No se proporcionó un identificador de datos.",
+    "errNoDataset": "No se proporcionó un identificador de conjunto de datos.",
     "errNotFound": "Conjunto de datos no encontrado en el catálogo.",
     "tools": "Herramientas",
     "export": "Exportar",
@@ -334,7 +336,7 @@
     "galleryReduce": "Reducir la galería",
     "urlState": {
       "title": "Este enlace contiene una vista guardada",
-      "message": "La dirección que has abierto guarda un espacio de trabajo: cámara, ajustes de canales, herramientas y medidas. ¿Abrir esa vista o partir del conjunto de datos tal cual?",
+      "message": "La dirección que ha abierto guarda un espacio de trabajo: cámara, ajustes de canales, herramientas y medidas. ¿Abrir esa vista o partir del conjunto de datos tal cual?",
       "note": "Empezar de nuevo solo borra la vista guardada en el enlace: el conjunto de datos no cambia.",
       "restore": "Abrir la vista guardada",
       "restoreHint": "Restaura la cámara, los canales, las herramientas y las medidas guardadas en el enlace.",
@@ -423,7 +425,7 @@
     "stabilizationActive": "Deriva y rotación corregidas con el seguimiento celular.",
     "stabilizationRaw": "Adquisición sin procesar: cada imagen tal como la registró el microscopio.",
     "previousBricks": "versión anterior (antes de la actualización de datos)",
-    "previousBricksMissing": "Este dataset no conservó ninguna versión anterior: se muestra la actual.",
+    "previousBricksMissing": "Este conjunto de datos no conservó ninguna versión anterior: se muestra la actual.",
     "qualityMatrix": {
       "help": "¿Cómo elegir?",
       "resolutionHead": "Resolución",
@@ -441,7 +443,7 @@
       "rateMeasured": "Medida aquí ({rate} Mb/s)",
       "rateMbps": "{rate} Mb/s",
       "tableHead": "Todas las combinaciones",
-      "tableNote": "Tamaño: todo lo que hay que descargar para ese nivel, todos los canales. Tiempo: tamaño ÷ velocidad. La primera vista sólo carga los bricks visibles, así que suele ser más rápida que el tiempo indicado.",
+      "tableNote": "Tamaño: todo lo que hay que descargar para ese nivel, todos los canales. Tiempo: tamaño ÷ velocidad. La primera vista solo carga los bloques visibles, así que suele ser más rápida que el tiempo indicado.",
       "gpuOk": "Verde: la tarjeta lo admite cómodamente (menos del 75 % del presupuesto de {budget}).",
       "gpuTight": "Naranja: cerca del presupuesto (75 a 100 %).",
       "gpuOver": "Rojo: por encima del presupuesto. El visor muestra entonces el nivel más grueso siguiente.",
@@ -468,12 +470,12 @@
         },
         "low": {
           "short": "WebP 50",
-          "long": "WebP con pérdida, calidad 50: el más ligero. Suavizado visible y pérdida de detalle fino. Sólo para recorrer un nivel muy grande con una conexión lenta."
+          "long": "WebP con pérdida, calidad 50: el más ligero. Suavizado visible y pérdida de detalle fino. Solo para recorrer un nivel muy grande con una conexión lenta."
         }
       },
       "adviceHead": "Qué elegir",
       "advice": "Recomendado: la resolución más fina en verde, con calidad Extra. Para una medición o una figura: Max en Native.",
-      "adviceRest": "Con una calidad comprimida, los bricks visibles se vuelven a cargar sin pérdida cuando la cámara se detiene (casilla bajo las listas).",
+      "adviceRest": "Con una calidad comprimida, los bloques visibles se vuelven a cargar sin pérdida cuando la cámara se detiene (casilla bajo las listas).",
       "q30Note": "Todos los volúmenes se muestran comprimidos en WebP calidad 30. Las medidas y las exportaciones leen los datos sin pérdidas, en la resolución elegida aquí.",
       "summaryQ30": "{res} · WebP Q30: {size}"
     },
@@ -489,7 +491,10 @@
     "tierHigh": "Alta",
     "tierMedium": "Media",
     "tierLow": "Baja",
-    "tierQ30": "Q30"
+    "tierQ30": "Q30",
+    "bootSlowTitle": "Esta página tarda demasiado en cargar",
+    "bootSlow": "Un script o la información del conjunto de datos no respondió. Recargar la página suele solucionarlo.",
+    "bootReload": "Recargar"
   },
   "compare": {
     "title": "Modo de comparación",
@@ -533,9 +538,9 @@
     "studioHint": "Abrir todos los paneles en el Slice Studio",
     "qualityAuto": "Calidad automática",
     "qualityHint": "Calidad de renderizado de los paneles volumétricos (auto: 1024 hasta dos volúmenes, 512 más allá)",
-    "search": "Buscar un dataset…",
+    "search": "Buscar un conjunto de datos…",
     "allTypes": "Todos",
-    "noMatch": "Ningún dataset coincide.",
+    "noMatch": "Ningún conjunto de datos coincide.",
     "notAllReady": "Espere a que todos los paneles terminen de cargar.",
     "resizeCols": "Arrastre para redimensionar las columnas",
     "resizeRows": "Arrastre para redimensionar las filas",
@@ -550,9 +555,9 @@
     "backToPanels": "Volver a los paneles",
     "panelQueued": "Esperando un turno de carga…",
     "panelLoading": "Cargando…",
-    "panelFailed": "No se pudo cargar este dataset.",
+    "panelFailed": "No se pudo cargar este conjunto de datos.",
     "channelsDropped": "{count} canal(es) omitido(s): como máximo {max} paneles.",
-    "unknownDataset": "El dataset «{id}» no está en el catálogo.",
+    "unknownDataset": "El conjunto de datos «{id}» no está en el catálogo.",
     "uncalibrated": "sin calibrar",
     "retry": "Reintentar",
     "noDatasets": "El catálogo aún no tiene conjuntos de datos.",
@@ -560,8 +565,8 @@
   },
   "upload": {
     "title": "Subir y visualizar",
-    "subtitle": "Visualiza tus propios datos en el navegador",
-    "dragDrop": "Arrastra y suelta tus archivos aquí",
+    "subtitle": "Visualice sus propios datos en el navegador",
+    "dragDrop": "Arrastre y suelte sus archivos aquí",
     "or": "o",
     "browse": "Buscar archivos",
     "supported": "Formatos soportados: .glb, .imaris_track, .json",
@@ -1326,7 +1331,28 @@
     "loginServerError": "El servidor no pudo procesar el inicio de sesión (HTTP {status}). Inténtelo de nuevo o revise los registros del servidor.",
     "sessionChanged": "Su sesión cambió en otra pestaña. Recargue esta página e inténtelo de nuevo.",
     "previewFrameTitle": "Vista previa del dataset",
-    "displayNamePlaceholder": "Ej.: Muestra A, réplica 1"
+    "displayNamePlaceholder": "Ej.: Muestra A, réplica 1",
+    "updateErr_preflight_failed": "las comprobaciones previas han fallado",
+    "updateErr_backup_failed": "no se pudo crear la copia de seguridad",
+    "updateErr_download_failed": "la descarga ha fallado",
+    "updateErr_verify_failed": "no se pudo verificar la versión descargada",
+    "updateErr_staging_failed": "no se pudo preparar la nueva versión",
+    "updateErr_startup_check_failed": "la nueva versión no superó la comprobación de arranque",
+    "updateErr_planning_failed": "no se pudo preparar el cambio de versión",
+    "updateErr_pivot_failed": "el cambio de versión ha fallado",
+    "updateErr_pivot_interrupted": "el cambio de versión se interrumpió",
+    "updateErr_pivot_pending": "un cambio de versión anterior aún no está conciliado: reinicie el servidor",
+    "updateErr_insufficient_disk": "espacio en disco insuficiente",
+    "updateErr_signature_invalid": "la firma de la versión falta o no es válida",
+    "updateErr_release_signature_invalid": "la firma de la versión falta o no es válida",
+    "updateErr_release_unverifiable": "la versión no se puede verificar (huella ausente o distinta)",
+    "updateErr_zip_digest_mismatch": "el archivo descargado no coincide con su huella",
+    "updateErr_release_unreachable": "no se pudo contactar con GitHub",
+    "updateErr_sums_unreachable": "no se pudieron descargar las huellas de la versión",
+    "updateErr_zip_unreachable": "no se pudo descargar el archivo de la versión",
+    "updateErr_write_failed": "no se pudo escribir un archivo: compruebe los permisos de la carpeta del sitio (la actualización se puede repetir)",
+    "updateErr_update_in_progress": "ya hay otra actualización en curso",
+    "updateErr_update_failed": "error inesperado: consulte el registro del servidor"
   },
   "upl": {
     "title": "Importar datasets",
@@ -2157,7 +2183,9 @@
         "media": "Imagen no válida o demasiado pesada en el archivo: {detail}.",
         "variables": "Variable no válida en el archivo: {detail}."
       }
-    }
+    },
+    "missing": "Esta página no existe.",
+    "backHome": "Volver al inicio"
   },
   "wizard": {
     "title": "Instalación guiada",

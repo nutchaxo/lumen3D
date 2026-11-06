@@ -237,6 +237,8 @@ const CompareApp = (() => {
 
   // ── Dataset picker ────────────────────────────────────────
 
+  let _releaseModalFocus = null;
+
   function _bindModal() {
     document.getElementById('btn-close-modal').addEventListener('click', _closeModal);
     document.getElementById('modal-select').addEventListener('click', (e) => {
@@ -329,12 +331,19 @@ const CompareApp = (() => {
       _toast(_t('toast.maxPanels', `Maximum of ${MAX_PANELS} panels reached.`, { count: MAX_PANELS }));
       return;
     }
-    document.getElementById('modal-select').classList.add('active');
-    document.getElementById('modal-search')?.focus();
+    const modal = document.getElementById('modal-select');
+    const wasOpen = modal.classList.contains('active');
+    modal.classList.add('active');
+    // Focus enters the picker (search field first), Tab stays inside it, and closing hands
+    // focus back to the control that opened it.
+    if (!wasOpen) {
+      _releaseModalFocus = Utils.trapFocus(modal, { initialFocus: document.getElementById('modal-search') });
+    }
   }
 
   function _closeModal() {
     document.getElementById('modal-select').classList.remove('active');
+    if (_releaseModalFocus) { const release = _releaseModalFocus; _releaseModalFocus = null; release(); }
   }
 
   // ── Panels ────────────────────────────────────────────────

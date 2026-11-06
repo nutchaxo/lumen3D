@@ -12,6 +12,10 @@ The same requests go to dev_server.py and to a throwaway copy of the PHP tree un
   as it was; a partial `merge=` save and an empty map written as `[]` still pass.
 * media upload/delete: a field that is not a string is a 400 with the PHP wording,
   never a 500.
+* media upload keeps only what the magic bytes prove (stored extension = the bytes'),
+  atomically; media delete: 400 `Invalid file` for a bad name, 404 `Not found` for none.
+* site publish of a page nothing backs: 404 `Not found`; of a bad name: 400 `Invalid doc`.
+* a failed login carries `code: bad_credentials` beside the legacy `error` text.
 * `Unknown action` (`Unknown action.` on auth.php) and `bad_request` for a login,
   setup or change_password body whose fields are not strings.
 * catalog.json survives two datasets of one date whose names are not comparable.
@@ -219,7 +223,82 @@ class TwinCases:
             st, data, _ = self.call("POST", "/api/media.php?action=delete", body)
             self.assertEqual((st, data), (400, {"error": "Invalid file"}), body)
 
+    def _upload(self, filename, raw_bytes=None, data=None):
+        import base64
+        payload = data if data is not None else base64.b64encode(raw_bytes).decode()
+        return self.call("POST", "/api/media.php?action=upload", {"filename": filename, "data": payload})
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+    JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 24
+    GIF = b"GIF89a" + b"\x00" * 24
+    WEBP = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 24
+    AVIF = b"\x00\x00\x00\x1cftypavif" + b"\x00" * 24
+
+    def test_media_upload_checks_the_magic_bytes(self):
+        bad_type = "Type de fichier non supporté (png, jpg, webp, gif, avif)"
+        empty = "Fichier vide ou trop volumineux (max 8 Mo)"
+        for fname, raw in (("x.png", b"<?php echo 1; ?>"), ("x.png", b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+                           ("x.jpg", b"not an image at all"), ("x.gif", b"GIF90a" + b"\x00" * 8)):
+            st, data, _ = self._upload(fname, raw)
+            self.assertEqual((st, data), (400, {"ok": False, "error": bad_type}), (fname, raw))
+        for fname, payload in (("x.png", "!!!not base64!!!"), ("x.png", ""), ("x.png", "A")):
+            st, data, _ = self._upload(fname, data=payload)
+            self.assertEqual((st, data), (400, {"ok": False, "error": empty}), (fname, payload))
+        stored = [p.name for p in (self.tree / "config" / "uploads").glob("*") if not p.name.startswith(".")] \
+            if (self.tree / "config" / "uploads").is_dir() else []
+        self.assertFalse([n for n in stored if n.startswith("x")], "nothing refused was stored")
+
+    def test_media_upload_extension_follows_the_bytes(self):
+        import base64
+        cases = (("photo.jpeg", self.PNG, "photo.png"), ("a.png", self.JPG, "a.jpg"), ("b.webp", self.GIF, "b.gif"),
+                 ("c.gif", self.WEBP, "c.webp"), ("d.png", self.AVIF, "d.avif"))
+        for fname, raw, want in cases:
+            st, data, _ = self._upload(fname, raw)
+            self.assertEqual(st, 200, (fname, data))
+            self.assertEqual(data, {"ok": True, "url": f"config/uploads/{want}", "name": want})
+            self.assertEqual((self.tree / "config" / "uploads" / want).read_bytes(), raw)
+        # a data: URL, whitespace inside the base64 and a name already taken
+        url = "data:image/png;base64," + base64.b64encode(self.PNG).decode()
+        st, data, _ = self._upload("photo.png", data=url)
+        self.assertEqual((st, data["name"]), (200, "photo-1.png"))
+        st, data, _ = self._upload("sp.png", data=base64.b64encode(self.PNG).decode()[:8] + "\n " + base64.b64encode(self.PNG).decode()[8:])
+        self.assertEqual((st, data["name"]), (200, "sp.png"))
+        left = [p.name for p in (self.tree / "config" / "uploads").iterdir() if p.name.startswith(".tmp")]
+        self.assertEqual(left, [], "the write is atomic: no temporary file stays")
+
+    def test_media_delete_statuses(self):
+        st, data, _ = self._upload("gone.png", self.PNG)
+        self.assertEqual(st, 200)
+        st, data, _ = self.call("POST", "/api/media.php?action=delete", {"name": "gone.png"})
+        self.assertEqual((st, data), (200, {"ok": True}))
+        self.assertFalse((self.tree / "config" / "uploads" / "gone.png").exists())
+        st, data, _ = self.call("POST", "/api/media.php?action=delete", {"name": "gone.png"})
+        self.assertEqual((st, data), (404, {"error": "Not found"}), "no such file")
+        for name in ("script.php", "noext", "../x"):
+            st, data, _ = self.call("POST", "/api/media.php?action=delete", {"name": name})
+            self.assertEqual((st, data), (400, {"error": "Invalid file"}), name)
+
+    # ── site.php publish ────────────────────────────────────────────────────────
+
+    def test_publish_statuses(self):
+        st, data, _ = self.call("POST", "/api/site.php?action=publish&doc=pages/never-written", {})
+        self.assertEqual((st, data), (404, {"error": "Not found"}), "a page nothing backs")
+        for doc in ("pages/Bad Slug", "unknown", "pages/../x"):
+            st, data, _ = self.call("POST", f"/api/site.php?action=publish&doc={doc.replace(' ', '%20')}", {})
+            self.assertEqual((st, data), (400, {"error": "Invalid doc"}), doc)
+        st, data, _ = self.call("POST", "/api/site.php?action=save_draft&doc=pages/news",
+                                {"title": {"en": "N"}, "draft": {"sections": []}})
+        self.assertEqual(st, 200, data)
+        st, data, _ = self.call("POST", "/api/site.php?action=publish&doc=pages/news", {})
+        self.assertEqual(st, 200, data)
+        self.assertTrue(data["ok"] and isinstance(data["rev"], str))
+
     # ── parity bits ─────────────────────────────────────────────────────────────
+
+    def test_bad_credentials_carry_a_stable_code(self):
+        st, data, _ = self.call("POST", "/api/auth.php?action=login",
+                                {"username": "admin", "password": "wrong-password"}, auth=False)
+        self.assertEqual((st, data), (401, {"error": "Identifiants incorrects.", "code": "bad_credentials"}))
 
     def test_unknown_action_wording(self):
         for ep in ("datasets", "site", "media", "admin"):
@@ -309,6 +388,18 @@ class PythonBackend(TwinCases, unittest.TestCase):
             return data
         finally:
             s.close()
+
+    def test_media_upload_size_limit(self):
+        # Called directly: an 8 MB image is an 11 MB request, past a default php.ini's
+        # post_max_size, so the PHP twin cannot be fed one over HTTP in a test.
+        import base64
+        empty = {"ok": False, "error": "Fichier vide ou trop volumineux (max 8 Mo)"}
+        big = base64.b64encode(self.PNG + b"\x00" * (8 * 1024 * 1024)).decode()
+        self.assertEqual(dev_server._media_upload({"filename": "big.png", "data": big}), empty)
+        self.assertEqual(dev_server._media_upload({"filename": "big.png", "data": "A" * (4 * 2796203 + 8)}), empty)
+        ok = dev_server._media_upload({"filename": "edge.png", "data": base64.b64encode(
+            self.PNG + b"\x00" * (8 * 1024 * 1024 - len(self.PNG))).decode()})
+        self.assertTrue(ok["ok"], ok)
 
     def test_refused_before_the_body_is_read(self):
         for path in ("/api/datasets.php?action=save&id=3d/G", "/api/media.php?action=upload",

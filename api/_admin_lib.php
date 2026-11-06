@@ -3175,6 +3175,15 @@ function admin_update_check_assets(array $rel, string $latest): array {
             'signingConfigured' => LUMEN_RELEASE_PUBKEY !== ''];
 }
 
+/** A failed apply: the code (and the release-relative path of the file it stopped on, which
+ *  names nothing of this host) go to the browser, what the host said goes to the log. */
+function admin_update_fail(string $code, string $relPath, int $updated): array {
+    $last = error_get_last();
+    @error_log('[lumen] update_apply ' . $code . ' on ' . $relPath . ' after ' . $updated . ' file(s)'
+        . ($last ? ': ' . str_replace(["\r", "\n"], ' ', (string)$last['message']) : ''));
+    return [500, ['error' => $code, 'path' => $relPath, 'filesUpdated' => $updated]];
+}
+
 function admin_update_apply_locked(): array {
     if (!class_exists('ZipArchive')) return [500, ['error' => 'zip_unavailable']];
     @set_time_limit(600);
@@ -3280,7 +3289,7 @@ function admin_update_apply_locked(): array {
         if (!is_file($srcF)) continue;
         $dstF = $root . '/' . $relPath;
         $dir = dirname($dstF);
-        if (!admin_make_dir($dir)) { mkt_rmrf($staging); return [500, ['error' => 'mkdir_failed', 'path' => $relPath, 'filesUpdated' => $updated]]; }
+        if (!admin_make_dir($dir)) { mkt_rmrf($staging); return admin_update_fail('mkdir_failed', $relPath, $updated); }
         // Rename-aside FIRST: it frees the name atomically and works even on an
         // OPEN file (Windows allows rename, not delete-in-place; a plain unlink
         // there only marks delete-pending and the name stays blocked until the
@@ -3293,7 +3302,7 @@ function admin_update_apply_locked(): array {
             @file_put_contents($dstF . '.lumen-backup', $prev);
             if (!lumen_write_file_atomic($dstF, $merged, admin_code_file_mode())) {
                 mkt_rmrf($staging);
-                return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
+                return admin_update_fail('write_failed', $relPath, $updated);
             }
             $updated++;
             continue;
@@ -3307,7 +3316,7 @@ function admin_update_apply_locked(): array {
             // beside it; a later request finalizes (admin_update_finish_pending).
             if (@rename($srcF, $dstF . '.lumen-new') || @copy($srcF, $dstF . '.lumen-new')) { $pending[] = $relPath; $updated++; continue; }
             mkt_rmrf($staging);
-            return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
+            return admin_update_fail('write_failed', $relPath, $updated);
         }
         admin_fix_file_mode($dstF);
         if (substr($relPath, -4) === '.php') $phpWritten[] = $dstF;

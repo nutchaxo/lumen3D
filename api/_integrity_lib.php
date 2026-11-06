@@ -219,9 +219,13 @@ function lumen_int_handle(string $action, array $params): array {
             $r = $staged ? lumen_int_check_staged($type, $folder) : lumen_int_check_published($type, $folder);
             return [200, ['ok' => true, 'result' => $r]];
         } catch (Throwable $e) {
+            // The full text (it may name files of this host) stays in the server log; the
+            // browser gets the class of the failure only.
+            @error_log('[lumen] integrity check of ' . "$type/$folder" . ' failed: ' . get_class($e) . ': '
+                . str_replace(["\r", "\n"], ' ', $e->getMessage()));
             return [200, ['ok' => true, 'result' => ['id' => "$type/$folder", 'type' => $type, 'folder' => $folder, 'name' => $folder,
                 'staged' => $staged, 'latest' => LUMEN_MIG_LATEST, 'status' => 'error',
-                'findings' => [lumen_int_finding('error', 'check_failed', get_class($e) . ': ' . $e->getMessage())]]]];
+                'findings' => [lumen_int_finding('error', 'check_failed', get_class($e))]]]];
         }
     }
     return [400, ['error' => 'Unknown action']];

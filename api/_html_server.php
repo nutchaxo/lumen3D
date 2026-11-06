@@ -90,16 +90,7 @@ function lumen_request_rel(array $server, string $appDir): string {
     $reqPath = parse_url((string)($server['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
     if ($reqPath === null || $reqPath === false || $reqPath === '') $reqPath = '/';
 
-    $base = str_replace('\\', '/', dirname((string)($server['SCRIPT_NAME'] ?? '')));
-    if ($base === '.') $base = '/';
-    if (($base === '' || $base === '/') && !empty($server['DOCUMENT_ROOT'])) {
-        $docRoot = rtrim(str_replace('\\', '/', (string)$server['DOCUMENT_ROOT']), '/');
-        $app     = rtrim(str_replace('\\', '/', $appDir), '/');
-        if ($docRoot !== '' && strncmp($app, $docRoot, strlen($docRoot)) === 0) {
-            $base = substr($app, strlen($docRoot));            // e.g. "/tools/webplatform"
-        }
-    }
-    $base = rtrim($base, '/');
+    $base = lumen_mount_base($server, $appDir);
 
     if ($base !== '' && $base !== '/') {
         if (strncmp($reqPath, $base . '/', strlen($base) + 1) === 0) {
@@ -110,6 +101,23 @@ function lumen_request_rel(array $server, string $appDir): string {
     }
     if ($reqPath === '' || $reqPath === '/') return 'index.html';
     return ltrim(urldecode($reqPath), '/');
+}
+
+/**
+ * The install directory as a URL path prefix: '' at the domain root, '/tools/webplatform'
+ * in a subdirectory (no trailing slash). See lumen_request_rel for how it is found.
+ */
+function lumen_mount_base(array $server, string $appDir): string {
+    $base = str_replace('\\', '/', dirname((string)($server['SCRIPT_NAME'] ?? '')));
+    if ($base === '.') $base = '/';
+    if (($base === '' || $base === '/') && !empty($server['DOCUMENT_ROOT'])) {
+        $docRoot = rtrim(str_replace('\\', '/', (string)$server['DOCUMENT_ROOT']), '/');
+        $app     = rtrim(str_replace('\\', '/', $appDir), '/');
+        if ($docRoot !== '' && strncmp($app, $docRoot, strlen($docRoot)) === 0) {
+            $base = substr($app, strlen($docRoot));            // e.g. "/tools/webplatform"
+        }
+    }
+    return rtrim($base, '/');
 }
 
 /**
@@ -138,7 +146,34 @@ function lumen_refresh_theme_css(string $themeCss): void {
     }
 }
 
-function lumen_serve_html(string $root, string $rel): bool {
+/**
+ * Whether a missing path should be answered with the branded 404.html (status 404)
+ * rather than a plain "Not found": a PAGE request only — never an API route or a
+ * DATA_WEB path, never anything with a non-HTML extension (a missing script, image,
+ * pack), never a client that asked for something other than HTML. Pure. Twin of
+ * dev_server.py:AdminHandler._not_found_page.
+ */
+function lumen_wants_not_found_page(string $rel, string $accept): bool {
+    $segs = explode('/', trim(str_replace('\\', '/', $rel), '/'));
+    if (in_array(strtolower($segs[0]), ['api', 'data_web'], true)) return false;
+    $ext = strtolower(pathinfo((string)end($segs), PATHINFO_EXTENSION));
+    if ($ext !== '' && $ext !== 'html' && $ext !== 'htm') return false;
+    if ($accept !== '' && stripos($accept, 'text/html') === false) return false;
+    return true;
+}
+
+/**
+ * Serve 404.html with status 404 when $rel is a page request (see above). Returns
+ * false when it is not, or when the page is missing, so the caller keeps its plain
+ * answer. $base is the URL prefix of the install root, with its trailing slash
+ * ('/' at the domain root).
+ */
+function lumen_serve_not_found(string $root, string $rel, string $accept, string $base = '/'): bool {
+    if (!lumen_wants_not_found_page($rel, $accept)) return false;
+    return lumen_serve_html($root, '404.html', $base);
+}
+
+function lumen_serve_html(string $root, string $rel, string $base = '/'): bool {
     $rootReal = realpath($root);
     if ($rootReal === false) return false;
     $rel = ltrim(str_replace('\\', '/', $rel), '/');
@@ -165,6 +200,12 @@ function lumen_serve_html(string $root, string $rel): bool {
     lumen_refresh_theme_css($themeCss);
     $tv = is_file($themeCss) ? (int)@filemtime($themeCss) : 0;
     $body = str_replace('href="config/theme.css"', 'href="config/theme.css?v=' . $tv . '"', $body);
+    if ($rel === '404.html') {
+        // The page answers for any missing path, however deep: pin its relative URLs
+        // to the install root. Twin of dev_server.py:_serve_html.
+        $body = str_replace('<base href="./">', '<base href="' . htmlspecialchars($base, ENT_QUOTES, 'UTF-8') . '">', $body);
+        http_response_code(404);
+    }
     $body = str_replace('{{CSP_NONCE}}', $nonce, $body);
 
     header('Content-Type: text/html; charset=utf-8');

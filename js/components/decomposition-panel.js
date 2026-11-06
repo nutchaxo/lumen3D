@@ -827,7 +827,7 @@ const DecompositionPanel = (() => {
       return;
     }
     if (fit.itemSize < itemSize) {
-      console.info(`[DecompositionPanel] Export vignettes reduced from ${itemSize} to ${fit.itemSize} px to fit the canvas limits.`);
+      console.debug(`[DecompositionPanel] Export vignettes reduced from ${itemSize} to ${fit.itemSize} px to fit the canvas limits.`);
     }
     itemSize = fit.itemSize;
     const { padding, cols, totalWidth, totalHeight } = fit.geometry;

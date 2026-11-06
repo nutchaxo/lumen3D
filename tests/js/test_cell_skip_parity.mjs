@@ -180,3 +180,113 @@ for (let round = 0; round < 60; round++) {
 }
 assert.ok(saved / total > 0.2, `the cell test must skip a real share of the samples (${(100 * saved / total).toFixed(1)} %)`);
 console.log(`cell skip parity: ${rays} rays equal to 1e-9, ${(100 * saved / total).toFixed(1)} % of the samples skipped: OK`);
+
+// ── Raw maxima march (RAW_OUT, the maximum projection cache) ─────────────────────────
+// The march keeps the raw per-channel maximum of the samples, whatever the window. A cell
+// is jumped over when, in EVERY channel, its maximum is 0 (every sample of it reads 0 in
+// that channel: it cannot raise a maximum >= 0) or its maximum + RAW_SKIP_MARGIN is at or
+// under the ray's running maximum. The maxima must be those of the march without the skip,
+// for volumes of 1, 2 and 3 channels — the channels a volume lacks are 0 in its cells and
+// must not veto the skip (the earlier all-channels test never fired below four channels).
+const RAW_SKIP_MARGIN = 0.002;
+assert.match(VV, /#define RAW_SKIP_MARGIN 0\.002/);
+assert.match(VV, /vec4 quietChannel = vec4\(lessThanEqual\(gFineMax, vec4\(0\.0\)\)\);\s+vec4 underChannel = vec4\(lessThanEqual\(gFineMax \+ vec4\(RAW_SKIP_MARGIN\), gRayMax\)\);\s+bool empty = all\(greaterThan\(quietChannel \+ underChannel, vec4\(0\.0\)\)\);/, 'the shader carries the per-channel rule of this port');
+
+function rawVolume(comps) {
+  const v = new Uint8Array(DIM[0] * DIM[1] * DIM[2] * comps);
+  for (let b = 0; b < 14; b++) {
+    const c = [rnd() * DIM[0], rnd() * DIM[1], rnd() * DIM[2]], r = 3 + rnd() * 7, ch = (rnd() * comps) | 0, peak = 30 + rnd() * 225;
+    for (let z = 0; z < DIM[2]; z++) for (let y = 0; y < DIM[1]; y++) for (let x = 0; x < DIM[0]; x++) {
+      const d = Math.hypot(x - c[0], y - c[1], z - c[2]);
+      if (d < r) { const i = ((z * DIM[1] + y) * DIM[0] + x) * comps + ch; v[i] = Math.max(v[i], Math.round(peak * (1 - d / r))); }
+    }
+  }
+  const st = new Uint8Array(EDGE * EDGE * EDGE * comps);
+  for (let z = 0; z < EDGE; z++) for (let y = 0; y < EDGE; y++) for (let x = 0; x < EDGE; x++) {
+    const sx = Math.min(DIM[0] - 1, Math.max(0, x - 1)), sy = Math.min(DIM[1] - 1, Math.max(0, y - 1)), sz = Math.min(DIM[2] - 1, Math.max(0, z - 1));
+    for (let c = 0; c < comps; c++) st[((z * EDGE + y) * EDGE + x) * comps + c] = v[((sz * DIM[1] + sy) * DIM[0] + sx) * comps + c];
+  }
+  return { comps, vol: v, cells: CellMax.fromBox(st, comps, EDGE, EDGE, EDGE, { apron: 1 }) };
+}
+
+function rawSample(V, p) {
+  const t = p.map((q) => q - 0.5);
+  const i0 = t.map(Math.floor), f = t.map((q, k) => q - i0[k]);
+  const out = [0, 0, 0, 0];
+  for (let dz = 0; dz < 2; dz++) for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+    const w = (dx ? f[0] : 1 - f[0]) * (dy ? f[1] : 1 - f[1]) * (dz ? f[2] : 1 - f[2]);
+    const x = Math.min(DIM[0] - 1, Math.max(0, i0[0] + dx)), y = Math.min(DIM[1] - 1, Math.max(0, i0[1] + dy)), z = Math.min(DIM[2] - 1, Math.max(0, i0[2] + dz));
+    for (let c = 0; c < V.comps; c++) out[c] += w * V.vol[((z * DIM[1] + y) * DIM[0] + x) * V.comps + c] / 255;
+  }
+  return out;
+}
+
+// rule: 'none' (no cell test), 'zero' (only cells at 0 in every channel), 'all' (the former all-channels test), 'channel' (the shader's).
+function rawMarch(V, origin, dir, rule) {
+  let t0 = -Infinity, t1 = Infinity;
+  for (let k = 0; k < 3; k++) {
+    const a = (0 - origin[k]) / dir[k], b = (DIM[k] - origin[k]) / dir[k];
+    t0 = Math.max(t0, Math.min(a, b)); t1 = Math.min(t1, Math.max(a, b));
+  }
+  if (t0 >= t1) return null;
+  t0 = Math.max(t0, 0);
+  const rayLength = t1 - t0, nu = Math.hypot(...dir);
+  const delta = Math.min(1 / nu / Math.max(Math.abs(dir[2]) / nu, 0.05), rayLength);
+  const jitter = Math.ceil(t0 / delta) * delta - t0;
+  const mip = [0, 0, 0, 0];
+  let k = 0, t = jitter, evals = 0;
+  for (let i = 0; i < 4096 && t < rayLength; i++) {
+    const pos = [0, 1, 2].map((a) => origin[a] + (t0 + t) * dir[a]);
+    if (rule !== 'none') {
+      const fc = pos.map((q, a) => Math.floor(Math.min(DIM[a] - 1, Math.max(0, q)) / 8));
+      const o = ((fc[2] * CN + fc[1]) * CN + fc[0]) * 4;
+      const m = [0, 1, 2, 3].map((c) => V.cells[o + c] / 255);
+      const empty = rule === 'zero' ? m.every((x) => x <= 0)
+        : rule === 'all' ? (m.every((x) => x <= 0) || m.every((x, c) => x + RAW_SKIP_MARGIN <= mip[c]))
+        : m.every((x, c) => x <= 0 || x + RAW_SKIP_MARGIN <= mip[c]);
+      if (empty) {
+        let skip = Infinity;
+        for (let a = 0; a < 3; a++) {
+          if (Math.abs(dir[a]) < 1e-12) continue;
+          const face = dir[a] > 0 ? Math.min((fc[a] + 1) * 8, DIM[a]) : fc[a] * 8;
+          skip = Math.min(skip, (face - pos[a]) / dir[a]);
+        }
+        k += Math.max(1, Math.ceil(Math.max(0, skip) / delta));
+        t = jitter + k * delta;
+        continue;
+      }
+    }
+    evals++;
+    const val = rawSample(V, pos);
+    for (let c = 0; c < 4; c++) mip[c] = Math.max(mip[c], val[c]);
+    k += 1;
+    t = jitter + k * delta;
+  }
+  return { mip, evals };
+}
+
+for (const comps of [1, 2, 3]) {
+  const V = rawVolume(comps);
+  let n = 0, total = 0, byAll = 0, byChannel = 0;
+  for (let r = 0; r < 3000; r++) {
+    const target = [rnd() * DIM[0], rnd() * DIM[1], rnd() * DIM[2]];
+    const d = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5];
+    const len = Math.hypot(...d) || 1;
+    const dir = d.map((q) => q / len * (0.6 + rnd() * 0.8));
+    const origin = target.map((q, a) => q - dir[a] * 90);
+    const ref = rawMarch(V, origin, dir, 'none');
+    if (!ref) continue;
+    const all = rawMarch(V, origin, dir, 'all'), ch = rawMarch(V, origin, dir, 'channel');
+    // Below four channels the former test's "under the ray maximum" half never fired.
+    assert.equal(all.evals, rawMarch(V, origin, dir, 'zero').evals, `${comps} channel(s): the all-channels test only skipped empty cells`);
+    for (let c = 0; c < 4; c++) {
+      assert.ok(Math.abs(ch.mip[c] - ref.mip[c]) < 1e-9, `${comps} channel(s), channel ${c}: ${ch.mip[c]} (skip) vs ${ref.mip[c]}`);
+      assert.ok(Math.abs(all.mip[c] - ref.mip[c]) < 1e-9);
+    }
+    n++; total += ref.evals; byAll += ref.evals - all.evals; byChannel += ref.evals - ch.evals;
+  }
+  const pAll = 100 * byAll / total, pCh = 100 * byChannel / total;
+  assert.ok(byChannel > byAll, `${comps} channel(s): the per-channel test must skip more than the all-channels one (${pCh.toFixed(1)} vs ${pAll.toFixed(1)} %)`);
+  assert.ok(pCh - pAll > 2, `${comps} channel(s): the per-channel test must add a real share of skipped samples (${pCh.toFixed(1)} vs ${pAll.toFixed(1)} %)`);
+  console.log(`raw maxima skip, ${comps} channel(s): ${n} rays equal to 1e-9, ${pCh.toFixed(1)} % skipped (all-channels test: ${pAll.toFixed(1)} %): OK`);
+}

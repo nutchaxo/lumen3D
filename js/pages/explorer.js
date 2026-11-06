@@ -165,12 +165,6 @@ const Explorer = (() => {
         window.location.href = `compare.html?add=${encodeURIComponent(compare.dataset.compareId)}`;
       }
     });
-    document.getElementById('dataset-container')?.addEventListener('keydown', (e) => {
-      if (!['Enter', ' '].includes(e.key)) return;
-      if (!e.target.closest('[data-download-id], [data-compare-id]')) return;
-      e.preventDefault();
-      e.target.click();
-    });
   }
 
   function _render() {
@@ -243,8 +237,10 @@ const Explorer = (() => {
     const cellCount = Number(dataset.tracking?.cellCount) || 0;
     if (cellCount) metaItems.push(`<span>${cellCount} ${I18n.t('js.trackingCells').toLowerCase()}</span>`);
 
+    // One real link (the title, stretched over the card by CSS) and sibling real buttons:
+    // an interactive control is never nested inside the link.
     return `
-      <a href="${_datasetUrl(dataset)}" class="card animate-fade-in-up" style="text-decoration:none;color:inherit;animation-duration:0.3s;">
+      <article class="card dataset-card animate-fade-in-up" style="animation-duration:0.3s;">
         <div class="card-image" style="background: ${Utils.datasetTypeGradient(dataset.type)}; display:flex; align-items:center; justify-content:center;">
           ${_datasetPreview(dataset)}
         </div>
@@ -253,16 +249,16 @@ const Explorer = (() => {
             ${_typeBadge(dataset)}
             ${_availabilityBadges(dataset)}
           </div>
-          <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
+          <div class="card-title"><a class="dataset-card-link" href="${_datasetUrl(dataset)}">${Utils.escapeHtml(dataset.name)}</a></div>
           <div class="card-subtitle">${Utils.escapeHtml(dataset.description || '')}</div>
           <div class="card-meta">${metaItems.join('<span style="opacity:0.3">&middot;</span>')}</div>
         </div>
         <div class="card-actions dataset-card-actions">
-          <span class="btn btn-primary btn-sm"><i data-lucide="eye"></i> ${esc(_tr('explorer.view', 'View'))}</span>
+          <span class="btn btn-primary btn-sm" aria-hidden="true"><i data-lucide="eye"></i> ${esc(_tr('explorer.view', 'View'))}</span>
           ${_compareButton(dataset, `<i data-lucide="columns-3"></i> ${esc(_tr('nav.compare', 'Compare'))}`)}
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> ${esc(_tr('app.download', 'Download'))}</span>
+          <button type="button" class="btn btn-outline btn-sm" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> ${esc(_tr('app.download', 'Download'))}</button>
         </div>
-      </a>
+      </article>
     `;
   }
 
@@ -271,7 +267,7 @@ const Explorer = (() => {
     const dateDisplay = Utils.formatDate(dataset.date);
 
     return `
-      <a href="${_datasetUrl(dataset)}" class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
+      <article class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
         <div class="dataset-list-icon" style="background: ${Utils.datasetTypeGradient(dataset.type)};">
           ${dataset.thumbnail ? `<img src="${esc(dataset.thumbnail)}" alt="" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="color:var(--text-muted);opacity:0.6"></i>`}
         </div>
@@ -281,20 +277,20 @@ const Explorer = (() => {
             <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? esc(stageDisplay) + ' &middot; ' : ''}${esc(dateDisplay)}</span>
             ${_availabilityBadges(dataset)}
           </div>
-          <div class="dataset-list-title">${Utils.escapeHtml(dataset.name)}</div>
+          <div class="dataset-list-title"><a class="dataset-card-link" href="${_datasetUrl(dataset)}">${Utils.escapeHtml(dataset.name)}</a></div>
           <div style="font-size:var(--text-sm);color:var(--text-secondary);">${Utils.escapeHtml(dataset.description || '')}</div>
         </div>
-        <div style="display:flex;align-items:center;padding:0 var(--space-4);">
-          <span class="btn btn-primary btn-sm">${esc(_tr('explorer.view', 'View'))}</span>
+        <div class="dataset-list-actions">
+          <span class="btn btn-primary btn-sm" aria-hidden="true">${esc(_tr('explorer.view', 'View'))}</span>
           ${_compareButton(dataset, esc(_tr('nav.compare', 'Compare')))}
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}">${esc(_tr('app.download', 'Download'))}</span>
+          <button type="button" class="btn btn-outline btn-sm" data-download-id="${Utils.escapeHtml(dataset.id)}">${esc(_tr('app.download', 'Download'))}</button>
         </div>
-      </a>
+      </article>
     `;
   }
 
   function _compareButton(dataset, label) {
-    return `<span class="btn btn-outline btn-sm" role="button" tabindex="0" data-compare-id="${Utils.escapeHtml(dataset.id)}">${label}</span>`;
+    return `<button type="button" class="btn btn-outline btn-sm" data-compare-id="${Utils.escapeHtml(dataset.id)}">${label}</button>`;
   }
 
   // The colour class and the name both come from Utils: the name may be the

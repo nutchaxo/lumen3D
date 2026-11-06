@@ -11,16 +11,48 @@ const Utils = (() => {
    * @param {number} bytes
    * @returns {string}
    */
+  function _uiLanguage() {
+    try {
+      return (typeof I18n !== 'undefined' && I18n.getLanguage && I18n.getLanguage()) || 'en';
+    } catch (e) {
+      return 'en';
+    }
+  }
+
+  /**
+   * A number with a fixed count of decimals in the reader's language ("0,50" in French,
+   * "0.50" in English), no digit grouping so the English output matches `toFixed`.
+   * '—' for a value that is not finite.
+   */
+  function formatNumber(value, digits = 1) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    try {
+      return new Intl.NumberFormat(_uiLanguage(), {
+        minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false
+      }).format(n);
+    } catch (e) {
+      return n.toFixed(digits);
+    }
+  }
+
+  /** Unit symbols B / KB / MB / GB / TB in the reader's language: French says o / Ko / Mo / Go / To. */
+  function byteUnits() {
+    return _uiLanguage().slice(0, 2).toLowerCase() === 'fr'
+      ? ['o', 'Ko', 'Mo', 'Go', 'To']
+      : ['B', 'KB', 'MB', 'GB', 'TB'];
+  }
+
   function formatFileSize(bytes) {
-    if (bytes === 0) return '0 B';
+    if (bytes === 0) return `0 ${byteUnits()[0]}`;
     // EDGE-043: Math.log of a negative/NaN size is NaN and Math.log(Infinity) is
     // Infinity, so the unit index goes out of range and the output degrades to
     // 'NaN undefined'. Reject non-finite/negative sizes, and clamp the index so a
     // value larger than 1 PB still reports in TB rather than indexing past the array.
     if (!Number.isFinite(bytes) || bytes < 0) return '—';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const units = byteUnits();
     const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+    return formatNumber(bytes / Math.pow(1024, i), i > 0 ? 1 : 0) + ' ' + units[i];
   }
 
   /**
@@ -178,18 +210,55 @@ const Utils = (() => {
    * closes the menu — so no listener leaks across repeated toggles.
    * @param {string} id - element id of the dropdown container
    */
+  // The open dropdowns and what to unhook when each one closes: one outside-click and one
+  // Escape listener per open menu, removed on every way of closing it.
+  const _openDropdowns = new Map();
+
+  function _dropdownTrigger(dropdown) {
+    return Array.from(dropdown.children || []).find(c => c.tagName === 'BUTTON') || null;
+  }
+
+  function _setDropdownOpen(dropdown, open, { restoreFocus = false } = {}) {
+    if (open) dropdown.classList.add('open');
+    else dropdown.classList.remove('open');
+    const trigger = _dropdownTrigger(dropdown);
+    // Only the navbar language switcher (data-action trigger) is kept in sync here: other
+    // dropdowns (admin) toggle their own class and own their ARIA.
+    if (trigger && trigger.getAttribute('data-action') === 'lang-dropdown') {
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (open) return;
+    const teardown = _openDropdowns.get(dropdown);
+    if (teardown) {
+      _openDropdowns.delete(dropdown);
+      teardown();
+    }
+    if (restoreFocus && trigger && typeof trigger.focus === 'function') trigger.focus();
+  }
+
   function toggleDropdown(id) {
     const dropdown = document.getElementById(id);
     if (!dropdown) return;
-    dropdown.classList.toggle('open');
+    if (dropdown.classList.contains('open')) {
+      _setDropdownOpen(dropdown, false);
+      return;
+    }
+    _setDropdownOpen(dropdown, true);
 
-    const close = (e) => {
-      if (!dropdown.contains(e.target)) {
-        dropdown.classList.remove('open');
-        document.removeEventListener('click', close);
-      }
+    const onClick = (e) => { if (!dropdown.contains(e.target)) _setDropdownOpen(dropdown, false); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      _setDropdownOpen(dropdown, false, { restoreFocus: true });
     };
-    setTimeout(() => document.addEventListener('click', close), 0);
+    // The opening click is still bubbling: attach on the next turn so it does not close it.
+    const timer = setTimeout(() => document.addEventListener('click', onClick), 0);
+    document.addEventListener('keydown', onKey);
+    _openDropdowns.set(dropdown, () => {
+      clearTimeout(timer);
+      document.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKey);
+    });
   }
 
   /**
@@ -198,7 +267,58 @@ const Utils = (() => {
    * each page repopulates its own dynamic content.
    */
   function closeDropdowns() {
-    document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+    document.querySelectorAll('.dropdown').forEach(d => _setDropdownOpen(d, false));
+  }
+
+  const _FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), '
+    + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  /**
+   * Keep keyboard focus inside a modal container while it is open: focus moves in now
+   * (`initialFocus`, else the first control, else the container itself), Tab / Shift+Tab
+   * wrap around the visible controls, and the returned function releases the trap and puts
+   * focus back where it was (when that node is still on the page). Escape stays the
+   * caller's: each modal already closes in its own way.
+   * @param {HTMLElement} container
+   * @param {{ initialFocus?: HTMLElement|null }} [options]
+   * @returns {function({restore?: boolean}=):void} release
+   */
+  function trapFocus(container, { initialFocus = null } = {}) {
+    const previous = document.activeElement;
+    const focusables = () => Array.from(container.querySelectorAll(_FOCUSABLE))
+      .filter(n => n.getClientRects().length > 0);
+    const onKeydown = (e) => {
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (!items.length) { e.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!container.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeydown, true);
+    const start = initialFocus || focusables()[0] || container;
+    if (start === container && !container.hasAttribute('tabindex')) container.setAttribute('tabindex', '-1');
+    if (typeof start.focus === 'function') start.focus();
+    let released = false;
+    return function release({ restore = true } = {}) {
+      if (released) return;
+      released = true;
+      document.removeEventListener('keydown', onKeydown, true);
+      if (restore && previous && previous !== document.body && previous.isConnected
+          && typeof previous.focus === 'function') {
+        try { previous.focus(); } catch (_) { /* focus refused: leave it where it is */ }
+      }
+    };
   }
 
   /**
@@ -221,11 +341,27 @@ const Utils = (() => {
     const menu = dropdown && dropdown.querySelector('.dropdown-menu');
     if (!menu) return;
 
-    const current = I18n.getLanguage();
+    const trigger = _dropdownTrigger(dropdown);
+    if (trigger && trigger.getAttribute('data-action') === 'lang-dropdown') {
+      trigger.setAttribute('aria-haspopup', 'true');
+      trigger.setAttribute('aria-expanded', dropdown.classList.contains('open') ? 'true' : 'false');
+    }
+
+    // Marks the entry of the language now in force (also after an async switch settles).
+    const markActive = () => {
+      const now = I18n.getLanguage();
+      menu.querySelectorAll('.dropdown-item').forEach((item) => {
+        const on = item.dataset.lang === now;
+        item.classList.toggle('active', on);
+        if (on) item.setAttribute('aria-current', 'true');
+        else item.removeAttribute('aria-current');
+      });
+    };
+
     menu.textContent = '';
     for (const lang of I18n.getAvailableLanguages()) {
       const btn = document.createElement('button');
-      btn.className = 'dropdown-item' + (lang.code === current ? ' active' : '');
+      btn.className = 'dropdown-item';
       btn.type = 'button';
       btn.dataset.lang = lang.code;
       btn.setAttribute('lang', lang.code);
@@ -234,10 +370,18 @@ const Utils = (() => {
       btn.appendChild(flag);
       btn.appendChild(document.createTextNode(' ' + lang.native));
       btn.addEventListener('click', () => {
-        if (typeof onSwitch === 'function') onSwitch(lang.code);
+        _setDropdownOpen(dropdown, false, { restoreFocus: true });
+        if (typeof onSwitch !== 'function') return;
+        const result = onSwitch(lang.code);
+        // A failed switch still refreshes the highlight, and stays an error for the page.
+        if (result && typeof result.then === 'function') {
+          result.then(markActive, (err) => { markActive(); throw err; });
+        }
+        else markActive();
       });
       menu.appendChild(btn);
     }
+    markActive();
   }
 
   /**
@@ -628,6 +772,8 @@ const Utils = (() => {
 
   return {
     formatFileSize,
+    formatNumber,
+    byteUnits,
     formatDate,
     parseDatasetName,
     formatStage,
@@ -635,6 +781,7 @@ const Utils = (() => {
     throttle,
     toggleDropdown,
     closeDropdowns,
+    trapFocus,
     populateLanguageMenu,
     el,
     animateCounter,

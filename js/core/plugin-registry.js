@@ -224,7 +224,7 @@ const PluginRegistry = (() => {
     for (const { url, authoritative } of candidates) {
       const paths = await _fetchPluginList(url, authoritative);
       if (paths) {
-        console.log(`[PluginRegistry] Discovered ${paths.length} plugins via ${url}`);
+        console.debug(`[PluginRegistry] Discovered ${paths.length} plugins via ${url}`);
         return paths;
       }
     }
@@ -326,14 +326,12 @@ const PluginRegistry = (() => {
         // quarantine. A page passing no dataType is unchanged.
         _warnUnknownDataTypes(meta, modPath);
         if (opts.dataType && !_acceptsDataType(meta, opts.dataType, opts.allowUndeclaredDataTypes)) {
-          console.info(`[PluginRegistry] "${modPath}" left out: its dataTypes do not cover "${opts.dataType}"`);
           return;
         }
         // Context gate, same shape: an embedded page (opts.context 'panel') keeps
         // only the plugins that declared they can be driven from outside.
         _warnUnknownContexts(meta, modPath);
         if (opts.context && !_acceptsContext(meta, opts.context)) {
-          console.info(`[PluginRegistry] "${modPath}" left out: its contexts do not cover "${opts.context}"`);
           return;
         }
 
@@ -1088,7 +1086,7 @@ const PluginRegistry = (() => {
         _quarantine(entry.meta._modPath || id, 'revoked', 'operator revoked approval (torn down live)');
         // Remove its toolbar button (action/toggle → data-plugin-id).
         document.querySelectorAll(`[data-plugin-id="${CSS.escape(id)}"]`).forEach(b => b.remove());
-        console.info(`[PluginRegistry] sandboxed plugin "${id}" revoked — iframe torn down`);
+        console.debug(`[PluginRegistry] sandboxed plugin "${id}" revoked — iframe torn down`);
       }
     }
   }

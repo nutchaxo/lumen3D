@@ -282,6 +282,18 @@ function site_delete_doc(string $doc): bool {
     return true;
 }
 
+/** True when something backs this doc name: the stored file, its shipped default or a
+ *  page's private draft. A valid name with none of them is a page that was never written. */
+function site_doc_exists(string $doc): bool {
+    $res = site_doc_path($doc);
+    if ($res === null) return false;
+    $paths = $res;
+    $draft = site_draft_path($doc);
+    if ($draft !== null) $paths[] = $draft;
+    foreach ($paths as $p) if (is_file($p)) return true;
+    return false;
+}
+
 function site_publish_doc(string $doc): bool {
     $data = site_load_admin($doc);   // needs the private draft to promote it
     if ($data === false) return false;
@@ -503,7 +515,12 @@ if (in_array($action, ['save', 'save_draft', 'reset', 'publish', 'delete'], true
         admin_json_out($ok ? ['ok' => true, 'rev' => site_rev($doc)] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
     }
     if ($action === 'publish') {
-        $ok = site_locked($doc, fn() => site_publish_doc($doc));
+        $known = true;
+        $ok = site_locked($doc, function () use ($doc, &$known) {
+            $known = site_doc_exists($doc);
+            return $known && site_publish_doc($doc);
+        });
+        if (!$known) admin_json_out(['error' => 'Not found'], 404);
         admin_json_out($ok ? ['ok' => true, 'rev' => site_rev($doc)] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
     }
     if ($action === 'delete') {

@@ -236,7 +236,7 @@ const VolumeViewer = (() => {
           };
           _blurWorkerPool.push(w);
         }
-        console.log(`[VolumeViewer] Blur worker pool initialized (${BLUR_POOL_SIZE} workers)`);
+        console.debug(`[VolumeViewer] Blur worker pool initialized (${BLUR_POOL_SIZE} workers)`);
       } catch (err) {
         console.error('[VolumeViewer] Failed to create blur worker pool:', err);
         _blurWorkerPool = null;
@@ -323,7 +323,7 @@ const VolumeViewer = (() => {
       }, [chunkData.buffer]);
     }
 
-    console.log(`[VolumeViewer] Blur task ${taskId}: ${depth} slices split across ${N} workers`);
+    console.debug(`[VolumeViewer] Blur task ${taskId}: ${depth} slices split across ${N} workers`);
   }
 
   const QUALITY_PRESETS = {
@@ -870,8 +870,14 @@ const VolumeViewer = (() => {
         #endif
       }
       #ifdef RAW_OUT
-      // Re-tested at every sample: the running maximum grows as the ray goes on.
-      bool empty = all(lessThanEqual(gFineMax, vec4(0.0))) || all(lessThanEqual(gFineMax + vec4(RAW_SKIP_MARGIN), gRayMax));
+      // Re-tested at every sample: the running maximum grows as the ray goes on. Decided
+      // per channel: a channel whose cell maximum is 0 reads exact zeros everywhere in the
+      // cell (a zero BC block decodes to zeros; a channel the volume lacks is 0) and cannot
+      // raise a maximum that is >= 0, so it never vetoes the skip — otherwise a volume of
+      // fewer than four channels, or a ray that has not yet met every channel, never skips.
+      vec4 quietChannel = vec4(lessThanEqual(gFineMax, vec4(0.0)));
+      vec4 underChannel = vec4(lessThanEqual(gFineMax + vec4(RAW_SKIP_MARGIN), gRayMax));
+      bool empty = all(greaterThan(quietChannel + underChannel, vec4(0.0)));
       #else
       bool empty = gFineEmpty;
       #endif
@@ -3680,6 +3686,11 @@ const VolumeViewer = (() => {
    *  ≤ 16 MiB interleaved between macrotasks. false when superseded or released. */
   async function _uploadEntryChannels(entry, isCurrent) {
     _dataVersion++;
+    // The dense cells hold the RAW voxels' maxima: blurred voxels spread past them, so the
+    // cells read "never skip" before the first blurred slab lands, and the raw cells come
+    // back only once every raw slab is in again.
+    const blurred = (entry.denoiseSigma || []).some(s => s > 0);
+    if (blurred) entry.denseCells?.setNeverSkip?.(true);
     const { width: w, height: h, depth: d } = entry;
     const stride = entry.stride || RGBA_TEXTURE_BYTES_PER_VOXEL;
     const slice = w * h;
@@ -3694,6 +3705,7 @@ const VolumeViewer = (() => {
       _scheduleFrame();
       if (z0 + dz < d) await _macrotask();
     }
+    if (!blurred) entry.denseCells?.setNeverSkip?.(false);
     return true;
   }
 
@@ -5324,6 +5336,7 @@ const VolumeViewer = (() => {
         renderer.setRenderTarget(prevTarget);
         renderer.setClearColor(prevClear, prevAlpha);
       }
+      if (_rawProgramFailed(c.rawMat)) { _abandonRawCache('RAW_OUT'); renderer.render(scene, camera); return; }
       c.valid = true;
       _rawStats.marches++;
     } else {
@@ -5331,6 +5344,22 @@ const VolumeViewer = (() => {
     }
     cube.material = c.readMat;
     try { renderer.render(scene, camera); } finally { cube.material = material; }
+    if (_rawProgramFailed(c.readMat)) { _abandonRawCache('RAW_READ'); renderer.render(scene, camera); }
+  }
+
+  // three r147 has no shader-error callback: a program that failed to compile or link is
+  // still recorded on the material (WebGLProgram.diagnostics.runnable === false, filled
+  // while renderer.debug.checkShaderErrors is on, the default) and simply draws nothing.
+  // A GPU that cannot build the two cache variants would show a blank projection.
+  function _rawProgramFailed(mat) {
+    const program = renderer.properties?.get?.(mat)?.currentProgram;
+    return Boolean(program && program.diagnostics && program.diagnostics.runnable === false);
+  }
+
+  function _abandonRawCache(variant) {
+    _rawCacheUnsupported = true;
+    _disposeRawCache();
+    console.warn(`[VolumeViewer] the ${variant} program of the maximum-projection cache failed to compile on this GPU: classic single pass from now on.`);
   }
 
   // Resolution of the maxima march, as a fraction of the drawing buffer's. The picture is
@@ -5349,7 +5378,7 @@ const VolumeViewer = (() => {
       const v = new URLSearchParams(window.location.search).get('renderScale') || localStorage.getItem('lumen3d.renderScale');
       if (v === 'native') return 1;
       const n = Number(v);
-      return n > 0 && n <= 1 ? n : null;
+      return n > 0 && n <= 1 ? Math.max(RAW_SCALE_MIN, n) : null;
     } catch (_) { return null; }
   })();
   let _rawScaleAuto = 1;
@@ -5358,6 +5387,9 @@ const VolumeViewer = (() => {
   function _autoRawScale() {
     const e = _activeVolumeEntry;
     if (!e || !camera || !cube || !renderer || !(e.width > 0) || !(e.height > 0)) return 1;
+    // A borderless (v2) atlas is read NEAREST: the picture is voxel blocks with hard edges,
+    // not a bandlimited one, and interpolated maxima would blur them when zoomed in.
+    if (e.svrManager && !e.svrManager.apron) return 1;
     // World size of a lateral voxel; the distance is taken to the far side of the box, where
     // the voxel footprint is smallest, so the density asked for holds everywhere.
     const vox = Math.max(cube.scale.x / e.width, cube.scale.y / e.height);
@@ -5388,8 +5420,17 @@ const VolumeViewer = (() => {
   // drawing-buffer size, the maxima march's scale, the volume's path.
   let _perfOverlay = null;
   const _perfState = { last: 0, ema: 0, shown: 0 };
+  let _perfOverlayFlag = null;
   function _perfOverlayWanted() {
-    try { return new URLSearchParams(window.location.search).get('perf') === '1'; } catch (_) { return false; }
+    if (_perfOverlayFlag === null) _perfOverlayFlag = _urlFlag('perf') === '1';
+    return _perfOverlayFlag;
+  }
+  function _removePerfOverlay() {
+    _perfOverlay?.remove?.();
+    _perfOverlay = null;
+    _perfState.last = 0;
+    _perfState.ema = 0;
+    _perfState.shown = 0;
   }
   function _updatePerfOverlay(now) {
     if (!_perfOverlay) {
@@ -7009,7 +7050,7 @@ const VolumeViewer = (() => {
       const streamBricks = BrickLoader.activeBricks(lod);
       const extentUm = computePhysicalScale(metadata, Number(metadata.dimensions?.z) || depth, Number(metadata.dimensions?.x) || width).physicalSizeUm;
       const orderedBricks = _orderBricksForStreaming(streamBricks, dims, extentUm);
-      console.log(`[VolumeViewer] Streaming LOD${lod}: ${orderedBricks.length} active bricks (${footprint.mode}, ${_mib(footprint.bytes)} MiB).`);
+      console.debug(`[VolumeViewer] Streaming LOD${lod}: ${orderedBricks.length} active bricks (${footprint.mode}, ${_mib(footprint.bytes)} MiB).`);
 
       let occTex = null;
       let occScale = null;
@@ -7241,6 +7282,8 @@ const VolumeViewer = (() => {
           return preload ? { available: false, reason: 'busy' } : { stale: true };
         }
         summary = result?.summary || null;
+        // The last bricks' cells now, not 250 ms after the stream ends.
+        if (!stopped()) denseCells?.flush();
       }
 
       if (stopped()) {
@@ -7437,6 +7480,32 @@ const VolumeViewer = (() => {
   }
 
   /**
+   * dst = the per-channel maximum of src over the 3×3×3 cells around each cell (clamped at
+   * the edges), RGBA8 cells, x fastest. The box is the product of three clamped intervals,
+   * so the maximum is taken one axis at a time (x into dst, y into tmp, z into dst): 9 reads
+   * per cell instead of 27, the same bytes.
+   */
+  function _dilateCells3(src, dst, tmp, cnx, cny, cnz) {
+    const sx = 4, sy = cnx * 4, sz = cnx * cny * 4;
+    const pass = (a, b, axis, len, stride) => {
+      for (let z = 0; z < cnz; z++) for (let y = 0; y < cny; y++) for (let x = 0; x < cnx; x++) {
+        const o = z * sz + y * sy + x * sx;
+        const i = axis === 0 ? x : axis === 1 ? y : z;
+        const lo = i > 0 ? o - stride : o, hi = i < len - 1 ? o + stride : o;
+        for (let c = 0; c < 4; c++) {
+          let m = a[o + c];
+          if (a[lo + c] > m) m = a[lo + c];
+          if (a[hi + c] > m) m = a[hi + c];
+          b[o + c] = m;
+        }
+      }
+    };
+    pass(src, dst, 0, cnx, sx);
+    pass(dst, tmp, 1, cny, sy);
+    pass(tmp, dst, 2, cnz, sz);
+  }
+
+  /**
    * Fine empty-space cells of a DENSE volume (an atlas keeps them in SVRManager). One RGBA8
    * texel per 8³ voxels holding the raw per-channel maximum of every voxel a trilinear
    * sample inside the cell can read. A dense brick arrives as its interior box alone, so
@@ -7450,7 +7519,10 @@ const VolumeViewer = (() => {
     const n = CellMax.CELL;
     const cnx = Math.max(1, Math.ceil(width / n)), cny = Math.max(1, Math.ceil(height / n)), cnz = Math.max(1, Math.ceil(depth / n));
     const raw = new Uint8Array(cnx * cny * cnz * 4);
-    const data = new Uint8Array(cnx * cny * cnz * 4);
+    // 255 = never skipped, until the first publish: the shader may draw (a frame, a
+    // capture, a pick) before any brick's cells are known.
+    const data = new Uint8Array(cnx * cny * cnz * 4).fill(255);
+    const tmp = new Uint8Array(cnx * cny * cnz * 4);
     const per = VOLUME_BRICK_SIZE / n;
     const fill = (bx, by, bz, value) => {
       for (let z = bz * per; z < Math.min(cnz, (bz + 1) * per); z++)
@@ -7468,30 +7540,29 @@ const VolumeViewer = (() => {
     map.minFilter = THREE.NearestFilter;
     map.magFilter = THREE.NearestFilter;
     map.unpackAlignment = 1;
+    map.needsUpdate = true;
     let timer = null;
     let disposed = false;
+    // Blurred voxels (a denoise sigma > 0) reach further than the raw cells' one-cell
+    // dilation: every cell is published as 255 until the raw voxels are back.
+    let neverSkip = false;
     const publish = () => {
       timer = null;
       if (disposed) return;
-      for (let z = 0; z < cnz; z++) for (let y = 0; y < cny; y++) for (let x = 0; x < cnx; x++) {
-        const o = ((z * cny + y) * cnx + x) * 4;
-        let r = 0, g = 0, b = 0, a = 0;
-        for (let dz = Math.max(0, z - 1); dz <= Math.min(cnz - 1, z + 1); dz++)
-          for (let dy = Math.max(0, y - 1); dy <= Math.min(cny - 1, y + 1); dy++)
-            for (let dx = Math.max(0, x - 1); dx <= Math.min(cnx - 1, x + 1); dx++) {
-              const q = ((dz * cny + dy) * cnx + dx) * 4;
-              if (raw[q] > r) r = raw[q];
-              if (raw[q + 1] > g) g = raw[q + 1];
-              if (raw[q + 2] > b) b = raw[q + 2];
-              if (raw[q + 3] > a) a = raw[q + 3];
-            }
-        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = a;
-      }
+      if (neverSkip) data.fill(255);
+      else _dilateCells3(raw, data, tmp, cnx, cny, cnz);
       map.needsUpdate = true;
       _scheduleFrame();
     };
     return {
       map, dim: new THREE.Vector3(cnx, cny, cnz),
+      /** true: every cell reads 255 (voxels no longer the raw ones); false: the raw cells again. */
+      setNeverSkip(on) {
+        if (Boolean(on) === neverSkip) return;
+        neverSkip = Boolean(on);
+        if (timer) clearTimeout(timer);
+        publish();
+      },
       /** A brick's cells (null: the brick stays at 255). Published at most every 250 ms. */
       set(bx, by, bz, cells) {
         if (cells instanceof Uint8Array && cells.length === per * per * per * 4) {
@@ -7933,6 +8004,7 @@ const VolumeViewer = (() => {
     _releaseAllVolumes();
     _disposePickResources();
     _disposeRawCache();
+    _removePerfOverlay();
     _manifestCache.clear();
     _imageCache.clear();
     for (const taskId of [..._blurAssemblers.keys()]) _failBlurTask(taskId, 'viewer disposed');

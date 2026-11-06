@@ -41,11 +41,18 @@ register_shutdown_function(function () {
     if (!$e || !in_array($e['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) return;
     if (($_GET['action'] ?? '') !== 'check') return;
     $GLOBALS['lumen_fatal_answered'] = true;   // api/_bootstrap.php must not replace this answer with its 500
+    // The fatal's own text names files of this host: it goes to the log, and the answer
+    // carries only which limit was hit (what the fix text asks the operator to raise).
+    @error_log('[lumen] integrity check stopped: ' . str_replace(["\r", "\n"], ' ', (string)$e['message'])
+        . ' in ' . (string)($e['file'] ?? '') . ':' . (string)($e['line'] ?? 0));
+    $msg = (string)$e['message'];
+    if (stripos($msg, 'memory size') !== false) $why = 'memory_limit=' . ini_get('memory_limit');
+    elseif (stripos($msg, 'execution time') !== false) $why = 'max_execution_time=' . ini_get('max_execution_time') . 's';
+    else $why = 'fatal_error';
     while (ob_get_level() > 0) @ob_end_clean();
     if (!headers_sent()) { http_response_code(200); header('Content-Type: application/json; charset=utf-8'); }
     echo json_encode(['ok' => true, 'result' => ['id' => (string)($_GET['dataset'] ?? ''), 'name' => (string)($_GET['dataset'] ?? ''),
-        'status' => 'error', 'findings' => [lumen_int_finding('error', 'check_failed',
-            'PHP stopped: ' . $e['message'] . ' (memory_limit=' . ini_get('memory_limit') . ', max_execution_time=' . ini_get('max_execution_time') . 's)')]]],
+        'status' => 'error', 'findings' => [lumen_int_finding('error', 'check_failed', 'PHP stopped: ' . $why)]]],
         JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 });
 [$status, $payload] = lumen_int_handle(lumen_str($_GET['action'] ?? null) ?? '', $params);

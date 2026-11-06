@@ -444,14 +444,30 @@ function initHeroAnimation() {
     mouse.y = -1000;
   });
 
+  // With prefers-reduced-motion the hero is one still frame: no rAF loop at all.
+  const motionQuery = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+
+  function start() {
+    cancelAnimationFrame(animFrame);
+    if (motionQuery && motionQuery.matches) draw();
+    else animate();
+  }
+
+  if (motionQuery) {
+    const onMotionChange = () => start();
+    if (motionQuery.addEventListener) motionQuery.addEventListener('change', onMotionChange);
+    else if (motionQuery.addListener) motionQuery.addListener(onMotionChange);
+  }
+
   window.addEventListener('resize', Utils.debounce(() => {
     cancelAnimationFrame(animFrame);
     resize();
     createParticles();
-    animate();
+    start();
   }, 200));
 
   resize();
   createParticles();
-  animate();
+  start();
 }

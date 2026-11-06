@@ -27,7 +27,9 @@
     "errBusy": "Another operation is still running. Try again when it has finished.",
     "errSaveRefused": "The browser refused to save the file. Choose another location or allow downloads for this site.",
     "errDiskFull": "There is not enough free disk space to save the file.",
-    "errUnknown": "Something went wrong. Try again; if it keeps happening, reload the page."
+    "errUnknown": "Something went wrong. Try again; if it keeps happening, reload the page.",
+    "notFoundTitle": "Page not found",
+    "notFoundText": "The page you are looking for does not exist or has been moved."
   },
   "types": {
     "3d": {
@@ -489,7 +491,10 @@
     "tierHigh": "High",
     "tierMedium": "Medium",
     "tierLow": "Low",
-    "tierQ30": "Q30"
+    "tierQ30": "Q30",
+    "bootSlowTitle": "This page is taking too long to load",
+    "bootSlow": "A script or the dataset information did not answer. Reloading the page usually fixes it.",
+    "bootReload": "Reload"
   },
   "compare": {
     "title": "Comparison Mode",
@@ -1326,7 +1331,28 @@
     "loginServerError": "The server could not process the sign-in (HTTP {status}). Try again, or check the server logs.",
     "sessionChanged": "Your session changed in another tab. Reload this page and try again.",
     "previewFrameTitle": "Dataset preview",
-    "displayNamePlaceholder": "e.g. Sample A, replicate 1"
+    "displayNamePlaceholder": "e.g. Sample A, replicate 1",
+    "updateErr_preflight_failed": "pre-update checks failed",
+    "updateErr_backup_failed": "the backup could not be made",
+    "updateErr_download_failed": "the download failed",
+    "updateErr_verify_failed": "the downloaded release could not be verified",
+    "updateErr_staging_failed": "the new version could not be prepared",
+    "updateErr_startup_check_failed": "the new version failed its start-up check",
+    "updateErr_planning_failed": "the switch-over could not be planned",
+    "updateErr_pivot_failed": "the switch-over failed",
+    "updateErr_pivot_interrupted": "the switch-over was interrupted",
+    "updateErr_pivot_pending": "a previous switch-over is not reconciled yet: restart the server",
+    "updateErr_insufficient_disk": "not enough free disk space",
+    "updateErr_signature_invalid": "the release signature is missing or invalid",
+    "updateErr_release_signature_invalid": "the release signature is missing or invalid",
+    "updateErr_release_unverifiable": "the release cannot be verified (checksum missing or different)",
+    "updateErr_zip_digest_mismatch": "the downloaded archive does not match its checksum",
+    "updateErr_release_unreachable": "GitHub could not be reached",
+    "updateErr_sums_unreachable": "the release checksums could not be downloaded",
+    "updateErr_zip_unreachable": "the release archive could not be downloaded",
+    "updateErr_write_failed": "a file could not be written: check the permissions of the site folder (the update can be run again)",
+    "updateErr_update_in_progress": "another update is already running",
+    "updateErr_update_failed": "unexpected error: see the server log"
   },
   "upl": {
     "title": "Import datasets",
@@ -2157,7 +2183,9 @@
         "media": "Invalid or oversized image in the file: {detail}.",
         "variables": "Invalid variable in the file: {detail}."
       }
-    }
+    },
+    "missing": "This page does not exist.",
+    "backHome": "Back to the home page"
   },
   "wizard": {
     "title": "Guided setup",

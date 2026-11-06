@@ -57,7 +57,7 @@ switch ($action) {
         [$ok, $why] = admin_login_verify($u, $p);
         if (!$ok) {
             if ($why === 'credential_upgrade_failed') admin_json_out(['error' => $why], 500);
-            admin_json_out(['error' => 'Identifiants incorrects.'], 401);
+            admin_json_out(['error' => 'Identifiants incorrects.', 'code' => 'bad_credentials'], 401);
         }
         admin_bf_success();
         admin_session_login($u);

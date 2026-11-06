@@ -338,6 +338,24 @@ const InstanceConfig = (() => {
     if (typeof title === 'string' && title) document.title = title;
     _setMeta('description', get('seo.description'));
     _setMeta('keywords', get('seo.keywords'));
+    _applyFavicon(get('brand.favicon'));
+  }
+
+  // An operator icon (brand.favicon, a path under the install or an http(s) URL)
+  // replaces the shipped assets/favicon.svg. Any other scheme is ignored: the value
+  // is operator data, but a link href is never a place for javascript:/data:.
+  function _applyFavicon(value) {
+    if (typeof value !== 'string' || !document.head) return;
+    const href = value.trim();
+    if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) && !/^https?:/i.test(href)) return;
+    let el = document.head.querySelector('link[rel="icon"]');
+    if (!el) {
+      el = document.createElement('link');
+      el.setAttribute('rel', 'icon');
+      document.head.appendChild(el);
+    }
+    el.removeAttribute('type');
+    el.setAttribute('href', href);
   }
 
   function _setMeta(name, value) {

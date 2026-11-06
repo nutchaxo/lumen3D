@@ -150,7 +150,7 @@ function makeWorld({ max3D = 256, blurWorker = null } = {}) {
     return { ok: true, status: 200, json: async () => body, arrayBuffer: async () => body.slice(0) };
   };
   const ctx = vm.createContext({
-    console: { log() {}, warn() {}, error() {}, info() {} },
+    console: { log() {}, warn() {}, error() {}, info() {}, debug() {} },
     setTimeout, clearTimeout, Promise, URL, Map, Set, WeakMap, Uint8Array, Float64Array, Int32Array, ArrayBuffer,
     AbortController, DOMException, CustomEvent, MessageChannel,
     THREE, window, fetch: fetchImpl,

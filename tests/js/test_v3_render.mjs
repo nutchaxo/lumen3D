@@ -74,7 +74,7 @@ function makeWorld({ files, max3D = 2048, fetchMode = 'multipart', delay = 0 }) 
   const THREE = Object.assign({}, REAL_THREE, { WebGLRenderer: function WebGLRenderer() { return renderer; } });
   const fetchImpl = mockFetch(files, { mode: fetchMode, delay });
   const ctx = vm.createContext({
-    console: { log() {}, warn() {}, error() {}, info() {} },
+    console: { log() {}, warn() {}, error() {}, info() {}, debug() {} },
     setTimeout, clearTimeout, Promise, URL, Map, Set, WeakMap, Uint8Array, Float64Array, Int32Array, ArrayBuffer, DataView, TextDecoder,
     AbortController, DOMException, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
     MessageChannel, Blob, Response, crypto: webcrypto,

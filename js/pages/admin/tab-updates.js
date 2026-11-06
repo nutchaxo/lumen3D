@@ -100,6 +100,14 @@ function unverifiableMessage(reason) {
   return reason ? `${base} (${reason})` : base;
 }
 
+// Failure codes of the updater (both backends) → a sentence. The servers keep the
+// technical detail (it may name files of the host) in their log; a code with no
+// sentence, or a text an older server wrote, is shown as it is.
+function updateErrorText(code) {
+  if (!code) return '';
+  return t(`admin.updateErr_${code}`, '') || String(code);
+}
+
 // "· publiée le 11 sept. 2026" beside the notes heading, when GitHub dates the release.
 function publishedOn(iso) {
   if (!iso) return '';
@@ -290,7 +298,7 @@ function lastOutcomeBlock(last) {
   const icon = done ? 'check-circle-2' : 'undo-2';
   const text = done
     ? `${t('admin.updateSucceeded', 'Mise à jour terminée avec succès. Le serveur a redémarré — reconnectez-vous.')} (v${last.target || '?'})`
-    : `${t('admin.updateRolledBack', "La nouvelle version n'a pas démarré — restauration automatique effectuée. L'ancienne version fonctionne.")}${last.error ? ` — ${last.error}` : ''}`;
+    : `${t('admin.updateRolledBack', "La nouvelle version n'a pas démarré — restauration automatique effectuée. L'ancienne version fonctionne.")}${last.error && last.error !== 'health_probe_failed' ? ` — ${updateErrorText(last.error)}` : ''}`;
   return `
     <div class="adm-card" style="margin-top:18px" id="last-outcome-card">
       <div class="adm-card-head"><i data-lucide="history"></i><span>${escHtml(t('admin.lastUpdateOutcome', 'Dernière mise à jour'))}</span></div>
@@ -453,7 +461,7 @@ async function confirmUpdate() {
       ? t('admin.upToDate', 'Vous êtes à jour.')
       : r.data?.error === 'unverifiable_release'
         ? unverifiableMessage(r.data.reason)
-        : t('admin.updateFailed', 'Échec du lancement de la mise à jour.') + (r.data?.error ? ` (${r.data.error})` : ''), 'error');
+        : t('admin.updateFailed', 'Échec du lancement de la mise à jour.') + (r.data?.error ? ` (${updateErrorText(r.data.error)})` : ''), 'error');
     return;
   }
   // Synchronous apply (PHP hosts): the whole download→verify→swap ran inside this
@@ -514,7 +522,7 @@ async function pollStatus() {
     setProgress(s.pct || 0, s.message || '', s.phase);
     if (s.phase === 'error') {
       _polling = false;
-      toast(t('admin.updateFailed', 'Échec de la mise à jour.') + (s.error ? ` (${s.error})` : ''), 'error');
+      toast(t('admin.updateFailed', 'Échec de la mise à jour.') + (s.error ? ` (${updateErrorText(s.error)})` : ''), 'error');
       el('btn-update') && (el('btn-update').disabled = false);
       loadCheck();
       return;

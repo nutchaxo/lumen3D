@@ -2,6 +2,87 @@
    IRIBHM Microscopy Platform — Viewer Controller
    ============================================================ */
 
+/**
+ * The page's own boot — scripts, instance config, translations, catalog, metadata,
+ * plugin list — is what this watches, never the brick streaming that follows it: a
+ * multi-gigabyte volume may legitimately load for minutes. It lives outside ViewerApp
+ * and relies on nothing but the DOM, because the failures it covers (a core script that
+ * answered 404 or failed its integrity check) are exactly the ones where ViewerApp, Utils
+ * or I18n are missing and the "Loading dataset…" card would otherwise stay up forever.
+ */
+const BootWatchdog = (() => {
+  const DELAY_MS = 20000;
+  let _timer = null;
+  let _settled = false;
+  let _shown = false;
+
+  function _text(key, fallback) {
+    try {
+      if (typeof I18n !== 'undefined' && I18n.t) {
+        const value = I18n.t(key);
+        if (value && value !== key) return value;
+      }
+    } catch (e) { /* the translations may be what failed to load */ }
+    return fallback;
+  }
+
+  function show() {
+    if (_timer) { clearTimeout(_timer); _timer = null; }
+    const loader = document.getElementById('viewer-loader');
+    if (!loader || _shown) return;
+    _shown = true;
+    const title = _text('viewer.bootSlowTitle', 'This page is taking too long to load');
+    const message = _text('viewer.bootSlow', 'A script or the dataset information did not answer. Reloading the page usually fixes it.');
+    loader.style.display = 'flex';
+    document.getElementById('loader-body')?.classList.add('hidden');
+    let card = document.getElementById('loader-error');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'loader-error';
+      card.className = 'viewer-loader-error';
+      card.setAttribute('role', 'alert');
+      loader.appendChild(card);
+    }
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    const body = document.createElement('p');
+    body.className = 'viewer-loader-error__message';
+    body.textContent = message;
+    const reload = document.createElement('button');
+    reload.type = 'button';
+    reload.className = 'btn btn-primary viewer-loader-error__back';
+    reload.textContent = _text('viewer.bootReload', 'Reload');
+    reload.addEventListener('click', () => window.location.reload());
+    card.replaceChildren(heading, body, reload);
+    card.classList.remove('hidden');
+    // A Compare panel waits for PANEL_READY: tell it instead of leaving it to its own timeout.
+    try {
+      if (window.parent !== window && window.location.origin && window.location.origin !== 'null') {
+        window.parent.postMessage({ type: 'PANEL_ERROR', message: title }, window.location.origin);
+      }
+    } catch (e) { /* no host to tell */ }
+  }
+
+  /** The boot got through (or failed visibly): stop watching; a card already shown steps aside. */
+  function settle() {
+    _settled = true;
+    if (_timer) { clearTimeout(_timer); _timer = null; }
+    if (!_shown) return;
+    _shown = false;
+    const card = document.getElementById('loader-error');
+    if (card) { card.classList.add('hidden'); card.replaceChildren(); }
+    document.getElementById('loader-body')?.classList.remove('hidden');
+  }
+
+  function arm(delayMs = DELAY_MS) {
+    if (_settled || _timer) return;
+    _timer = setTimeout(() => { _timer = null; if (!_settled) show(); }, delayMs);
+  }
+
+  return { arm, settle, show };
+})();
+BootWatchdog.arm();
+
 const ViewerApp = (() => {
   let datasetId;
   let datasetMeta;
@@ -303,6 +384,7 @@ const ViewerApp = (() => {
     // Every reader of this canvas renders it in its own task first (renderNow, the
     // canvas's toBlob/toDataURL hooks, getCaptureCanvas for a host page), so the
     // drawing buffer need not be kept between frames.
+    BootWatchdog.settle();
     VolumeViewer.init('webgl-canvas', { preserveDrawingBuffer: false });
     // The slice on screen ⇔ the two renders swapped (_setSliceStage): one listener
     // serves the tool, a sibling's SYNC_SLICER_SPEC and the Z-stack browser alike.
@@ -382,7 +464,6 @@ const ViewerApp = (() => {
       || (_pendingWorkspaceState && _pendingWorkspaceState?.viewer?.camera);
     if (hasPendingCameraState && VolumeViewer.setHasLoadedVolume) {
       VolumeViewer.setHasLoadedVolume(true);
-      console.log('[ViewerApp] Pre-set _hasLoadedVolume=true to skip fitCameraToVolume (state will be restored)');
     }
 
     // Build the ViewerContext façade for module implementations. Every member is a
@@ -665,10 +746,7 @@ const ViewerApp = (() => {
         console.error('[ViewerApp] Plugin initialisation failed — continuing without plugin tools.', err);
       }
 
-      const toolsCount = PluginRegistry.listByPlacement('tools').length;
-
-      const shadersCount = PluginRegistry.listByPlacement('shaders').length;
-      console.log(`[ViewerApp] PluginRegistry initialized — ${toolsCount} tools, ${shadersCount} shaders`);
+      console.debug(`[ViewerApp] PluginRegistry initialized — ${PluginRegistry.listByPlacement('tools').length} tools, ${PluginRegistry.listByPlacement('shaders').length} shaders`);
     }
 
     // ELE-26: apply saved workspace + buffered z-stack state AFTER initAll, so plugin
@@ -687,7 +765,6 @@ const ViewerApp = (() => {
       VolumeViewer.resetView({ resetClipping: true });
     }
     if (_pendingWorkspaceState) {
-      console.log('[ViewerApp] Applying pending workspace state after init, camera:', _pendingWorkspaceState?.viewer?.camera?.cameraZ, 'measurements:', _pendingWorkspaceState?.viewer?.measurements?.length);
       _applyWorkspaceStateNow(_pendingWorkspaceState);
       _pendingWorkspaceState = null;
     }
@@ -1377,8 +1454,9 @@ const ViewerApp = (() => {
   function _fmtMB(bytes) {
     const mb = Number(bytes) / 1048576;
     if (!Number.isFinite(mb)) return '—';
-    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-    return `${mb >= 100 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+    const units = Utils.byteUnits();
+    if (mb >= 1024) return `${Utils.formatNumber(mb / 1024, 1)} ${units[3]}`;
+    return `${Utils.formatNumber(mb, mb >= 100 ? 0 : 1)} ${units[2]}`;
   }
 
   function _fmtDuration(s) {
@@ -2375,7 +2453,7 @@ const ViewerApp = (() => {
     if (!slider) return;
     const label = document.getElementById('val-exposure');
     const val = parseInt(slider.value, 10) / 100;
-    if (label) label.textContent = `${val.toFixed(2)}×`;
+    if (label) label.textContent = `${Utils.formatNumber(val, 2)}×`;
     VolumeViewer.setExposure(val);
     // _isInitialized gates the boot-time chatter, like the SYNC_CHANNELS emitter:
     // seeding the slider from the dataset's own metadata is not an operator edit, and
@@ -2818,7 +2896,7 @@ const ViewerApp = (() => {
     if (!(progress.totalChunks > 0)) return res;
     const mb = (bytes) => {
       const v = Math.max(0, Number(bytes) || 0) / 1e6;
-      return v < 10 ? v.toFixed(1) : String(Math.round(v));
+      return v < 10 ? Utils.formatNumber(v, 1) : String(Math.round(v));
     };
     let eta = '';
     const seconds = Number(progress.etaSeconds);
@@ -4831,7 +4909,6 @@ const ViewerApp = (() => {
   // Public entry-point: buffer if init() hasn't completed yet
   function _applyWorkspaceState(state = {}) {
     if (!_isInitialized) {
-      console.log('[ViewerApp] _applyWorkspaceState: buffering (not yet initialized)');
       _pendingWorkspaceState = state;
       return;
     }
@@ -4857,11 +4934,6 @@ const ViewerApp = (() => {
     const ui = state.ui || {};
     const viewerState = state.viewer && Object.keys(state.viewer).length ? state.viewer : state;
 
-    console.log('[ViewerApp] _applyWorkspaceStateNow called', {
-      hasCamera: !!viewerState.camera,
-      cameraZ: viewerState.camera?.cameraZ,
-      measurementCount: viewerState.measurements?.length
-    });
     if (viewerState.camera) VolumeViewer.setCameraState(viewerState.camera);
 
     if (typeof ui.presentationMode === 'boolean') {
@@ -4908,7 +4980,7 @@ const ViewerApp = (() => {
       if (slider) {
         slider.value = Math.max(20, Math.min(500, Math.round(viewerState.exposure * 100)));
         const exposureLabel = document.getElementById('val-exposure');
-        if (exposureLabel) exposureLabel.textContent = `${viewerState.exposure.toFixed(2)}×`;
+        if (exposureLabel) exposureLabel.textContent = `${Utils.formatNumber(viewerState.exposure, 2)}×`;
         VolumeViewer.setExposure(viewerState.exposure);
       }
     }
@@ -5629,7 +5701,7 @@ const ViewerApp = (() => {
     const reg = datasetMeta?.registration;
     if (!reg || !Array.isArray(reg.transforms) || !reg.transforms.length) return;
     if (!reg.appliedToVolume) {
-      console.info('[ViewerApp] registration present but not applicable to the volume:',
+      console.debug('[ViewerApp] registration present but not applicable to the volume:',
         reg.qcSummary?.warnings || 'see qcSummary');
       return;
     }
@@ -5916,7 +5988,7 @@ const ViewerApp = (() => {
       // Surfaced so the cost of a scrub step can be read off the console directly
       // instead of inferred: first visit vs. revisit is the number that matters.
       const ms = Math.round((performance.now?.() || Date.now()) - _tpLoadStart);
-      console.log(`[ViewerApp] timepoint ${t + 1}/${datasetMeta.dimensions?.t} ready in ${ms} ms `
+      console.debug(`[ViewerApp] timepoint ${t + 1}/${datasetMeta.dimensions?.t} ready in ${ms} ms `
         + `(${primaryQuality}, ${_tpSeen.has(t) ? 'revisit' : 'first visit'}, `
         + `${loadedTimepoints.size} visited so far)`);
       _tpSeen.add(t);
@@ -6358,7 +6430,7 @@ const ViewerApp = (() => {
 
   function _updateZScaleLabel() {
     const label = document.getElementById('val-z-scale');
-    if (label) label.textContent = `${_zDisplayScale.toFixed(2)}x`;
+    if (label) label.textContent = `${Utils.formatNumber(_zDisplayScale, 2)}x`;
   }
 
   function _updatePhysicalStatus() {
@@ -6378,7 +6450,7 @@ const ViewerApp = (() => {
         ? _t('viewer.calEstimated', 'Estimated')
         : _t('viewer.calMissing', 'Metadata missing');
     const zDisplayed = physical.z * _zDisplayScale;
-    const overrideText = _tf('viewer.displayOverride', 'Display override: {k}x', { k: _zDisplayScale.toFixed(2) });
+    const overrideText = _tf('viewer.displayOverride', 'Display override: {k}x', { k: Utils.formatNumber(_zDisplayScale, 2) });
     const active = VolumeViewer.getSamplingVolume?.();
     const activeGrid = active?.width && active?.height && active?.depth
       ? `${active.width}x${active.height}x${active.depth}`
@@ -6396,8 +6468,8 @@ const ViewerApp = (() => {
   function _fmtUm(value) {
     if (!Number.isFinite(value)) return '--';
     if (value >= 100) return Math.round(value).toString();
-    if (value >= 10) return value.toFixed(1);
-    return value.toFixed(2);
+    if (value >= 10) return Utils.formatNumber(value, 1);
+    return Utils.formatNumber(value, 2);
   }
 
   function _bindIframeSync() {
@@ -6998,6 +7070,7 @@ const ViewerApp = (() => {
 
   function _showLoadingError(err) {
     console.error('[ViewerApp] Loading failed:', err);
+    BootWatchdog.settle();
     const { text, detail, silent } = _loadErrorText(err);
     // A superseded or cancelled load says nothing while a volume is on screen; with
     // none, the card still replaces a spinner that would otherwise never stop.
@@ -7236,7 +7309,7 @@ const ViewerApp = (() => {
       if (el) el.value = val;
       if (lb) lb.textContent = fmt;
     };
-    set('slicer-position', Math.round(spec.value * 100), 'slicer-val-pos', spec.value.toFixed(2));
+    set('slicer-position', Math.round(spec.value * 100), 'slicer-val-pos', Utils.formatNumber(spec.value, 2));
     set('slicer-yaw', spec.yaw || 0, 'slicer-val-yaw', `${spec.yaw || 0}°`);
     set('slicer-pitch', spec.pitch || 0, 'slicer-val-pitch', `${spec.pitch || 0}°`);
     set('slicer-roll', spec.roll || 0, 'slicer-val-roll', `${spec.roll || 0}°`);
@@ -7489,7 +7562,6 @@ window.addEventListener('message', (e) => {
   if (!_fromViewerHost(e)) return;
   const data = e.data;
   if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state || typeof data.state !== 'object' || Array.isArray(data.state)) return;
-  console.log('[ViewerApp] Early listener: APPLY_WORKSPACE_STATE received — routing to ViewerApp.applyWorkspaceState');
   ViewerApp.applyWorkspaceState(data.state);
 });
 
@@ -7518,7 +7590,14 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch((err) => {
       console.error('[ViewerApp] boot failed:', err);
       // A hosting page (Compare) waits for PANEL_READY: tell it, and the operator.
-      ViewerApp._bootFailed?.(err);
+      // A core script that never loaded leaves ViewerApp, Utils or I18n undefined, so the
+      // regular error card can throw again: the watchdog's card needs none of them.
+      try {
+        if (typeof ViewerApp === 'undefined') throw err;
+        ViewerApp._bootFailed?.(err);
+      } catch (e) {
+        BootWatchdog.show();
+      }
     });
 });
 

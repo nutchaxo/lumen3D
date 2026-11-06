@@ -200,6 +200,7 @@ const App2D = (() => {
         openStudio: () => _openStudio(),
         openStudioWith: (sliceResult) => { if (typeof StudioEditor !== 'undefined') StudioEditor.open(sliceResult); },
         addSidebarSection: _addSidebarSection,
+        addCanvasPanel: _addCanvasPanel,
         getStage: () => $('p2d-canvas').parentElement
       },
       iframe: {
@@ -367,6 +368,32 @@ const App2D = (() => {
    * so a plugin written for both pages needs no branching. `section` is kept as
    * an alias of `root` for the plugins that destructure it.
    */
+  /** A floating panel over the photograph's stage (same contract as the volume viewer's). */
+  function _addCanvasPanel(def = {}) {
+    const stage = $('p2d-canvas')?.parentElement;
+    if (!stage || !def.id) return null;
+    const safeId = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
+    document.getElementById(`plugin-panel-${safeId}`)?.remove();
+    const root = document.createElement('div');
+    root.className = `scientific-panel ${def.className || ''}`.trim();
+    root.id = `plugin-panel-${safeId}`;
+    if (def.style) root.style.cssText = def.style;
+    root.innerHTML = def.html || '';
+    stage.appendChild(root);
+    if (window.lucide) lucide.createIcons({ nodes: [root] });
+    const handle = {
+      root,
+      setHtml(html) { root.innerHTML = html; if (window.lucide) lucide.createIcons({ nodes: [root] }); },
+      show() { root.classList.add('visible'); },
+      hide() { root.classList.remove('visible'); },
+      toggle(force) { return root.classList.toggle('visible', force); },
+      isVisible() { return root.classList.contains('visible'); },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(root, handle);
+    return handle;
+  }
+
   function _addSidebarSection(def = {}) {
     const label = Utils.el('span', {}, def.title || '');
     const body = Utils.el('div', { class: 'p2d-plugin-body' });

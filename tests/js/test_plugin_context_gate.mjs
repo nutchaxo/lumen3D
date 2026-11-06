@@ -18,6 +18,7 @@ const PLUGINS = {
   'tools/page-only': { id: 'page-only', name: 'Page only', placement: 'tools', contexts: ['page'] },
   'tools/panel-only':{ id: 'panel-only',name: 'Panel only',placement: 'tools', contexts: ['panel'] },
   'tools/undeclared':{ id: 'undeclared',name: 'Undeclared',placement: 'tools' },
+  'tools/compare-host':{ id: 'compare-host', name: 'Compare host', placement: 'tools', contexts: ['page', 'panel', 'compare'] },
   'tools/bogus':     { id: 'bogus',     name: 'Bogus',     placement: 'tools', contexts: ['kiosk'] },
 };
 const ALL = Object.keys(PLUGINS);
@@ -60,20 +61,24 @@ async function loadedIds(opts) {
 // The vocabulary is closed and exported for the pages.
 {
   const { PR } = freshRegistry();
-  assert.deepEqual(Array.from(PR.CONTEXTS), ['page', 'panel'], 'two hosting contexts');
+  assert.deepEqual(Array.from(PR.CONTEXTS), ['page', 'panel', 'compare'], 'three hosting contexts');
 }
 
 // No context: unfiltered, exactly as before the field existed.
 assert.deepEqual(await loadedIds(undefined),
-  ['bogus', 'both', 'page-only', 'panel-only', 'undeclared'], 'no context → unfiltered');
+  ['bogus', 'both', 'compare-host', 'page-only', 'panel-only', 'undeclared'], 'no context → unfiltered');
 
 // A page keeps what declares 'page' and what declares nothing.
 assert.deepEqual(await loadedIds({ context: 'page' }),
-  ['both', 'page-only', 'undeclared'], 'page context');
+  ['both', 'compare-host', 'page-only', 'undeclared'], 'page context');
 
 // A panel keeps ONLY what declared it copes with being driven from outside.
 assert.deepEqual(await loadedIds({ context: 'panel' }),
-  ['both', 'panel-only'], 'panel context is default-deny');
+  ['both', 'compare-host', 'panel-only'], 'panel context is default-deny');
+
+// The Compare page itself hosts a plugin only when it declared 'compare'.
+assert.deepEqual(await loadedIds({ context: 'compare' }),
+  ['compare-host'], 'compare context is default-deny');
 
 // Left out is not quarantined; an unknown context name is warned about.
 {
@@ -88,7 +93,7 @@ assert.deepEqual(await loadedIds({ context: 'panel' }),
   const { PR } = freshRegistry();
   PLUGINS['tools/both'].dataTypes = ['2d'];
   await PR.loadModules('js/modules', ALL, { context: 'panel', dataType: '3d', allowUndeclaredDataTypes: true });
-  assert.deepEqual(Array.from(PR.listByPlacement('tools'), p => p.id).sort(), ['panel-only'],
+  assert.deepEqual(Array.from(PR.listByPlacement('tools'), p => p.id).sort(), ['compare-host', 'panel-only'],
     'a panel-capable plugin of another data type stays out; an undeclared one the host opts in stays');
   delete PLUGINS['tools/both'].dataTypes;
 }

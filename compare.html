@@ -93,6 +93,21 @@
       font-size: var(--text-sm);
     }
 
+    .compare-drawers { display: flex; flex-direction: column; flex: 0 0 auto; }
+    .compare-drawer {
+      position: relative;
+      display: none;
+      height: min(52vh, 560px);
+      overflow: auto;
+      border-top: 1px solid var(--border-light);
+      background: var(--bg-surface);
+    }
+    .compare-drawer.open { display: flex; flex-direction: column; }
+    .compare-drawer > .compare-drawer-close { position: absolute; top: 6px; right: 8px; z-index: 2; }
+    .compare-drawer .graphs-body { flex: 1 1 auto; }
+    .compare-drawer .scientific-panel-header { padding-right: 48px; }
+    .compare-drawer .graphs-body .btn.active { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary, #fff); }
+
     .compare-grid {
       flex: 1;
       display: grid;
@@ -458,6 +473,8 @@
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-compare-studio" data-i18n-title="compare.studioHint" disabled>
           <i data-lucide="pen-tool"></i> <span data-i18n="compare.studio">Studio</span>
         </button>
+        <!-- Buttons of the plugins that declared the "compare" context (Graphs…), added by JS. -->
+        <span id="compare-plugin-actions" style="display:contents"></span>
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-export-compare">
           <i data-lucide="download"></i> <span data-i18n="compare.export">Export</span>
         </button>
@@ -499,6 +516,10 @@
       </div>
       <!-- Panels are appended here by JS -->
     </main>
+
+    <!-- Drawers of the plugins that declared the "compare" context: they sit under the
+         panels and take a share of the height while open. -->
+    <div class="compare-drawers" id="compare-drawers"></div>
 
   </div>
 
@@ -601,6 +622,9 @@
   <script src="js/components/channel-panel.js"></script>
   <script src="js/core/slice-compositor.js"></script>
   <script src="js/components/studio-editor.js"></script>
+  <script src="js/core/compat.js"></script>
+  <script src="js/core/plugin-trust.js"></script>
+  <script src="js/core/plugin-registry.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/pages/compare-policy.js"></script>
   <script src="js/pages/compare.js"></script>
 </body>

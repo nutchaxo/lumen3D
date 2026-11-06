@@ -520,6 +520,43 @@ body.presentation-mode .viewer-layout {
   width: 100%;
 }
 
+/* Graphs (graphs plugin): a floating panel over the canvas — controls on top, the
+   plot filling the rest — and, in Compare, the same body inside the host's drawer. */
+.graphs-panel {
+  right: auto;
+  bottom: auto;
+  top: var(--space-4);
+  left: var(--space-4);
+  width: min(760px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.graphs-panel.visible {
+  display: flex;
+}
+
+.graphs-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+
+.graphs-plot {
+  flex: 1 1 auto;
+  min-height: 300px;
+  width: 100%;
+}
+
+.graphs-body .btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary, #fff);
+}
+
 .export-modal-overlay {
   position: fixed;
   inset: 0;

@@ -66,6 +66,18 @@ const DataAccess = (() => {
     };
   }
 
+  /** The levels of the mounted tree, finest first: [{ level, dims: {x, y, z}, voxelSize: {x, y, z} }]. */
+  function levels() {
+    _ready();
+    const out = [];
+    for (let k = 0; ; k++) {
+      const L = BrickLoader.getLevelInfo?.(k);
+      if (!L) break;
+      out.push({ level: k, dims: { ...L.dims }, voxelSize: voxelSize(k) });
+    }
+    return out;
+  }
+
   /** Physical µm → voxel coordinates (floats) of level k. */
   function toVoxel(um, { level = 0 } = {}) {
     const v = voxelSize(level);
@@ -195,5 +207,5 @@ const DataAccess = (() => {
     return r.data.map(a => a[0]);
   }
 
-  return { info, voxelSize, toVoxel, toUm, screenToVoxel, locate, readRegion, valueAt, MAX_REGION_BYTES };
+  return { info, levels, voxelSize, toVoxel, toUm, screenToVoxel, locate, readRegion, valueAt, MAX_REGION_BYTES };
 })();

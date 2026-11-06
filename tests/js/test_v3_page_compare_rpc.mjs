@@ -97,9 +97,18 @@ const Rpc = loadModule('js/pages/compare-policy.js', 'ComparePanelRpc');
   await assert.rejects(rpc.request('0', 'REQUEST_EVERYTHING'), (e) => e.code === 'COMPARE_BAD_REQUEST');
   assert.equal(rpc.pending(), 0);
   // Every request type has its answer type, handled by compare.js.
+  // A plugin's own request: the plugin (in the host and in the panel) sends and answers it,
+  // compare.js only routes the answer through the shared RPC.
+  const PLUGIN_REQUESTS = { REQUEST_GRAPH_DATA: 'js/modules/tools/graphs/index.js' };
   for (const [req, ans] of Object.entries(Rpc.ANSWER_OF)) {
-    assert.ok(compareSrc.includes(`'${req}'`), `compare.js sends ${req}`);
     assert.ok(compareSrc.includes(`case '${ans}':`), `compare.js routes ${ans}`);
+    if (PLUGIN_REQUESTS[req]) {
+      const plugin = readFileSync(path.join(ROOT, PLUGIN_REQUESTS[req]), 'utf8');
+      assert.ok(plugin.includes(`'${req}'`), `${PLUGIN_REQUESTS[req]} sends and answers ${req}`);
+      assert.ok(plugin.includes(`type: '${ans}', requestId`), `${PLUGIN_REQUESTS[req]} sends ${ans} with the requestId`);
+      continue;
+    }
+    assert.ok(compareSrc.includes(`'${req}'`), `compare.js sends ${req}`);
     for (const [name, src] of [['viewer.js', viewerSrc], ['2d.js', page2dSrc]]) {
       assert.ok(src.includes(`'${req}'`), `${name} answers ${req}`);
       assert.ok(src.includes(`type: '${ans}', requestId`), `${name} sends ${ans} with the requestId`);

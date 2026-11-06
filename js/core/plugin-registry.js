@@ -127,11 +127,14 @@ const PluginRegistry = (() => {
   //   'panel' — that same page embedded chrome-less by a host (a Compare panel,
   //             a split-view pane, the admin preview): no toolbar of its own, the
   //             host drives it by postMessage and shows the buttons it asks for.
+  //   'compare' — the Compare page itself, which hosts no volume of its own: a
+  //             plugin that declared it gets a host context (panels to ask, a
+  //             toolbar button and a drawer to fill) and aggregates the panels.
   // A plugin declaring nothing predates the field and is taken on a page only:
   // an embedded page never runs a plugin that did not say it copes with being
   // driven from outside (a nested split view, a fullscreen request, a modal in a
   // 300 px panel). The vocabulary is closed and is the one plugin.json uses.
-  const CONTEXTS = ['page', 'panel'];
+  const CONTEXTS = ['page', 'panel', 'compare'];
 
   function _acceptsContext(meta, context) {
     if (!context) return true;

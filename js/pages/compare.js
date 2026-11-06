@@ -145,6 +145,7 @@ const CompareApp = (() => {
       _initialPending = added.length;
     }
     document.addEventListener('keydown', _onKeydown);
+    _initHostPlugins();
 
     if (typeof UrlState !== 'undefined') {
       UrlState.startSync(_getWorkspaceState, 1000, { pristine: !restored });
@@ -445,6 +446,7 @@ const CompareApp = (() => {
     _panels = _panels.filter(p => p !== panel);
     _loadQueue = _loadQueue.filter(p => p !== panel);
     _qualityQueue = _qualityQueue.filter(p => p !== panel);
+    _emitPanelsChanged();
     if (_qualityBusy?.panel === panel) _finishQuality();
     // What a closed panel last shared must not be replayed onto the next one.
     _forgetSyncFrom(panel.index);
@@ -599,6 +601,7 @@ const CompareApp = (() => {
     if (!panel.restored) _replayLastSync(panel);
     panel.readyResolve?.(true);
     panel.readyResolve = null;
+    _emitPanelsChanged();
     _scheduleQuality();
     // The panels the URL asked for are the page's untouched state.
     if (_initialPending > 0 && --_initialPending === 0 && !_restoredFromUrl && typeof UrlState !== 'undefined') {
@@ -1108,6 +1111,7 @@ const CompareApp = (() => {
       case 'STUDIO_SLICE':
       case 'WORKSPACE_STATE':
       case 'CHANNEL_STATE':
+      case 'GRAPH_DATA':
         // A late answer (its request timed out) or a duplicate: release its pictures.
         if (!_rpc.settle(panel.index, data)) _releaseAnswer(data);
         break;
@@ -1659,6 +1663,103 @@ const CompareApp = (() => {
       return;
     }
     console.warn(`[Compare] ${text}`);
+  }
+
+  // ── Plugins that extend this page ─────────────────────────
+  // A plugin declaring the "compare" context gets a host context instead of a
+  // viewer one: the open panels (to ask, by request / response), a toolbar button
+  // and a drawer under the grid. The panels themselves load the same plugin in
+  // their "panel" context and answer it. Nothing here knows what the plugin draws.
+
+  let _panelListeners = [];
+
+  function _emitPanelsChanged() {
+    _panelListeners.slice().forEach(fn => { try { fn(); } catch (err) { console.warn('[Compare] panel listener failed:', err); } });
+  }
+
+  function _hostPluginCtx() {
+    return {
+      context: 'compare',
+      panels: {
+        list: () => _panels.map(p => ({ index: p.index, id: p.id, name: p.name, type: p.type, ready: p.ready, failed: p.failed })),
+        request: (index, type, payload, opts) => _rpc.request(index, type, payload, opts),
+        onChange: (cb) => {
+          if (typeof cb !== 'function') return () => {};
+          _panelListeners.push(cb);
+          return () => { _panelListeners = _panelListeners.filter(fn => fn !== cb); };
+        }
+      },
+      ui: {
+        toast: (msg) => _toast(msg),
+        escapeHtml: (s) => Utils.escapeHtml(s),
+        /** A button in the toolbar that opens / closes a drawer under the panels. */
+        addDrawer: (def = {}) => {
+          const bar = document.getElementById('compare-plugin-actions');
+          const host = document.getElementById('compare-drawers');
+          if (!bar || !host || !def.id) return null;
+          const id = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-outline btn-sm flex items-center gap-2';
+          btn.id = `compare-plugin-${id}`;
+          btn.setAttribute('aria-pressed', 'false');
+          btn.innerHTML = `<i data-lucide="${Utils.escapeHtml(def.icon || 'square')}"></i> <span></span>`;
+          btn.querySelector('span').textContent = def.title || id;
+          bar.appendChild(btn);
+          const el = document.createElement('section');
+          el.className = 'compare-drawer';
+          el.id = `compare-drawer-${id}`;
+          const close = document.createElement('button');
+          close.type = 'button';
+          close.className = 'btn btn-icon btn-ghost compare-drawer-close';
+          close.setAttribute('aria-label', _t('app.close', 'Close'));
+          close.innerHTML = '<i data-lucide="x"></i>';
+          const body = document.createElement('div');
+          body.style.cssText = 'flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:auto';
+          body.innerHTML = def.html || '';
+          el.append(close, body);
+          host.appendChild(el);
+          if (window.lucide) lucide.createIcons({ nodes: [btn, el] });
+          let open = false;
+          const set = (on) => {
+            on = Boolean(on);
+            if (on === open) return;
+            open = on;
+            el.classList.toggle('open', on);
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-pressed', String(on));
+            try { def.onToggle?.(on); } catch (err) { console.warn('[Compare] drawer toggle failed:', err); }
+            // The panels share the height with the drawer: let them re-measure.
+            requestAnimationFrame(() => {
+              try { def.onResize?.(); } catch (_) { /* drawer gone */ }
+              window.dispatchEvent(new Event('resize'));
+            });
+          };
+          btn.addEventListener('click', () => set(!open));
+          close.addEventListener('click', () => set(false));
+          return {
+            el: body,
+            open: () => set(true),
+            close: () => set(false),
+            isOpen: () => open,
+            setTitle: (title) => { btn.querySelector('span').textContent = title; },
+            remove: () => { btn.remove(); el.remove(); }
+          };
+        }
+      }
+    };
+  }
+
+  async function _initHostPlugins() {
+    if (typeof PluginRegistry === 'undefined' || typeof PluginRegistry.loadModules !== 'function') return;
+    try {
+      const paths = await PluginRegistry.discover('js/modules');
+      await PluginRegistry.loadModules('js/modules', paths, { context: 'compare' });
+      await PluginRegistry.initAll(_hostPluginCtx());
+    } catch (err) {
+      // A plugin must never cost the page: Compare works without them.
+      console.warn('[Compare] Host plugins unavailable:', err);
+    }
   }
 
   // ── Workspace ─────────────────────────────────────────────

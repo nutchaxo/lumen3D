@@ -143,6 +143,9 @@ const Compat = (() => {
   // Dev checkouts have no version.json (gitignored) but run dev_server.py,
   // which answers /api/health. When neither responds the version is unknown
   // and the compat gate is inert (see satisfies()).
+  // 'no-cache', not 'no-store': version.json is the same file on every page of a
+  // host and only changes with an update, so a revalidation (304) is enough to
+  // see a new release; the plugin registry's own read of it is then a 304 too.
   let _versionPromise = null;
 
   function platformVersion() {
@@ -150,7 +153,7 @@ const Compat = (() => {
       _versionPromise = (async () => {
         for (const [url, key] of [['version.json', 'web'], ['api/health', 'web']]) {
           try {
-            const resp = await fetch(url, { cache: 'no-store' });
+            const resp = await fetch(url, { cache: 'no-cache' });
             if (!resp.ok) continue;
             const v = (await resp.json())?.[key];
             if (typeof v === 'string' && v) return v;

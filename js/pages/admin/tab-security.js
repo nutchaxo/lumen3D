@@ -134,7 +134,7 @@ async function submit() {
     ['sec-current', 'sec-new', 'sec-new2'].forEach((id) => { const e = el(id); if (e) e.value = ''; });
   } else if (throttleText(r.data)) {
     err(throttleText(r.data));
-  } else if (r.status === 401 || r.data?.error === 'bad_current') {
+  } else if (r.data?.error === 'bad_current') {
     err(t('admin.badCurrent', 'Mot de passe actuel incorrect.'));
   } else if (r.data?.error === 'weak_password') {
     err(t('admin.setupWeak', `Mot de passe trop court (${MIN_PASSWORD} caractères minimum).`, { n: MIN_PASSWORD }));

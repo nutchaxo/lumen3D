@@ -27,9 +27,9 @@
                     TOGGLE_SIDEBAR, TOGGLE_ZSTACK, ZSTACK_HOVER_STATE,
                     SET_CHANNEL_ACTIVE, APPLY_WORKSPACE_STATE, the SYNC_* relays,
                     WM_SET_PHYSICAL_VIEW
-                    PANEL_RESOURCES        how many volume panels share the machine, the
-                                           loader settings and the GPU budget each may
-                                           plan against (PanelResources); also `?panels=N`
+                    PANEL_RESOURCES        how many volume panels share the machine (the
+                                           page divides its loader by it) and the GPU
+                                           budget each may plan against (PanelResources); also `?panels=N`
                                            in the page's address, for its first load
                     REQUEST_CAPTURE       what the panel shows, as an ImageBitmap
                     REQUEST_STUDIO_SLICE   the slice the Studio composes (bitmap +
@@ -107,11 +107,14 @@ const CompareApp = (() => {
 
   async function init() {
     Theme.init();
+    // The catalog needs neither the instance config nor the translations: its
+    // request runs beside them (Catalog.load() never rejects).
+    const catalogReady = Catalog.load();
     await InstanceConfig.load();
     await I18n.init();
     InstanceConfig.applyHead();
     InstanceConfig.applyDom();
-    await Catalog.load();
+    await catalogReady;
 
     _datasets = Catalog.getAll();
     _updateThemeIcon();
@@ -120,6 +123,7 @@ const CompareApp = (() => {
     I18n.onLanguageChange(() => {
       _renderModalList();
       _renderModalTypeChips();
+      document.querySelectorAll('.compare-drawer-close').forEach(b => b.setAttribute('aria-label', _t('app.close', 'Close')));
       // The panels follow the language on their own (storage event) and re-describe
       // their toolbar; ask once more a little later for any that were still busy.
       setTimeout(() => _broadcast({ type: 'PANEL_HELLO' }, null), 600);
@@ -128,6 +132,7 @@ const CompareApp = (() => {
     _bindToolbar();
     _bindModal();
     _watchLayoutVisibility();
+    _watchNarrowLayout();
     _updateLayout();
     _bindExport();
     // Panels answer the host in messages: listen before the first one is added.
@@ -267,8 +272,11 @@ const CompareApp = (() => {
       const chip = e.target.closest('[data-type]');
       if (!chip) return;
       _modalFilter.type = chip.dataset.type;
+      const hadFocus = chip === document.activeElement;
       _renderModalTypeChips();
       _renderModalList();
+      // The chips are rebuilt: give the keyboard back the one it pressed.
+      if (hadFocus) _modalTypeChip(_modalFilter.type)?.focus();
     });
     document.getElementById('modal-dataset-list').addEventListener('click', async (e) => {
       const retry = e.target.closest('[data-catalog-retry]');
@@ -300,9 +308,17 @@ const CompareApp = (() => {
     const host = document.getElementById('modal-type-chips');
     if (!host) return;
     const present = new Set(_datasets.map(d => d.type));
-    const chip = (type, label) => `<button type="button" class="modal-type-chip${_modalFilter.type === type ? ' is-active' : ''}" data-type="${Utils.escapeHtml(type)}">${Utils.escapeHtml(label)}</button>`;
+    const chip = (type, label) => {
+      const on = _modalFilter.type === type;
+      return `<button type="button" class="modal-type-chip${on ? ' is-active' : ''}" aria-pressed="${on}" data-type="${Utils.escapeHtml(type)}">${Utils.escapeHtml(label)}</button>`;
+    };
     host.innerHTML = chip('all', _t('compare.allTypes', 'All'))
       + Utils.DATASET_TYPES.filter(t => present.has(t)).map(t => chip(t, Utils.datasetTypeLabel(t))).join('');
+  }
+
+  function _modalTypeChip(type) {
+    const host = document.getElementById('modal-type-chips');
+    return host ? Array.from(host.querySelectorAll('[data-type]')).find(b => b.dataset.type === type) || null : null;
   }
 
   function _modalMatches(d) {
@@ -411,10 +427,10 @@ const CompareApp = (() => {
         <div class="panel-title-badge" title="${Utils.escapeHtml(panel.name)}">${Utils.escapeHtml(panel.name)}</div>
         <div class="panel-actions">
           <div class="panel-toggles" data-index="${index}"></div>
-          <button class="btn btn-outline btn-sm bg-surface p-1 btn-settings" data-index="${index}" title="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" data-i18n-title="js.toggleSettings">
+          <button type="button" class="btn btn-outline btn-sm bg-surface p-1 btn-settings" data-index="${index}" aria-pressed="false" title="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" aria-label="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" data-i18n-title="js.toggleSettings" data-i18n-aria="js.toggleSettings">
             <i data-lucide="settings" class="w-4 h-4"></i>
           </button>
-          <button class="btn btn-outline btn-sm bg-surface p-1 btn-close-panel" data-index="${index}" title="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" data-i18n-title="js.closePanel">
+          <button type="button" class="btn btn-outline btn-sm bg-surface p-1 btn-close-panel" data-index="${index}" title="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" aria-label="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" data-i18n-title="js.closePanel" data-i18n-aria="js.closePanel">
             <i data-lucide="x" class="w-4 h-4"></i>
           </button>
         </div>
@@ -452,6 +468,9 @@ const CompareApp = (() => {
   function _removePanel(index) {
     const panel = _panelByIndex(index);
     if (!panel) return;
+    // Removing the focused element would drop the keyboard back at the top of the page.
+    const hadFocus = Boolean(panel.el && document.activeElement && panel.el.contains(document.activeElement));
+    const position = _panels.indexOf(panel);
     panel.timers.forEach(t => clearTimeout(t));
     panel.timers.clear();
     panel.readyResolve?.(false);
@@ -473,6 +492,11 @@ const CompareApp = (() => {
     _renderToolChips();
     _updateActionButtons();
     _updateLayout();
+    if (hadFocus) {
+      const neighbour = _panels[Math.min(position, _panels.length - 1)];
+      const target = neighbour?.el?.querySelector('.btn-close-panel') || document.getElementById('btn-add-dataset');
+      target?.focus();
+    }
     // The room a closed panel held goes back to the others before they are raised.
     _postResources();
     _scheduleQuality();
@@ -507,6 +531,17 @@ const CompareApp = (() => {
       _layoutHidden = hidden;
       if (!hidden) { _notifyFramesResize(); _scheduleQuality(); }
     }).observe(layout, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  // Below this width compare.html stacks the automatic layout in one scrolling column.
+  const NARROW_LAYOUT_QUERY = '(max-width: 720px)';
+
+  /** Crossing the narrow breakpoint reshapes every panel at once: let them re-measure. */
+  function _watchNarrowLayout() {
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(NARROW_LAYOUT_QUERY);
+    if (typeof query.addEventListener === 'function') query.addEventListener('change', _notifyFramesResize);
+    else if (typeof query.addListener === 'function') query.addListener(_notifyFramesResize);
   }
 
   function _setTimer(panel, fn, ms) {
@@ -659,7 +694,9 @@ const CompareApp = (() => {
     _updateActionButtons();
     _showPanelLoadState(panel, null);
     _refreshPanelState(panel);
-    if (!first) return;
+    // A panel that describes itself again (a language switch, PANEL_HELLO): what a
+    // host plugin asked it before may be out of date.
+    if (!first) { _emitPanelsChanged(); return; }
 
     // The host's state, now that the page listens: tool, then whatever a restore
     // or a decomposition had reserved for it, then the view the others share.
@@ -810,6 +847,7 @@ const CompareApp = (() => {
   function _syncToolChips() {
     document.querySelectorAll('#compare-tool-chips [data-tool]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tool === _tool);
+      btn.setAttribute('aria-pressed', String(btn.dataset.tool === _tool));
     });
   }
 
@@ -886,10 +924,10 @@ const CompareApp = (() => {
         return { key: p.index, bytes: _qualityBusy?.panel === p ? now + next : Math.max(now, next) };
       }), total)
       : null;
-    const loader = PanelResources.loaderSettings(count, Number(globalThis.navigator?.hardwareConcurrency) || 4);
+    // The loader settings are divided in the panel, from its own BrickLoader's defaults.
     volumes.forEach(p => {
       if (!p.ready) return;
-      _postTo(p, { type: 'PANEL_RESOURCES', panels: count, loader, vramBytes: shares ? shares.get(p.index) : null });
+      _postTo(p, { type: 'PANEL_RESOURCES', panels: count, vramBytes: shares ? shares.get(p.index) : null });
     });
   }
 
@@ -965,9 +1003,15 @@ const CompareApp = (() => {
       const btn = panel.el?.querySelector('.btn-settings');
       const isTarget = String(panel.index) === String(index);
       const next = isTarget && btn ? !btn.classList.contains('active') : false;
-      if (btn) btn.classList.toggle('active', next);
+      _setSettingsButton(btn, next);
       _postTo(panel, { type: 'TOGGLE_SIDEBAR', value: next });
     });
+  }
+
+  function _setSettingsButton(btn, on) {
+    if (!btn) return;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
   }
 
   // ── Layout ────────────────────────────────────────────────
@@ -1246,8 +1290,7 @@ const CompareApp = (() => {
         _broadcastVolumes(data, panel.index);
         break;
       case 'SIDEBAR_CLOSED': {
-        const btn = panel.el?.querySelector('.btn-settings');
-        if (btn) btn.classList.remove('active');
+        _setSettingsButton(panel.el?.querySelector('.btn-settings'), false);
         break;
       }
       case 'REQUEST_COMPARE_STUDIO': _openCompareStudio(); break;
@@ -1876,7 +1919,10 @@ const CompareApp = (() => {
             on = Boolean(on);
             if (on === open) return;
             open = on;
+            // A closing drawer hides whatever had the focus in it: hand it to its toolbar button.
+            const focusBack = !on && el.contains(document.activeElement);
             el.classList.toggle('open', on);
+            if (focusBack) btn.focus();
             btn.classList.toggle('active', on);
             btn.setAttribute('aria-pressed', String(on));
             try { def.onToggle?.(on); } catch (err) { console.warn('[Compare] drawer toggle failed:', err); }

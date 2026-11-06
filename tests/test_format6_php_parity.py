@@ -165,6 +165,38 @@ class Format6Parity(unittest.TestCase):
         self.assertFalse((bricks / "index" / "q30.bin").exists())
         self.assertTrue((bricks / "index" / "b2.bin").is_file())
 
+    def test_crash_between_commit_and_swapped_is_finished_not_cancelled(self):
+        """The journal both backends share, left "assembling" with the v6 manifest live (a
+        finalize that died between the commit point and the "swapped" save)."""
+        from test_format6 import crash_after_commit
+        tree = self.clone("window")
+        ds = DATASETS[0]
+        tree.py()
+        dm.plan_job(ds, M6)
+        while dm.unit_run(ds, M6, 20)["done"] < dm.plan_job(ds, M6)["total"]:
+            pass
+        crash_after_commit(self, ds)
+        d = tree.data_web / ds
+        jpath = dm.journal_path(*ds.split("/"), M6)
+        old = json.loads(jpath.read_text(encoding="utf-8"))["oldManifestSha"]
+        st, out = tree.php_handle("cancel", {"dataset": ds, "migration": M6})
+        self.assertEqual((st, out.get("error")), (409, "finalize_in_progress"))
+        out = self.php_ok(tree, "plan", {"dataset": ds, "migration": M6})
+        self.assertEqual(out["state"], "swapped")
+        self.assertEqual(json.loads(jpath.read_text(encoding="utf-8"))["oldManifestSha"], old)
+        for _ in range(1000):
+            if self.php_ok(tree, "finalize", {"dataset": ds, "migration": M6}).get("complete"):
+                break
+        self.assertIsNone(f5.bricks_problem(d, 6))
+        sha = hashlib.sha256((d / "bricks" / "manifest.json").read_bytes()).hexdigest()
+        stamps = list((d / "planes").rglob("manifest.json")) + list((d / "mips").rglob("manifest.json"))
+        self.assertTrue(stamps)
+        for pm in stamps:
+            self.assertEqual(json.loads(pm.read_text(encoding="utf-8"))["source"]["manifestSha256"], sha, pm)
+        st, status = tree.php_handle("status")
+        row = next(r for r in status["datasets"] if r["id"] == ds)
+        self.assertEqual((row["formatVersion"], row["pending"], row.get("problem")), (6, [], None), row)
+
     def test_browser_units_assemble_identically(self):
         py, ph = self.clone("py"), self.clone("php")
         for ds in DATASETS:

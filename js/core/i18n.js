@@ -62,6 +62,7 @@ const I18n = (() => {
   // dropping a new lang/<code>.json is picked up without code edits.
   const DEFAULT_LANGS = ['en', 'fr', 'es'];
   const _platformReady = new Set();
+  const _languageInflight = new Map();
   let _tokenCache = null;
 
   // Dictionary codes and plugin ids come from files an operator or a plugin
@@ -83,12 +84,21 @@ const I18n = (() => {
    * @param {string} lang - Language code (e.g. 'en', 'fr')
    * @returns {Promise<object|null>} The translations object, or null on failure
    */
-  async function loadLanguage(lang) {
+  function loadLanguage(lang) {
     // _loaded[lang] can exist as a bare {plugins:{…}} stub (inline plugin
     // dictionaries register before the platform file is read), so "present"
     // is tracked separately from "the platform file was read".
-    if (_platformReady.has(lang) && _loaded[lang]) return _loaded[lang];
-    if (!_isSafeKey(lang)) return null;
+    if (_platformReady.has(lang) && _loaded[lang]) return Promise.resolve(_loaded[lang]);
+    if (!_isSafeKey(lang)) return Promise.resolve(null);
+    // init() starts a file before discovery ends and asks for it again once the
+    // language is chosen: both callers share the one request.
+    if (_languageInflight.has(lang)) return _languageInflight.get(lang);
+    const pending = _fetchLanguage(lang).finally(() => { _languageInflight.delete(lang); });
+    _languageInflight.set(lang, pending);
+    return pending;
+  }
+
+  async function _fetchLanguage(lang) {
     try {
       const basePath = _getBasePath();
       const resp = await fetch(`${basePath}lang/${lang}.json`);
@@ -274,17 +284,25 @@ const I18n = (() => {
    * @returns {Promise<void>}
    */
   async function init() {
-    await discoverLanguages();
-
     const saved = _storageGet('iribhm-lang');
     const browserLang = (navigator.language || 'en').split('-')[0];
+
+    // Neither the English file nor the likely target depends on the discovery
+    // answer, so they travel beside it instead of after it. The guess is the
+    // saved choice (it was an available locale when it was stored) or a browser
+    // language among the locales that ship in-repo; a wrong guess costs one file
+    // and is never applied, since the choice below still goes through isAvailable.
+    const fallbackReady = loadLanguage(_fallbackLang);
+    const guess = _isSafeKey(saved) ? saved : (DEFAULT_LANGS.includes(browserLang) ? browserLang : null);
+    if (guess && guess !== _fallbackLang) loadLanguage(guess);
+
+    await discoverLanguages();
+
     let lang = _fallbackLang;
     if (saved && isAvailable(saved)) lang = saved;
     else if (isAvailable(browserLang)) lang = browserLang;
 
-    // Load fallback first, then target
-    await loadLanguage(_fallbackLang);
-    if (lang !== _fallbackLang) await loadLanguage(lang);
+    await Promise.all([fallbackReady, lang !== _fallbackLang ? loadLanguage(lang) : null]);
 
     // A saved/target locale whose file failed to load must not strand the
     // UI on a half-applied language — fall back cleanly.

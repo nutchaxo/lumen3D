@@ -27,7 +27,15 @@ let _preflight = null;   // report shown between "Mettre à jour" and confirmati
 let _notesOpen = false;  // release-note entries unfolded (titles only when false; survives re-renders)
 let _notesVersion = null; // the version whose notes are shown — one pill per version the update brings
 let _polling = false;
-let _sawPivot = false;       // the pipeline reported 'pivoting': the server is about to exit
+// From the confirmed apply until the update ends without a reload. Not `_polling`:
+// that flag is down during the restart probe and the whole synchronous PHP apply.
+// While it is set, a re-render (language switch, mount) keeps the progress card
+// visible and offers no control that would start a second apply.
+let _updating = false;
+// Last progress painted, repainted after a re-render. `msg` is a string or a
+// function returning one, so a language switch re-translates the line.
+let _progress = { pct: 0, msg: '', phase: null };
+let _sawPivot = false;      // the pipeline reported 'pivoting': the server is about to exit
 let _targetVersion = '';      // version this run installs
 let _startVersion = '';       // version running when the run began
 const _bareVersion = (v) => String(v == null ? '' : v).trim().replace(/^v/i, '');
@@ -47,6 +55,36 @@ const PHASES = [
   ['pivoting', 'admin.phasePivoting', 'Basculement'],
   ['restart', 'admin.phaseRestart', 'Redémarrage du serveur'],
 ];
+
+// The line under the progress bar, per server phase. The server's own `message` is a
+// log line in one language: the operator reads this translated one instead.
+const PROGRESS_LINES = {
+  starting: ['admin.updateMsgStarting', 'Préparation…'],
+  preflight: ['admin.updateMsgPreflight', 'Vérifications préalables…'],
+  backup: ['admin.updateMsgBackup', "Sauvegarde de l'installation…"],
+  download: ['admin.updateMsgDownload', 'Téléchargement de la mise à jour…'],
+  verify: ['admin.updateMsgVerify', "Vérification de l'authenticité…"],
+  staging: ['admin.updateMsgStaging', 'Préparation de la nouvelle version…'],
+  verifying: ['admin.updateMsgVerifying', 'Contrôle de démarrage de la nouvelle version…'],
+  planning: ['admin.updateMsgPlanning', 'Préparation du basculement…'],
+  pivoting: ['admin.updateMsgPivoting', 'Basculement vers la nouvelle version…'],
+  error: ['admin.updateMsgError', 'Échec de la mise à jour — installation intacte.'],
+};
+
+function progressLine(s) {
+  const phase = s && s.phase;
+  const done = Number(s && s.done), total = Number(s && s.total);
+  if (phase === 'download' && Number.isFinite(done) && Number.isFinite(total) && total > 0) {
+    const size = (n) => (Utils && typeof Utils.formatFileSize === 'function') ? Utils.formatFileSize(n) : `${Math.round(n)}`;
+    const vars = { done: size(done), total: size(total) };
+    return t('admin.updateMsgDownloadBytes', 'Téléchargement… {done} / {total}', vars)
+      .replace('{done}', vars.done).replace('{total}', vars.total);
+  }
+  const line = PROGRESS_LINES[phase];
+  if (line) return t(line[0], line[1]);
+  const chip = PHASES.find((p) => p[0] === phase);
+  return chip ? t(chip[1], chip[2]) : '';
+}
 
 // Only versions that exist are shown: a chip reading "—" invites the operator to
 // hunt for a number that was never going to be there.
@@ -85,7 +123,7 @@ function updateBlock() {
   return `
     <div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.updateAvailable', 'Mise à jour disponible'))} : <b>v${escHtml(_check.latest)}</b></div>
     ${notesBlock()}
-    ${_preflight ? preflightBlock() : `
+    ${_updating ? '' : _preflight ? preflightBlock() : `
     <div class="adm-update-actions">
       <button class="adm-btn adm-btn-accent" id="btn-update"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.updateNow', 'Mettre à jour maintenant'))}</button>
       ${_check.htmlUrl ? `<a class="adm-btn adm-btn-ghost" href="${escHtml(_check.htmlUrl)}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> GitHub</a>` : ''}
@@ -354,7 +392,7 @@ function render(lastOutcome) {
         <h2 class="adm-page-title">${escHtml(t('admin.updatesTitle', 'Version & mises à jour'))}</h2>
         <p class="adm-page-sub">${escHtml(t('admin.updatesSub', 'Suivi de version et mise à jour automatique depuis GitHub.'))}</p>
       </div>
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-recheck"><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.checkUpdates', 'Vérifier'))}</button>
+      ${_updating ? '' : `<button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-recheck"><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.checkUpdates', 'Vérifier'))}</button>`}
     </div>
 
     ${lastOutcomeBlock(lastOutcome)}
@@ -383,7 +421,7 @@ function render(lastOutcome) {
       <div class="adm-card-body" id="pipeline-pack-body">${pipelinePackBlock()}</div>
     </div>
 
-    <div class="adm-card adm-progress-card" id="progress-card" style="display:none;margin-top:18px">
+    <div class="adm-card adm-progress-card" id="progress-card" style="display:${_updating ? 'block' : 'none'};margin-top:18px">
       <div class="adm-card-head"><i data-lucide="loader"></i><span>${escHtml(t('admin.updating', 'Mise à jour en cours'))}</span></div>
       <div class="adm-card-body">
         <div class="adm-phase-chips" id="phase-chips">${PHASES.map(([key, i18nKey, def]) =>
@@ -398,6 +436,7 @@ function render(lastOutcome) {
   bindUpdateBody(root);
   bindPluginUpdates(root);
   refreshIcons(root);
+  if (_updating) paintProgress();
 }
 
 async function loadVersions() {
@@ -429,7 +468,10 @@ async function loadPipelinePack() {
   }
 }
 
-function recheck() { loadCheck(); loadPluginUpdates(); loadPipelinePack(); }
+function recheck() {
+  if (_updating) return;
+  loadCheck(); loadPluginUpdates(); loadPipelinePack();
+}
 
 async function ackOutcome() {
   await apiFetchStatus(`${API_ADMIN}?action=update_ack`, { method: 'POST', body: '{}' });
@@ -452,11 +494,17 @@ async function startPreflight() {
 
 /** Step 2 — the operator confirmed with the report in view: launch the pipeline. */
 async function confirmUpdate() {
+  if (_updating) return;
+  _updating = true;
+  _progress = { pct: 0, msg: () => progressLine({ phase: 'starting' }), phase: null };
   const btn = el('btn-confirm-update');
-  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.updating', 'Mise à jour…')}`; }
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.updating', 'Mise à jour…'))}`; }
   const r = await apiFetchStatus(`${API_ADMIN}?action=update_apply`, { method: 'POST', body: '{}' });
   if (!(r.ok && r.data?.ok)) {
-    if (btn) { btn.disabled = false; btn.textContent = t('admin.confirmUpdate', 'Confirmer la mise à jour'); }
+    _updating = false;
+    // A re-render during the request replaced the preflight block: draw it again
+    // so Confirm / Cancel are back, whichever node the operator now sees.
+    render();
     toast(r.data?.error === 'no_update_available'
       ? t('admin.upToDate', 'Vous êtes à jour.')
       : r.data?.error === 'unverifiable_release'
@@ -469,11 +517,11 @@ async function confirmUpdate() {
   // fresh HTML (whose ?v=<version> asset URLs bust the browser cache).
   if (r.data.applied) {
     _preflight = null;
+    const applied = r.data.applied;
+    const appliedMsg = () => t('admin.updateApplied', 'Mise à jour appliquée (v{v}) — rechargement…', { v: applied }).replace('{v}', applied);
+    _progress = { pct: 100, msg: appliedMsg, phase: null };
     render();
-    const msg = t('admin.updateApplied', 'Mise à jour appliquée (v{v}) — rechargement…', { v: r.data.applied }).replace('{v}', r.data.applied);
-    el('progress-card') && (el('progress-card').style.display = 'block');
-    setProgress(100, msg);
-    toast(msg, 'success');
+    toast(appliedMsg(), 'success');
     setTimeout(() => location.reload(), 2000);
     return;
   }
@@ -482,15 +530,22 @@ async function confirmUpdate() {
   _sawPivot = false;
   _preflight = null;
   render();
-  el('progress-card').style.display = 'block';
-  el('btn-update') && (el('btn-update').disabled = true);
   pollStatus();
 }
 
+/** Records the progress (msg: a string, or a function giving it in the current
+ *  language) and paints it. The phase chips keep the last phase reported. */
 function setProgress(pct, msg, phase) {
+  _progress = { pct, msg, phase: phase || _progress.phase };
+  paintProgress();
+}
+
+function paintProgress() {
+  const { pct, msg, phase } = _progress;
+  const text = typeof msg === 'function' ? msg() : msg;
   const bar = el('progress-bar'), m = el('progress-msg');
-  if (bar) bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-  if (m) m.textContent = msg || '';
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(pct) || 0))}%`;
+  if (m) m.textContent = text || '';
   if (phase) {
     const order = PHASES.map(p => p[0]);
     const idx = order.indexOf(phase);
@@ -519,11 +574,11 @@ async function pollStatus() {
       _polling = false; pollRestart(); return;
     }
     misses = 0;
-    setProgress(s.pct || 0, s.message || '', s.phase);
+    setProgress(s.pct || 0, () => progressLine(s), s.phase);
     if (s.phase === 'error') {
       _polling = false;
+      _updating = false;
       toast(t('admin.updateFailed', 'Échec de la mise à jour.') + (s.error ? ` (${updateErrorText(s.error)})` : ''), 'error');
-      el('btn-update') && (el('btn-update').disabled = false);
       loadCheck();
       return;
     }
@@ -534,7 +589,7 @@ async function pollStatus() {
 }
 
 function pollRestart() {
-  setProgress(93, t('admin.updateRestart', 'Redémarrage du serveur…'), 'restart');
+  setProgress(93, () => t('admin.updateRestart', 'Redémarrage du serveur…'), 'restart');
   const deadline = Date.now() + 120000;
   const probe = async () => {
     try {
@@ -551,9 +606,10 @@ function pollRestart() {
                                         : (_sawPivot || (_startVersion && nowV !== _startVersion));
           if (!rolledBack && !landed) { if (Date.now() < deadline) { setTimeout(probe, 1500); return; } }
           const done = !rolledBack && landed;
+          const web = h.web;
           setProgress(100,
-            done ? `${t('admin.updateSucceeded', 'Mise à jour terminée avec succès. Le serveur a redémarré — reconnectez-vous.')} (v${h.web})`
-                 : t('admin.updateRolledBack', "La nouvelle version n'a pas démarré — restauration automatique effectuée. L'ancienne version fonctionne."),
+            done ? () => `${t('admin.updateSucceeded', 'Mise à jour terminée avec succès. Le serveur a redémarré — reconnectez-vous.')} (v${web})`
+                 : () => t('admin.updateRolledBack', "La nouvelle version n'a pas démarré — restauration automatique effectuée. L'ancienne version fonctionne."),
             done ? undefined : 'restart');
           setTimeout(() => location.reload(), 2500);
           return;
@@ -562,6 +618,7 @@ function pollRestart() {
     } catch (_) { /* server still down — keep probing */ }
     if (Date.now() > deadline) {
       _polling = false;
+      _updating = false;
       setProgress(0, t('admin.updateTimeout', 'Le serveur ne répond plus. Vérifiez logs/update-pivot-*.log puis rechargez la page.'));
       return;
     }

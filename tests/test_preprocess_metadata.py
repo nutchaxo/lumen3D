@@ -16,9 +16,12 @@ Covers:
 
 Run: python -m unittest tests.test_preprocess_metadata
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -63,6 +66,10 @@ class StageAndEmbryoParsing(unittest.TestCase):
         ("E80",                                                        "E8.0",  8.0,  None),
         ("Dll4-e8-25-Em4",                                             "E8.25", 8.25, "Em4"),
         ("sample-Em3",                                                 "Unknown", 0.0, "Em3"),
+        ("Egfl7eGFP-E8-5-2-DAPI",                                      "E8.5",  8.5,  "Em2"),
+        ("Dll4-E10-5-3-x",                                             "E10.5", 10.5, "Em3"),
+        ("E8-5-2",                                                     "E8.5",  8.5,  "Em2"),
+        ("Dll4-E10-5-26112024-x",                                      "E10.5", 10.5, None),
     ]
 
     def test_table(self):
@@ -224,10 +231,176 @@ class Publication(unittest.TestCase):
             return real_replace(src, dst)
 
         with mock.patch.object(rp.os, "replace", failing_replace):
-            with self.assertRaises(OSError):
+            with self.assertRaises(rp.PublishError) as ctx:
                 rp.publish_dataset(self.stage, self.final)
+        self.assertIsInstance(ctx.exception.__cause__, OSError)
+        self.assertTrue(ctx.exception.stage_intact)
         self.assertEqual(_snapshot(self.final), before)
         self.assertEqual(_snapshot(self.stage)["bricks/manifest.json"], "new-manifest")
+
+    def _busy_bricks(self, failures=None):
+        """os.rename refusing to move the published bricks/ (a file inside is open), for
+        ever or for the first `failures` attempts."""
+        real_rename = os.rename
+        busy = self.final / "bricks"
+        state = {"left": failures}
+
+        def rename(src, dst):
+            if Path(src) == busy and (state["left"] is None or state["left"] > 0):
+                if state["left"] is not None:
+                    state["left"] -= 1
+                raise PermissionError(32, "The process cannot access the file", str(src))
+            return real_rename(src, dst)
+        return mock.patch.object(rp.os, "rename", rename)
+
+    def test_busy_dataset_is_waited_for(self):
+        _mkdataset(self.final, {"bricks/manifest.json": "old-manifest",
+                                "metadata.json": json.dumps(_fresh(description="old"))})
+        self._stage()
+        with self._busy_bricks(failures=3), \
+                mock.patch.object(rp, "_BACKOFF_START_S", 0.01), \
+                mock.patch.object(rp, "PUBLISH_PATIENCE_S", 30.0):
+            rp.publish_dataset(self.stage, self.final)
+        self.assertEqual(_snapshot(self.final)["bricks/manifest.json"], "new-manifest")
+
+    def test_busy_dataset_keeps_the_stage_for_a_later_publication(self):
+        _mkdataset(self.final, {"bricks/manifest.json": "old-manifest", "thumbnail.webp": "old-thumb",
+                                "metadata.json": json.dumps(_fresh(description="old"))})
+        before = _snapshot(self.final)
+        self._stage()
+        root = self.tmp / "DATA_WEB"
+        with self._busy_bricks(), mock.patch.object(rp, "PUBLISH_PATIENCE_S", 0.3), \
+                mock.patch.object(rp, "_BACKOFF_START_S", 0.01):
+            with self.assertRaises(rp.PublishError) as ctx:
+                rp.publish_dataset(self.stage, self.final)
+            self.assertTrue(ctx.exception.stage_intact)
+            self.assertEqual(_snapshot(self.final), before)
+            kept = rp.keep_unpublished_stage(self.stage, root, "3d", "ds")
+        self.assertEqual(kept, root / ".unpublished_3d__ds")
+        self.assertFalse(self.stage.exists())
+        self.assertEqual(_snapshot(kept)["bricks/lod0/c0/pack_00.bin"], "new-pack")
+
+        final = rp.publish_staged(kept)
+        self.assertEqual(final, self.final.resolve())
+        snap = _snapshot(self.final)
+        self.assertEqual(snap["bricks/lod0/c0/pack_00.bin"], "new-pack")
+        self.assertEqual(snap["thumbnail.webp"], "new-thumb")
+        self.assertFalse(kept.exists())
+        self.assertFalse(any(k.endswith(rp.SWAP_SUFFIX) or k.startswith(rp.SWAP_MARKER) for k in snap))
+
+    def test_publish_staged_refuses_another_folder(self):
+        other = self.tmp / "DATA_WEB" / "not-a-stage"
+        other.mkdir(parents=True)
+        with self.assertRaises(ValueError):
+            rp.publish_staged(other)
+
+    def _fake_pipeline(self, tag):
+        def run_step(script, *args):
+            if script == "1-ims_metadata.py":
+                Path(args[1]).write_text(json.dumps({"n_timepoints": 1}), encoding="utf-8")
+            elif script == "2-image_processor.py":
+                (Path(args[2]) / "processing_meta.json").write_text("{}", encoding="utf-8")
+                _mkdataset(Path(args[4]), {"bricks/manifest.json": f"{tag}-manifest",
+                                           "thumbnail.webp": f"{tag}-thumb"})
+            elif script == "4-catalog_generator.py":
+                (Path(args[1]) / "metadata.json").write_text(json.dumps(_fresh(description=tag)),
+                                                             encoding="utf-8")
+        return mock.patch.multiple(rp, run_step=run_step, build_thumbnail=lambda *a, **k: None)
+
+    def test_pipeline_run_keeps_a_stage_it_could_not_publish(self):
+        _mkdataset(self.final, {"bricks/manifest.json": "old-manifest",
+                                "metadata.json": json.dumps(_fresh(description="old"))})
+        before = _snapshot(self.final)
+        root = self.tmp / "DATA_WEB"
+        ims = self.tmp / "raw" / "ds.ims"
+        with self._fake_pipeline("run1"), self._busy_bricks(), \
+                mock.patch.object(rp, "PUBLISH_PATIENCE_S", 0.3), \
+                mock.patch.object(rp, "_BACKOFF_START_S", 0.01):
+            self.assertFalse(rp.process_ims_file(ims, root))
+        self.assertEqual(_snapshot(self.final), before)
+        kept = root / ".unpublished_3d__ds"
+        self.assertEqual(_snapshot(kept)["bricks/manifest.json"], "run1-manifest")
+        self.assertFalse((root / ".temp_preprocess_ds").exists())
+
+        # The next successful run publishes its own result and drops the stale one.
+        with self._fake_pipeline("run2"):
+            self.assertTrue(rp.process_ims_file(ims, root))
+        self.assertEqual(_snapshot(self.final)["bricks/manifest.json"], "run2-manifest")
+        self.assertFalse(kept.exists())
+
+    def test_busy_later_entry_never_leaves_the_dataset_without_bricks(self):
+        """planes/ held open (the Studio reading it): bricks/ already moved aside in that
+        round goes back before the wait, so the published folder stays whole."""
+        _mkdataset(self.final, {"bricks/manifest.json": "old-manifest",
+                                "planes/manifest.json": "old-planes",
+                                "metadata.json": json.dumps(_fresh(description="old"))})
+        before = _snapshot(self.final)
+        self._stage()
+        (self.stage / "planes").mkdir()
+        (self.stage / "planes" / "manifest.json").write_text("new-planes", encoding="utf-8")
+        real_rename = os.rename
+        busy = self.final / "planes"
+        state = {"left": 3}
+        seen = []
+
+        def rename(src, dst):
+            if Path(src) == busy and (state["left"] is None or state["left"] > 0):
+                if state["left"] is not None:
+                    state["left"] -= 1
+                raise PermissionError(32, "The process cannot access the file", str(src))
+            return real_rename(src, dst)
+
+        def sleep(_seconds):
+            seen.append(((self.final / "bricks" / "manifest.json").is_file(),
+                         (self.final / ("bricks" + rp.SWAP_SUFFIX)).exists()))
+
+        with mock.patch.object(rp.os, "rename", rename),                 mock.patch.object(rp.time, "sleep", sleep),                 mock.patch.object(rp, "PUBLISH_PATIENCE_S", 30.0):
+            rp.publish_dataset(self.stage, self.final)
+        self.assertEqual(len(seen), 3)
+        self.assertTrue(all(present and not aside for present, aside in seen))
+        snap = _snapshot(self.final)
+        self.assertEqual(snap["bricks/manifest.json"], "new-manifest")
+        self.assertEqual(snap["planes/manifest.json"], "new-planes")
+
+        # Busy for good: publication gives up with the published dataset as it was.
+        shutil.rmtree(self.final)
+        _mkdataset(self.final, {k: v for k, v in before.items()})
+        shutil.rmtree(self.stage.parent.parent.parent)
+        self._stage()
+        state["left"] = None
+        seen.clear()
+        with mock.patch.object(rp.os, "rename", rename),                 mock.patch.object(rp.time, "sleep", sleep),                 mock.patch.object(rp, "PUBLISH_PATIENCE_S", 0.2):
+            with self.assertRaises(rp.PublishError) as ctx:
+                rp.publish_dataset(self.stage, self.final)
+        self.assertTrue(ctx.exception.stage_intact)
+        self.assertTrue(seen and all(present and not aside for present, aside in seen))
+        self.assertEqual(_snapshot(self.final), before)
+
+    def test_publish_staged_accepts_the_runs_own_staging_tree(self):
+        _mkdataset(self.final, {"bricks/manifest.json": "old-manifest",
+                                "metadata.json": json.dumps(_fresh(description="old"))})
+        root = self.tmp / "DATA_WEB"
+        self.stage = root / (rp.TEMP_PREFIX + "ds") / "stage" / "3d" / "ds"
+        self._stage()
+        final = rp.publish_staged(self.stage)
+        self.assertEqual(final, self.final.resolve())
+        self.assertEqual(_snapshot(self.final)["bricks/manifest.json"], "new-manifest")
+        self.assertFalse((root / (rp.TEMP_PREFIX + "ds")).exists())
+
+    def test_pipeline_run_whose_stage_cannot_be_moved_points_at_a_publishable_tree(self):
+        _mkdataset(self.final, {"bricks/manifest.json": "old-manifest",
+                                "metadata.json": json.dumps(_fresh(description="old"))})
+        root = self.tmp / "DATA_WEB"
+        ims = self.tmp / "raw" / "ds.ims"
+        err = io.StringIO()
+        with self._fake_pipeline("run1"), self._busy_bricks(),                 mock.patch.object(rp, "PUBLISH_PATIENCE_S", 0.3),                 mock.patch.object(rp, "_BACKOFF_START_S", 0.01),                 mock.patch.object(rp, "keep_unpublished_stage", lambda *a: None),                 contextlib.redirect_stderr(err):
+            self.assertFalse(rp.process_ims_file(ims, root))
+        hinted = re.search(r'--publish-staged "([^"]+)"', err.getvalue())
+        self.assertIsNotNone(hinted)
+        final = rp.publish_staged(Path(hinted.group(1)))
+        self.assertEqual(final, self.final.resolve())
+        self.assertEqual(_snapshot(self.final)["bricks/manifest.json"], "run1-manifest")
+        self.assertFalse((root / (rp.TEMP_PREFIX + "ds")).exists())
 
     def test_interrupted_swap_is_undone_or_finished(self):
         # Crash after the old entries moved aside and the new ones moved in, before the

@@ -81,13 +81,21 @@ function _toggle(path, label) {
     </label>`;
 }
 
+// One row of the footer links editor, shared by the initial render and "Add link".
+function _linkRowFields(lk = {}) {
+  const labelName = escHtml(t('branding.linkLabel', 'Libellé'));
+  const urlName = escHtml(t('branding.linkUrl', 'Adresse du lien'));
+  const removeName = escHtml(t('branding.removeLink', 'Retirer'));
+  return `<input type="text" class="adm-field-input adm-link-label" value="${escHtml(lk.label || '')}" placeholder="${labelName}" aria-label="${labelName}" style="flex:1">
+        <input type="text" class="adm-field-input adm-link-url" value="${escHtml(lk.url || '')}" placeholder="https://…" aria-label="${urlName}" style="flex:2">
+        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm adm-link-del" title="${removeName}" aria-label="${removeName}"><i data-lucide="x" aria-hidden="true"></i></button>`;
+}
+
 function _linksEditor() {
   const links = _get('footer.links', []) || [];
   const rows = (Array.isArray(links) ? links : []).map((lk, i) => `
       <div class="adm-link-row" data-link-idx="${i}" style="display:flex;gap:6px;margin-bottom:6px">
-        <input type="text" class="adm-field-input adm-link-label" value="${escHtml(lk.label || '')}" placeholder="${escHtml(t('branding.linkLabel', 'Libellé'))}" style="flex:1">
-        <input type="text" class="adm-field-input adm-link-url" value="${escHtml(lk.url || '')}" placeholder="https://…" style="flex:2">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm adm-link-del" title="${escHtml(t('branding.removeLink', 'Retirer'))}"><i data-lucide="x"></i></button>
+        ${_linkRowFields(lk)}
       </div>`).join('');
   return `<div id="branding-links">${rows}</div>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="branding-add-link"><i data-lucide="plus"></i> ${escHtml(t('branding.addLink', 'Ajouter un lien'))}</button>`;
@@ -162,9 +170,7 @@ function render() {
     const div = document.createElement('div');
     div.className = 'adm-link-row';
     div.style.cssText = 'display:flex;gap:6px;margin-bottom:6px';
-    div.innerHTML = `<input type="text" class="adm-field-input adm-link-label" placeholder="${escHtml(t('branding.linkLabel', 'Libellé'))}" style="flex:1">
-        <input type="text" class="adm-field-input adm-link-url" placeholder="https://…" style="flex:2">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm adm-link-del"><i data-lucide="x"></i></button>`;
+    div.innerHTML = _linkRowFields();
     linksWrap.appendChild(div);
     div.querySelector('.adm-link-del').addEventListener('click', () => { div.remove(); _mark(true); });
     div.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => _mark(true)));

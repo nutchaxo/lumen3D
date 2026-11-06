@@ -7,13 +7,14 @@
   "notchTitle": "Vue 3D de toutes les coupes conservées. Faites glisser le curseur vers le bas dans la piste pour parcourir coupe par coupe.",
   "trackTitle": "Faites glisser pour parcourir les coupes. Remontez le curseur dans le cran 3D pour toutes les afficher.",
   "cursorTitle": "Faites glisser pour déplacer. Tirez un bord pour changer le nombre de coupes affichées.",
-  "trimAboveTitle": "Rogner les coupes du dessus",
-  "trimBelowTitle": "Rogner les coupes du dessous",
+  "trimAboveTitle": "Rogner les coupes du dessus (Maj+↑/↓)",
+  "trimBelowTitle": "Rogner les coupes du dessous (Alt+↑/↓)",
   "thickness": "Épaisseur",
   "thicknessTitle": "Coupes affichées à la fois",
   "kept": "Conservées {lo}–{hi} · {n} coupes sur {total}",
   "keptAll": "Les {total} coupes sont conservées",
   "resetTrim": "Rétablir toutes les coupes",
   "spin": "Rotation",
-  "spinTitle": "Tourner les coupes à l'écran"
+  "spinTitle": "Tourner les coupes à l'écran",
+  "keysHelp": "↑/↓ déplacent le curseur, Début affiche toutes les coupes conservées en 3D, Fin va à la dernière coupe, + et − changent l’épaisseur, Maj+↑/↓ déplace le rognage du dessus et Alt+↑/↓ celui du dessous."
 }

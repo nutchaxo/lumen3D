@@ -22,16 +22,25 @@ import { ROOT } from './harness.mjs';
 
 const BC4 = 0x8DBB, BC5 = 0x8DBD;
 
-function load() {
+function memoryStorage(store = new Map()) {
+  return {
+    store,
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)); },
+    removeItem: (k) => { store.delete(k); },
+  };
+}
+
+function load(storage = memoryStorage()) {
   const ctx = vm.createContext({
     console: { warn() {}, log() {}, error() {} }, setTimeout, clearTimeout, window: {}, self: {},
     navigator: { deviceMemory: 8 },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: storage,
   });
   vm.runInContext(readFileSync(path.join(ROOT, 'js/vendor/three.min.js'), 'utf8'), ctx);
   vm.runInContext(readFileSync(path.join(ROOT, 'js/core/bc-codec.js'), 'utf8'), ctx);
   vm.runInContext(readFileSync(path.join(ROOT, 'js/core/svr-manager.js'), 'utf8') + '\n;globalThis.__SVR = SVRManager; globalThis.__BC = BCCodec;', ctx);
-  return { S: ctx.__SVR, BC: ctx.__BC, THREE: ctx.THREE };
+  return { S: ctx.__SVR, BC: ctx.__BC, THREE: ctx.THREE, storage };
 }
 
 function fakeRenderer(name = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', { rgtc = true } = {}) {
@@ -100,27 +109,120 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
   console.log('compression support: OK');
 }
 
-// ── mobile GPUs, and a device where compression already lost the context ───────
+// ── mobile GPUs ────────────────────────────────────────────────────────────────
 {
   const { S, THREE } = load();
   const adreno = fakeRenderer('ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 V@0676.76.1)');
   assert.equal(S.compressionSupport(adreno.renderer).reason, 'mobile-gpu', 'an Adreno GPU never gets RGTC atlases');
   assert.equal(S.compressionSupport(fakeRenderer('Mali-G710').renderer).bc, false);
-  // A context lost while a compressed atlas is alive: recorded, then refused on any GPU.
-  const hw = fakeRenderer();
-  const m = new S();
-  m.init(2, dims, hw.renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' });
-  assert.equal(m.compressed, true);
-  assert.equal(S.compressionFailedBefore(), false);
-  S.noteContextLost();
-  assert.equal(S.compressionFailedBefore(), true);
-  assert.equal(S.compressionSupport(fakeRenderer('NVIDIA GeForce RTX 4070').renderer).reason, 'failed-before');
-  m.dispose();
-  // A loss with no compressed atlas alive records nothing.
-  const fresh = load();
-  fresh.S.noteContextLost();
-  assert.equal(fresh.S.compressionFailedBefore(), false);
-  console.log('mobile GPUs and failed compression: OK');
+  console.log('mobile GPUs: OK');
+}
+
+// ── when a context loss is laid on the compression, and for how long ───────────
+{
+  const HOUR = 3600 * 1000;
+  // A loss long after the compressed atlas was allocated (a driver reset, a GPU process
+  // restart) does not condemn the compression on its own.
+  {
+    const { S, THREE, storage } = load();
+    const hw = fakeRenderer();
+    const m = new S();
+    m.init(2, dims, hw.renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' });
+    assert.equal(m.compressed, true);
+    assert.ok(S._lastCompressedAllocAt > 0, 'the compressed allocation is time-stamped');
+    S._lastCompressedAllocAt = Date.now() - HOUR;
+    S.noteContextLost();
+    assert.equal(S.compressionFailedBefore(), false, 'one loss with compression alive is not enough');
+    assert.equal(JSON.parse(storage.getItem('lumen3d.gpuCompressedLosses')).length, 1);
+    // The second such loss within the week is.
+    S.noteContextLost();
+    assert.equal(S.compressionFailedBefore(), true, 'a second loss with compression alive marks it');
+    assert.equal(S.compressionSupport(fakeRenderer('NVIDIA GeForce RTX 4070').renderer).reason, 'failed-before');
+    m.dispose();
+    // Another page of the same profile (same storage) inherits the mark...
+    const other = load(storage);
+    assert.equal(other.S.compressionFailedBefore(), true, 'the mark is kept on the browser profile');
+    // ...and resetGpuBudget clears it, the session flag included.
+    S.resetGpuBudget();
+    assert.equal(S.compressionFailedBefore(), false, 'resetGpuBudget clears the compression mark');
+    assert.equal(storage.getItem('lumen3d.gpuCompressionFailed'), null);
+    assert.equal(storage.getItem('lumen3d.gpuCompressedLosses'), null);
+    assert.equal(S.compressionSupport(fakeRenderer('NVIDIA GeForce RTX 4070').renderer).bc, true);
+  }
+  // A loss right after a compressed allocation is laid on it at once.
+  {
+    const { S, THREE } = load();
+    const m = new S();
+    m.init(2, dims, fakeRenderer().renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' });
+    S.noteContextLost();
+    assert.equal(S.compressionFailedBefore(), true, 'a loss moments after the compressed allocation marks it');
+    m.dispose();
+  }
+  // Two losses more than a week apart never meet inside the memory window.
+  {
+    const { S, THREE, storage } = load();
+    storage.setItem('lumen3d.gpuCompressedLosses', JSON.stringify([Date.now() - 8 * 24 * HOUR]));
+    const m = new S();
+    m.init(2, dims, fakeRenderer().renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' });
+    S._lastCompressedAllocAt = Date.now() - HOUR;
+    S.noteContextLost();
+    assert.equal(S.compressionFailedBefore(), false, 'a compressed loss older than the window is forgotten');
+    m.dispose();
+  }
+  // A loss with no compressed atlas alive and none allocated lately records nothing.
+  {
+    const { S, storage } = load();
+    S.noteContextLost();
+    S.noteContextLost();
+    assert.equal(S.compressionFailedBefore(), false);
+    assert.equal(storage.getItem('lumen3d.gpuCompressedLosses'), null);
+  }
+  // The mark expires: one older than CONTEXT_LOSS_MEMORY_MS is ignored, a recent one is not,
+  // and the bare number written by earlier versions reads as one stamp.
+  {
+    const { S, storage } = load();
+    storage.setItem('lumen3d.gpuCompressionFailed', String(Date.now() - S.CONTEXT_LOSS_MEMORY_MS - HOUR));
+    assert.equal(S.compressionFailedBefore(), false, 'a stale mark (bare number) has expired');
+    assert.equal(S.compressionSupport(fakeRenderer().renderer).bc, true, 'compression comes back after the window');
+    storage.setItem('lumen3d.gpuCompressionFailed', String(Date.now() - HOUR));
+    assert.equal(S.compressionFailedBefore(), true, 'a recent mark (bare number) still applies');
+    storage.setItem('lumen3d.gpuCompressionFailed', JSON.stringify([Date.now() - S.CONTEXT_LOSS_MEMORY_MS - HOUR]));
+    assert.equal(S.compressionFailedBefore(), false, 'a stale mark (list) has expired');
+  }
+  // An RGTC page the driver refuses for anything but memory: marked, and the atlas is refused
+  // as SVR_BAD_FORMAT so the caller streams the same level uncompressed.
+  {
+    const { S, THREE } = load();
+    const hw = fakeRenderer();
+    assert.equal(S.compressionSupport(hw.renderer).bc, true, 'the 4 x 4 probe passes');
+    let pending = 0;
+    hw.gl.texStorage3D = (target, levels, fmt, w) => { if (w > 4) pending = 0x0500; };
+    hw.gl.getError = () => { const e = pending; pending = 0; return e; };
+    const m = new S();
+    assert.throws(
+      () => m.init(2, dims, hw.renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' }),
+      (err) => err.code === 'SVR_BAD_FORMAT');
+    assert.equal(S.compressionFailedBefore(), true, 'an RGTC page refused with INVALID_ENUM marks the compression');
+    assert.equal(S._liveCompressed.size, 0, 'the refused atlas is not counted as a live compressed one');
+    assert.equal(S._failedAllocBytes, Infinity, 'a format refusal does not cap the budget');
+    m.dispose();
+  }
+  // Out of memory is a size problem, not a format one: the usual coarser-level path.
+  {
+    const { S, THREE } = load();
+    const hw = fakeRenderer();
+    assert.equal(S.compressionSupport(hw.renderer).bc, true);
+    let pending = 0;
+    hw.gl.texStorage3D = (target, levels, fmt, w) => { if (w > 4) pending = 0x0505; };
+    hw.gl.getError = () => { const e = pending; pending = 0; return e; };
+    const m = new S();
+    assert.throws(
+      () => m.init(2, dims, hw.renderer, material(THREE), { targetSlots: 8, components: 2, apron: 1, compression: 'bc' }),
+      (err) => err.code === 'SVR_ALLOC_FAILED');
+    assert.equal(S.compressionFailedBefore(), false, 'OUT_OF_MEMORY does not mark the compression');
+    m.dispose();
+  }
+  console.log('failed compression: OK');
 }
 
 // ── two channels, bordered bricks ─────────────────────────────────────────────

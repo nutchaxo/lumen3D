@@ -3,9 +3,9 @@
 Pins the shared on-disk format of upload_staging.py and api/_upload_lib.php:
   * a chunk sent with the plan's `fileId` appends ONE 16-byte record and never
     rewrites the JSON journal (the per-chunk whole-journal rewrite was the cost);
-  * the log folds into the journal at plan / file completion and on every read,
-    under either backend: an import started under Python resumes under PHP and
-    the other way round, mid-file;
+  * the log folds into the journal at plan (and at file completion once long)
+    and on every read, under either backend: an import started under Python
+    resumes under PHP and the other way round, mid-file;
   * a torn tail or a corrupted record is ignored, a record naming a retired id
     (the file was reset or dropped) never marks the new incarnation;
   * the two backends write byte-identical log records and file tables.
@@ -129,8 +129,14 @@ class LogCase(unittest.TestCase):
         self.assertEqual(st, 200)
         (fin,) = self.php({"fn": "lumen_up_finalize", "args": ["3d", "DS", rel, None]})
         self.assertEqual(fin[0], 200, fin)
-        self.assertFalse(us.log_path("3d", "DS").exists(), "file completion compacts the log")
-        self.assertTrue(json.loads(us.journal_path("3d", "DS").read_text())["files"][rel]["done"])
+        # The log already says every chunk is in, so completion leaves it for the
+        # next compaction: the other backend reads the file done from the log.
+        self.assertTrue(us.log_path("3d", "DS").exists())
+        self.assertTrue(us.load_journal("3d", "DS")["files"][rel]["done"])
+        (desc,) = self.php({"fn": "lumen_up_describe", "args": ["3d", "DS"]})
+        self.assertEqual(desc["receivedBytes"], len(self.blob))
+        st, _ = us.finalize_file("3d", "DS", rel, None)
+        self.assertEqual(st, 200)
         self.assertEqual((us.STAGING_DIR / "3d/DS" / rel).read_bytes(), self.blob)
 
     def test_php_plan_resumes_under_python(self):

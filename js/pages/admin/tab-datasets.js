@@ -14,7 +14,7 @@
 import {
   API_DATASETS, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, deepClone, refreshIcons,
 } from './shared.js';
-import { setUnsaved, registerDirtyGuard, setDatasetOpener, bindTabSave } from './bus.js';
+import { setUnsaved, registerDirtyGuard, setDatasetOpener, setOpenDatasetGetter, bindTabSave } from './bus.js';
 import * as Upload from './upload-manager.js';
 import { moveToTrash, openTrash, fetchTrash } from './dataset-trash.js';
 
@@ -44,6 +44,15 @@ const VIEW_PRESETS = [
   ['ventral', 'V', 'A'], ['dorsal', 'D', 'A'],
 ];
 const ORIENTATION_REPLY_TIMEOUT = 2000;
+// A preview capture renders one frame and encodes a 512 px picture: far below this.
+// Past it the page is not answering (still booting, failed, or too old to know the
+// request) and the button is given back.
+const CAPTURE_REPLY_TIMEOUT = 8000;
+// css/admpan.css hides the preview column at this width. A viewer mounted there
+// would stream the dataset into a frame nobody sees, and the pose controls would
+// capture a view the operator never looked at, so neither happens below it.
+const PREVIEW_HIDDEN_QUERY = '(max-width: 860px)';
+let _previewMq = null;
 
 let _datasets = [];
 let _current = null;
@@ -53,6 +62,8 @@ let _dirty = false;
 let _typeFilter = 'all';
 let _searchQuery = '';
 let _previewTimer = null;
+let _capture = null;   // { id, timer } of the preview capture awaiting its SCREENSHOT_RESPONSE
+let _captureSeq = 0;
 let _selectGen = 0;
 let _isCalibratingOrientation = false;
 let _loaded = false;
@@ -108,6 +119,7 @@ function refDom() {
     fDefaultView: el('f-default-view'),
     btnCaptureView: el('btn-capture-view'),
     defaultViewHint: el('default-view-hint'),
+    previewNarrowHint: el('preview-narrow-hint'),
     galleryDrop: el('gallery-drop'),
     galleryFile: el('gallery-file'),
     galleryGrid: el('gallery-grid'),
@@ -232,6 +244,7 @@ function discardChanges({ repaint = true } = {}) {
   populateForm();
   schedulePreviewUpdate();
   pushOrientationAxes();
+  pushOrientationBase();
 }
 
 // ── List ───────────────────────────────────────────────────────
@@ -263,6 +276,7 @@ async function loadDatasets() {
   if (DOM.listLoading) DOM.listLoading.remove();
   renderList();
   _loaded = true;
+  followVanishedStaging();
   if (_pendingSelect) {
     const id = _pendingSelect;
     _pendingSelect = null;
@@ -420,6 +434,9 @@ async function refreshTrashCount() {
 function closeEditor() {
   clearTimeout(_previewTimer);
   clearTimeout(_axesPushTimer);
+  cancelCapture();
+  // A selection or a gallery upload still in flight belongs to the dataset that left.
+  ++_selectGen;
   _isCalibratingOrientation = false;
   _formBound = false;
   _current = null; _draft = null; _original = null;
@@ -487,8 +504,27 @@ function onImportChange(s) {
     _draft.stagingState = fresh.stagingState;
     if (_original) _original.stagingState = fresh.stagingState;
     applyStagingChrome(_draft);
-    if (isStagingEditable(_draft) && !DOM.previewFrame.getAttribute('src')) loadPreview(_current);
+    if (isStagingEditable(_draft) && !DOM.previewFrame.getAttribute('src')) mountPreview(_current);
   });
+}
+
+/**
+ * The staged dataset open in the editor left the list: it was published (from the
+ * dock or the Import tab) or discarded. Its staging id addresses nothing any more —
+ * every save, visibility or gallery call would be refused and the preview would
+ * keep streaming through a proxy whose journal is gone — so the editor follows the
+ * published copy, or closes. Pending edits are not carried over: the published
+ * metadata.json is the staged one as the server normalised it, and the dock asks
+ * before publishing a dataset that has unsaved edits open.
+ */
+function followVanishedStaging() {
+  const openId = _current?.id;
+  if (typeof openId !== 'string' || !openId.startsWith('staging:')) return;
+  if (_datasets.some((d) => d.id === openId)) return;
+  const publishedId = openId.slice('staging:'.length);
+  const published = _datasets.some((d) => d.id === publishedId && !d.staging);
+  closeEditor();
+  if (published) openDataset(publishedId);
 }
 
 function stagingChip(state) {
@@ -535,7 +571,24 @@ function setFormEnabled(on) {
   DOM.fSampleSide?.querySelectorAll('input').forEach((e) => { e.disabled = !on; });
   // Visibility belongs to publication — never offered for a staged dataset.
   if (DOM.fVisible) DOM.fVisible.disabled = !on || !!_draft?.staging;
+  applyPreviewGate();
   renderGallery();   // the drop zone follows the same gate
+}
+
+function previewHidden() { return !!_previewMq?.matches; }
+
+/**
+ * The controls that act on the live preview: calibrating the frame and capturing
+ * or posing a default view. The sample side and the axis names stay editable —
+ * they are stored metadata, and their push to the preview is a no-op without one.
+ * Choosing "none" as the default view only clears the stored pose, so it stays too.
+ */
+function applyPreviewGate() {
+  const blind = previewHidden();
+  const editable = !!_draft && isStagingEditable(_draft);
+  [DOM.btnDefineOrientation, DOM.btnCaptureView].forEach((b) => { if (b) b.disabled = !editable || blind; });
+  DOM.fDefaultView?.querySelectorAll('option').forEach((o) => { o.disabled = blind && o.value !== 'none'; });
+  if (DOM.previewNarrowHint) DOM.previewNarrowHint.style.display = blind ? '' : 'none';
 }
 
 function dimsLabel(m) {
@@ -628,7 +681,7 @@ async function selectDataset(id) {
   // A dataset whose coarse LOD has not landed yet cannot be mounted: pointing the
   // preview iframe at it would only produce a failed manifest fetch and an error
   // banner inside the frame. Show the placeholder until it becomes openable.
-  if (isStagingEditable(meta)) loadPreview(_current);
+  if (isStagingEditable(meta)) mountPreview(_current);
   else showPreviewPending();
   populateForm();
   DOM.configEmpty.style.display = 'none';
@@ -678,7 +731,40 @@ function normaliseChannels(channels, count) {
 }
 
 // ── Preview ────────────────────────────────────────────────────
+/** Mount the viewer for `ds`, unless the preview column is hidden at this width. */
+function mountPreview(ds) {
+  if (previewHidden()) { stopPreview(); return; }
+  loadPreview(ds);
+}
+
+/** Unload whatever the frame holds (a hidden iframe keeps running its viewer). */
+function stopPreview() {
+  cancelCapture();
+  const src = DOM.previewFrame.getAttribute('src');
+  showPreviewPending();
+  if (src && src !== 'about:blank') DOM.previewFrame.src = 'about:blank';
+}
+
+/** The window crossed the width at which the preview column is hidden. */
+function onPreviewVisibilityChange() {
+  if (previewHidden()) {
+    if (_isCalibratingOrientation) {
+      // The gizmo the operator was dragging is going away with the frame.
+      _isCalibratingOrientation = false;
+      paintOrientationControls(false);
+      syncDirty();
+      toast(t('admin.previewNeedsWideScreen',
+        'Élargissez la fenêtre pour afficher l\'aperçu : le repère et la vue par défaut se définissent en regardant le volume.'), 'warning');
+    }
+    stopPreview();
+  } else if (_current && _draft && isStagingEditable(_draft)) {
+    loadPreview(_current);
+  }
+  applyPreviewGate();
+}
+
 function loadPreview(ds) {
+  cancelCapture();   // the page asked is being replaced: its answer would describe another dataset
   DOM.previewPlaceholder.style.display = 'none';
   DOM.previewLabelBar.style.display = 'none';
   DOM.previewFrameWrap.style.display = 'none';
@@ -734,22 +820,33 @@ function populateForm() {
   }
   updateVisibilityUI();
   _isCalibratingOrientation = false;
-  if (DOM.btnDefineOrientation) {
-    DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
-    DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
-    DOM.btnDefineOrientation.innerHTML = t('admin.defineOrientation', '🧭 Définir l\'orientation');
-  }
-  if (DOM.orientationStatus) {
-    DOM.orientationStatus.textContent = (m.orientation || m.orientation2d)
-      ? t('admin.orientationSet', 'Orientation définie ✓')
-      : t('admin.noOrientation', '(Aucune orientation définie)');
-  }
+  paintOrientationControls(false);
   renderSampleSide();
   renderOrientationAxes();
   renderDefaultView();
   renderGallery();
   ensureGalleryThumbs();
   _formBound = true;
+}
+
+/** The calibration button and its status line, for a calibration running or not. */
+function paintOrientationControls(calibrating) {
+  const btn = DOM.btnDefineOrientation;
+  if (btn) {
+    btn.classList.toggle('adm-btn-accent', !!calibrating);
+    btn.classList.toggle('adm-btn-ghost', !calibrating);
+    btn.innerHTML = calibrating
+      ? t('admin.cancelOrientation', '❌ Annuler l\'orientation')
+      : t('admin.defineOrientation', '🧭 Définir l\'orientation');
+  }
+  if (!DOM.orientationStatus) return;
+  if (calibrating) {
+    DOM.orientationStatus.textContent = t('admin.orientationAdjustHint', 'Ajustez l\'embryon sur les axes (puis sauvegardez)…');
+  } else {
+    DOM.orientationStatus.textContent = (_draft?.orientation || _draft?.orientation2d)
+      ? t('admin.orientationSet', 'Orientation définie ✓')
+      : t('admin.noOrientation', '(Aucune orientation définie)');
+  }
 }
 
 // ── Sample side ────────────────────────────────────────────────
@@ -850,6 +947,7 @@ function renderDefaultView() {
       + VIEW_PRESETS.map(([id, face, up]) => `<option value="${id}">${escHtml(presetLabel(face, up))}</option>`).join('')
       + `<option value="custom">${escHtml(t('admin.viewCustom', 'Personnalisée (vue capturée)'))}</option>`;
     DOM.fDefaultView.value = current;
+    if (previewHidden()) DOM.fDefaultView.querySelectorAll('option').forEach((o) => { o.disabled = o.value !== 'none'; });
   }
   if (DOM.defaultViewHint) {
     DOM.defaultViewHint.textContent = cfg.defaultView
@@ -868,17 +966,52 @@ function pushOrientationAxes() {
 }
 
 /**
+ * The preview booted from the SAVED calibration (Q_base) and keeps it until told
+ * otherwise. A custom default view is captured as Q_cube · Q_base⁻¹ there, so once
+ * the draft's calibration changes (Define orientation → Save, or a discarded draft)
+ * the preview must read the draft's Q_base, or the stored view is posed wrong.
+ */
+function pushOrientationBase() {
+  const win = DOM.previewFrame?.contentWindow;
+  if (!win || !_draft) return;
+  try {
+    win.postMessage({ type: 'SET_ORIENTATION_BASE', quaternion: _draft.orientation || null }, window.location.origin);
+  } catch (_) { /* cross-origin guard */ }
+}
+
+/**
  * Ask the plugin in the preview iframe to resolve a default view, then store what
  * it hands back. `message` is either APPLY_ORIENTATION_VIEW (pose the volume in a
  * named preset) or GET_ORIENTATION_VIEW (capture the pose the operator built).
  */
 function requestOrientationView(message) {
+  if (previewHidden()) {
+    toast(t('admin.previewNeedsWideScreen',
+      'Élargissez la fenêtre pour afficher l\'aperçu : le repère et la vue par défaut se définissent en regardant le volume.'), 'warning');
+    renderDefaultView();
+    return;
+  }
+  // The volume is being aligned on the axes: its pose is a calibration in progress,
+  // and a preset would move it out from under the operator.
+  if (_isCalibratingOrientation) {
+    toast(t('admin.viewDuringCalibration',
+      'Terminez d’abord la définition de l’orientation (Sauvegarder), puis choisissez la vue par défaut.'), 'warning');
+    renderDefaultView();
+    return;
+  }
   const win = DOM.previewFrame?.contentWindow;
   if (!win) return;
   const settle = () => { window.removeEventListener('message', onReply); clearTimeout(timer); };
   const onReply = (e) => {
     if (e.origin !== window.location.origin || e.data?.type !== 'ORIENTATION_VIEW_RESULT') return;
+    if (DOM.previewFrame?.contentWindow && e.source !== DOM.previewFrame.contentWindow) return;
     settle();
+    if (e.data.reason === 'calibrating') {
+      toast(t('admin.viewDuringCalibration',
+        'Terminez d’abord la définition de l’orientation (Sauvegarder), puis choisissez la vue par défaut.'), 'warning');
+      renderDefaultView();
+      return;
+    }
     const q = e.data.quaternion;
     if (!Array.isArray(q) || q.length !== 4 || !q.every(Number.isFinite)) {
       toast(t('admin.viewCaptureFailed', 'Vue par défaut non définie : le volume n\'est pas encore prêt.'), 'error');
@@ -1061,11 +1194,45 @@ function renderGallery() {
     </div>`).join('');
 }
 
-/** Mirror a server-confirmed gallery into BOTH draft and baseline (never dirty). */
+/**
+ * Fold the gallery the server answered (the one stored on disk after an add or a
+ * delete) into the draft and the baseline.
+ *
+ * The server decides WHICH files exist and their derived fields (`thumb`); the
+ * draft keeps the order and the captions/titles the operator is editing, the
+ * baseline keeps its own. A file the server added is appended to both, so the
+ * upload itself is never reported as an unsaved change while an unsaved caption
+ * or reorder still is.
+ */
+function mergeGallery(draftList, baseList, serverList) {
+  const server = new Map();
+  (Array.isArray(serverList) ? serverList : []).forEach((g) => {
+    if (g && typeof g.file === 'string' && !server.has(g.file)) server.set(g.file, g);
+  });
+  const fold = (local) => {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(local) ? local : []).forEach((g) => {
+      const stored = server.get(g?.file);
+      if (!stored || seen.has(g.file)) return;
+      seen.add(g.file);
+      const item = deepClone(stored);
+      if (Object.prototype.hasOwnProperty.call(g, 'caption')) item.caption = g.caption;
+      if (Object.prototype.hasOwnProperty.call(g, 'title')) item.title = g.title;
+      out.push(item);
+    });
+    server.forEach((stored, file) => { if (!seen.has(file)) out.push(deepClone(stored)); });
+    return out;
+  };
+  return { draft: fold(draftList), base: fold(baseList) };
+}
+
+/** Take a server-confirmed gallery without losing the operator's pending edits. */
 function commitGallery(gallery) {
-  const list = Array.isArray(gallery) ? gallery : [];
-  if (_draft) _draft.gallery = deepClone(list);
-  if (_original) _original.gallery = deepClone(list);
+  const merged = mergeGallery(_draft?.gallery, _original?.gallery, gallery);
+  if (_draft) _draft.gallery = merged.draft;
+  if (_original) _original.gallery = merged.base;
+  syncDirty();
   renderGallery();
 }
 
@@ -1075,8 +1242,18 @@ async function uploadGalleryFiles(files) {
   const list = Array.from(files || []);
   if (!list.length) return;
 
+  // Every request of this batch goes to the dataset it was dropped on. Once the
+  // operator opens another one (or this one closes), the rest is not sent and no
+  // answer is written into the editor that replaced it.
+  const id = _current.id;
+  const gen = _selectGen;
+  const stillOpen = () => _selectGen === gen && _current?.id === id && !!_draft;
+  let unsent = 0;
+
   DOM.galleryDrop?.classList.add('is-busy');
-  for (const file of list) {
+  for (let i = 0; i < list.length; i++) {
+    const file = list[i];
+    if (!stillOpen()) { unsent = list.length - i; break; }
     if (galleryItems().length >= GALLERY_MAX_ITEMS) {
       toast(t('admin.galleryFull', `Maximum ${GALLERY_MAX_ITEMS} images par dataset.`, { max: GALLERY_MAX_ITEMS }), 'error');
       break;
@@ -1093,9 +1270,10 @@ async function uploadGalleryFiles(files) {
     // Raw bytes, read by the browser straight from the file: no base64 detour. The
     // server takes the extension from the magic bytes, never from this name.
     const res = await apiFetchStatus(
-      `${API_DATASETS}?action=gallery_add&id=${encodeURIComponent(_current.id)}&filename=${encodeURIComponent(file.name)}`,
+      `${API_DATASETS}?action=gallery_add&id=${encodeURIComponent(id)}&filename=${encodeURIComponent(file.name)}`,
       { method: 'POST', body: file, headers: { 'Content-Type': file.type } });
     const data = res.data;
+    if (!stillOpen()) { unsent = list.length - i - 1; break; }
     if (data?.ok) {
       commitGallery(data.gallery);
     } else {
@@ -1105,15 +1283,23 @@ async function uploadGalleryFiles(files) {
   }
   DOM.galleryDrop?.classList.remove('is-busy');
   if (DOM.galleryFile) DOM.galleryFile.value = '';
+  if (unsent > 0) {
+    toast(t('admin.galleryUploadInterrupted',
+      `Un autre dataset a été ouvert : ${unsent} image(s) non envoyée(s).`, { count: unsent }), 'error');
+  }
 }
 
 async function deleteGalleryImage(fileName) {
   if (!_current || !fileName) return;
+  const id = _current.id;
+  const gen = _selectGen;
   if (!confirm(t('admin.galleryConfirmDelete', 'Supprimer cette image ? Le fichier est effacé du dossier du dataset.'))) return;
-  const data = await apiFetch(`${API_DATASETS}?action=gallery_delete&id=${encodeURIComponent(_current.id)}`,
+  const data = await apiFetch(`${API_DATASETS}?action=gallery_delete&id=${encodeURIComponent(id)}`,
     { method: 'POST', body: JSON.stringify({ file: fileName }) });
   if (data?.ok) {
-    commitGallery(data.gallery);
+    // The file is gone from the dataset it was deleted from; the editor only takes
+    // the answer if that dataset is still the one open.
+    if (_selectGen === gen && _current?.id === id && _draft) commitGallery(data.gallery);
     toast(t('admin.galleryDeleted', 'Image supprimée ✓'));
   } else {
     toast(t('admin.galleryDeleteError', 'Suppression impossible.'), 'error');
@@ -1211,12 +1397,8 @@ async function saveDatasetNow() {
       setTimeout(() => { window.removeEventListener('message', handler); resolve(); }, 1500);
     });
     _isCalibratingOrientation = false;
-    if (DOM.btnDefineOrientation) {
-      DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
-      DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
-      DOM.btnDefineOrientation.innerHTML = t('admin.defineOrientation', '🧭 Définir l\'orientation');
-    }
-    if (DOM.orientationStatus) DOM.orientationStatus.textContent = t('admin.orientationSet', 'Orientation définie ✓');
+    paintOrientationControls(false);
+    pushOrientationBase();
     DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, window.location.origin);
   }
 
@@ -1254,6 +1436,58 @@ async function saveDatasetNow() {
 }
 
 function resetDataset() { discardChanges(); }
+
+function paintCaptureButton(busy) {
+  if (!DOM.btnSetPreview) return;
+  if (busy) {
+    DOM.btnSetPreview.disabled = true;
+    DOM.btnSetPreview.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.capturing', 'Capture…'))}`;
+  } else {
+    DOM.btnSetPreview.disabled = !_draft || !isStagingEditable(_draft);
+    DOM.btnSetPreview.innerHTML = t('admin.setPreview', '📸 Redéfinir la preview');
+  }
+}
+
+/** Ask the preview page for a thumbnail; the answer (or its absence) gives the button back. */
+function requestCapture() {
+  const win = DOM.previewFrame?.contentWindow;
+  if (!_current || !win || _capture) return;
+  const id = `capture-${++_captureSeq}`;
+  const timer = setTimeout(() => {
+    if (_capture?.id !== id) return;
+    _capture = null;
+    paintCaptureButton(false);
+    toast(t('admin.captureUnavailable', 'The preview did not answer. Wait until it has finished loading, then try again.'), 'error');
+  }, CAPTURE_REPLY_TIMEOUT);
+  _capture = { id, timer };
+  paintCaptureButton(true);
+  win.postMessage({ type: 'REQUEST_SCREENSHOT', requestId: id }, window.location.origin);
+}
+
+/** Forget a pending capture (dataset switched, preview unloaded): its answer is ignored. */
+function cancelCapture() {
+  if (!_capture) return;
+  clearTimeout(_capture.timer);
+  _capture = null;
+  paintCaptureButton(false);
+}
+
+/** SCREENSHOT_RESPONSE from the preview page: only the answer to the pending request counts. */
+function onCaptureResponse(data) {
+  if (!_capture || data.requestId !== _capture.id) return;
+  clearTimeout(_capture.timer);
+  _capture = null;
+  paintCaptureButton(false);
+  if (data.success && typeof data.dataUrl === 'string' && data.dataUrl) {
+    saveThumbnail(data.dataUrl);
+    return;
+  }
+  // A code from the page, logged; the operator reads a sentence.
+  console.error('[Datasets] Preview capture failed:', data.error);
+  toast(data.error === 'not_ready'
+    ? t('admin.captureUnavailable', 'The preview did not answer. Wait until it has finished loading, then try again.')
+    : t('admin.captureFailed', 'The preview could not be captured. Try again; if it keeps failing, reload the preview.'), 'error');
+}
 
 async function saveThumbnail(dataUrl) {
   if (!_current) return;
@@ -1309,6 +1543,8 @@ function wire() {
   DOM.searchClear.addEventListener('click', () => {
     _searchQuery = ''; DOM.datasetSearch.value = '';
     DOM.searchClear.style.display = 'none'; renderList();
+    // The button just hid itself: keyboard focus would fall to the page body.
+    DOM.datasetSearch.focus();
   });
   // Delegated: the strip is re-generated on every language switch and after a
   // type is renamed, so a per-button listener would be lost (or stacked).
@@ -1372,34 +1608,20 @@ function wire() {
   });
 
   if (DOM.btnDefineOrientation) DOM.btnDefineOrientation.addEventListener('click', () => {
-    if (!_current) return;
+    if (!_current || previewHidden()) return;
     _isCalibratingOrientation = !_isCalibratingOrientation;
-    if (_isCalibratingOrientation) {
-      DOM.btnDefineOrientation.classList.add('adm-btn-accent');
-      DOM.btnDefineOrientation.classList.remove('adm-btn-ghost');
-      DOM.btnDefineOrientation.innerHTML = t('admin.cancelOrientation', '❌ Annuler l\'orientation');
-      if (DOM.orientationStatus) DOM.orientationStatus.textContent = t('admin.orientationAdjustHint', 'Ajustez l\'embryon sur les axes (puis sauvegardez)…');
-      DOM.previewFrame.contentWindow?.postMessage({ type: 'CALIBRATE_ORIENTATION_START' }, '*');
-      syncDirty();
-    } else {
-      DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
-      DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
-      DOM.btnDefineOrientation.innerHTML = t('admin.defineOrientation', '🧭 Définir l\'orientation');
-      if (DOM.orientationStatus) DOM.orientationStatus.textContent = _draft?.orientation
-        ? t('admin.orientationSet', 'Orientation définie ✓') : t('admin.noOrientation', '(Aucune orientation définie)');
-      DOM.previewFrame.contentWindow?.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
-      syncDirty();
-    }
+    paintOrientationControls(_isCalibratingOrientation);
+    DOM.previewFrame.contentWindow?.postMessage(
+      { type: _isCalibratingOrientation ? 'CALIBRATE_ORIENTATION_START' : 'CALIBRATE_ORIENTATION_STOP' }, '*');
+    syncDirty();
   });
 
-  if (DOM.btnSetPreview) DOM.btnSetPreview.addEventListener('click', () => {
-    if (!_current || !DOM.previewFrame.contentWindow) return;
-    DOM.btnSetPreview.disabled = true;
-    DOM.btnSetPreview.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.capturing', 'Capture…'))}`;
-    DOM.previewFrame.contentWindow.postMessage({ type: 'REQUEST_SCREENSHOT' }, '*');
-  });
+  if (DOM.btnSetPreview) DOM.btnSetPreview.addEventListener('click', requestCapture);
 
   DOM.previewFrame.addEventListener('load', () => {
+    // The blank page that unloads a viewer is not a preview: keep the placeholder.
+    const src = DOM.previewFrame.getAttribute('src');
+    if (!src || src === 'about:blank') return;
     DOM.previewLoading.style.display = 'none';
     DOM.previewFrameWrap.style.display = 'flex';
     if (_current) {
@@ -1440,14 +1662,7 @@ function wire() {
       if (DOM.fExposureVal) DOM.fExposureVal.textContent = `${e.data.value.toFixed(2)}×`;
       syncDirty();
     }
-    if (e.data?.type === 'SCREENSHOT_RESPONSE') {
-      if (DOM.btnSetPreview) {
-        DOM.btnSetPreview.disabled = false;
-        DOM.btnSetPreview.innerHTML = t('admin.setPreview', '📸 Redéfinir la preview');
-      }
-      if (e.data.error) toast(t('admin.toastCaptureError', `Erreur de capture : ${e.data.error}`, { error: e.data.error }), 'error');
-      else if (e.data.dataUrl) saveThumbnail(e.data.dataUrl);
-    }
+    if (e.data?.type === 'SCREENSHOT_RESPONSE') onCaptureResponse(e.data);
   });
 }
 
@@ -1460,8 +1675,12 @@ export const DatasetsTab = {
     refDom();
     registerDirtyGuard('datasets', () => _dirty, () => discardChanges());
     setDatasetOpener(openDataset);
+    setOpenDatasetGetter(() => _current?.id || null);
     renderFilterTabs();
     wire();
+    _previewMq = typeof window.matchMedia === 'function' ? window.matchMedia(PREVIEW_HIDDEN_QUERY) : null;
+    _previewMq?.addEventListener?.('change', onPreviewVisibilityChange);
+    applyPreviewGate();
     _firstLoadPending = true;
     loadDatasets().finally(() => { _firstLoadPending = false; });
     refreshTrashCount();
@@ -1476,5 +1695,15 @@ export const DatasetsTab = {
   // next time this tab is opened, not only after a reload.
   // The first load is already under way when mount() has just run.
   activate() { renderFilterTabs(); if (!_firstLoadPending) loadDatasets(); },
-  relabel() { renderFilterTabs(); renderList(); if (_draft) { populateForm(); applyStagingChrome(_draft); } },
+  relabel() {
+    renderFilterTabs();
+    renderList();
+    if (!_draft) return;
+    // A repaint in the new language is not a cancel: the preview is still
+    // calibrating, and Save must still read the pose back from it.
+    const calibrating = _isCalibratingOrientation;
+    populateForm();
+    applyStagingChrome(_draft);
+    if (calibrating) { _isCalibratingOrientation = true; paintOrientationControls(true); }
+  },
 };

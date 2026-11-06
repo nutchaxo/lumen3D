@@ -10,7 +10,7 @@
 
 'use strict';
 
-import { API_DATASETS, t, escHtml, apiFetchStatus, toast, refreshIcons } from './shared.js';
+import { API_DATASETS, t, escHtml, apiFetchStatus, toast, refreshIcons, fmtBytes } from './shared.js';
 
 const post = (action, query, body) => apiFetchStatus(
   `${API_DATASETS}?action=${action}${query || ''}`,
@@ -20,12 +20,32 @@ let _retentionDays = 60;
 let _dialog = null;
 let _onChange = () => {};
 
-function fmtBytes(n) {
-  if (!Number.isFinite(n) || n < 0) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let v = n, i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+// The trash engines (dataset_trash.py / api/_trash_lib.php) answer codes and a few
+// English sentences their tests pin; the operator reads them in the admin's
+// language, and anything unrecognised is logged rather than shown.
+const TRASH_REASONS = {
+  busy: () => t('admin.deleteBusy', 'le dossier est utilisé par un autre processus (conversion en cours ?)'),
+  use_import_discard: () => t('admin.deleteUseImport', 'un import en cours se supprime depuis l\'onglet Import'),
+  trash_unavailable: () => t('admin.trashUnavailable', 'la corbeille est inaccessible sur le serveur (droits d\'écriture ?)'),
+  corrupt_entry: () => t('admin.trashCorruptEntry', 'cette entrée de la corbeille est endommagée'),
+  purge_incomplete: () => t('admin.trashPurgeIncomplete', 'une partie des fichiers n\'a pas pu être effacée'),
+  'Dataset not found': () => t('admin.trashDatasetNotFound', 'ce dataset n\'existe plus'),
+  'Invalid dataset ID': () => t('admin.trashInvalidId', 'identifiant de dataset invalide'),
+  'Not in trash': () => t('admin.trashNotInTrash', 'cette entrée n\'est plus dans la corbeille'),
+  'Invalid folder name': () => t('admin.trashInvalidFolder', 'nom de dossier invalide'),
+};
+
+/** A failed trash request in words; `res` is an apiFetchStatus answer. */
+export function trashReason(res) {
+  const data = res && res.data;
+  const code = data && typeof data.error === 'string' ? data.error : '';
+  if (code && Object.prototype.hasOwnProperty.call(TRASH_REASONS, code)) {
+    if (data.detail) console.error('Trash:', code, data.detail);
+    return TRASH_REASONS[code]();
+  }
+  console.error('Trash: unexpected answer', res && res.status, data);
+  if (res && res.status === 0) return t('admin.trashNoAnswer', 'le serveur ne répond pas');
+  return t('admin.unknownError', 'Inconnue');
 }
 
 function fmtDate(iso) {
@@ -52,12 +72,7 @@ export async function moveToTrash(ds) {
     toast(t('admin.datasetDeleted', 'Dataset déplacé dans la corbeille ✓'));
     return true;
   }
-  const code = res.data?.error;
-  const reason = code === 'busy'
-    ? t('admin.deleteBusy', 'le dossier est utilisé par un autre processus (conversion en cours ?)')
-    : code === 'use_import_discard'
-      ? t('admin.deleteUseImport', 'un import en cours se supprime depuis l\'onglet Import')
-      : (code || t('admin.unknownError', 'Inconnue'));
+  const reason = trashReason(res);
   toast(t('admin.datasetDeleteError', `Suppression impossible : ${reason}`, { reason }), 'error');
   return false;
 }
@@ -139,7 +154,7 @@ async function onAction(btn) {
       _onChange();
       await render();
     } else {
-      const reason = res.data?.error || t('admin.unknownError', 'Inconnue');
+      const reason = trashReason(res);
       toast(t('admin.trashRestoreError', `Restauration impossible : ${reason}`, { reason }), 'error');
       btn.disabled = false;
     }

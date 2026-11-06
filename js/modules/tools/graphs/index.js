@@ -28,6 +28,12 @@
  * asks every panel for the same query and overlays the results, one colour per
  * dataset.
  *
+ * QUERIES run in engine-worker.js (this file's engine, loaded alone there): a table
+ * crosses to the worker once per build, each query sends its spec. A page queries
+ * one at a time per caller, the newest waiting query replacing an older one; a table
+ * built for a state that is gone (another timepoint) has its read aborted. Without a
+ * worker, or once it failed, the same engine runs on the page.
+ *
  * Plotly (3.5 MB) is fetched from the platform's vendor folder the first time a
  * plot is drawn, with the integrity digest the platform pins for it.
  */
@@ -49,6 +55,7 @@
   const MAX_SERIES = 24;
   const MAX_BINS = 400;
   const PIXEL_BUDGET = 2e6;
+  const BIN_CACHE_ENTRIES = 4;            // X binnings kept per table (≤ 2 bytes per row each)
 
   // The platform's categorical palette (dataviz skill, validated), in its fixed
   // order: a colour follows the entity it was given to, never its rank.
@@ -104,6 +111,12 @@
     }
     return rgbToHex(cur);
   }
+  /** A colour read from a dataset's metadata goes into a style attribute: only a hex
+   *  colour passes, anything else (a `;` would add declarations) is dropped. */
+  function safeColor(c) {
+    const v = String(c ?? '').trim();
+    return /^#[0-9a-f]{3,8}$/i.test(v) ? v : null;
+  }
   function withAlpha(hex, a) {
     const rgb = hexToRgb(hex);
     return rgb ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})` : hex;
@@ -113,20 +126,38 @@
   // Engine — pure: tables in, plain results out
   // ════════════════════════════════════════════════════════════════════
   //
-  // table = { id, n, cols: { varId: TypedArray }, lazy: { varId: () => TypedArray },
+  // table = { id, n, cols: { varId: TypedArray },
+  //           lazy: { varId: () => TypedArray | { fill: 'axis', dims, axis, scale } },
   //           vars: [{ id, label, unit, kind: 'num'|'cat', dom?: [lo, hi], step?, bins?,
   //                    intensity?, ch?, color?, cats?: { names, colors } }],
   //           measureUnit, unitSize }
   // A categorical column holds the index of the category (negative / NaN = none).
+  // A lazy column described by data (an axis) can be built wherever the table is, the
+  // engine worker included; a function stays on the page that made it.
 
   const Engine = (() => {
+    const binCaches = new WeakMap();      // table -> Map(binning key -> bins), dropped with the table
+
     function varOf(table, id) { return table.vars.find(v => v.id === id) || null; }
+
+    /** Position of every row along one axis of a grid whose rows run x fastest, then
+     *  y, then z: (index along the axis + 0.5) · scale, the centre of the voxel/pixel. */
+    function fillAxis(desc) {
+      const dx = desc.dims[0], dy = desc.dims[1] || 1, dz = desc.dims[2] || 1;
+      const k = desc.axis, scale = desc.scale;
+      const a = new Float32Array(dx * dy * dz);
+      let i = 0;
+      for (let z = 0; z < dz; z++) for (let y = 0; y < dy; y++) for (let x = 0; x < dx; x++) {
+        a[i++] = ((k === 0 ? x : k === 1 ? y : z) + 0.5) * scale;
+      }
+      return a;
+    }
 
     function colOf(table, id) {
       let c = table.cols[id];
-      if (!c && table.lazy && typeof table.lazy[id] === 'function') {
-        c = table.cols[id] = table.lazy[id]();
-      }
+      const lazy = !c && table.lazy ? table.lazy[id] : null;
+      if (typeof lazy === 'function') c = table.cols[id] = lazy();
+      else if (lazy && lazy.fill === 'axis') c = table.cols[id] = fillAxis(lazy);
       return c || null;
     }
 
@@ -206,9 +237,23 @@
       return s;
     }
 
-    /** Bin index of every row for X. */
+    /** Bin index of every row for X. A table's columns never change, so the binning of
+     *  one X is reused by every query that only changes Y, the aggregation, the group
+     *  or the threshold (the slider). Callers never write into what this returns. */
     function makeBins(table, xid, spec) {
       if (xid === ALL) return { nb: 1, idx: null, centers: [''], cat: true, labels: [''], w: 1, lo: 0 };
+      const ck = `${xid}|${spec.bins || 0}|${Array.isArray(spec.xDomain) ? spec.xDomain.join(',') : ''}`;
+      let cache = binCaches.get(table);
+      if (!cache) { cache = new Map(); binCaches.set(table, cache); }
+      const hit = cache.get(ck);
+      if (hit) { cache.delete(ck); cache.set(ck, hit); return hit; }
+      const bins = binRows(table, xid, spec);
+      cache.set(ck, bins);
+      while (cache.size > BIN_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
+      return bins;
+    }
+
+    function binRows(table, xid, spec) {
       const xv = varOf(table, xid);
       const col = colOf(table, xid);
       if (!col) throw gerr('NO_VARIABLE', `no column ${xid}`);
@@ -216,7 +261,7 @@
       if (xv.kind === 'cat') {
         const names = xv.cats.names;
         const nb = names.length;
-        const idx = new Int32Array(n);
+        const idx = nb <= 0x7fff ? new Int16Array(n) : new Int32Array(n);
         for (let i = 0; i < n; i++) { const v = col[i]; idx[i] = v >= 0 && v < nb ? v | 0 : -1; }
         return { nb, idx, centers: names.slice(), cat: true, labels: names.slice(), w: 1, lo: 0, colors: xv.cats.colors || null };
       }
@@ -227,7 +272,7 @@
       if (step && (hi - lo) / step + 1 <= MAX_BINS) { nb = Math.round((hi - lo) / step) + 1; w = step; round = true; }
       else { nb = clamp(spec.bins || xv.bins || 64, 2, MAX_BINS); w = (hi - lo) / nb; }
       if (spec.bins && round && spec.bins < nb) { nb = spec.bins; w = (hi - lo) / nb; round = false; }
-      const idx = new Int32Array(n);
+      const idx = new Int16Array(n);                // nb ≤ MAX_BINS; −1 = outside
       for (let i = 0; i < n; i++) {
         const v = col[i];
         let b;
@@ -538,8 +583,14 @@
       return lines.join('\n') + '\n';
     }
 
-    return { varOf, colOf, normalizeSpec, makeBins, compute, toCsv, intensityIds, expandIds, ALL, INT };
+    return { varOf, colOf, fillAxis, normalizeSpec, makeBins, compute, toCsv, intensityIds, expandIds, ALL, INT };
   })();
+
+  // engine-worker.js loads this file for the engine alone: nothing below runs there.
+  if (typeof PluginRegistry === 'undefined' && typeof importScripts === 'function') {
+    self.GraphsEngine = Engine;
+    return;
+  }
 
   /** The channel variables a comparison can line up: those every dataset has (all of
    *  them when no channel is shared). `tb.total` / `v.haveCount` come from the host. */
@@ -748,7 +799,7 @@
       let id = (opts.prefix || 'ch_') + (slug(name) || String(c));
       while (used.has(id)) id += c;
       used.add(id);
-      return { id, label: name, unit: '', kind: 'num', dom: [0, 255], step: 1, bins: 64, intensity: true, ch: true, color: ch.color || null, channelIndex: c };
+      return { id, label: name, unit: '', kind: 'num', dom: [0, 255], step: 1, bins: 64, intensity: true, ch: true, color: safeColor(ch.color), channelIndex: c };
     });
   }
 
@@ -782,9 +833,22 @@
           ].filter(Boolean)
         };
       },
+      // The tree the read will use: the frame on screen (ctx.data pins it), not the tree
+      // BrickLoader has mounted, which the timelapse prefetch moves to later frames and a
+      // cached frame shown leaves behind. A prefetch mount then rebuilds nothing, and a scrub
+      // to a cached frame rebuilds the table. Null while ctx.data names no tree on screen
+      // (the volumes released by a WebGL context loss, nothing activated yet): the mounted
+      // tree is then a prefetched frame, so nothing is marked stale and nothing is read.
+      // Only a host whose ctx.data cannot say at all keys on the mounted tree.
       key(ctx) {
-        const base = typeof BrickLoader !== 'undefined' && BrickLoader.getBasePath ? BrickLoader.getBasePath() : '';
-        return `${ctx.dataset.getId()}|${base}`;
+        const id = ctx.dataset.getId();
+        if (ctx.data && typeof ctx.data.displayedTree === 'function') {
+          let shown = null;
+          try { shown = ctx.data.displayedTree(); } catch (_) { shown = null; }
+          return shown && shown.path ? `${id}|${String(shown.path).replace(/\/$/, '')}` : null;
+        }
+        const base = typeof BrickLoader !== 'undefined' && BrickLoader.getBasePath ? (BrickLoader.getBasePath() || '') : '';
+        return `${id}|${String(base).replace(/\/$/, '')}`;
       },
       async build(ctx, schema, opts) {
         const D = ctx.data;
@@ -801,7 +865,7 @@
         const vs = pick.voxelSize;
         let reg;
         try {
-          reg = await D.readRegion({ x0: 0, x1: dx, y0: 0, y1: dy, z0: 0, z1: dz }, Array.from({ length: C }, (_, i) => i), { level: pick.level, signal: opts && opts.signal });
+          reg = await D.readRegion({ x0: 0, x1: dx, y0: 0, y1: dy, z0: 0, z1: dz }, Array.from({ length: C }, (_, i) => i), { level: pick.level, signal: opts && opts.signal, onProgress: opts && opts.onProgress });
         } catch (err) {
           if (err && err.name === 'AbortError') throw err;
           throw gerr(err && err.code === 'NO_DATASET' ? 'NOT_READY' : 'READ_FAILED', 'volume read failed');
@@ -810,32 +874,26 @@
         const vars = schema.vars.map(v => ({ ...v }));
         const cols = {};
         vars.forEach(v => { if (v.ch) cols[v.id] = reg.data[v.channelIndex]; });
-        const axisFill = (k, scale) => () => {
-          const a = new Float32Array(n);
-          let i = 0;
-          for (let z = 0; z < dz; z++) for (let y = 0; y < dy; y++) for (let x = 0; x < dx; x++) {
-            a[i++] = ((k === 0 ? x : k === 1 ? y : z) + 0.5) * scale(k);
-          }
-          return a;
-        };
         const dimOf = [dx, dy, dz];
         const sizeOf = [vs.x, vs.y, vs.z];
         const lazy = {};
         vars.forEach(v => {
           if (!v.pos) return;
           const k = v.axis;
-          if (v.rel) lazy[v.id] = axisFill(k, () => 100 / dimOf[k]);
+          if (v.rel) lazy[v.id] = { fill: 'axis', dims: dimOf, axis: k, scale: 100 / dimOf[k] };
           else {
-            lazy[v.id] = axisFill(k, () => sizeOf[k]);
+            lazy[v.id] = { fill: 'axis', dims: dimOf, axis: k, scale: sizeOf[k] };
             v.dom = [0.5 * sizeOf[k], (dimOf[k] - 0.5) * sizeOf[k]];
             if (dimOf[k] <= MAX_BINS) v.step = sizeOf[k];
           }
           if (v.rel && dimOf[k] <= MAX_BINS) v.step = 100 / dimOf[k];
           if (v.rel) v.dom = [50 / dimOf[k], 100 - 50 / dimOf[k]];
         });
+        // `owned`: the columns are this table's alone (a fresh read), so they can be
+        // handed to the engine worker instead of copied.
         return {
           id: 'voxels', n, cols, lazy, vars, defaults: schema.defaults, measureUnit: 'µm³', unitSize: vs.x * vs.y * vs.z,
-          info: { level: pick.level, dims: pick.dims, voxelSize: vs }
+          info: { level: pick.level, dims: pick.dims, voxelSize: vs }, owned: true
         };
       }
     },
@@ -873,16 +931,17 @@
         };
       },
       key(ctx) { return ctx.dataset.getId(); },
-      async build(ctx, schema) {
+      async build(ctx, schema, opts) {
         // The photograph's own file, not what the viewer draws: display adjustments,
         // stain isolation and rotation must not change a measurement.
         const meta0 = ctx.dataset.getMeta();
         let bitmap;
         try {
-          const resp = await fetch(ctx.dataset.fileUrl({ path: ctx.dataset.getId() }, meta0.image.native));
+          const resp = await fetch(ctx.dataset.fileUrl({ path: ctx.dataset.getId() }, meta0.image.native), { signal: opts && opts.signal });
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           bitmap = await createImageBitmap(await resp.blob());
         } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
           console.error('[graphs] photograph unreadable:', err);
           throw gerr('READ_FAILED', 'photograph unreadable');
         }
@@ -913,21 +972,15 @@
         const sx = (W / w) * px0, sy = (H / h) * py0;
         const vars = schema.vars.map(v => ({ ...v }));
         const lazy = {};
-        const fill = (k, scale) => () => {
-          const a = new Float32Array(n);
-          let i = 0;
-          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) a[i++] = ((k === 0 ? x : y) + 0.5) * scale;
-          return a;
-        };
         vars.forEach(v => {
           if (!v.pos) return;
           const dim = v.axis === 0 ? w : h, size = v.axis === 0 ? sx : sy;
-          if (v.rel) { lazy[v.id] = fill(v.axis, 100 / dim); v.dom = [50 / dim, 100 - 50 / dim]; }
-          else { lazy[v.id] = fill(v.axis, size); v.dom = [0.5 * size, (dim - 0.5) * size]; }
+          if (v.rel) { lazy[v.id] = { fill: 'axis', dims: [w, h], axis: v.axis, scale: 100 / dim }; v.dom = [50 / dim, 100 - 50 / dim]; }
+          else { lazy[v.id] = { fill: 'axis', dims: [w, h], axis: v.axis, scale: size }; v.dom = [0.5 * size, (dim - 0.5) * size]; }
         });
         return {
           id: 'pixels', n, cols: { R, G, B, L, S, blue }, lazy, vars, defaults: schema.defaults, measureUnit: schema.measureUnit, unitSize: sx * sy,
-          info: { dims: { x: w, y: h }, scale: s }
+          info: { dims: { x: w, y: h }, scale: s }, owned: true
         };
       }
     },
@@ -1157,7 +1210,7 @@
     const { unit } = dtOf(meta);
     const speedUnit = `µm/${unit}`;
     const regionNames = (meta.tracking?.regions || []).map(r => r.name);
-    const regionCats = { names: regionNames, colors: (meta.tracking?.regions || []).map(r => r.color) };
+    const regionCats = { names: regionNames, colors: (meta.tracking?.regions || []).map(r => safeColor(r && r.color)) };
     const yesno = { names: [t('no'), t('yes')], colors: null };
     const pos = (id, label) => ({ id, label, unit: 'µm', kind: 'num' });
     const num = (id, label, u, extra) => ({ id, label, unit: u || '', kind: 'num', ...extra });
@@ -1262,18 +1315,187 @@
   }
 
   // ════════════════════════════════════════════════════════════════════
+  // Latest wins — at most one query running per caller
+  // ════════════════════════════════════════════════════════════════════
+
+  function supersededError() {
+    return Object.assign(new Error('superseded by a newer query'), { name: 'AbortError', code: 'SUPERSEDED' });
+  }
+
+  /** Wrap an async `run`: one call runs at a time; a call made while one runs waits,
+   *  and a newer call replaces it (its promise rejects with SUPERSEDED). A slider
+   *  drag then costs the query running now plus the last one, whatever its length.
+   *  `cancel()` rejects the waiting call: a caller that drops its tables must call it
+   *  first, or the waiting call starts right after the abort and builds them again. */
+  function latestOnly(run) {
+    let running = false;
+    let pending = null;
+    async function pump() {
+      running = true;
+      while (pending) {
+        const job = pending;
+        pending = null;
+        try { job.resolve(await run(...job.args)); } catch (err) { job.reject(err); }
+      }
+      running = false;
+    }
+    const call = function (...args) {
+      return new Promise((resolve, reject) => {
+        if (pending) pending.reject(supersededError());
+        pending = { args, resolve, reject };
+        if (!running) pump();
+      });
+    };
+    call.cancel = () => {
+      const job = pending;
+      pending = null;
+      if (job) job.reject(supersededError());
+    };
+    return call;
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // Engine worker — the queries off the page's thread
+  // ════════════════════════════════════════════════════════════════════
+  //
+  // A table is posted to the worker once per build (an owned table hands its columns
+  // over, the others are copied); each query then posts only its spec. In Compare
+  // every panel is a same-origin frame on the host's thread: a query computed there
+  // would freeze every panel and the host at once.
+
+  /** `url`: the worker script, or null for none. Every failure of the worker rejects
+   *  with WORKER_FAILED and leaves the runner unavailable: the provider then computes
+   *  on the page, which is where it computed before. */
+  function createWorkerRunner(url) {
+    let worker = null;
+    let broken = !url || typeof Worker !== 'function';
+    let failure = null;
+    let nextId = 0;
+    const waiting = new Map();
+
+    function stop(err) {
+      broken = true;
+      failure = err;
+      if (worker) { try { worker.terminate(); } catch (_) { /* already gone */ } }
+      worker = null;
+      for (const w of waiting.values()) w.reject(err);
+      waiting.clear();
+    }
+
+    function ensure() {
+      if (worker || broken) return worker;
+      try { worker = new Worker(url); } catch (err) {
+        console.error('[graphs] engine worker unavailable:', err);
+        stop(gerr('WORKER_FAILED', 'worker did not start'));
+        return null;
+      }
+      worker.onmessage = (e) => {
+        const d = e.data;
+        const w = d && waiting.get(d.id);
+        if (!w) return;
+        waiting.delete(d.id);
+        if (d.ok) w.resolve(d.result);
+        else w.reject(gerr(d.code || 'GRAPH_FAILED', String(d.code || 'GRAPH_FAILED')));
+      };
+      worker.onerror = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        console.error('[graphs] engine worker failed:', e && (e.message || e));
+        stop(gerr('WORKER_FAILED', 'worker failed'));
+      };
+      worker.onmessageerror = () => stop(gerr('WORKER_FAILED', 'unreadable worker message'));
+      return worker;
+    }
+
+    function call(msg, transfer) {
+      return new Promise((resolve, reject) => {
+        const w = ensure();
+        if (!w) { reject(failure || gerr('WORKER_FAILED', 'no worker')); return; }
+        const id = ++nextId;
+        waiting.set(id, { resolve, reject });
+        try { w.postMessage({ ...msg, id }, transfer || []); } catch (err) {
+          waiting.delete(id);
+          reject(err);
+        }
+      });
+    }
+
+    return {
+      get available() { return !broken; },
+      load: (key, table, transfer) => call({ op: 'load', key, table }, transfer),
+      column: (key, col, data) => call({ op: 'column', key, col, data }),
+      compute: (key, spec) => call({ op: 'compute', key, spec }),
+      drop(key) {
+        if (!worker || broken) return;
+        try { worker.postMessage({ op: 'drop', key }); } catch (_) { /* worker gone */ }
+      },
+      dispose() {
+        stop(Object.assign(new Error('graphs closed'), { name: 'AbortError', code: 'DISPOSED' }));
+      }
+    };
+  }
+
+  /** The worker script beside this plugin's index.js. */
+  function engineWorkerUrl() {
+    try {
+      const mod = typeof PluginRegistry !== 'undefined' && PluginRegistry.getModule ? PluginRegistry.getModule('graphs') : null;
+      const base = mod && mod.meta && mod.meta._path;
+      return base ? `${base}/engine-worker.js` : null;
+    } catch (_) { return null; }
+  }
+
+  /** What crosses to the worker: data only (a lazy function stays here) and, for a
+   *  table whose columns are its own, their buffers to hand over. */
+  function wireTable(tb) {
+    const cols = {};
+    const buffers = new Set();
+    for (const [id, c] of Object.entries(tb.cols || {})) {
+      cols[id] = c;
+      if (tb.owned && c && c.buffer) buffers.add(c.buffer);
+    }
+    const lazy = {};
+    for (const [id, L] of Object.entries(tb.lazy || {})) if (L && typeof L === 'object') lazy[id] = L;
+    return {
+      table: { id: tb.id, n: tb.n, cols, lazy, vars: tb.vars, defaults: tb.defaults || null, measureUnit: tb.measureUnit || '', unitSize: tb.unitSize || 1 },
+      transfer: [...buffers]
+    };
+  }
+
+  /** Variable ids a spec reads (tokens such as @int are channels, never lazy). */
+  function specIds(spec) {
+    const out = [];
+    if (spec && typeof spec.x === 'string') out.push(spec.x);
+    if (spec && Array.isArray(spec.y)) spec.y.forEach(id => { if (typeof id === 'string') out.push(id); });
+    if (spec && typeof spec.group === 'string') out.push(spec.group);
+    return out;
+  }
+
+  // ════════════════════════════════════════════════════════════════════
   // Data provider — tables of THIS page, cached, with the queries on them
   // ════════════════════════════════════════════════════════════════════
 
-  function createProvider(ctx, t) {
-    const cache = new Map();            // key -> { key, promise, table }
+  /** The language the labels of a description are in (null when the page cannot say). */
+  function languageOf(ctx) {
+    try { return (ctx.i18n && typeof ctx.i18n.getLanguage === 'function' && ctx.i18n.getLanguage()) || null; } catch (_) { return null; }
+  }
+
+  /** `opts.runner`: an engine runner (createWorkerRunner) or null to compute here. */
+  function createProvider(ctx, t, opts = {}) {
+    const runner = opts.runner || null;
+    // id -> { key, ctrl, promise, token, sent }: one table per id, for the state that
+    // was on screen when it was asked for. `token` names its copy in the worker.
+    const cache = new Map();
+    // Per table, the key of the last build refused NOT_READY: once the state it waited for
+    // is there (another key, not null), the table counts as stale so a follow redraws it.
+    const notReady = new Map();
     let schemasMemo = null;
+    let serial = 0;
     const schemas = () => (schemasMemo || (schemasMemo = allSchemas(ctx, t)));
 
     function describe() {
       const meta = ctx.dataset.getMeta() || {};
       return {
         datasetId: ctx.dataset.getId(), name: meta.name || ctx.dataset.getId(), type: meta.type || null,
+        lang: languageOf(ctx),
         tables: schemas().map(sc => ({
           id: sc.id, label: sc.label, measureUnit: sc.measureUnit || '', defaults: sc.defaults,
           presets: sc.presets || [],
@@ -1292,33 +1514,149 @@
       return Number.isFinite(f) ? { value: f * dt, frame: f } : null;
     }
 
-    async function table(id, opts = {}) {
+    function schemaOf(id) {
       const sc = schemas().find(s => s.id === id);
       if (!sc) throw gerr('NO_TABLE', `no table ${id}`);
-      const key = sc.source === TrackingSources ? TrackingSources.key(ctx, id) : sc.source.key(ctx);
-      const slot = cache.get(id);
-      if (slot && slot.key === key && !opts.force) return slot.promise;
-      const promise = (sc.source === TrackingSources ? TrackingSources.build(ctx, sc, t) : sc.source.build(ctx, sc, opts))
-        .catch(err => { if (cache.get(id)?.promise === promise) cache.delete(id); throw err; });
-      cache.set(id, { key, promise });
-      return promise;
+      return sc;
     }
 
-    async function compute(tableId, spec, opts = {}) {
-      const tb = await table(tableId, opts);
-      return Object.assign(Engine.compute(tb, spec), { info: tb.info || null });
+    function keyOf(sc, id) {
+      return sc.source === TrackingSources ? TrackingSources.key(ctx, id) : sc.source.key(ctx);
+    }
+
+    function retire(slot) {
+      slot.ctrl.abort();
+      if (slot.token && runner) runner.drop(slot.token);
+    }
+
+    /** The slot of a table for the state on screen now. A slot built for a state that
+     *  is gone (another timepoint, another tracking option) is retired: its read is
+     *  aborted, its worker copy dropped. A null key (no state on screen to build for)
+     *  keeps the slot there is: it is the last state shown. */
+    function slotFor(id, force) {
+      const sc = schemaOf(id);
+      const key = keyOf(sc, id);
+      const old = cache.get(id);
+      if (old && !force && (old.key === key || key === null)) return old;
+      if (old) retire(old);
+      notReady.delete(id);
+      const slot = { key, ctrl: new AbortController(), promise: null, token: null, sent: new Set(), progress: null, listeners: new Set() };
+      const signal = slot.ctrl.signal;
+      // One build serves every query waiting on it: each one listens while it waits.
+      const onProgress = (f) => {
+        slot.progress = f;
+        for (const fn of slot.listeners) { try { fn(f); } catch (err) { console.error('[graphs] progress listener failed:', err); } }
+      };
+      slot.promise = (sc.source === TrackingSources ? TrackingSources.build(ctx, sc, t) : sc.source.build(ctx, sc, { signal, onProgress }))
+        .then(async (tb) => {
+          if (signal.aborted) throw supersededError();
+          if (runner && runner.available) {
+            const token = `${id}#${++serial}`;
+            const wire = wireTable(tb);
+            const loading = runner.load(token, wire.table, wire.transfer);
+            // A handed-over buffer is empty here from now on: this copy can no longer compute.
+            if (wire.transfer.some(b => b.byteLength === 0)) { tb.cols = {}; tb.detached = true; }
+            await loading;
+            if (signal.aborted) { runner.drop(token); throw supersededError(); }
+            slot.token = token;
+          }
+          return tb;
+        })
+        .catch(err => {
+          if (cache.get(id) === slot) {
+            cache.delete(id);
+            if (err && err.code === 'NOT_READY') notReady.set(id, key);
+          }
+          throw err;
+        });
+      slot.promise.catch(() => { /* reported to whoever awaits it */ });
+      cache.set(id, slot);
+      return slot;
+    }
+
+    function table(id, o = {}) {
+      return slotFor(id, Boolean(o.force)).promise;
+    }
+
+    /** Start (or keep) the build of a table for the state on screen now, before a
+     *  query queued behind another one gets to it: a read for a state the user has
+     *  left is aborted at once instead of when the queue reaches it. */
+    function touch(id) {
+      try { slotFor(id, false); } catch (_) { /* the query will report it */ }
+    }
+
+    async function sendLazyColumns(slot, tb, spec) {
+      for (const id of specIds(spec)) {
+        if (slot.sent.has(id) || !tb.lazy || typeof tb.lazy[id] !== 'function') continue;
+        const col = Engine.colOf(tb, id);
+        if (!col) continue;
+        await runner.column(slot.token, id, col);
+        slot.sent.add(id);
+      }
+    }
+
+    function dropAll() {
+      for (const slot of cache.values()) retire(slot);
+      cache.clear();
+    }
+
+    async function compute(tableId, spec, o = {}) {
+      let force = Boolean(o.force);
+      for (let attempt = 0; ; attempt++) {
+        const slot = slotFor(tableId, force);
+        force = false;
+        const listen = typeof o.onProgress === 'function' ? o.onProgress : null;
+        try {
+          let tb;
+          if (listen) {
+            slot.listeners.add(listen);
+            if (slot.progress !== null) { try { listen(slot.progress); } catch (err) { console.error('[graphs] progress listener failed:', err); } }
+          }
+          try { tb = await slot.promise; } finally { if (listen) slot.listeners.delete(listen); }
+          let result;
+          if (slot.token) {
+            await sendLazyColumns(slot, tb, spec);
+            result = await runner.compute(slot.token, spec);
+          } else if (tb.detached) {
+            throw gerr('WORKER_FAILED', 'the table was handed to a worker that is gone');
+          } else {
+            result = Engine.compute(tb, spec);
+          }
+          return Object.assign(result, { info: tb.info || null });
+        } catch (err) {
+          // The worker died with the tables it held: build them again, on this page.
+          if (err && err.code === 'WORKER_FAILED' && attempt === 0) { dropAll(); continue; }
+          throw err;
+        }
+      }
     }
 
     function stale(id) {
       const sc = schemas().find(s => s.id === id);
       if (!sc) return false;
+      const key = keyOf(sc, id);
       const slot = cache.get(id);
-      if (!slot) return false;
-      const key = sc.source === TrackingSources ? TrackingSources.key(ctx, id) : sc.source.key(ctx);
-      return slot.key !== key;
+      if (!slot) return key !== null && notReady.has(id) && notReady.get(id) !== key;
+      return key !== null && slot.key !== key;
     }
 
-    return { describe, table, compute, stale, cursorMinutes, reset: () => { cache.clear(); schemasMemo = null; trackingMemo.key = null; } };
+    /** The key the table would be built for now (null without such a table). */
+    function currentKey(id) {
+      const sc = schemas().find(s => s.id === id);
+      return sc ? keyOf(sc, id) : null;
+    }
+
+    function reset() {
+      dropAll();
+      notReady.clear();
+      schemasMemo = null;
+      trackingMemo.key = null;
+    }
+
+    return {
+      describe, table, touch, compute, stale, currentKey, cursorMinutes, reset,
+      dispose() { reset(); if (runner) runner.dispose(); }
+    };
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -1326,24 +1664,37 @@
   // ════════════════════════════════════════════════════════════════════
   //
   // host = { t, multi, describe() → { tables: [...] } (the union across datasets in
-  //          Compare), compute(tableId, spec) → Promise<result>, cursor(), datasets()?,
+  //          Compare), compute(tableId, spec, { onProgress }) → Promise<result>
+  //          (onProgress(f): fraction of the volume read, page mode only), cursor(), datasets()?,
   //          onNotes? }
 
   let plotlyPromise = null;
   function ensurePlotly() {
     if (window.Plotly) return Promise.resolve(window.Plotly);
+    // The core loads it once for every plugin of the page.
+    if (typeof PluginRegistry !== 'undefined' && typeof PluginRegistry.loadVendor === 'function') return PluginRegistry.loadVendor('plotly');
     if (plotlyPromise) return plotlyPromise;
+    // A core older than loadVendor: load it here, joining a tag another plugin has in flight.
     plotlyPromise = new Promise((resolve, reject) => {
       // Plotly writes its CSS into <style id="plotly.js-style-global"> at load; under
       // the nonce-locked CSP that element has to be created by the registry first.
       if (typeof PluginRegistry !== 'undefined' && PluginRegistry.ensureNoncedStyle) PluginRegistry.ensureNoncedStyle('plotly.js-style-global');
-      const script = document.createElement('script');
-      script.src = PLOTLY_SRC;
-      script.integrity = PLOTLY_SRI;
-      script.crossOrigin = 'anonymous';
-      script.onload = () => (window.Plotly ? resolve(window.Plotly) : reject(new Error('Plotly did not define itself')));
-      script.onerror = () => reject(new Error('Plotly failed to load'));
-      document.head.appendChild(script);
+      let script = Array.from(document.querySelectorAll('script[data-vendor-state="loading"]'))
+        .find(s => s.getAttribute('src') === PLOTLY_SRC) || null;
+      if (!script) {
+        script = document.createElement('script');
+        script.src = PLOTLY_SRC;
+        script.integrity = PLOTLY_SRI;
+        script.crossOrigin = 'anonymous';
+        script.setAttribute('data-vendor-state', 'loading');
+        document.head.appendChild(script);
+      }
+      const tag = script;
+      tag.addEventListener('load', () => {
+        tag.setAttribute('data-vendor-state', 'loaded');
+        if (window.Plotly) resolve(window.Plotly); else reject(new Error('Plotly did not define itself'));
+      });
+      tag.addEventListener('error', () => { tag.remove(); reject(new Error('Plotly failed to load')); });
     }).catch(err => { plotlyPromise = null; throw err; });
     return plotlyPromise;
   }
@@ -1363,11 +1714,44 @@
   const FIELD = 'display:flex;flex-direction:column;gap:2px;min-width:0;font-size:11px;color:var(--text-secondary)';
   const CONTROL = 'width:100%;min-width:0;padding:4px 6px;font-size:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm,4px);background:var(--bg-surface,transparent);color:var(--text-primary)';
 
+  const UI_SPEC_DEFAULTS = Object.freeze({ x: null, y: [], agg: 'mean', group: null, bins: 0, threshold: 0, signalOnly: false, band: false, normalize: 'none', yScale: 'linear', xScale: 'linear' });
+  const NORMALIZE_MODES = ['none', 'max', 'sum', 'first'];
+  const ID_MAX = 200;
+
+  function cleanBins(v) {
+    const b = Number(v);
+    return Number.isFinite(b) && b >= 2 ? Math.min(MAX_BINS, Math.round(b)) : 0;
+  }
+  function cleanThreshold(v) { return clamp(Number(v) || 0, 0, 254); }
+  const cleanId = (v) => (typeof v === 'string' && v.length <= ID_MAX ? v : null);
+
+  /** The controls' spec from a value that came from outside the panel — a workspace,
+   *  a shared #state= link, the Compare state, a preset — field by field over `base`:
+   *  it is written back into the controls' markup and into the address bar, so only
+   *  the known fields with values the controls can hold survive. */
+  function sanitizeUiSpec(src, base = UI_SPEC_DEFAULTS) {
+    const out = { ...UI_SPEC_DEFAULTS, ...base, y: Array.isArray(base.y) ? base.y.slice() : [] };
+    if (!src || typeof src !== 'object') return out;
+    const has = (k) => Object.prototype.hasOwnProperty.call(src, k);
+    if (has('x')) out.x = cleanId(src.x);
+    if (has('group')) out.group = cleanId(src.group);
+    if (has('y')) out.y = Array.isArray(src.y) ? src.y.filter(v => cleanId(v) !== null).slice(0, 64) : [];
+    if (has('agg') && (AGGS.includes(src.agg) || src.agg === 'points' || src.agg === 'density')) out.agg = src.agg;
+    if (has('bins')) out.bins = cleanBins(src.bins);
+    if (has('threshold')) out.threshold = cleanThreshold(src.threshold);
+    if (has('signalOnly')) out.signalOnly = src.signalOnly === true;
+    if (has('band')) out.band = src.band === true;
+    if (has('normalize') && NORMALIZE_MODES.includes(src.normalize)) out.normalize = src.normalize;
+    if (has('yScale') && (src.yScale === 'linear' || src.yScale === 'log')) out.yScale = src.yScale;
+    if (has('xScale') && (src.xScale === 'linear' || src.xScale === 'log')) out.xScale = src.xScale;
+    return out;
+  }
+
   function createUI(root, host) {
     const t = host.t;
     const st = {
       table: null, preset: null,
-      spec: { x: null, y: [], agg: 'mean', group: null, bins: 0, threshold: 0, signalOnly: false, band: false, normalize: 'none', yScale: 'linear', xScale: 'linear' },
+      spec: sanitizeUiSpec(null),
       colorBy: 'dataset'
     };
     let desc = { tables: [] };
@@ -1408,6 +1792,8 @@
       const showThr = tb.vars.some(v => v.intensity) && (COUNT_FAMILY.has(s.agg) || isHeat || s.signalOnly);
       const showSig = !isHeat && !isPts && !COUNT_FAMILY.has(s.agg) && tb.vars.some(v => v.intensity) && s.x !== INT;
       const presets = (tb.presets || []);
+      const binsValue = cleanBins(s.bins) || '';
+      const thr = cleanThreshold(s.threshold);
       box.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;align-items:end">
           <label style="${FIELD}"><span>${escapeHtml(t('data'))}</span>
@@ -1423,7 +1809,7 @@
           ${isHeat || s.x === INT ? '' : `<label style="${FIELD}"><span>${escapeHtml(t('normalize'))}</span>
             <select style="${CONTROL}" data-g="normalize" ${isPts ? 'disabled' : ''}>${['none', 'max', 'sum', 'first'].map(n => opt(n, t(`norm_${n}`), n === s.normalize)).join('')}</select></label>`}
           <label style="${FIELD}"><span>${escapeHtml(t('bins'))}</span>
-            <input style="${CONTROL}" type="number" min="2" max="${MAX_BINS}" step="1" placeholder="${escapeHtml(t('auto'))}" value="${s.bins || ''}" data-g="bins"></label>
+            <input style="${CONTROL}" type="number" min="2" max="${MAX_BINS}" step="1" placeholder="${escapeHtml(t('auto'))}" value="${binsValue}" data-g="bins"></label>
           <label style="${FIELD}"><span>${escapeHtml(t('yScale'))} / ${escapeHtml(t('xScale'))}</span>
             <span style="display:flex;gap:4px"><select style="${CONTROL}" data-g="yScale" aria-label="${escapeHtml(t('yScale'))}">${opt('linear', t('linear'), s.yScale === 'linear')}${opt('log', t('log'), s.yScale === 'log')}</select>
             ${isHeat || s.x === ALL || s.x === INT || varOf(tb, s.x)?.kind === 'cat' ? '' : `<select style="${CONTROL}" data-g="xScale" aria-label="${escapeHtml(t('xScale'))}">${opt('linear', t('linear'), s.xScale === 'linear')}${opt('log', t('log'), s.xScale === 'log')}</select>`}</span></label>
@@ -1434,10 +1820,12 @@
           <div style="display:flex;flex-wrap:wrap;gap:4px" data-g="ychips">${nums.map(v => {
             const on = s.y.includes(v.id) || (s.y.includes(INT) && commonChannels(tb).includes(v.id));
             const partial = tb.total > 1 && v.haveCount !== undefined && v.haveCount < tb.total ? ` (${v.haveCount}/${tb.total})` : '';
-            return `<button type="button" class="btn btn-outline btn-sm${on ? ' active' : ''}" data-y="${escapeHtml(v.id)}" aria-pressed="${on}" style="${on ? 'font-weight:600' : ''}">${v.color ? `<span aria-hidden="true" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:${escapeHtml(readable(v.color, isDark()) || v.color)}"></span>` : ''}${escapeHtml(v.label + partial)}</button>`;
+            // In Compare the colour comes from a panel's answer: checked again here.
+            const sw = readable(v.color, isDark()) || safeColor(v.color);
+            return `<button type="button" class="btn btn-outline btn-sm${on ? ' active' : ''}" data-y="${escapeHtml(v.id)}" aria-pressed="${on}" style="${on ? 'font-weight:600' : ''}">${sw ? `<span aria-hidden="true" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:${escapeHtml(sw)}"></span>` : ''}${escapeHtml(v.label + partial)}</button>`;
           }).join('')}</div></div>`}
         <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center;font-size:12px">
-          ${showThr ? `<label style="display:flex;align-items:center;gap:6px"><span>${escapeHtml(t('threshold'))}</span><input type="range" min="0" max="254" step="1" value="${s.threshold}" data-g="threshold" style="width:120px"><output data-g="thrOut">${s.threshold}</output></label>` : ''}
+          ${showThr ? `<label style="display:flex;align-items:center;gap:6px"><span>${escapeHtml(t('threshold'))}</span><input type="range" min="0" max="254" step="1" value="${thr}" data-g="threshold" style="width:120px"><output data-g="thrOut">${thr}</output></label>` : ''}
           ${showSig ? `<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-g="signalOnly" ${s.signalOnly ? 'checked' : ''}>${escapeHtml(t('signalOnly'))}</label>` : ''}
           ${s.agg === 'mean' && !isHeat ? `<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-g="band" ${s.band ? 'checked' : ''}>${escapeHtml(t('band'))}</label>` : ''}
         </div>`;
@@ -1466,7 +1854,7 @@
       const nth = (tok) => { const m = /^@int\[(\d+)\]$/.exec(tok); return m ? (commonChannels(tb)[+m[1]] || tok) : tok; };
       spec.x = nth(spec.x);
       spec.y = (spec.y || []).map(nth);
-      st.spec = Object.assign({ x: null, y: [], agg: 'mean', group: null, bins: 0, threshold: st.spec.threshold, signalOnly: false, band: false, normalize: 'none', yScale: 'linear', xScale: 'linear' }, spec);
+      st.spec = sanitizeUiSpec(spec, { ...UI_SPEC_DEFAULTS, threshold: st.spec.threshold });
     }
 
     function chooseTable(id) {
@@ -1474,7 +1862,7 @@
       const tb = tableOf(id);
       st.preset = null;
       if (tb && tb.presets && tb.presets.length) applyPreset(tb.presets[0].id);
-      else if (tb) st.spec = Object.assign(st.spec, { x: tb.defaults?.x || null, y: tb.defaults?.y || [], agg: tb.defaults?.agg || 'mean', group: tb.defaults?.group || null });
+      else if (tb) st.spec = sanitizeUiSpec({ x: tb.defaults?.x || null, y: tb.defaults?.y || [], agg: tb.defaults?.agg || 'mean', group: tb.defaults?.group || null }, st.spec);
     }
 
     function schedule(delay = 90) {
@@ -1485,7 +1873,7 @@
     function friendly(err) {
       const code = err && err.code;
       if (code === 'NOT_READY') return t('err_notReady');
-      if (code === 'NO_DATA' || code === 'NO_VARIABLE') return t('err_noData');
+      if (code === 'NO_DATA' || code === 'NO_VARIABLE' || code === 'NO_TABLE') return t('err_noData');
       if (code === 'COMPARE_TIMEOUT') return t('err_timeout');
       return t('err_generic');
     }
@@ -1499,9 +1887,12 @@
       setStatus(t('computing'));
       let result;
       try {
-        result = await host.compute(st.table, st.spec);
+        result = await host.compute(st.table, st.spec, {
+          onProgress: (f) => { if (mine === seq && !destroyed && f < 1) setStatus(t('reading', { pct: Math.round(100 * f) })); }
+        });
       } catch (err) {
-        if (mine !== seq || destroyed) return;
+        // A superseded query: the one that replaced it draws.
+        if (mine !== seq || destroyed || (err && err.code === 'SUPERSEDED')) return;
         if (!(err && err.name === 'AbortError')) console.error('[graphs] query failed:', err);
         setStatus(friendly(err), 'error');
         setNotes([]);
@@ -1553,10 +1944,10 @@
         case 'agg': s.agg = v; st.preset = null; structural = true; break;
         case 'group': s.group = v || null; st.preset = null; break;
         case 'normalize': s.normalize = v; st.preset = null; break;
-        case 'bins': s.bins = Number(v) >= 2 ? Number(v) : 0; break;
+        case 'bins': s.bins = cleanBins(v); break;
         case 'yScale': s.yScale = v; break;
         case 'xScale': s.xScale = v; break;
-        case 'threshold': s.threshold = Number(v); { const o = el('[data-g="thrOut"]'); if (o) o.textContent = String(v); } break;
+        case 'threshold': s.threshold = cleanThreshold(v); { const o = el('[data-g="thrOut"]'); if (o) o.textContent = String(s.threshold); } break;
         case 'signalOnly': s.signalOnly = Boolean(v); break;
         case 'band': s.band = Boolean(v); break;
         case 'colorBy': st.colorBy = v; break;
@@ -1588,6 +1979,11 @@
       else if (a === 'png') exportPng();
     }
 
+    function purgePlot() {
+      if (gd && window.Plotly) { try { Plotly.purge(gd); } catch (_) { /* nothing to purge */ } }
+      gd = null;
+    }
+
     function stamp() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'); }
 
     function download(blob, name) {
@@ -1616,38 +2012,68 @@
     root.addEventListener('input', (e) => { if (e.target.getAttribute && e.target.getAttribute('data-g') === 'threshold') onChange(e); });
     root.addEventListener('click', onClick);
 
+    // A state restored before the host described its tables (a closed panel): applied
+    // by the next description, so reopening shows the saved choices.
+    let pending = null;
+    function applyState(s) {
+      if (typeof s.table === 'string' && tableOf(s.table)) st.table = s.table;
+      if (s.spec && typeof s.spec === 'object') st.spec = sanitizeUiSpec(s.spec, st.spec);
+      if (s.colorBy === 'series' || s.colorBy === 'dataset') st.colorBy = s.colorBy;
+      st.preset = cleanId(s.preset);
+    }
+
     return {
       /** Re-read what the host offers and redraw. */
       refreshDescription() {
         desc = host.describe();
+        if (pending && tableOf(pending.table)) applyState(pending);
+        pending = null;
         if (!tableOf(st.table)) chooseTable(desc.tables[0] ? desc.tables[0].id : null);
         renderControls();
         schedule(0);
       },
       redraw: () => schedule(0),
       relabel() { renderControls(); schedule(0); },
-      getState: () => JSON.parse(JSON.stringify({ table: st.table, spec: st.spec, colorBy: st.colorBy, preset: st.preset })),
-      setState(s) {
+      /** The choices on screen, or the restored ones still waiting for the description
+       *  (a URL sync or a saved workspace before the first open must carry them). */
+      getState: () => JSON.parse(JSON.stringify(pending ? {
+        table: pending.table,
+        spec: pending.spec && typeof pending.spec === 'object' ? sanitizeUiSpec(pending.spec, st.spec) : st.spec,
+        colorBy: pending.colorBy === 'series' || pending.colorBy === 'dataset' ? pending.colorBy : st.colorBy,
+        preset: cleanId(pending.preset)
+      } : { table: st.table, spec: st.spec, colorBy: st.colorBy, preset: st.preset })),
+      /** `draw: false` stores the choices without querying (a closed panel must not
+       *  read a table it would then hold); the next refreshDescription draws them. */
+      setState(s, { draw = true } = {}) {
         if (!s || typeof s !== 'object') return;
-        if (s.table && tableOf(s.table)) st.table = s.table;
-        if (s.spec && typeof s.spec === 'object') st.spec = Object.assign(st.spec, s.spec);
-        if (s.colorBy === 'series' || s.colorBy === 'dataset') st.colorBy = s.colorBy;
-        st.preset = s.preset || null;
+        if (!draw && typeof s.table === 'string' && !tableOf(s.table)) {
+          pending = JSON.parse(JSON.stringify(s));
+          return;
+        }
+        pending = null;
+        applyState(s);
         renderControls();
-        schedule(0);
+        if (draw) schedule(0);
       },
       getPlot: () => gd,
       getLast: () => last,
       getTable: () => st.table,
       setStatus,
       resize() { if (gd && window.Plotly) { try { Plotly.Plots.resize(gd); } catch (_) { /* detached */ } } },
+      /** Drop the plot (its div, data and resize handler) and any draw in flight; the
+       *  controls and choices stay, and the next refresh draws again. */
+      release() {
+        clearTimeout(timer);
+        seq++;
+        purgePlot();
+        last = null;
+      },
       destroy() {
         destroyed = true;
         clearTimeout(timer);
         root.removeEventListener('change', onChange);
         root.removeEventListener('click', onClick);
-        if (gd && window.Plotly) { try { Plotly.purge(gd); } catch (_) { /* nothing to purge */ } }
-        gd = null;
+        purgePlot();
       }
     };
   }
@@ -1684,9 +2110,10 @@
   // ════════════════════════════════════════════════════════════════════
 
   const plugin = {
-    Engine, buildPlot, mergeResults, shortNames, commonChannels, Sources, TrackingSources, trackingSchemas, buildTracking, msdRows, neighbourColumn, allSchemas, createProvider, readable, PALETTE,
+    Engine, buildPlot, mergeResults, shortNames, commonChannels, Sources, TrackingSources, trackingSchemas, buildTracking, msdRows, neighbourColumn, allSchemas, createProvider, readable, safeColor, PALETTE,
+    createUI, sanitizeUiSpec, latestOnly, createWorkerRunner, wireTable,
     _ctx: null, _t: null, _provider: null, _ui: null, _panel: null, _open: false, _mode: 'page',
-    _unsubs: [], _pollTimer: null, _lastKey: null, _msgHandler: null, _host: null,
+    _unsubs: [], _pollTimer: null, _lastKey: null, _msgHandler: null, _host: null, _run: null,
 
     _tr(key, params) { return this._ctx.i18n.t(key, params); },
 
@@ -1695,7 +2122,7 @@
       const t = (k, p) => ctx.i18n.t(k, p);
       this._t = t;
       if (ctx.context === 'compare') { this._mode = 'compare'; return this._initHost(ctx); }
-      this._provider = createProvider(ctx, t);
+      this._provider = createProvider(ctx, t, { runner: createWorkerRunner(engineWorkerUrl()) });
       if (ctx.iframe && ctx.iframe.isIframe && ctx.iframe.isIframe()) { this._mode = 'panel'; this._bindPanel(ctx); return this; }
       this._mode = 'page';
       if (!ctx.ui || !ctx.ui.addCanvasPanel) return this;
@@ -1703,10 +2130,17 @@
         id: 'graphs', className: 'graphs-panel', html: panelHtml(t, true),
         bind: (root) => {
           root.querySelector('[data-g-close]')?.addEventListener('click', () => this._setOpen(false));
+          const run = latestOnly((table, spec, o) => this._provider.compute(table, spec, o));
+          this._run = run;
           this._ui = createUI(root, {
             t, multi: false,
             describe: () => this._provider.describe(),
-            compute: (table, spec) => this._provider.compute(table, spec, { signal: undefined }).then(r => Object.assign(r, { datasets: 1, statusText: this._statusText(r) })),
+            compute: (table, spec, o) => {
+              // A closed panel holds no table: a draw that slipped past the close stops here.
+              if (!this._open) return Promise.reject(supersededError());
+              this._provider.touch(table);
+              return run(table, spec, { onProgress: o && o.onProgress }).then(r => Object.assign(r, { datasets: 1, statusText: this._statusText(r) }));
+            },
             cursor: () => this._provider.cursorMinutes(),
             invalidate: () => this._provider.reset()
           });
@@ -1715,9 +2149,12 @@
       return this;
     },
 
-    /** Called by the registry on a language switch (page and Compare host alike). */
+    /** Called by the registry on a language switch (page, Compare panel and host alike). */
     onLanguageChange() {
       if (this._mode === 'compare') this._host?.relabel();
+      // A panel has no UI of its own, but its tables carry the translated variable
+      // names it describes and computes with: build them again in the new language.
+      else if (this._mode === 'panel') this._provider?.reset();
       else this._relabel();
     },
 
@@ -1734,9 +2171,11 @@
 
     _relabel() {
       if (!this._panel) return;
+      this._run?.cancel();
       this._provider.reset();
       const body = this._panel.root;
       const keep = this._ui ? this._ui.getState() : null;
+      this._ui?.release();
       body.innerHTML = panelHtml(this._t, true);
       body.querySelector('[data-g-close]')?.addEventListener('click', () => this._setOpen(false));
       if (window.lucide) lucide.createIcons({ nodes: [body] });
@@ -1750,18 +2189,31 @@
       if (typeof PluginRegistry !== 'undefined') PluginRegistry.syncToolbarButton('graphs', { active: this._open });
       clearInterval(this._pollTimer);
       this._pollTimer = null;
+      this._lastKey = null;
       if (this._open) {
         this._ui?.refreshDescription();
         // A timelapse: the volume on screen changes with the timepoint; follow it.
         this._pollTimer = setInterval(() => this._follow(), 800);
+      } else {
+        // A closed panel holds nothing: a lossless level and its position columns can
+        // take over 100 MB beside the viewer's own memory. Reopening reads them again.
+        this._ui?.release();
+        this._run?.cancel();
+        this._provider?.reset();
       }
       this._ctx.ui.scheduleResize?.();
     },
 
+    /** Redraw once the state the table depends on has held for a whole tick: a
+     *  timelapse that plays changes timepoint faster than a level can be read, and
+     *  every frame it passed would otherwise start a lossless read of a whole level. */
     _follow() {
       if (!this._open || !this._ui) return;
       const tb = this._ui.getTable();
-      if (!tb || !this._provider.stale(tb)) return;
+      const key = tb ? this._provider.currentKey(tb) : null;
+      const settled = key !== null && key === this._lastKey;
+      this._lastKey = key;
+      if (!settled || !this._provider.stale(tb)) return;
       this._ui.redraw();
     },
 
@@ -1781,10 +2233,11 @@
       if (!s || typeof s !== 'object') return;
       if (this._mode === 'page') {
         this._setOpen(Boolean(s.open));
-        if (s.ui && this._ui) this._ui.setState(s.ui);
+        // Closed: keep the choices for the reopen, read nothing now.
+        if (s.ui && this._ui) this._ui.setState(s.ui, { draw: this._open });
       } else if (this._mode === 'compare' && this._host) {
         this._host.setOpen(Boolean(s.open));
-        if (s.ui) this._host.ui.setState(s.ui);
+        if (s.ui) this._host.ui.setState(s.ui, { draw: this._open });
       }
     },
 
@@ -1795,6 +2248,7 @@
 
     dispose() {
       clearInterval(this._pollTimer);
+      this._lastKey = null;
       this._unsubs.forEach(fn => { try { fn(); } catch (_) { /* gone */ } });
       this._unsubs = [];
       if (this._msgHandler) window.removeEventListener('message', this._msgHandler);
@@ -1805,7 +2259,9 @@
       this._panel = null;
       this._host?.dispose();
       this._host = null;
-      this._provider?.reset();
+      this._run?.cancel();
+      this._run = null;
+      this._provider?.dispose();
       this._open = false;
     },
 
@@ -1816,6 +2272,9 @@
       const reply = (msg) => {
         try { window.parent.postMessage({ ...msg, sourceIndex: index }, Utils.trustedTargetOrigin()); } catch (_) { /* host gone */ }
       };
+      // This frame shares the host's thread: never let queries pile up behind each other.
+      const run = latestOnly((table, spec) => this._provider.compute(table, spec));
+      this._run = run;
       this._msgHandler = (e) => {
         if (e.source !== window.parent || window.parent === window) return;
         if (typeof Utils !== 'undefined' && Utils.isTrustedMessageOrigin && !Utils.isTrustedMessageOrigin(e)) return;
@@ -1828,9 +2287,14 @@
           if (d.op === 'describe') {
             reply({ type: 'GRAPH_DATA', requestId, ok: true, description: plainResult(this._provider.describe()) });
           } else if (d.op === 'compute') {
-            this._provider.compute(String(d.table), d.spec && typeof d.spec === 'object' ? d.spec : {}).then(
+            const table = String(d.table);
+            this._provider.touch(table);
+            run(table, d.spec && typeof d.spec === 'object' ? d.spec : {}).then(
               (r) => reply({ type: 'GRAPH_DATA', requestId, ok: true, result: plainResult(r), statusText: this._statusText(r) }),
-              fail
+              // An aborted read: the table was dropped for a newer state or language.
+              (err) => (err && (err.code === 'SUPERSEDED' || err.name === 'AbortError')
+                ? reply({ type: 'GRAPH_DATA', requestId, ok: false, error: 'SUPERSEDED', code: 'SUPERSEDED' })
+                : fail(err))
             );
           } else fail({ code: 'BAD_REQUEST' });
         } catch (err) { fail(err); }
@@ -1859,7 +2323,8 @@
         for (const k of [...descriptions.keys()]) if (!ps.some(p => p.index === k)) { descriptions.delete(k); slots.delete(k); }
         await Promise.all(ps.map(async (p) => {
           const known = descriptions.get(p.index);
-          if (known && known.id === p.id) return;
+          // Asked again after a language switch until the panel answers in the new language.
+          if (known && known.id === p.id && (!known.lang || known.lang === languageOf(ctx))) return;
           try {
             const a = await ctx.panels.request(p.index, 'REQUEST_GRAPH_DATA', { op: 'describe' }, { timeoutMs: 8000 });
             descriptions.set(p.index, { ...a.description, id: p.id });
@@ -1893,7 +2358,8 @@
         describe: union,
         cursor: () => null,
         invalidate: () => descriptions.clear(),
-        compute: async (tableId, spec) => {
+        // One round in flight: a newer draw waits for it and replaces any round still waiting.
+        compute: latestOnly(async (tableId, spec) => {
           await fetchDescriptions();
           const ps = live().filter(p => descriptions.get(p.index)?.tables.some(tb => tb.id === tableId));
           if (!ps.length) throw gerr('NOT_READY', 'no panel offers this table');
@@ -1905,13 +2371,22 @@
             ctx.panels.request(p.index, 'REQUEST_GRAPH_DATA', { op: 'compute', table: tableId, spec: sent }, { timeoutMs: 180000 })));
           const results = [];
           const missing = live().filter(p => !ps.some(q => q.index === p.index)).map(p => p.name);
+          let superseded = 0;
+          // A panel's refusal arrives as a COMPARE_PANEL_ERROR carrying the panel's own code.
+          const codeOf = (r) => (r.status === 'rejected' ? (r.reason?.panelCode || r.reason?.code || null) : (r.value?.ok ? null : r.value?.code || null));
           settled.forEach((r, i) => {
             if (r.status === 'fulfilled' && r.value.ok) results.push({ p: ps[i], res: r.value.result });
+            else if (codeOf(r) === 'SUPERSEDED') superseded++;
             else missing.push(ps[i].name);
           });
-          if (!results.length) throw gerr(settled.find(r => r.status === 'rejected')?.reason?.code || 'NO_DATA', 'no panel could answer');
+          if (!results.length && superseded) throw supersededError();
+          if (!results.length) {
+            const codes = settled.map(codeOf).filter(Boolean);
+            // "Still loading" wins: it is the one reason that goes away by waiting.
+            throw gerr(codes.includes('NOT_READY') ? 'NOT_READY' : (codes[0] || 'NO_DATA'), 'no panel could answer');
+          }
           return mergeResults(results, missing, slotOf, t);
-        }
+        })
       };
 
       const drawer = ctx.ui.addDrawer({
@@ -1936,6 +2411,7 @@
         setOpen: (on) => (on ? drawer.open() : drawer.close()),
         relabel: () => {
           const keep = ui.getState();
+          ui.release();
           drawer.setTitle(t('title'));
           drawer.el.innerHTML = panelHtml(t, false);
           if (window.lucide) lucide.createIcons({ nodes: [drawer.el] });

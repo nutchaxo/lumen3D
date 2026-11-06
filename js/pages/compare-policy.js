@@ -168,6 +168,11 @@ const ComparePanelRpc = (() => {
     return Object.assign(new Error(message), { code });
   }
 
+  /** An error code a panel sent (`NOT_READY`…), or null for free text. */
+  function _panelCode(v) {
+    return typeof v === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(v) ? v : null;
+  }
+
   /**
    * options.post(key, message)  sends `message` to the panel `key` (false/throw: not sent)
    * options.timeoutMs           default time an answer may take
@@ -214,8 +219,13 @@ const ComparePanelRpc = (() => {
       if (!entry || String(entry.key) !== String(key) || message.type !== entry.answer) return false;
       open.delete(id);
       clearT(entry.timer);
-      if (message.ok === false) entry.reject(_error('COMPARE_PANEL_ERROR', String(message.error || `${message.type} failed`)));
-      else entry.resolve(message);
+      if (message.ok === false) {
+        // The panel's own reason travels as `panelCode`, beside the transport's code,
+        // so a caller can tell "not loaded yet" from a real failure.
+        const err = _error('COMPARE_PANEL_ERROR', String(message.error || `${message.type} failed`));
+        err.panelCode = _panelCode(message.code) || _panelCode(message.error);
+        entry.reject(err);
+      } else entry.resolve(message);
       return true;
     }
 

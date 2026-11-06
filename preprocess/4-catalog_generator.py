@@ -34,7 +34,7 @@ COLORS = ["#00FF00", "#00AAFF", "#FF00FF", "#FF0000", "#FFFF00", "#00FFFF"]
 _STAGE_RX = re.compile(r"(?:^|[-_ ])E(\d{1,3})(?:([.,])(\d{1,2})|-(25|5|75))?(?=$|[-_ ])",
                        re.IGNORECASE)
 _EMBRYO_RX = re.compile(r"(?:^|[-_ ])(Em\d+)(?=$|[-_ ])", re.IGNORECASE)
-_STAGE_EMBRYO_NUMBER_RX = re.compile(r"(?:^|[-_ ])E[\d.,]+-(\d{1,2})(?=$|[-_ ])", re.IGNORECASE)
+_EMBRYO_AFTER_STAGE_RX = re.compile(r"-(\d{1,2})(?=$|[-_ ])")
 
 
 def _split_compact(digits: str):
@@ -69,10 +69,12 @@ def _parse_embryo(name: str):
     m = _EMBRYO_RX.search(name)
     if m:
         return m.group(1)
+    # Read after the WHOLE stage token, so a dash fraction ("E8-5-2") is never taken
+    # for the embryo and every stage spelling yields the same embryo.
     stage = _STAGE_RX.search(name)
-    if stage and not stage.group(4):
-        n = _STAGE_EMBRYO_NUMBER_RX.search(name, stage.start())
-        if n and n.start() == stage.start():
+    if stage:
+        n = _EMBRYO_AFTER_STAGE_RX.match(name, stage.end())
+        if n:
             return f"Em{int(n.group(1))}"
     return None
 
@@ -184,12 +186,10 @@ def generate_catalog_metadata(temp_dir: Path, output_dir: Path, existing_path: P
     ext_min = extent.get("min") or [0.0, 0.0, 0.0]
     ext_max = extent.get("max") or [W * vx, H * vy, D * vz]
 
-    # The viewer models depth as (D-1) z-steps plus one slice thickness, and without
-    # an explicit value it guesses that thickness as min(zStep, voxelX) — which for an
-    # anisotropic stack under-reports the depth (here 329.50 um instead of the 333.87 um
-    # Imaris states). Declaring the slice thickness equal to the z-step reproduces the
-    # microscope's own extent exactly, which is mandatory for anything registered in
-    # Imaris coordinates (cell tracks) to land on the right voxels.
+    # The viewer's box is D z-steps deep (each plane covers one z-step), the extent
+    # Imaris states, which is what lets anything registered in Imaris coordinates
+    # (cell tracks) land on the right voxels. The slice thickness written here is that
+    # z-step: a reported value, shown in the viewer's calibration line.
     slice_thickness = (ext_max[2] - ext_min[2]) / max(D, 1)
     physical_size = {
         "x": ext_max[0] - ext_min[0],
@@ -281,11 +281,15 @@ def generate_catalog_metadata(temp_dir: Path, output_dir: Path, existing_path: P
         # window (see 2-image_processor.py) so a frame that looks dimmer really is
         # dimmer. These per-frame signal levels let the viewer offer an OPTIONAL,
         # reversible display gain instead of silently rewriting the data.
+        # `signalBasis` names what each channel's levels were ranked over; a series
+        # processed before it existed has none and was ranked over the whole volume.
         metadata["intensityNormalization"] = {
             "mode": norm.get("mode", "global"),
             "bounds": norm.get("bounds", {}),
             "signalLevels": norm.get("signalLevels", {})
         }
+        if norm.get("signalBasis"):
+            metadata["intensityNormalization"]["signalBasis"] = norm["signalBasis"]
 
     # Re-processing keeps what the lab curated in the admin panel — orientation, display
     # settings, hand-corrected stage, hidden flag, gallery… (merge_volume_metadata).

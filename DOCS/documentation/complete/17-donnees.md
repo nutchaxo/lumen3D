@@ -176,12 +176,12 @@ Les réglages de canal sont conservés quand un jeu est refait **tant que le nom
 | Bloc | Contenu réel du jeu de démonstration |
 |---|---|
 | `timeline` | `{count:4, intervalMinutes:30.0, timestamps:["2026-05-12T09:00:00", …]}` |
-| `intensityNormalization` | `{mode:"global", bounds:{c0:{bgFloor, sigMax}, c1:{…}}, signalLevels:{"t000_c0":33107.0, …}}` : la fenêtre commune de toute la série et un niveau de signal par image et par canal |
+| `intensityNormalization` | `{mode:"global", bounds:{c0:{bgFloor, sigMax}, c1:{…}}, signalLevels:{"t000_c0":33107.0, …}, signalBasis:{c0:"above-floor", …}}` : la fenêtre commune de toute la série, un niveau de signal par image et par canal, et ce sur quoi les niveaux de chaque canal sont classés |
 | `tracking` | `{schema:"iribhm-tracks-v1", source, tracksPath:"tracks.json", surfacePath:"model.glb", surfaceOrigin:"reconstructed", cellCount:50, timepointCount:4, mitosisCount:1, fusionCount:0, regions:[{name, cells, color}], boundsUm:{stabilized, raw}, provenance:{…}, alignment:{…}}` |
 | `registration` | `{method:"tracking-procrustes", coordinateSpace:"acquisition-um", timepointOffset:-1, appliedToVolume:true, transforms:[…], qcSummary:{…}, imageBoxUnionUm:{…}}` |
 
 ::: note
-**À propos de `intensityNormalization`.** Le pipeline enregistre ces niveaux « pour qu'un réglage facultatif puisse un jour compenser le photoblanchiment ». **Aucun réglage du viewer ne les lit encore** : une série dont le signal s'éteint s'affiche réellement plus sombre.
+**À propos de `intensityNormalization`.** Le pipeline enregistre ces niveaux « pour qu'un réglage facultatif puisse un jour compenser le photoblanchiment ». **Aucun réglage du viewer ne les lit encore** : une série dont le signal s'éteint s'affiche réellement plus sombre. L'outil *Graphiques* les trace (signal dans le temps, courbe de photoblanchiment). Un niveau est le 99,9e centile du sous-échantillon brut de l'image, classé sur la `signalBasis` du canal : `above-floor` (les seuls voxels plus brillants que le plancher de bruit, retenue quand la série regroupée en compte au moins 1000) ou `volume` (tous les voxels). La base est choisie une fois par canal : chaque image est mesurée de la même façon, et un niveau `above-floor` suit la luminosité du signal et non la part de l'image qu'occupe le spécimen. Une série traitée avant le pipeline 0.23.1 n'a pas de `signalBasis` : ses niveaux sont des centiles du volume entier, qui varient avec la part du spécimen dans une image clairsemée — retraitez-la pour une courbe de photoblanchiment fiable.
 :::
 
 Le bloc `tracking` a trois sous-blocs utiles :

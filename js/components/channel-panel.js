@@ -180,43 +180,58 @@ window.createChannelPanel = function() {
     return _channels.map(channel => ({ ...channel, denoise_sigma: channel.denoise_sigma ?? 0 }));
   }
 
+  // The next state of channel `idx` given a (partial) item: every value clamped, the
+  // midtone and gamma re-derived from each other. Shared by setState and patchChannel so
+  // a workspace restore and a sibling's relayed edit clamp the same way.
+  function _normalizeChannel(idx, item) {
+    // BUG-044: the +0.01 floor was applied AFTER clamping min and never re-clamped,
+    // so min===1.0 produced max=1.01 (>1) which propagated unclamped to the shader
+    // uniform. Cap min at 0.99 and re-clamp max into [0,1] while keeping max>min.
+    const nextMin = Math.min(_clamp01(item.min ?? _channels[idx].min), 0.99);
+    const nextMax = _clamp01(Math.max(_clamp01(item.max ?? _channels[idx].max), nextMin + 0.01));
+    
+    let nextGamma = Number.isFinite(item.gamma) ? item.gamma : _channels[idx].gamma;
+    let nextMidtone = item.midtone ?? item.mid ?? null;
+    if (nextMidtone === null && Number.isFinite(item.gamma)) {
+      const safeGamma = Math.max(0.18, nextGamma);
+      const relativeMidtone = Math.pow(0.5, 1.0 / safeGamma);
+      nextMidtone = nextMin + relativeMidtone * (nextMax - nextMin);
+    } else if (nextMidtone === null) {
+      nextMidtone = _channels[idx].midtone;
+    } else {
+      nextMidtone = _clamp01(nextMidtone);
+      nextGamma = _midtoneToGamma((nextMidtone - nextMin) / Math.max(0.001, nextMax - nextMin));
+    }
+
+    return {
+      ..._channels[idx],
+      color: _safeColor(item.color, _channels[idx].color),
+      min: nextMin,
+      max: nextMax,
+      midtone: nextMidtone,
+      gamma: nextGamma,
+      opacity: Number.isFinite(Number(item.opacity ?? _channels[idx].opacity))
+        ? _clamp(Number(item.opacity ?? _channels[idx].opacity), 0.05, 1)
+        : _channels[idx].opacity,
+      enabled: (item.enabled !== undefined ? item.enabled : item.active) !== false,
+      expanded: item.expanded === undefined ? _channels[idx].expanded : Boolean(item.expanded),
+      denoise_sigma: item.denoise_sigma ?? _channels[idx].denoise_sigma ?? 0
+    };
+  }
+
+  // A channel name is what Compare pairs channels by across panels, so a saved rename
+  // must come back on restore; a blank or non-string value keeps the current name.
+  function _safeName(value, fallback) {
+    if (typeof value !== 'string') return fallback;
+    const name = value.trim().slice(0, 128);
+    return name || fallback;
+  }
+
   function setState(state = [], options = {}) {
     if (!Array.isArray(state)) return;
     state.forEach((item, idx) => {
       if (!_channels[idx] || !item || typeof item !== 'object') return;
-      // BUG-044: the +0.01 floor was applied AFTER clamping min and never re-clamped,
-      // so min===1.0 produced max=1.01 (>1) which propagated unclamped to the shader
-      // uniform. Cap min at 0.99 and re-clamp max into [0,1] while keeping max>min.
-      const nextMin = Math.min(_clamp01(item.min ?? _channels[idx].min), 0.99);
-      const nextMax = _clamp01(Math.max(_clamp01(item.max ?? _channels[idx].max), nextMin + 0.01));
-      
-      let nextGamma = Number.isFinite(item.gamma) ? item.gamma : _channels[idx].gamma;
-      let nextMidtone = item.midtone ?? item.mid ?? null;
-      if (nextMidtone === null && Number.isFinite(item.gamma)) {
-        const safeGamma = Math.max(0.18, nextGamma);
-        const relativeMidtone = Math.pow(0.5, 1.0 / safeGamma);
-        nextMidtone = nextMin + relativeMidtone * (nextMax - nextMin);
-      } else if (nextMidtone === null) {
-        nextMidtone = _channels[idx].midtone;
-      } else {
-        nextMidtone = _clamp01(nextMidtone);
-        nextGamma = _midtoneToGamma((nextMidtone - nextMin) / Math.max(0.001, nextMax - nextMin));
-      }
-
-      _channels[idx] = {
-        ..._channels[idx],
-        color: _safeColor(item.color, _channels[idx].color),
-        min: nextMin,
-        max: nextMax,
-        midtone: nextMidtone,
-        gamma: nextGamma,
-        opacity: Number.isFinite(Number(item.opacity ?? _channels[idx].opacity))
-          ? _clamp(Number(item.opacity ?? _channels[idx].opacity), 0.05, 1)
-          : _channels[idx].opacity,
-        enabled: (item.enabled !== undefined ? item.enabled : item.active) !== false,
-        expanded: item.expanded === undefined ? _channels[idx].expanded : Boolean(item.expanded),
-        denoise_sigma: item.denoise_sigma ?? _channels[idx].denoise_sigma ?? 0
-      };
+      _channels[idx] = { ..._normalizeChannel(idx, item), name: _safeName(item.name, _channels[idx].name) };
       _clampMidtone(idx);
     });
     // Restoring a workspace rewrites every visibility flag, so the solo snapshot
@@ -225,6 +240,37 @@ window.createChannelPanel = function() {
     _soloRestore = null;
     _renderAll();
     if (options.notify !== false) _channels.forEach((_, idx) => _notify(idx));
+  }
+
+  // One channel's settings, applied to the markup in place: a sibling panel's edit is
+  // relayed once per frame while a handle is dragged, and rebuilding the whole panel
+  // (markup, listeners, icons, translation, every histogram) for each one stalls every
+  // page sharing the thread. A solo survives unless this edit changes the visibility.
+  function patchChannel(idx, item, options = {}) {
+    if (!_channels[idx] || !item || typeof item !== 'object') return null;
+    const before = _channels[idx];
+    _channels[idx] = _normalizeChannel(idx, item);
+    _clampMidtone(idx);
+    const channel = _channels[idx];
+    const row = _getEl(`channel-item-${idx}`);
+    if (channel.enabled !== before.enabled) {
+      const toggle = _getEl(`ch-toggle-${idx}`);
+      if (toggle) toggle.checked = channel.enabled;
+      _clearSolo();
+    }
+    if (channel.expanded !== before.expanded && row) {
+      row.classList.toggle('expanded', channel.expanded);
+      const button = row.querySelector('[data-channel-action="expand"]');
+      if (button) {
+        button.setAttribute('aria-expanded', String(channel.expanded));
+        const icon = button.querySelector('[data-lucide]');
+        if (icon) icon.setAttribute('data-lucide', channel.expanded ? 'chevron-up' : 'chevron-down');
+        if (window.lucide) lucide.createIcons({ nodes: [button] });
+      }
+    }
+    _syncChannelUi(idx);
+    if (options.notify !== false) _notify(idx);
+    return { ...channel };
   }
 
   function _renderAll() {
@@ -353,7 +399,7 @@ window.createChannelPanel = function() {
   ];
 
   function _colorGridHtml(idx) {
-    let html = `<div class="color-grid-popup" id="ch-color-popup-${idx}" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-surface, #222); border: 1px solid var(--border-color, #444); border-radius: 6px; padding: 6px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; gap: 4px;">`;
+    let html = `<div class="color-grid-popup" id="ch-color-popup-${idx}" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-surface, #222); border: 1px solid var(--border-default, #444); border-radius: 6px; padding: 6px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; gap: 4px;">`;
     for (const row of PALETTE) {
       html += `<div style="display: flex; gap: 4px;">`;
       for (const color of row) {
@@ -437,7 +483,9 @@ window.createChannelPanel = function() {
       const nameInput = item.querySelector(`#ch-name-input-${idx}`);
       if (nameInput) {
         nameInput.addEventListener('change', (e) => {
-          _channels[idx].name = e.target.value;
+          const name = _safeName(e.target.value, _channels[idx].name);
+          if (e.target.value !== name) e.target.value = name;
+          _channels[idx].name = name;
           _notify(idx);
         });
       }
@@ -640,6 +688,7 @@ window.createChannelPanel = function() {
     setHistograms,
     getState,
     setState,
+    patchChannel,
     registerLayer,
     dispose
   };

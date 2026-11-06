@@ -239,4 +239,169 @@ const tick = () => new Promise(r => setTimeout(r, 5));
   assert.ok(/prefers-reduced-motion: reduce/.test(src) && /motionQuery\.matches\) draw\(\)/.test(src));
 }
 
-console.log('a11y menus / toast / focus trap / anchors: OK');
+// ── Admin markup: announcers, named switches and controls ───────────────────
+{
+  const html = readFileSync(path.join(ROOT, 'admpan.html'), 'utf8');
+  const tag = (id) => {
+    const m = new RegExp(`<[a-z]+[^>]*\\bid="${id}"[^>]*>`, 's').exec(html);
+    assert.ok(m, `#${id} exists`);
+    return m[0];
+  };
+  assert.ok(!/aria-live/.test(tag('toast-container')), 'the visual toast stack is not itself a live region');
+  assert.match(tag('toast-status'), /role="status"/);
+  assert.match(tag('toast-status'), /aria-live="polite"/);
+  assert.match(tag('toast-alert'), /role="alert"/);
+  assert.match(tag('toast-alert'), /aria-live="assertive"/);
+  assert.ok(!/aria-live/.test(tag('upload-dock')), 'the dock repaints numbers several times a second: not live');
+  assert.match(tag('upload-dock'), /role="region"/);
+  assert.match(tag('upload-dock-status'), /role="status"/);
+  assert.match(tag('upload-dock-status'), /aria-live="polite"/);
+  const vis = tag('f-visible');
+  assert.match(vis, /aria-label="[^"]+"/, 'the visibility switch has a name');
+  assert.match(vis, /data-i18n-aria="admin\.visibleInExplorer"/);
+  assert.match(vis, /aria-describedby="vis-hint"/);
+  const clear = tag('search-clear');
+  assert.match(clear, /type="button"/);
+  assert.match(clear, /data-i18n-aria="admin\.clearSearch"/);
+  assert.match(clear, /aria-label="[^"]+"/);
+
+  const css = readFileSync(path.join(ROOT, 'css/admin-shell.css'), 'utf8');
+  assert.ok(/\.adm-switch input:focus-visible \+ \.adm-switch-track\s*\{[^}]*outline/.test(css), 'switch focus is drawn on the track');
+  assert.ok(/\.adm-sr-only\s*\{/.test(css), 'screen-reader-only helper exists');
+  assert.ok(/\.toast-close:focus-visible/.test(css), 'the close button shows its focus');
+
+  const plugins = readFileSync(path.join(ROOT, 'js/pages/admin/tab-plugins.js'), 'utf8');
+  assert.ok(/class="adm-plugin-toggle"[^>]*aria-label="\$\{escHtml\(t\('admin\.enablePlugin'/s.test(plugins), 'each plugin switch is named after its plugin');
+  for (const f of ['js/pages/admin/tab-appearance.js', 'js/pages/admin/tab-pages.js']) {
+    const src = readFileSync(path.join(ROOT, f), 'utf8');
+    assert.ok(!/<iframe[^>]*title="(preview|editor)"/.test(src), `${f}: iframe titles are translated`);
+  }
+}
+
+// ── Admin toast (js/pages/admin/shared.js) ──────────────────────────────────
+{
+  const { pathToFileURL } = await import('node:url');
+  class AEl extends El {
+    remove() { if (this.parent) { this.parent.children = this.parent.children.filter(c => c !== this); this.parent = null; } }
+    get children() { return this._kids; }
+    set children(v) { this._kids = v; }
+    set innerHTML(h) {
+      this._kids = []; this.html = h;
+      const msg = /class="toast-msg" id="([^"]+)" aria-hidden="true">([^<]*)</.exec(h);
+      if (msg) { const s = new AEl(this.doc, 'span'); s.className = 'toast-msg'; s.attrs.id = msg[1]; s.attrs['aria-hidden'] = 'true'; s.text = msg[2]; this.appendChild(s); }
+      const btn = /<button type="button" class="toast-close" aria-describedby="([^"]+)" aria-label="([^"]*)">/.exec(h);
+      if (btn) {
+        const b = new AEl(this.doc, 'button'); b.className = 'toast-close';
+        b.attrs['aria-describedby'] = btn[1]; b.attrs['aria-label'] = btn[2];
+        this.appendChild(b);
+      }
+    }
+    dispatch(t, ev = {}) { for (const fn of this.handlers[t] || []) fn(ev); }
+  }
+  const doc = new Doc();
+  doc.createElement = (tag) => new AEl(doc, tag);
+  doc.baseURI = 'http://h/admpan.html';
+  const container = new AEl(doc, 'div'); doc.byId['toast-container'] = container; doc.body.appendChild(container);
+  const status = new AEl(doc, 'div'); doc.byId['toast-status'] = status; doc.body.appendChild(status);
+  const alert = new AEl(doc, 'div'); doc.byId['toast-alert'] = alert; doc.body.appendChild(alert);
+
+  const timers = new Map();
+  let seq = 0;
+  const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const prevDoc = globalThis.document, prevWin = globalThis.window;
+  globalThis.document = doc;
+  globalThis.window = { location: { origin: 'http://h' }, addEventListener() {} };
+  // shared.js binds I18n when it is first imported (here), for the dock section too.
+  const DICT = { 'upl.srProgress': 'Import: {pct} % sent', 'upl.srRowError': '{name}: {error}' };
+  globalThis.I18n = { t: (k, p = {}) => (k in DICT ? DICT[k].replace(/\{(\w+)\}/g, (_, n) => String(p[n])) : k) };
+  globalThis.setTimeout = (fn, ms) => { const id = ++seq; timers.set(id, { fn, ms }); return id; };
+  globalThis.clearTimeout = (id) => { timers.delete(id); };
+  const fire = (id) => { const tm = timers.get(id); timers.delete(id); tm.fn(); };
+  const lastTimer = () => [...timers.entries()].at(-1);
+  try {
+    const shared = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/shared.js')).href);
+
+    assert.equal(shared.toastDuration('ok'), 3000, '3 s floor');
+    assert.equal(shared.toastDuration('x'.repeat(80)), 4800, '60 ms a character');
+    assert.equal(shared.toastDuration('x'.repeat(500)), 8000, 'capped at 8 s');
+    assert.equal(shared.toastDuration('x'.repeat(500), 'warning'), 8000);
+    assert.equal(shared.toastDuration('short', 'error'), Infinity, 'an error stays until dismissed');
+
+    shared.toast('Saved');
+    const ok = container.children.at(-1);
+    assert.equal(status.children.length, 1, 'a success is spoken through the polite announcer');
+    assert.equal(status.children[0].textContent, 'Saved');
+    assert.equal(alert.children.length, 0);
+    const close = ok.querySelector('.toast-close');
+    assert.ok(close && close.getAttribute('aria-label'), 'the close button has a name');
+    assert.equal(close.getAttribute('aria-describedby'), ok.querySelector('.toast-msg').getAttribute('id'));
+    const [okTimer, okT] = lastTimer();
+    assert.equal(okT.ms, 3000);
+
+    // Hover pauses, leaving resumes with what was left.
+    ok.dispatch('mouseenter');
+    assert.ok(!timers.has(okTimer), 'hover pauses the timer');
+    ok.dispatch('mouseleave');
+    const [resumed, resumedT] = lastTimer();
+    assert.ok(resumedT.ms >= 1000 && resumedT.ms <= 3000, 'resumes with the time left');
+    // Focus inside also pauses it, and moving focus within the toast does not resume.
+    ok.dispatch('focusin');
+    assert.ok(!timers.has(resumed));
+    ok.dispatch('focusout', { relatedTarget: close });
+    assert.equal([...timers.values()].filter(v => v.ms !== 280).length, 0, 'focus still inside: still paused');
+    ok.dispatch('focusout', { relatedTarget: null });
+    fire(lastTimer()[0]);
+    assert.ok(ok.classList.contains('dismissing'));
+    assert.equal(status.children.length, 0, 'the spoken copy goes with its toast');
+
+    shared.toast('Delete failed: the folder is in use', 'error');
+    const err = container.children.at(-1);
+    assert.equal(alert.children.length, 1, 'an error is spoken through the assertive announcer');
+    assert.ok(![...timers.values()].some(v => v.ms === Infinity || (v.ms >= 3000 && v.ms <= 8000)), 'no auto-dismiss timer for an error');
+    err.querySelector('.toast-close').click();
+    assert.ok(err.classList.contains('dismissing'), 'the close button dismisses it');
+    assert.equal(alert.children.length, 0);
+
+    // A pile of sticky errors keeps only the newest five on screen.
+    for (const tm of [...timers.keys()]) fire(tm);
+    for (let i = 0; i < 7; i++) shared.toast(`failure ${i}`, 'error');
+    const live = container.children.filter(c => !c.classList.contains('dismissing'));
+    assert.equal(live.length, 5, 'oldest toasts leave first');
+    assert.equal(alert.children.length, 5);
+  } finally {
+    globalThis.setTimeout = realSetTimeout; globalThis.clearTimeout = realClearTimeout;
+    globalThis.document = prevDoc; globalThis.window = prevWin;
+  }
+}
+
+// ── Import dock announcements (js/pages/admin/upload-dock.js) ───────────────
+{
+  const { pathToFileURL } = await import('node:url');
+  const prevDoc = globalThis.document, prevWin = globalThis.window;
+  globalThis.document = { baseURI: 'http://h/admpan.html', getElementById: () => null, addEventListener() {}, title: '' };
+  globalThis.window = { location: { origin: 'http://h' }, addEventListener() {} };
+  try {
+    const dock = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/upload-dock.js')).href);
+    const ds = (state, error = null) => [{ key: '3d/e85', name: 'E85', state, error }];
+    const st = (phase, datasets = ds('uploading')) => ({ phase, datasets, failed: [], network: 'online', error: null });
+
+    assert.deepEqual(dock.announcements(st('uploading'), 4, true, false), [], 'the first render only records');
+    assert.deepEqual(dock.announcements(st('uploading'), 7, true, false), [], 'bytes moving inside a step: silent');
+    assert.deepEqual(dock.announcements(st('uploading'), 12.4, true, false), ['Import: 10 % sent']);
+    assert.deepEqual(dock.announcements(st('uploading'), 19, true, false), []);
+    assert.deepEqual(dock.announcements(st('uploading'), 41, true, false), ['Import: 40 % sent'], 'one sentence per emit, the step reached');
+    const paused = dock.announcements(st('paused'), 41, false, true);
+    assert.equal(paused.length, 1, 'pausing is announced once');
+    assert.deepEqual(dock.announcements(st('paused'), 41, false, true), [], 'and not again while it stays paused');
+    const editable = dock.announcements(st('uploading', ds('editable')), 48, true, false);
+    assert.equal(editable.length, 2, 'resuming + the dataset turning editable');
+    assert.deepEqual(dock.announcements(st('uploading', ds('editable')), 52, true, false), ['Import: 50 % sent']);
+    assert.ok(editable.some(m => m.startsWith('E85 — ')));
+    const failed = dock.announcements(st('uploading', ds('editable', 'disk full')), 53, true, false);
+    assert.deepEqual(failed, ['E85: disk full'], 'a dataset error is announced with its name');
+  } finally {
+    globalThis.document = prevDoc; globalThis.window = prevWin;
+  }
+}
+
+console.log('a11y menus / toast / focus trap / anchors / admin toast + dock announcements: OK');

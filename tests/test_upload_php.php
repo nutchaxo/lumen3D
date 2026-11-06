@@ -283,6 +283,53 @@ $g = lumen_up_gc();
 check('gc spares a finished dataset', !in_array('3d/RP', $g['removed'], true) && is_dir(lumen_up_dataset_dir('3d', 'RP')));
 check('no expiry countdown on a finished dataset', lumen_up_describe('3d', 'RP')['expiresInS'] === null);
 
+// ── 6c. Re-plan at a smaller chunk size (twin of TestRechunkAfterRefusal) ────
+// A chunk refused as too large by a proxy makes the client re-plan smaller; the
+// recorded size would be refused forever, so an unfinished file is re-expressed
+// at the new size, keeping the bytes already stored.
+echo "re-plan smaller after a refused chunk\n";
+$RC = LUMEN_UP_MIN_CHUNK;
+$rcRel = 'bricks/lod0/c0/pack_00.bin';
+$planAt = function (string $folder, int $chunk, int $size) use ($rcRel) {
+    return lumen_up_plan([['type' => '3d', 'folder' => $folder, 'files' => [['path' => $rcRel, 'size' => $size]]]], $chunk)['datasets'][0]['files'][0];
+};
+$rcSize = 4 * $RC + 100;
+$rcWhole = '';
+for ($i = 0; $i < $rcSize; $i++) $rcWhole .= chr(($i * 7) & 0xFF);
+$first = $planAt('RC', 2 * $RC, $rcSize);
+$head = substr($rcWhole, 0, 2 * $RC);
+[$st, ] = lumen_up_write_chunk('3d', 'RC', $rcRel, 0, $head, hash('sha256', $head), $first['fileId']);
+check('first chunk at the old size lands', $st === 200);
+$again = $planAt('RC', $RC, $rcSize);
+check('the smaller size is used, not the recorded one', $again['chunkSize'] === $RC);
+check('the stored half is not sent again', $again['missing'] === [2, 3, 4] && $again['received'] === 2 * $RC);
+check('a new incarnation of the file', $again['fileId'] !== $first['fileId']);
+$old1 = substr($rcWhole, 2 * $RC, 2 * $RC);
+[$st, $pl] = lumen_up_write_chunk('3d', 'RC', $rcRel, 1, $old1, hash('sha256', $old1), $first['fileId']);
+check('a chunk of the old geometry is refused (409)', $st === 409 && ($pl['error'] ?? '') === 'file_not_planned');
+$allOk = true;
+foreach ($again['missing'] as $i) {
+    $part = substr($rcWhole, $i * $RC, $RC);
+    [$st, ] = lumen_up_write_chunk('3d', 'RC', $rcRel, $i, $part, hash('sha256', $part), $again['fileId']);
+    $allOk = $allOk && $st === 200;
+}
+check('the missing chunks land at the new size', $allOk);
+[$st, ] = lumen_up_finalize('3d', 'RC', $rcRel, null);
+check('the file finalizes', $st === 200);
+check('bytes on disk match', file_get_contents(lumen_up_dataset_dir('3d', 'RC') . '/' . $rcRel) === $rcWhole);
+
+$planAt('RZ', 2 * $RC, 3 * $RC);
+$z = $planAt('RZ', $RC, 3 * $RC);
+check('nothing received: starts over at the smaller size', $z['chunkSize'] === $RC && $z['missing'] === [0, 1, 2] && $z['received'] === 0);
+$sameFirst = $planAt('RS', $RC, 3 * $RC);
+$same = $planAt('RS', 4 * $RC, 3 * $RC);
+check('a same-or-larger request keeps the recorded size', $same['chunkSize'] === $RC && $same['fileId'] === $sameFirst['fileId']);
+$smallFirst = $planAt('RT', 4 * $RC, $RC);
+$small = $planAt('RT', $RC, $RC);
+check('a file no larger than the new size is left alone', $small['chunkSize'] === 4 * $RC && $small['fileId'] === $smallFirst['fileId']);
+$nm = lumen_up_rechunked(['size' => 10 * $RC, 'chunkSize' => 3 * $RC, 'bits' => lumen_up_bitmap_encode(chr(0b0101))], 2 * $RC);
+check('a non-multiple size keeps only whole new chunks', lumen_up_missing($nm) === [1, 2, 4] && lumen_up_received($nm) === 4 * $RC);
+
 // ── 7. datasets.php must load the staging symbols for EVERY action ───────────
 // ?action=list calls lumen_staged_rows() and the id branch needs the
 // LUMEN_STAGING_PREFIX constant. Requiring _upload_lib.php only inside that
@@ -324,6 +371,62 @@ check('journal file name carries the canonical type',
 $e = lumen_up_load_journal('3d', 'PY')['files']['bricks/lod0/c0/pack_00.bin'];
 check('reads a python bitmap: 16 bytes received', lumen_up_received($e) === 16);
 check('reads a python bitmap: chunk 1 missing',   lumen_up_missing($e) === [1]);
+
+// ── 9. Large imports: plan and file completion stay cheap ───────────────────
+// Twin of TestLargeImportCost in tests/test_upload_staging.py.
+echo "large import cost\n";
+$n = 20000;
+$big = [];
+for ($i = 0; $i < $n; $i++) $big[] = ['path' => sprintf('bricks/lod0/c0/pack_%05d.bin', $i), 'size' => 10];
+$t0 = microtime(true);
+lumen_up_plan([['type' => '3d', 'folder' => 'BIG', 'files' => $big]], LUMEN_UP_DEFAULT_CHUNK);
+$elapsed = microtime(true) - $t0;
+check(sprintf('plan of %d files is fast (%.1f s)', $n, $elapsed), $elapsed < 15.0);
+$bj = lumen_up_load_journal('3d', 'BIG');
+$ids = array_map(fn($e) => $e['id'], array_values($bj['files']));
+sort($ids);
+check('plan ids are unique and contiguous', $ids === range(0, $n - 1));
+check('nextId = max(id) + 1', $bj['nextId'] === $n);
+lumen_up_plan([['type' => '3d', 'folder' => 'BIG', 'files' => array_merge($big, [['path' => 'bricks/lod0/c0/pack_99999.bin', 'size' => 10]])]], LUMEN_UP_DEFAULT_CHUNK);
+$bj = lumen_up_load_journal('3d', 'BIG');
+check('a second drop numbers after the first',
+      $bj['files']['bricks/lod0/c0/pack_99999.bin']['id'] === $n && $bj['nextId'] === $n + 1);
+unset($big, $bj, $ids);
+
+$fd = [];
+for ($i = 0; $i < 3; $i++) $fd[] = sprintf('bricks/lod0/c0/pack_%02d.bin', $i);
+$planFd = function (string $folder) use ($fd) {
+    lumen_up_plan([['type' => '3d', 'folder' => $folder, 'files' => array_map(fn($r) => ['path' => $r, 'size' => 10], $fd)]], LUMEN_UP_DEFAULT_CHUNK);
+    foreach ($fd as $r) lumen_up_write_chunk('3d', $folder, $r, 0, str_repeat('X', 10), hash('sha256', str_repeat('X', 10)));
+};
+$planFd('FD');
+$jpFd = lumen_up_journal_path('3d', 'FD');
+$before = file_get_contents($jpFd);
+$allOk = true;
+foreach ($fd as $r) { [$st, ] = lumen_up_finalize('3d', 'FD', $r, str_repeat('ab', 32)); $allOk = $allOk && $st === 200; }
+check('file_done of settled files answers 200', $allOk);
+check('file_done leaves the journal alone when the log says it all', file_get_contents($jpFd) === $before);
+check('the log is kept for the next compaction', is_file(lumen_up_log_path('3d', 'FD')));
+$jFd = lumen_up_load_journal('3d', 'FD');
+check('a fresh load reads every file done', count(array_filter($fd, fn($r) => !empty($jFd['files'][$r]['done']))) === 3);
+
+$planFd('FC');
+lumen_up_finalize('3d', 'FC', $fd[0], null);
+// Records naming no planned id are ignored by the fold; they only lengthen it.
+for ($i = 0; $i < LUMEN_UP_LOG_COMPACT_RECORDS; $i++) lumen_up_append_log('3d', 'FC', 999999, $i);
+[$st, ] = lumen_up_finalize('3d', 'FC', $fd[1], null);
+check('file_done with a long log answers 200', $st === 200);
+check('file_done compacts a long log', !is_file(lumen_up_log_path('3d', 'FC')));
+$onDisk = json_decode((string)file_get_contents(lumen_up_journal_path('3d', 'FC')), true);
+check('the compacted journal carries every file done',
+      !empty($onDisk['files'][$fd[0]]['done']) && !empty($onDisk['files'][$fd[1]]['done']) && !empty($onDisk['files'][$fd[2]]['done']));
+
+$planFd('FI');
+lumen_up_finalize('3d', 'FI', $fd[0], null);
+lumen_up_journal_locked('3d', 'FI', function ($j) use ($fd) { $j['files'][$fd[0]]['invalid'] = 'pack_bad'; lumen_up_save_journal($j); return null; });
+[$st, ] = lumen_up_finalize('3d', 'FI', $fd[0], null);
+$onDisk = json_decode((string)file_get_contents(lumen_up_journal_path('3d', 'FI')), true);
+check('clearing an invalid flag is written', $st === 200 && !array_key_exists('invalid', $onDisk['files'][$fd[0]]) && !empty($onDisk['files'][$fd[0]]['done']));
 
 echo $fails === 0 ? "\nALL PASS\n" : "\n$fails FAILURE(S)\n";
 exit($fails === 0 ? 0 : 1);

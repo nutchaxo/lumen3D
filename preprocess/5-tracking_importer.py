@@ -47,7 +47,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import atomic_write_bytes, atomic_write_json  # noqa: E402
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 SIGNATURE = "IMARIS_TRACKER_V1"
 # A Procrustes fit residual under this is machine noise: the stabilisation is rigid and
@@ -219,6 +219,11 @@ def build_tracks_document(doc: dict):
     return tracks, has_raw
 
 
+def no_registration() -> dict:
+    """The registration block of an analysis that cannot stabilise the volume."""
+    return {"method": None, "appliedToVolume": False, "transforms": []}
+
+
 def solve_registration(doc: dict, timepoint_offset: int):
     """Per-timepoint rigid transform mapping raw acquisition coords -> stabilised frame."""
     data = doc["data"]
@@ -332,25 +337,100 @@ def solve_registration(doc: dict, timepoint_offset: int):
     }
 
 
+def _index_tree_reader(manifest: dict):
+    """For a manifest whose trees are indexed by LBIX files (format 4: one index.bin per
+    tree; formats 5 and 6: one per compression column, of which the lossless `ll` one
+    lists exactly the stored bricks), return (tree keys, key -> index url relative to
+    bricks/, parse_index_bin). None for any other manifest, or when the module that
+    reads the format is not installed beside this script."""
+    schema = manifest.get("schema")
+    import bricks_v3_writer as v3
+    if schema == v3.SCHEMA:
+        return (v3.tree_keys(manifest),
+                lambda key: (v3.tree_index_info(manifest, key) or {}).get("url"),
+                v3.parse_index_bin)
+    try:
+        import format5
+    except ImportError:
+        if str(HERE.parent) not in sys.path:
+            sys.path.insert(0, str(HERE.parent))
+        try:
+            import format5
+        except ImportError:
+            return None
+    if format5.schema_format(schema) is None:
+        return None
+
+    def ll_url(key):
+        columns = (format5.tree_index_info(manifest, key) or {}).get("columns") or {}
+        return (columns.get("ll") or {}).get("url")
+    return format5.tree_rels(manifest), ll_url, format5.parse_index_bin
+
+
+def _occupied_boxes_from_index(dataset_dir: Path, manifest: dict, reader, dims0, lo, voxel):
+    """{timepoint: (min_um, max_um)} from the level-0 rows of each tree's brick index.
+
+    A brick is occupied when any channel stores it (length > 0): both writers store a
+    brick iff its 64³ interior holds a voxel >= 1. Bricks are numbered (bz·gy + by)·gx + bx,
+    and the box spans their 64-voxel interiors, the 1-voxel border excluded, clipped to
+    the level-0 size. A tree whose index is missing or unreadable is left out, so that
+    timepoint falls back to the acquisition box.
+    """
+    keys, index_url, parse = reader
+    brick = int(manifest.get("brickSize") or 64)
+    out = {}
+    for key in keys:
+        url = index_url(key)
+        if not isinstance(url, str) or not url or ".." in url.replace("\\", "/").split("/"):
+            continue
+        try:
+            idx = parse((dataset_dir / "bricks" / url).read_bytes())
+        except (OSError, ValueError):
+            continue
+        if not idx["levels"]:
+            continue
+        gx, gy, gz, _packs = idx["levels"][0]
+        present = (idx["entries"][0]["length"] > 0).any(axis=0)
+        ids = np.flatnonzero(present)
+        if not ids.size:
+            continue
+        bz, by, bx = np.unravel_index(ids, (gz, gy, gx))
+        cells = np.stack([bx, by, bz], axis=1)
+        vmin = cells.min(0) * brick
+        vmax = np.minimum((cells.max(0) + 1) * brick, dims0)
+        tp = int(key[1:]) if key.startswith("t") else 0
+        out[tp] = (lo + vmin * voxel, lo + vmax * voxel)
+    return out or None
+
+
 def _occupied_boxes_um(dataset_dir: Path, extent: dict, dims: dict):
     """Per-timepoint bounding box, in um, of the bricks that actually hold signal.
 
-    Read from bricks/manifest.json, which already records `nonEmpty` per brick after
-    empty-space skipping. Using the occupied region rather than the whole acquisition
-    box matters: the stabilised specimen barely moves, so its union stays tight, while
-    the union of the full imaged boxes is several times larger and would make the
-    renderer sweep mostly empty space.
+    Format 2 manifests record `nonEmpty` per brick; formats 4, 5 and 6 record which
+    bricks are stored in their binary brick index (`_occupied_boxes_from_index`). Using
+    the occupied region rather than the whole acquisition box matters: the stabilised
+    specimen barely moves, so its union stays tight, while the union of the full imaged
+    boxes is several times larger and would make the renderer sweep mostly empty space.
     """
     manifest_path = dataset_dir / "bricks" / "manifest.json"
     if not manifest_path.exists() or not extent or not dims:
         return None
-    with open(manifest_path, "r", encoding="utf-8") as fh:
-        manifest = json.load(fh)
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
 
     lo = np.array(extent["min"], float)
     hi = np.array(extent["max"], float)
     grid = np.array([dims.get("x", 1), dims.get("y", 1), dims.get("z", 1)], float)
     voxel = (hi - lo) / np.maximum(grid, 1.0)
+
+    reader = _index_tree_reader(manifest)
+    if reader is not None:
+        return _occupied_boxes_from_index(dataset_dir, manifest, reader, grid, lo, voxel)
 
     def box_from_levels(levels):
         level = next((l for l in levels or [] if l.get("level") == 0), None)
@@ -602,6 +682,13 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
               f"timepoints, residu max {qc['maxResidualUm']:.3g} um -> {verdict}")
         for w in qc["warnings"]:
             print(f"[TRACKING]   [!] {w}")
+    else:
+        # A new analysis never inherits the transforms of the one it replaces. An explicit
+        # empty block rather than a missing key: the re-processing merges (step 4, and the
+        # publish-time re-merge with the published file) restore any key the file lacks.
+        # Not null either: the viewer drops a registration that is not an object as
+        # malformed; an empty transform list is how it reads "no stabilisation".
+        metadata["registration"] = no_registration()
 
     metadata["lastModified"] = datetime.now().isoformat()
     atomic_write_json(metadata_path, metadata, indent=2, ensure_ascii=False)

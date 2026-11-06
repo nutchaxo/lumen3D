@@ -98,6 +98,9 @@ const ViewerApp = (() => {
   let _panelIndex = null;
   let _basePath = '';
   let _currentTimepoint = null;
+  // Bumped whenever another frame takes the screen: a pass bound to one frame can tell
+  // the mount under it changed, even if the frame number came back.
+  let _timepointGeneration = 0;
   let _qualityMode = '512x512';
   let _activeLoadToken = 0;
   let _zDisplayScale = 1.0;
@@ -112,6 +115,7 @@ const ViewerApp = (() => {
   let _previousBricksProbe = null;
   let _volumeMeasurements = [];
   let _isInitialized = false;
+  let _hostListenerBound = false;   // _bindIframeSync ran: the host's requests have their handler
   let _pendingWorkspaceState = null;
   let _pendingZstackState = null; // buffered TOGGLE_ZSTACK arriving before init()
   let _pendingPluginState = null; // plugin workspace state restored before PluginRegistry.initAll() ran
@@ -119,6 +123,9 @@ const ViewerApp = (() => {
   let _channelState = [];
   let _slicePreviewTimer = null;
   let _nativeSliceAbort = null;
+  // Studio native passes holding BrickLoader's mount on the tree on screen: the
+  // background prefetch, which mounts the frames after it, waits until they end.
+  let _nativePassHolds = 0;
   let _displayState = { backgroundPreset: 'dark', backgroundColor: '#000000' };
   let _volumeSourcePreference = 'webstack';
   let _urlStatePrompt = null; // in-flight "restore this shared view?" question
@@ -138,9 +145,7 @@ const ViewerApp = (() => {
   const _STAGING_PREFIX = 'staging:';
 
   function _datasetBase(datasetPath) {
-    const p = String(datasetPath || '');
-    if (!p.startsWith(_STAGING_PREFIX)) return `DATA_WEB/${p}`;
-    return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(_STAGING_PREFIX.length))}&path=`;
+    return Utils.datasetBaseUrl(datasetPath);
   }
 
   /**
@@ -757,22 +762,9 @@ const ViewerApp = (() => {
     // ELE-26: apply saved workspace + buffered z-stack state AFTER initAll, so plugin
     // setState()/applyState() run on fully-initialised plugin instances (_ctx + fields set).
     // The URL state is applied only if the operator asked for it (_promptUrlState).
-    let restoredFromUrl = false;
     const urlChoice = await _urlStatePrompt;
     _urlStatePrompt = null;
-    if (urlChoice?.choice === 'restore' && urlChoice.state) {
-      _applyWorkspaceStateNow(urlChoice.state);
-      restoredFromUrl = true;
-    } else if (urlChoice?.choice === 'fresh') {
-      UrlState.clearHash();
-      // hasPendingCameraState suppressed the initial fitCameraToVolume on the
-      // assumption a saved camera was coming; it is not — frame the volume now.
-      VolumeViewer.resetView({ resetClipping: true });
-    }
-    if (_pendingWorkspaceState) {
-      _applyWorkspaceStateNow(_pendingWorkspaceState);
-      _pendingWorkspaceState = null;
-    }
+    const restoredFromUrl = _applyInitialViewState(urlChoice, Boolean(hasPendingCameraState));
 
     // The two restores above ran while _isInitialized was still false, so the plugin
     // slice of what they carried was BUFFERED by the pre-initAll guard rather than
@@ -1206,7 +1198,16 @@ const ViewerApp = (() => {
     const previous = _qualityMode;
     _applyQualityMode(value);
     if (!_basePath) return Promise.resolve({ ok: true });
-    return _loadTimepoint(_basePath, _currentTimepoint, { force: true })
+    // The reload supersedes a frame request still running (its load turns stale) and
+    // takes over the one queued behind it: load the frame the scrubber asked for. A
+    // reload of the frame already on screen is no time change for the siblings
+    // ('sync': no SYNC_TIME); a frame asked by the operator is announced as it would
+    // have been.
+    const target = _tpPending || _tpTarget;
+    _tpPending = null;
+    const frame = target ? target.frame : _currentTimepoint;
+    const origin = target ? target.origin : 'sync';
+    return _loadTimepoint(_basePath, frame, { force: true, origin })
       .then((result) => { _kickPrefetch(200); return result; })
       .catch(err => {
         // The volume already on screen is intact: say so in the status line and
@@ -1218,6 +1219,11 @@ const ViewerApp = (() => {
         VolumeViewer.setQualityTarget?.(previous, previous);
         const why = Utils.friendlyErrorText(err);
         _setQualityStatus(why ? `${_qualityLabel(previous)} — ${why}` : _qualityLabel(previous));
+        // The frame it was carrying was not shown either: the scrubber goes back to
+        // the one on screen, as after a failed frame request.
+        if (isLive && frame !== _currentTimepoint && typeof Timeline !== 'undefined' && Number.isFinite(_currentTimepoint)) {
+          Timeline.setFrame(_currentTimepoint, true, false);
+        }
         throw err;
       });
   }
@@ -1338,6 +1344,10 @@ const ViewerApp = (() => {
     return out.length ? out : null;
   }
 
+  // The options last written into the select: every timepoint load calls the update,
+  // and replacing the options under an open list or a focused control would drop it.
+  let _qualityOptionsKey = null;
+
   function _updateQualityOptionLabels() {
     const select = document.getElementById('select-quality');
     if (!select) return;
@@ -1345,18 +1355,26 @@ const ViewerApp = (() => {
 
     const offered = _qualityLevels();
     if (offered && offered.length > 0) {
-      select.innerHTML = '';
-      offered.forEach(({ value, dims, column }) => {
-        const opt = document.createElement('option');
-        opt.value = value;
+      const entries = offered.map(({ value, dims, column }) => {
         const base = _qualityBaseOf(value);
         const name = base === 'native' ? _t('viewer.native', 'Native') : base.split('x')[0];
-        opt.textContent = column
+        return [value, column
           ? `${name} · ${_qualityColumnLabel(column)} (${dims.x}x${dims.y}x${dims.z})`
-          : `${name} (${dims.x}x${dims.y}x${dims.z})`;
-        select.appendChild(opt);
+          : `${name} (${dims.x}x${dims.y}x${dims.z})`];
       });
+      const key = JSON.stringify(entries);
+      if (key !== _qualityOptionsKey || select.options.length !== entries.length) {
+        select.innerHTML = '';
+        for (const [value, text] of entries) {
+          const opt = document.createElement('option');
+          opt.value = value;
+          opt.textContent = text;
+          select.appendChild(opt);
+        }
+        _qualityOptionsKey = key;
+      }
     } else {
+      _qualityOptionsKey = null;
       const labels = {
         '256x256':   `256x256${_qualityDimsLabel('256x256')}`,
         '512x512':   `512x512${_qualityDimsLabel('512x512')}`,
@@ -1544,6 +1562,10 @@ const ViewerApp = (() => {
    * select. Times appear here only once a download was measured; the guide gives them at a
    * stated speed.
    */
+  // What the matrix last drew (texts, states, classes): the same picture is not rebuilt,
+  // so a button under the pointer or holding the focus survives a timepoint load.
+  let _qmRenderedKey = null;
+
   function _renderQualityMatrix() {
     const box = document.getElementById('quality-matrix');
     const select = document.getElementById('select-quality');
@@ -1556,11 +1578,13 @@ const ViewerApp = (() => {
     if (!qm || !qm.levels.length) {
       box.classList.add('hidden');
       box.replaceChildren();
+      _qmRenderedKey = null;
       select?.classList.remove('hidden');
       return;
     }
     select?.classList.add('hidden');
     box.classList.remove('hidden');
+    const v6 = _isV6BrickManifest();
     const budget = Number(qm.budgetBytes) || Infinity;
     const chosen = _currentQualityParts();
     const level = qm.levels.find(L => L.key === chosen.res) || qm.levels[0];
@@ -1568,76 +1592,82 @@ const ViewerApp = (() => {
     const shown = qm.active ? qm.levels.find(L => L.level === qm.active.level) : null;
     const bytesOf = (L, col) => qm.bytes?.[L.level]?.[col.id];
 
-    const top = document.createElement('div');
-    top.className = 'qm-top';
-    const summary = document.createElement('div');
-    summary.className = 'qm-summary';
-    summary.textContent = _isV6BrickManifest()
-      ? _tf('viewer.qualityMatrix.summaryQ30', '{res} · WebP Q30: {size}', { res: _levelName(level), size: _fmtMB(bytesOf(level, column)) })
-      : _tf('viewer.qualityMatrix.summary', '{res} · {tier}: {size}', {
+    const view = {
+      v6,
+      // Format 6 shows no summary, help or quality list: they are left out of the picture.
+      summary: v6 ? '' : _tf('viewer.qualityMatrix.summary', '{res} · {tier}: {size}', {
         res: _levelName(level), tier: _qualityColumnLabel(column.id), size: _fmtMB(bytesOf(level, column))
-      });
-    if (shown && shown.level !== level.level) {
-      const note = document.createElement('div');
-      note.className = 'qm-note';
-      note.textContent = _tf('viewer.qualityMatrix.shownCoarser', 'Shown at {shown}: the GPU does not hold {chosen}.', {
-        shown: _levelName(shown), chosen: _levelName(level)
-      });
-      summary.appendChild(note);
-    }
-    const help = document.createElement('button');
-    help.type = 'button';
-    help.className = 'qm-help';
-    help.textContent = _t('viewer.qualityMatrix.help', 'How to choose?');
-    top.append(summary, help);
+      }),
+      note: shown && shown.level !== level.level
+        ? _tf('viewer.qualityMatrix.shownCoarser', 'Shown at {shown}: the GPU does not hold {chosen}.', {
+          shown: _levelName(shown), chosen: _levelName(level)
+        })
+        : '',
+      help: v6 ? '' : _t('viewer.qualityMatrix.help', 'How to choose?'),
+      resolutionHead: _t('viewer.qualityMatrix.resolutionHead', 'Resolution'),
+      resolutions: qm.levels.map((L) => {
+        const { bytes: gpuBytes, cls } = _gpuFit(L.gpu, budget);
+        return {
+          main: _levelName(L),
+          sub: `${L.dims.x}×${L.dims.y}×${L.dims.z}`,
+          extra: `GPU ${Number.isFinite(gpuBytes) ? _fmtMB(gpuBytes) : '—'}`,
+          fit: cls,
+          active: L.key === chosen.res,
+          attrs: { res: L.key }
+        };
+      }),
+      qualityHead: v6 ? '' : _t('viewer.qualityMatrix.qualityHead', 'Quality'),
+      qualities: v6 ? [] : qm.columns.map((col) => {
+        const bytes = bytesOf(level, col);
+        // The time only once a download was measured here; the guide gives it at a stated speed.
+        const eta = _rateProbe.rate && Number(bytes) > 0 ? _etaLabel(Number(bytes) / _rateProbe.rate) : '';
+        return {
+          main: _qualityColumnLabel(col.id),
+          sub: _qualityTierText(col.id, 'short'),
+          extra: [_fmtMB(bytes), eta].filter(Boolean).join(' · '),
+          active: col.id === chosen.col,
+          attrs: { col: col.id }
+        };
+      }),
+      legend: v6 ? '' : _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.')
+    };
+    const key = JSON.stringify(view);
+    if (key === _qmRenderedKey && box.firstChild) return;
+    _qmRenderedKey = key;
 
     const resList = document.createElement('ul');
     resList.className = 'qm-list';
-    for (const L of qm.levels) {
-      const { bytes: gpuBytes, cls } = _gpuFit(L.gpu, budget);
-      resList.appendChild(_qmOption({
-        main: _levelName(L),
-        sub: `${L.dims.x}×${L.dims.y}×${L.dims.z}`,
-        extra: `GPU ${Number.isFinite(gpuBytes) ? _fmtMB(gpuBytes) : '—'}`,
-        fit: cls,
-        active: L.key === chosen.res,
-        attrs: { res: L.key }
-      }));
+    for (const opt of view.resolutions) resList.appendChild(_qmOption(opt));
+    const lists = document.createElement('div');
+    lists.className = 'qm-lists';
+    const note = view.note ? _guideEl('div', 'qm-note', view.note) : null;
+    if (v6) {
+      // Format 6: one display quality, so only the resolution list (and the warning when the GPU holds a coarser level than chosen).
+      lists.classList.add('qm-lists-single');
+      lists.append(_qmSection(view.resolutionHead, resList));
+      box.replaceChildren(...(note ? [note] : []), lists);
+      return;
     }
     const colList = document.createElement('ul');
     colList.className = 'qm-list';
-    for (const col of qm.columns) {
-      const bytes = bytesOf(level, col);
-      // The time only once a download was measured here; the guide gives it at a stated speed.
-      const eta = _rateProbe.rate && Number(bytes) > 0 ? _etaLabel(Number(bytes) / _rateProbe.rate) : '';
-      colList.appendChild(_qmOption({
-        main: _qualityColumnLabel(col.id),
-        sub: _qualityTierText(col.id, 'short'),
-        extra: [_fmtMB(bytes), eta].filter(Boolean).join(' · '),
-        active: col.id === chosen.col,
-        attrs: { col: col.id }
-      }));
-    }
-    const lists = document.createElement('div');
-    lists.className = 'qm-lists';
-    if (_isV6BrickManifest()) {
-      // Format 6: one display quality, so only the resolution list (and the warning when the GPU holds a coarser level than chosen).
-      lists.classList.add('qm-lists-single');
-      lists.append(_qmSection(_t('viewer.qualityMatrix.resolutionHead', 'Resolution'), resList));
-      const coarser = summary.querySelector('.qm-note');
-      box.replaceChildren(...(coarser ? [coarser] : []), lists);
-      return;
-    }
+    for (const opt of view.qualities) colList.appendChild(_qmOption(opt));
+
+    const top = document.createElement('div');
+    top.className = 'qm-top';
+    const summary = _guideEl('div', 'qm-summary', view.summary);
+    if (note) summary.appendChild(note);
+    const help = document.createElement('button');
+    help.type = 'button';
+    help.className = 'qm-help';
+    help.textContent = view.help;
+    top.append(summary, help);
+
     lists.append(
-      _qmSection(_t('viewer.qualityMatrix.resolutionHead', 'Resolution'), resList),
-      _qmSection(_t('viewer.qualityMatrix.qualityHead', 'Quality'), colList)
+      _qmSection(view.resolutionHead, resList),
+      _qmSection(view.qualityHead, colList)
     );
 
-    const legend = document.createElement('div');
-    legend.className = 'qm-legend';
-    legend.textContent = _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.');
-
-    box.replaceChildren(top, lists, legend);
+    box.replaceChildren(top, lists, _guideEl('div', 'qm-legend', view.legend));
   }
 
   /** Opens the guide: every combination, the qualities, the GPU colour code and the advice. */
@@ -2244,6 +2274,8 @@ const ViewerApp = (() => {
         return _viewExportText('exportView.errDisplayChanged', 'The display settings changed during every attempt. Leave the channel and view controls alone until the export finishes.');
       case 'encode':
         return _viewExportText('exportView.errEncode', 'The browser could not encode a PNG this large. Choose a smaller size.');
+      case 'LOSSLESS_INTERRUPTED':
+        return Utils.friendlyErrorText(err);
       default:
         return _viewExportText('exportView.errGeneric', 'Export failed: {message}', { message: Utils.friendlyErrorText(err) || Utils.friendlyErrorText('unknown') });
     }
@@ -2590,6 +2622,9 @@ const ViewerApp = (() => {
     _studioOpening = true;
     let preview = null;
     let token = null;
+    // The figure is one frame of a timelapse, and the Studio covers the timeline:
+    // playback left running would swap the volume under the native pass.
+    if (isLive && typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
     try {
       // The Studio used to open only once the native LOD0 slice had arrived — minutes
       // of packs for one plane. It opens on the plane the GPU already holds (one render,
@@ -2604,6 +2639,12 @@ const ViewerApp = (() => {
       _studioOpening = false;
     }
     _studioPreview = preview;
+    // In the task the figure opened in: a load of another frame streaming behind the one
+    // on screen would land under the figure, and every native pass of it (an export of a
+    // format-6 tree, which runs none at open) would then stream its frame again.
+    if (isLive && preview && token !== null && token !== undefined && Number.isInteger(preview.timepoint)) {
+      _holdStudioFrame(preview.timepoint);
+    }
     // Format 6: the Studio works on the q30 picture; the lossless pass runs for an export only.
     if (preview && token !== null && token !== undefined && !_isV6BrickManifest()) {
       _studioUpgradePromise = _upgradeStudioSliceToNative(preview, token);
@@ -2853,6 +2894,10 @@ const ViewerApp = (() => {
     const dims = (typeof BrickLoader !== 'undefined' && BrickLoader.isReady?.()) ? BrickLoader.getDimensions(0) : null;
     if (!dims) return null;
     if (!spec) spec = VolumeSlicer.getPlaneSpec();
+    // The frame the GPU holds now, before any await lets another one take its place:
+    // the volume's own frame, which a first-visit frame's coarse level makes the new one
+    // while _currentTimepoint still names the previous frame.
+    const timepoint = _displayedTimepoint();
     const nativeRes = _nativeStudioRenderSize(spec, dims);
     const renderRes = Math.min(nativeRes, STUDIO_PREVIEW_MAX);
     const { geom, warp } = _studioGeometry(spec, material);
@@ -2892,7 +2937,7 @@ const ViewerApp = (() => {
       calibrated: _studioCalibrated(),
       physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
       channelState,
-      timepoint: _currentTimepoint
+      timepoint
     };
   }
 
@@ -3029,13 +3074,74 @@ const ViewerApp = (() => {
     const scoped = { token };
     const spec = preview.planeSpec;
     let lod = Number.isInteger(opts.lod) ? opts.lod : await _confirmLargeNativePass(spec);
-    if (lod === null || !StudioEditor.isOpen?.() || (StudioEditor.documentToken && StudioEditor.documentToken() !== token)) return;
+    const stillOpen = () => StudioEditor.isOpen?.() && !(StudioEditor.documentToken && StudioEditor.documentToken() !== token);
+    if (lod === null || !stillOpen()) return;
+
+    // The pass reads whatever frame is mounted (its bricks, planes, stabilisation warp)
+    // and fills its missing chunks from the preview: both must be the preview's frame.
+    const frame = isLive && Number.isInteger(preview.timepoint) ? preview.timepoint : null;
+    // The figure's frame is the one the pass may read only while it is ON SCREEN: with
+    // nothing shown (a WebGL context lost, or restored without its volume) the mounted
+    // tree is whatever frame the prefetch reached, so no fallback on _currentTimepoint.
+    const frameShown = () => frame === null || (_currentTimepoint === frame && _shownTimepoint() === frame);
+    if (frame !== null) {
+      if (typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
+      // openStudio held the frame already; held again here for a pass started later (an
+      // export) or after an await (the large-figure question) that let a scrub in.
+      if (!_holdStudioFrame(frame)) {
+        const back = await _returnToStudioFrame(frame, scoped);
+        if (!stillOpen()) return;
+        if (!back) {
+          _reportStudioFrameLost(frame, scoped);
+          return;
+        }
+      }
+    }
+    const generation = _timepointGeneration;
+    let frameLost = false;
+
+    // The pass reads BrickLoader's mounted tree, which is not always the one on screen:
+    // a cached frame is shown without a mount, and a stream or prefetch of another frame
+    // mounts its own. The tree on screen is mounted for the pass, held there (the
+    // prefetch waits) and named to every batch, so a tree mounted anyway fails the batch
+    // instead of serving another frame's bricks under this frame's label.
+    let holding = true;
+    _nativePassHolds++;
+    _stopPrefetch();
+    const releaseMount = () => {
+      if (!holding) return;
+      holding = false;
+      _nativePassHolds = Math.max(0, _nativePassHolds - 1);
+      if (_nativePassHolds === 0 && isLive) _kickPrefetch();
+    };
+    const pinnedManifest = await _mountTreeOnScreen();
+    if (!stillOpen()) { releaseMount(); return; }
+    // The tree just mounted is the one on screen: it must hold the preview's frame too.
+    if (frame !== null && (_timepointGeneration !== generation || !frameShown())) {
+      releaseMount();
+      _reportStudioFrameLost(frame, scoped);
+      return;
+    }
+    if (!pinnedManifest) {
+      releaseMount();
+      _setSliceStatus(_t('studio.nativeFailed', 'Native resolution unavailable; the picture so far is kept.'));
+      return;
+    }
 
     _cancelNativeSlice(false);
     const controller = new AbortController();
     _nativeSliceAbort = controller;
     const owns = () => _nativeSliceAbort === controller;
     const onCancel = () => { if (owns()) _cancelNativeSlice(); else controller.abort(); };
+    // Another frame took the screen while the pass ran: what it would still bring is not
+    // the preview's frame, so it stops and nothing more of it reaches the figure.
+    const checkFrame = () => {
+      if (!frameLost && frame !== null && (_timepointGeneration !== generation || !frameShown())) {
+        frameLost = true;
+        controller.abort();
+      }
+      return frameLost;
+    };
     const renderRes = Number(preview.nativeRes) > 0 ? preview.nativeRes : _nativeStudioRenderSize(spec, dims0);
     const levels = BrickLoader.getManifest?.()?.levels?.length || (Array.isArray(_brickManifest?.levels) ? _brickManifest.levels.length : 1);
     let downgradeNote = '';
@@ -3055,20 +3161,24 @@ const ViewerApp = (() => {
             cropRect: _scaleCropRect(preview.cropRect, renderRes),
             lod,
             controller,
+            timepoint: frame,
+            manifest: pinnedManifest,
             fallback: { canvas: preview.canvas, raw: preview.raw || null, rect: preview.cropRect },
             onProgress: (progress) => {
+              if (checkFrame()) return;
               StudioEditor.setLoadProgress?.({ percent: progress.percent, label: label(dims, progress), onCancel }, scoped);
             },
             // Chunks land one after the other, as they do in the 3D view: every partial
             // picture is the same frame with more of it native and the preview elsewhere.
             onPartial: (partial) => {
+              if (checkFrame()) return;
               if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true, token });
             }
           });
           break;
         } catch (err) {
           const overBudget = err?.code === 'SVR_OVER_BUDGET' || err?.code === 'SVR_ALLOC_FAILED';
-          if (!overBudget || lod + 1 >= levels || controller.signal.aborted) throw err;
+          if (!overBudget || lod + 1 >= levels || controller.signal.aborted || checkFrame()) throw err;
           lod += 1;
           const lower = BrickLoader.getDimensions(lod);
           console.warn(`[ViewerApp] Native Studio pass does not fit the GPU (${err.message}); retrying at level ${lod}.`);
@@ -3076,18 +3186,25 @@ const ViewerApp = (() => {
           StudioEditor.setLoadProgress?.({ percent: 0, label: label(lower || dims0), onCancel }, scoped);
         }
       }
-      if (sr && StudioEditor.isOpen?.()) {
+      if (sr && !checkFrame() && StudioEditor.isOpen?.()) {
         StudioEditor.setSliceResult(sr, { token });
         missing = Number(sr.missingChunks) || 0;
       }
     } catch (err) {
-      if (err?.name !== 'AbortError') {
+      // A tree mounted under the pass because its frame left the screen is that frame
+      // change, said as such.
+      if (!frameLost && !checkFrame() && err?.name !== 'AbortError') {
         console.warn('[ViewerApp] Native Studio slice failed; keeping the picture so far:', err);
         _setSliceStatus(_t('studio.nativeFailed', 'Native resolution unavailable; the picture so far is kept.'));
       }
     } finally {
       if (owns()) _nativeSliceAbort = null;
       StudioEditor.setLoadProgress?.(null, scoped);
+      releaseMount();
+    }
+    if (frameLost && StudioEditor.isOpen?.()) {
+      _reportStudioFrameLost(frame, scoped);
+      return;
     }
     if (missing > 0 && StudioEditor.isOpen?.()) {
       StudioEditor.setLoadProgress?.({
@@ -3096,6 +3213,151 @@ const ViewerApp = (() => {
       }, scoped);
       setTimeout(() => StudioEditor.setLoadProgress?.(null, scoped), 8000);
     }
+  }
+
+  /** A timelapse frame as the timeline shows it (0-based, three digits). */
+  function _frameLabel(frame) {
+    return String(frame).padStart(3, '0');
+  }
+
+  /**
+   * The frame of the volume on screen. _currentTimepoint moves only when a load
+   * resolves, but a first-visit frame shows its coarsest level before that, so for the
+   * whole rest of its load the screen holds the new frame while _currentTimepoint still
+   * names the previous one. A volume that names no frame falls back to _currentTimepoint.
+   */
+  function _displayedTimepoint() {
+    if (!isLive) return _currentTimepoint;
+    const shown = VolumeViewer.getDisplayedTimepoint?.();
+    return Number.isInteger(shown) ? shown : _currentTimepoint;
+  }
+
+  /**
+   * The frame of the volume actually on screen, null when nothing is (a WebGL context
+   * lost, or restored without its volume). Unlike _displayedTimepoint there is no
+   * fallback: _currentTimepoint still names a frame then, though nothing shows it.
+   */
+  function _shownTimepoint() {
+    const shown = VolumeViewer.getDisplayedTimepoint?.();
+    return Number.isInteger(shown) ? shown : null;
+  }
+
+  /**
+   * A Studio figure's frame is on screen while a load of another frame streams behind
+   * it (a revisit streams hidden, its activation deferred): that load is dropped and the
+   * frame on screen stays. Loading the figure's frame again instead would stream it a
+   * second time beside its own resident copy whenever it is not cached (native, or
+   * shown with missing bricks), and could land a coarser level than the one on screen.
+   */
+  function _dropOtherFrameLoad(frame) {
+    _tpPending = null;
+    // It is no frame request's target any more: a quality switch reloads the frame on
+    // screen, not the dropped one, and a second hold finds nothing left to drop.
+    _tpTarget = null;
+    // The load in flight resolves stale: nothing of it is applied to the page.
+    _activeLoadToken++;
+    // Its stream stops before it swaps its frame in.
+    VolumeViewer.cancelDisplayLoad?.();
+    const loader = document.getElementById('viewer-loader');
+    if (loader) loader.style.display = 'none';
+    const level = VolumeViewer.getActiveLevel?.() || null;
+    const grid = level?.dims ? ` (${level.dims.x}x${level.dims.y}x${level.dims.z})` : '';
+    _setQualityStatus(`${_tf('viewer.qualityActive', '{quality} active{grid}', { quality: _qualityLabel(_qualityMode), grid })}.`);
+    if (typeof Timeline !== 'undefined') Timeline.setFrame(frame, true, false);
+  }
+
+  /**
+   * Holds a timelapse on a Studio figure's frame. A frame still loading (playback
+   * stalled on it, or a scrub not landed yet) would take the screen under the figure
+   * though nothing changed after it opened: a frame queued behind the load in flight is
+   * dropped, and so is a load of another frame while the figure's frame is on screen
+   * (_dropOtherFrameLoad). -> true when the figure's frame is the one on screen; false
+   * when it is not (another frame landed, or a first-visit frame's coarse level shows
+   * while its own load runs), which the native pass settles with _returnToStudioFrame.
+   */
+  function _holdStudioFrame(frame) {
+    if (_tpPending && _tpPending.frame !== frame) _tpPending = null;
+    const shown = _currentTimepoint === frame && _shownTimepoint() === frame;
+    if (shown && _tpInFlight && _tpTarget !== null && _tpTarget.frame !== frame) _dropOtherFrameLoad(frame);
+    return shown;
+  }
+
+  /**
+   * Puts the frame a Studio figure was opened on back on screen, so its native pass
+   * reads that frame (a load still in flight when playback was paused can land after
+   * the preview). -> true once it is the frame mounted.
+   */
+  async function _returnToStudioFrame(frame, scoped) {
+    if (!_basePath || typeof Timeline === 'undefined') return false;
+    StudioEditor.setLoadProgress?.({
+      percent: 0,
+      label: _tf('studio.nativeReturnFrame', 'Loading frame {frame} again for its native picture…', { frame: _frameLabel(frame) })
+    }, scoped);
+    // A frame queued behind the load in flight must not follow this one onto the screen.
+    _tpPending = null;
+    Timeline.setFrame(frame, true, false);
+    let loaded = null;
+    // The page's load token of the load this waits on: a load started after it (a scrub
+    // once the Studio was closed, a quality switch) owns the scrubber from then on.
+    let ownToken = _activeLoadToken;
+    try {
+      if (_tpInFlight && _tpTarget !== null && _tpTarget.frame === frame) {
+        // The load in flight is this frame's (its coarse level was on screen when the
+        // Studio opened): it lands on its own, a second load would start it over. When it
+        // fails or is superseded, the frame is not put back.
+        await _whenTimepointIdle();
+        loaded = _currentTimepoint === frame ? { ok: true } : null;
+      } else {
+        // _loadTimepoint takes its token before its first await.
+        const load = _loadTimepoint(_basePath, frame);
+        ownToken = _activeLoadToken;
+        loaded = await load;
+      }
+    } catch (err) {
+      console.warn("[ViewerApp] The Studio figure's frame could not be loaded again:", err);
+      loaded = null;
+    } finally {
+      StudioEditor.setLoadProgress?.(null, scoped);
+    }
+    const back = Boolean(loaded) && _currentTimepoint === frame;
+    // Not put back because it failed: the scrubber shows the frame on screen again, as
+    // after a failed frame request. Superseded by a frame request or load started since,
+    // it is left to that one: the frame on screen now is about to be replaced.
+    const superseded = _tpInFlight || _activeLoadToken !== ownToken;
+    if (!back && !superseded && Number.isFinite(_currentTimepoint)) Timeline.setFrame(_currentTimepoint, true, false);
+    return back;
+  }
+
+  /**
+   * Mounts in BrickLoader the brick tree of the volume on screen (VolumeViewer's
+   * displayed tree), the tree a Studio native pass reads. Always asked, even when it is
+   * already the mount: an index of another tree still landing (a superseded stream's)
+   * must not commit over it afterwards. -> that tree's manifest once it is the mount,
+   * null when it cannot be (index refused, another mount won). A volume on screen that
+   * is not a brick tree (a slice stack) leaves the mount of a volume without a time
+   * axis as it is (-> the mounted manifest, its only tree). Nothing on screen (a WebGL
+   * context lost, or restored without its volume), or a timelapse frame shown from
+   * another source -> null: the mount is then whatever frame the prefetch reached.
+   */
+  async function _mountTreeOnScreen() {
+    if (typeof VolumeViewer.getDisplayedTree !== 'function') return BrickLoader.getManifest?.() || null;
+    const tree = VolumeViewer.getDisplayedTree() || null;
+    if (!tree) return !isLive && _hasMountedVolume() ? (BrickLoader.getManifest?.() || null) : null;
+    try {
+      await BrickLoader.init(tree.path, tree.manifest);
+    } catch (err) {
+      console.warn('[ViewerApp] The brick tree on screen could not be mounted for the native pass:', err);
+      return null;
+    }
+    return BrickLoader.getManifest?.() === tree.manifest ? tree.manifest : null;
+  }
+
+  /** The figure keeps its preview: the native pass could not run on its frame. */
+  function _reportStudioFrameLost(frame, scoped) {
+    const message = _tf('studio.nativeOtherTimepoint', 'The timelapse is no longer on frame {frame}, the frame of this figure: its native picture was not loaded and the preview is kept.', { frame: _frameLabel(frame) });
+    _setSliceStatus(message);
+    StudioEditor.setLoadProgress?.({ percent: 100, label: message }, scoped);
+    setTimeout(() => StudioEditor.setLoadProgress?.(null, scoped), 8000);
   }
 
   function _bindExportAndWorkspace() {
@@ -3560,12 +3822,15 @@ const ViewerApp = (() => {
     return `${_basePath}/${brickDir}`;
   }
 
-  /** The CutStore of the v5 tree mounted on screen, or null (any other tree). */
+  /**
+   * The CutStore of the v5 tree mounted on screen, or null (any other tree). Its base
+   * is the MOUNT's own path, so the store and the manifest are always one tree's.
+   */
   function _cutTreeOnScreen() {
     if (typeof CutStore === 'undefined' || typeof BrickLoader === 'undefined') return null;
     const manifest = BrickLoader.getManifest?.();
     if (!manifest || (manifest.schema !== 'iribhm-bricks-v5' && manifest.schema !== 'iribhm-bricks-v6')) return null;
-    const base = _brickTreeBaseOnScreen();
+    const base = BrickLoader.getBasePath?.() || _brickTreeBaseOnScreen();
     if (!base) return null;
     let tree = _cutTrees.get(base);
     if (!tree || tree.manifest !== manifest) {
@@ -3628,6 +3893,11 @@ const ViewerApp = (() => {
         channels: Number(dims0.channels) > 0 ? Number(dims0.channels) : null,
         sourceManifestUrl: `${_basePath}/${brickDir}/manifest.json`
       }).catch((err) => {
+        // A tree that is not there or not valid stays refused for the page; a network
+        // or server failure (5xx, 429) is forgotten, so the next pass opens it again.
+        const permanent = ['PLANES_INVALID', 'MIPS_INVALID', 'PLANES_STALE', 'PLANES_NO_CODEC'].includes(err?.code)
+          || (err?.code === 'PLANES_HTTP' && /\bHTTP (404|410)\b/.test(String(err?.message || '')));
+        if (!permanent && _planeTrees.get(base) === p) _planeTrees.delete(base);
         console.warn(`[ViewerApp] ${base} is not usable; the Studio reads the bricks.`, err?.message || err);
         return null;
       });
@@ -3655,6 +3925,10 @@ const ViewerApp = (() => {
         channels: Number(dims0.channels) > 0 ? Number(dims0.channels) : null,
         sourceManifestUrl: `${_basePath}/${brickDir}/manifest.json`
       }).catch((err) => {
+        // Same rule as the planes tree: only a missing or invalid tree is remembered.
+        const permanent = ['PLANES_INVALID', 'MIPS_INVALID', 'PLANES_STALE', 'PLANES_NO_CODEC'].includes(err?.code)
+          || (err?.code === 'PLANES_HTTP' && /\bHTTP (404|410)\b/.test(String(err?.message || '')));
+        if (!permanent && _planeTrees.get(base) === p) _planeTrees.delete(base);
         console.warn(`[ViewerApp] ${base} is not usable; the Studio reads the planes.`, err?.message || err);
         return null;
       });
@@ -3937,6 +4211,12 @@ const ViewerApp = (() => {
   async function _renderNativeSliceForStudio(options = {}) {
     if (typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || typeof VolumeSlicer === 'undefined' || typeof StudioPlaneOps === 'undefined') return null;
     if (!BrickLoader.isReady?.() || !VolumeSlicer.renderWithMaterial || !VolumeViewer.getRenderer?.() || !VolumeViewer.getMaterial?.()) return null;
+    // The tree the caller mounted for the pass (_mountTreeOnScreen): every batch names it,
+    // and another tree mounted by now is refused rather than read.
+    const pinnedManifest = options.manifest || null;
+    if (pinnedManifest && BrickLoader.getManifest?.() !== pinnedManifest) {
+      throw Object.assign(new Error('[ViewerApp] another brick tree is mounted than the one the native pass was planned on'), { code: 'BRICKS_MOUNT_CHANGED', stale: true });
+    }
 
     const controller = options.controller || new AbortController();
     if (!options.controller) {
@@ -3946,6 +4226,8 @@ const ViewerApp = (() => {
     const lod = Math.max(0, Math.floor(Number(options.lod) || 0));
     const dims = BrickLoader.getDimensions(lod);
     if (!dims) return null;
+    // The frame the caller bound the pass to (its preview's): every picture carries it.
+    const frame = options.timepoint !== undefined ? options.timepoint : _currentTimepoint;
     const channelCount = Math.max(1, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1);
     // The shader and the atlas carry four channels: a fifth is not shown (said at mount).
     const channels = Math.min(4, channelCount);
@@ -4090,7 +4372,7 @@ const ViewerApp = (() => {
       calibrated: _studioCalibrated(),
       physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
       channelState,
-      timepoint: _currentTimepoint,
+      timepoint: frame,
       nativeChunks: written,
       totalChunks: chunkTotal,
       ...extra
@@ -4207,6 +4489,7 @@ const ViewerApp = (() => {
       // stack needs a few bricks of many packs).
       byteRanges: true,
       streamOnly: true,
+      ...(pinnedManifest ? { manifest: pinnedManifest } : {}),
       compose: { channels, luts: floorLuts, components: 4, cropToVolume: true },
       onBrickLoaded,
       onProgress: (f) => { fraction = f; status(false); }
@@ -4634,61 +4917,11 @@ const ViewerApp = (() => {
   // a floating panel over the canvas. Both return a handle that owns the node.
 
   function _addPluginSidebarSection(def = {}) {
-    const sidebar = document.getElementById('viewer-sidebar');
-    if (!sidebar || !def.id) return null;
-    const safeId = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
-    document.getElementById(`plugin-section-${safeId}`)?.remove();
-    const root = document.createElement('div');
-    root.className = 'panel-section plugin-section';
-    root.id = `plugin-section-${safeId}`;
-    const title = document.createElement('div');
-    title.className = 'panel-title';
-    const label = document.createElement('span');
-    label.textContent = def.title || '';
-    title.appendChild(label);
-    const body = document.createElement('div');
-    body.className = 'plugin-section-body';
-    body.innerHTML = def.html || '';
-    root.appendChild(title);
-    root.appendChild(body);
-    if (def.hidden) root.hidden = true;
-    sidebar.appendChild(root);
-    if (window.lucide) lucide.createIcons({ nodes: [root] });
-    const handle = {
-      root, body,
-      setTitle(text) { label.textContent = text; },
-      setHtml(html) { body.innerHTML = html; if (window.lucide) lucide.createIcons({ nodes: [body] }); },
-      show() { root.hidden = false; },
-      hide() { root.hidden = true; },
-      remove() { root.remove(); }
-    };
-    if (typeof def.bind === 'function') def.bind(body, handle);
-    return handle;
+    return Utils.mountPluginSection(document.getElementById('viewer-sidebar'), def);
   }
 
   function _addPluginCanvasPanel(def = {}) {
-    const container = document.querySelector('.viewer-canvas-container');
-    if (!container || !def.id) return null;
-    const safeId = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
-    document.getElementById(`plugin-panel-${safeId}`)?.remove();
-    const root = document.createElement('div');
-    root.className = `scientific-panel ${def.className || ''}`.trim();
-    root.id = `plugin-panel-${safeId}`;
-    if (def.style) root.style.cssText = def.style;
-    root.innerHTML = def.html || '';
-    container.appendChild(root);
-    if (window.lucide) lucide.createIcons({ nodes: [root] });
-    const handle = {
-      root,
-      setHtml(html) { root.innerHTML = html; if (window.lucide) lucide.createIcons({ nodes: [root] }); },
-      show() { root.classList.add('visible'); },
-      hide() { root.classList.remove('visible'); },
-      toggle(force) { return root.classList.toggle('visible', force); },
-      isVisible() { return root.classList.contains('visible'); },
-      remove() { root.remove(); }
-    };
-    if (typeof def.bind === 'function') def.bind(root, handle);
-    return handle;
+    return Utils.mountPluginPanel(document.querySelector('.viewer-canvas-container'), def);
   }
 
   function _safeExportName() {
@@ -4823,7 +5056,10 @@ const ViewerApp = (() => {
     ChannelPanel.reset?.();
     _channelState = ChannelPanel.getState?.() || [];
 
-    // 5. Display: render mode, exposure, background, Z override.
+    // 5. Display: stabilisation, render mode, exposure, background, Z override.
+    //    A timelapse with an applicable registration opens stabilised; without one
+    //    setVolumeStabilized is a no-op.
+    setVolumeStabilized(true);
     const renderModeSelect = document.getElementById('select-render-mode');
     const defaultRenderMode = _defaultRenderModeId();
     if (renderModeSelect && defaultRenderMode) {
@@ -4873,7 +5109,6 @@ const ViewerApp = (() => {
   function _getWorkspaceState() {
     const state = {
       ui: {
-        presentationMode: document.body.classList.contains('presentation-mode'),
         sidebarHidden: document.querySelector('.viewer-sidebar')?.classList.contains('sidebar-hidden') || false,
         activeTool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate',
         display: { ..._displayState }
@@ -4922,13 +5157,44 @@ const ViewerApp = (() => {
     return _applyWorkspaceStateNow(state);
   }
 
+  /**
+   * The views init() restores once the volume and the plugins are up: the link's saved
+   * view when the operator chose it, then the one a hosting page or a brick-tree handoff
+   * left pending. The first camera fit was skipped for them (framingSuppressed); when
+   * none put a camera on the volume — a corrupt or truncated link, a view without a
+   * camera, a restore that failed, "open as new" — the volume is framed here, or on its
+   * first activation when nothing is mounted yet. → true when the link's view was applied.
+   */
+  function _applyInitialViewState(urlChoice, framingSuppressed) {
+    const restored = { cameraApplied: false };
+    let fromUrl = false;
+    if (urlChoice?.choice === 'restore' && urlChoice.state) {
+      _applyWorkspaceStateNow(urlChoice.state, restored);
+      fromUrl = true;
+    } else if (urlChoice?.choice === 'fresh') {
+      UrlState.clearHash();
+    }
+    if (_pendingWorkspaceState) {
+      _applyWorkspaceStateNow(_pendingWorkspaceState, restored);
+      _pendingWorkspaceState = null;
+    }
+    if (framingSuppressed && !restored.cameraApplied) {
+      if (_hasMountedVolume()) VolumeViewer.resetView({ resetClipping: urlChoice?.choice === 'fresh' });
+      else VolumeViewer.setHasLoadedVolume?.(false);
+    }
+    return fromUrl;
+  }
+
   // Internal: apply immediately (called by init() after volume is loaded). A saved
   // view that cannot be applied (hand-edited #state=, a state of an older build) must
   // not fail init() under a loaded volume: the dataset stays as it was opened.
-  function _applyWorkspaceStateNow(state = {}) {
+  // out.cameraApplied turns true when this state put its camera on the volume.
+  function _applyWorkspaceStateNow(state = {}, out = null) {
+    const applied = { cameraApplied: false };
     try {
       if (!state || typeof state !== 'object') throw new Error('workspace state is not an object');
-      _applyWorkspaceStateCore(state);
+      _applyWorkspaceStateCore(state, applied);
+      if (out && applied.cameraApplied) out.cameraApplied = true;
       return true;
     } catch (err) {
       console.warn('[ViewerApp] Saved view could not be applied:', err);
@@ -4937,18 +5203,28 @@ const ViewerApp = (() => {
     }
   }
 
-  function _applyWorkspaceStateCore(state) {
+  function _applyWorkspaceStateCore(state, out = null) {
     const ui = state.ui || {};
     const viewerState = state.viewer && Object.keys(state.viewer).length ? state.viewer : state;
 
-    if (viewerState.camera) VolumeViewer.setCameraState(viewerState.camera);
-
-    if (typeof ui.presentationMode === 'boolean') {
-      document.body.classList.toggle('presentation-mode', ui.presentationMode);
-      _scheduleViewerResize();
+    if (viewerState.camera) {
+      const cameraApplied = VolumeViewer.setCameraState(viewerState.camera) === true;
+      if (out) out.cameraApplied = cameraApplied;
     }
+
+    // Presentation mode is the presentation-mode plugin's state (state.plugins): it
+    // alone owns the way out of it, and without the plugin there is nothing to restore.
     if (typeof ui.sidebarHidden === 'boolean') {
       document.querySelector('.viewer-sidebar')?.classList.toggle('sidebar-hidden', ui.sidebarHidden);
+      // On the page itself the floating button is the only way back to a hidden
+      // sidebar; in a panel the host's own toggle drives it.
+      if (!_isIframe) {
+        const reopenBtn = document.getElementById('btn-reopen-sidebar');
+        if (reopenBtn) {
+          reopenBtn.style.display = ui.sidebarHidden ? 'flex' : 'none';
+          if (ui.sidebarHidden && window.lucide) lucide.createIcons({ nodes: [reopenBtn] });
+        }
+      }
       _scheduleViewerResize();
     }
     if (ui.display) {
@@ -5148,7 +5424,7 @@ const ViewerApp = (() => {
     
     const popup = document.createElement('div');
     popup.id = 'measure-color-popup-active';
-    popup.style.cssText = 'position:fixed; background:var(--bg-surface,#222); border:1px solid var(--border-color,#444); border-radius:6px; padding:6px; z-index:99999; box-shadow:0 4px 12px rgba(0,0,0,0.5); display:flex; flex-direction:column; gap:4px;';
+    popup.style.cssText = 'position:fixed; background:var(--bg-surface,#222); border:1px solid var(--border-default, #444); border-radius:6px; padding:6px; z-index:99999; box-shadow:0 4px 12px rgba(0,0,0,0.5); display:flex; flex-direction:column; gap:4px;';
 
     for (const row of MEASURE_PALETTE) {
       const rowDiv = document.createElement('div');
@@ -5197,26 +5473,34 @@ const ViewerApp = (() => {
   function _renderVolumeMeasurement() {
     const list = document.getElementById('volume-measure-list');
     if (list) {
+      const colorLabel = Utils.escapeHtml(_t('viewer.measureChangeColor', 'Change colour'));
+      const deleteLabel = Utils.escapeHtml(_t('viewer.measureDelete', 'Delete measurement'));
+      const nameLabel = Utils.escapeHtml(_t('plugins.measure-distance.labelPlaceholder', 'Label'));
       list.innerHTML = _volumeMeasurements.length
-        ? _volumeMeasurements.map(item => `
+        ? _volumeMeasurements.map(item => {
+          const visLabel = Utils.escapeHtml(item.visible === false
+            ? _t('viewer.measureShow', 'Show measurement')
+            : _t('viewer.measureHide', 'Hide measurement'));
+          return `
           <div class="measurement-row" style="display: flex; align-items: center; gap: 4px; padding: 4px 0;">
-            <button class="btn btn-ghost btn-sm measure-color-btn" type="button" data-volume-measure-action="toggle-color" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 0; width: 24px; height: 24px; border: none; flex-shrink: 0;">
-              <span style="background:${_safeMeasureColor(item.color)}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
+            <button class="btn btn-ghost btn-sm measure-color-btn" type="button" data-volume-measure-action="toggle-color" data-measurement-id="${Utils.escapeHtml(item.id)}" title="${colorLabel}" aria-label="${colorLabel}" aria-haspopup="true" style="padding: 0; width: 24px; height: 24px; border: none; flex-shrink: 0;">
+              <span aria-hidden="true" style="background:${_safeMeasureColor(item.color)}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
             </button>
-            <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="${Utils.escapeHtml(_t('plugins.measure-distance.labelPlaceholder', 'Label'))}" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
+            <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="${nameLabel}" aria-label="${nameLabel}" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-default); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
             <span style="white-space: nowrap; font-size: 11px; color: var(--text-muted);">
               ${item.visible === false ? Utils.escapeHtml(_t('viewer.measureHidden', 'Hidden')) : `${_fmtUm(item.distance)} µm`}
             </span>
             <span class="related-actions" style="display: flex; gap: 2px;">
-              <button class="btn btn-ghost btn-sm" type="button" data-volume-measure-action="toggle" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 2px;">
-                <i data-lucide="${item.visible === false ? 'eye-off' : 'eye'}"></i>
+              <button class="btn btn-ghost btn-sm" type="button" data-volume-measure-action="toggle" data-measurement-id="${Utils.escapeHtml(item.id)}" title="${visLabel}" aria-label="${visLabel}" style="padding: 2px;">
+                <i data-lucide="${item.visible === false ? 'eye-off' : 'eye'}" aria-hidden="true"></i>
               </button>
-              <button class="btn btn-ghost btn-sm" type="button" data-volume-measure-action="delete" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 2px;">
-                <i data-lucide="trash-2"></i>
+              <button class="btn btn-ghost btn-sm" type="button" data-volume-measure-action="delete" data-measurement-id="${Utils.escapeHtml(item.id)}" title="${deleteLabel}" aria-label="${deleteLabel}" style="padding: 2px;">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </span>
           </div>
-        `).join('')
+        `;
+        }).join('')
         : Utils.escapeHtml(_t('viewer.measureNone', 'No saved measurement yet.'));
       if (window.lucide) lucide.createIcons({ nodes: [list] });
     }
@@ -5385,7 +5669,7 @@ const ViewerApp = (() => {
     // Never in a compare panel: compare mounts up to four iframes, each a full
     // document with its own VolumeViewer, budget and WebGL context — four
     // simultaneous prefetches of the same series would quadruple both.
-    if (!isLive || _isIframe || !_basePath || document.hidden) return;
+    if (!isLive || _isIframe || !_basePath || document.hidden || _nativePassHolds > 0) return;
     // Bricked datasets only: the slice path has no way to load without displaying.
     if (!_brickManifest) return;
     const total = Number(datasetMeta?.dimensions?.t) || 0;
@@ -5396,7 +5680,7 @@ const ViewerApp = (() => {
     try {
       const quality = _qualityMode;
       for (let step = 1; step <= total; step++) {
-        if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode) break;
+        if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode || _nativePassHolds > 0) break;
         const t = ((_currentTimepoint || 0) + step) % total;
         if (VolumeViewer.hasCachedVolume?.(_basePath, quality, t)) continue;
 
@@ -5412,7 +5696,7 @@ const ViewerApp = (() => {
           await new Promise(r => setTimeout(r, 120));
           waited += 120;
         }
-        if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode) break;
+        if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode || _nativePassHolds > 0) break;
 
         const res = await VolumeViewer.loadBrickedVolumeStream(
           _basePath, datasetMeta, t, null, { quality, preload: true });
@@ -5783,6 +6067,28 @@ const ViewerApp = (() => {
   let _tpLoadStart = 0;
   let _tpInFlight = false;
   let _tpPending = null;
+  // The frame _requestTimepoint is loading right now ({ frame, origin }): a quality
+  // switch reloads THAT frame, not the one still on screen, or the scrubber would
+  // keep showing a frame whose load the switch silently superseded.
+  let _tpTarget = null;
+  /**
+   * Resolves once no frame request of _requestTimepoint is running or queued (a queued
+   * one starts as the running one settles, so _tpInFlight stays up across the pair).
+   */
+  async function _whenTimepointIdle() {
+    while (_tpInFlight) await new Promise((resolve) => { setTimeout(resolve, 50); });
+  }
+
+  /**
+   * Holds a timelapse still for an export: playback stops, and the promise resolves once
+   * the frame the scrubber shows is on screen. A figure built from several renders (the
+   * Decompose main view and its vignettes) then comes from one frame.
+   */
+  function _holdTimelineForExport() {
+    if (!isLive) return Promise.resolve();
+    if (typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
+    return _whenTimepointIdle();
+  }
 
   // Serialising the LOADER was only half of it: the playback clock still advanced on
   // wall time, so a 600 ms native frame let the head run ~6 frames ahead and the loader
@@ -5820,6 +6126,8 @@ const ViewerApp = (() => {
     if (frame === _currentTimepoint && !remount) return;
     _tpInFlight = true;
     let remountFrame = null;
+    const target = { frame, origin };
+    _tpTarget = target;
     _loadTimepoint(basePath, frame, { origin })
       .catch((err) => {
         _showLoadingError(err);
@@ -5834,6 +6142,7 @@ const ViewerApp = (() => {
       })
       .finally(() => {
         _tpInFlight = false;
+        if (_tpTarget === target) _tpTarget = null;
         const next = _tpPending;
         _tpPending = null;
         if (next !== null) _requestTimepoint(basePath, next.frame, next.origin, next.remount);
@@ -5906,10 +6215,19 @@ const ViewerApp = (() => {
         if (loadToken === _activeLoadToken && loader) loader.style.display = 'none';
       }
     } : {};
+    // The frame's own rigid transform travels with its data, so the renderer sets it
+    // the moment the entry is shown (coarse preview, streaming fill) instead of after
+    // the load resolves: the new frame is never drawn through the previous frame's
+    // warp. The transition cube shares the main cube's warp, so a different frame
+    // fills in hidden and swaps in whole, as a revisit does.
+    const frameOptions = _registration
+      ? { timepointTransform: _stabilizeVolume ? _transformForTimepoint(t) : null }
+      : {};
+    const hideTransition = !opts.force || t !== _currentTimepoint;
     let result;
     try {
       result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, onLoadProgress,
-        { deferActivation: isQualitySwitch, hideTransition: !opts.force, ...firstPicture });
+        { deferActivation: isQualitySwitch, hideTransition, ...frameOptions, ...firstPicture });
       if (_isStale()) { _bailStale(); return; }
       if ((!result || result.available === false) && !result?.stale && primaryQuality === '512x512') {
         console.warn('[ViewerApp] 512x512 unavailable, falling back to 256x256:', result?.reason || 'unknown');
@@ -5921,13 +6239,8 @@ const ViewerApp = (() => {
         VolumeViewer.setQualityTarget?.(primaryQuality, _qualityMode);
         _showResolutionDowngradeNotice(_qualityLabel(requested), _qualityLabel(primaryQuality));
         result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, onLoadProgress,
-          { deferActivation: isQualitySwitch, hideTransition: !opts.force });
+          { deferActivation: isQualitySwitch, hideTransition, ...frameOptions });
         if (_isStale()) { _bailStale(); return; }
-      }
-      if (!_isStale() && result && result.manifest) {
-        _brickManifest = result.manifest;
-        if (_isV5BrickManifest()) _qualityMode = _withColumn(_qualityMode);
-        _updateQualityOptionLabels();
       }
     } catch (err) {
       // A load that lost the race says nothing about the quality it asked for.
@@ -5942,7 +6255,7 @@ const ViewerApp = (() => {
         VolumeViewer.setQualityTarget?.(primaryQuality, _qualityMode);
         _showResolutionDowngradeNotice(_qualityLabel(requested), _qualityLabel(primaryQuality));
         result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, onLoadProgress,
-          { deferActivation: isQualitySwitch, hideTransition: !opts.force });
+          { deferActivation: isQualitySwitch, hideTransition, ...frameOptions });
         if (_isStale()) { _bailStale(); return; }
       } else {
         _perf()?.end(perfId, {
@@ -5980,6 +6293,7 @@ const ViewerApp = (() => {
       throw Utils.userError('QUALITY_UNAVAILABLE', 'viewer.qualityUnavailable', 'Quality {quality} unavailable', null, { quality: _qualityLabel(primaryQuality) });
     }
 
+    if (_currentTimepoint !== t) _timepointGeneration++;
     _currentTimepoint = t;
     _loadedQualities.add(qualityKey);
     loadedTimepoints.add(t);
@@ -6218,17 +6532,32 @@ const ViewerApp = (() => {
       : _tf('exportView.losslessLevel', 'Lossless at {x} × {y} × {z}: the native level is more than this GPU holds.', d);
   }
 
-  /** Runs `fn` with the volume on screen at the lossless target, then puts the quality back. */
+  /**
+   * Runs `fn` with the volume on screen at the lossless target, then puts the quality
+   * back. A timelapse is paused first. Rejects (code LOSSLESS_INTERRUPTED) without
+   * running `fn` when the lossless reload did not end on screen at that level: a load
+   * that took over from it (a scrub, a time sync) or a coarser level the GPU fell back to.
+   */
   async function _withLosslessQuality(fn, onStatus = null) {
     const target = _losslessExportTarget();
     const previous = _qualityMode;
-    const already = target && _lodForQuality(previous) === target.lod
-      && (!_isV5BrickManifest() || _currentColumn() === 'll');
-    if (!target || already) return fn(target);
+    const isLossless = () => !_isV5BrickManifest() || _currentColumn() === 'll';
+    const already = target && _lodForQuality(previous) === target.lod && isLossless();
+    if (!target || already) {
+      await _holdTimelineForExport();
+      return fn(target);
+    }
+    // The reload below takes over the frame the scrubber asked for; once playback is
+    // stopped nothing queues another one behind it.
+    if (isLive && typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
     onStatus?.(_t('exportView.loadingLossless', 'Loading the lossless level…'));
     _exportingLossless = true;
     try {
-      await _setQualityMode(target.key);
+      const loaded = await _setQualityMode(target.key);
+      if (!loaded || !loaded.ok || _lodForQuality(_qualityMode) !== target.lod || !isLossless()) {
+        throw Utils.userError('LOSSLESS_INTERRUPTED', 'exportView.losslessInterrupted',
+          'The lossless level could not be put on screen for the export. Try again once the volume has finished loading.');
+      }
       return await fn(target);
     } finally {
       _exportingLossless = false;
@@ -6481,6 +6810,7 @@ const ViewerApp = (() => {
 
   function _bindIframeSync() {
     if (!_isIframe) return;
+    _hostListenerBound = true;
 
     // Send Z sync
     document.getElementById('slicer-position')?.addEventListener('input', (e) => {
@@ -6549,11 +6879,11 @@ const ViewerApp = (() => {
           const kind = typeof current[k];
           if (kind === 'number' ? Number.isFinite(v) : (kind === 'boolean' || kind === 'string') && typeof v === kind) patch[k] = v;
         }
-        const newState = [..._channelState];
-        newState[matchingIdx] = { ...current, ...patch };
-        ChannelPanel.setState(newState, { notify: false });
+        const next = { ...current, ...patch };
+        // One channel, patched in place: a sibling's drag arrives once per frame.
+        ChannelPanel.patchChannel(matchingIdx, next, { notify: false });
         // What the panel accepted (clamped, re-derived), not the raw message.
-        const applied = ChannelPanel.getState?.()?.[matchingIdx] || newState[matchingIdx];
+        const applied = ChannelPanel.getState?.()?.[matchingIdx] || next;
         _channelState[matchingIdx] = { ...applied };
         VolumeViewer.updateChannel(matchingIdx, applied);
       }
@@ -6718,6 +7048,21 @@ const ViewerApp = (() => {
       // flat with the face the flag names as the top toward the camera — what the
       // z-stack browser will show — so the operator picks the side by looking.
       VolumeViewer.setSampleUpsideDown?.(data.value === true, { preview: true });
+    } else if (data.type === 'SET_ORIENTATION_BASE') {
+      // The admin editor saved (or threw away) a calibration under this preview:
+      // the anatomical camera sync and the axis-aligned views read Q_base from
+      // datasetMeta, so it follows the editor's draft. The volume is not moved.
+      const v = data.quaternion;
+      const a = Array.isArray(v) ? v : (v && typeof v === 'object' ? [v.x, v.y, v.z, v.w] : null);
+      const valid = !!a && a.length === 4 && a.every(Number.isFinite) && Math.hypot(a[0], a[1], a[2], a[3]) > 1e-4;
+      if (v == null || valid) {
+        if (datasetMeta) {
+          if (valid) datasetMeta.orientation = Array.isArray(v) ? a.slice() : { x: a[0], y: a[1], z: a[2], w: a[3] };
+          else delete datasetMeta.orientation;
+        }
+        VolumeViewer.setFrameQuaternion?.(_baseQuaternion());
+        VolumeViewer.triggerRender?.();
+      }
     } else if (data.type === 'TOGGLE_VISUAL') {
       if (data.visual === 'grid') {
         VolumeViewer.setGridMode?.(data.state ? 1 : 0);
@@ -6737,6 +7082,10 @@ const ViewerApp = (() => {
         }
       }
     } else if (data.type === 'REQUEST_SCREENSHOT') {
+      // The admin's "set the preview" button; `requestId` is echoed so a late answer
+      // to an abandoned request is told apart. Errors travel as codes, never as text.
+      const requestId = typeof data.requestId === 'string' ? data.requestId : null;
+      const reply = (msg) => window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, requestId, ...msg }, Utils.trustedTargetOrigin());
       try {
         let canvas = null;
         if (_zstackActive || (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible())) {
@@ -6756,8 +7105,7 @@ const ViewerApp = (() => {
         }
 
         if (!canvas) {
-          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: 'No active canvas found' }, Utils.trustedTargetOrigin());
+          reply({ success: false, error: 'no_canvas' });
           return;
         }
         const size = 512;
@@ -6779,11 +7127,10 @@ const ViewerApp = (() => {
         if (canvas === VolumeViewer.getRenderer?.()?.domElement) VolumeViewer.renderNow?.();
         ctx.drawImage(canvas, dx, dy, dWidth, dHeight);
         const dataUrl = thumbCanvas.toDataURL('image/webp', 0.9);
-        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-        window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: true, dataUrl }, Utils.trustedTargetOrigin());
+        reply({ success: true, dataUrl });
       } catch (err) {
-        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-        window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: err.message }, Utils.trustedTargetOrigin());
+        console.error('[ViewerApp] Thumbnail capture failed:', err);
+        reply({ success: false, error: 'capture_failed' });
       }
     }
   }
@@ -7053,26 +7400,26 @@ const ViewerApp = (() => {
   // (PanelResources, js/core/panel-resources.js): `?panels=N` at boot, PANEL_RESOURCES
   // after, carrying the loader settings and the GPU budget this panel may plan against.
   let _panelResourcesKey = null;
-  let _naturalGpuBudget = null;
 
-  /** What this page would give itself alone, read before a share replaces it (null: unknown). */
+  /** What this page would give itself alone, the share left out (null: unknown). Read at
+   *  each call: a context loss since the last reading has lowered it. */
   function _naturalGpuBudgetBytes() {
-    if (_naturalGpuBudget === null) {
-      // Before the renderer exists the card is unknown: read it once it does, not before.
-      if (!VolumeViewer.getRenderer?.()) return null;
-      let bytes = 0;
-      try { bytes = Number(VolumeViewer.getGpuBudget?.()?.bytes) || 0; } catch (err) { bytes = 0; }
-      _naturalGpuBudget = bytes > 0 ? bytes : 0;
-    }
-    return _naturalGpuBudget || null;
+    // Before the renderer exists the card is unknown, and that figure is not the card's.
+    if (!VolumeViewer.getRenderer?.()) return null;
+    if (typeof SVRManager === 'undefined' || typeof SVRManager.vramBudget !== 'function') return null;
+    let bytes = 0;
+    try { bytes = Number(SVRManager.vramBudget(VolumeViewer.getRenderer(), { uncapped: true })?.bytes) || 0; } catch (err) { bytes = 0; }
+    return bytes > 0 ? bytes : null;
   }
 
   function _applyPanelResources(data = {}) {
     if (!_isIframe || _panelIndex === null) return;
-    const natural = _naturalGpuBudgetBytes();
-    const loader = data.loader && typeof data.loader === 'object' ? data.loader
-      : (typeof PanelResources !== 'undefined' && Number(data.panels) > 0
-        ? PanelResources.loaderSettings(Number(data.panels), navigator.hardwareConcurrency) : null);
+    // Divided here, from this page's own loader defaults: the host has no BrickLoader,
+    // and a copy of its numbers there would undo any retune of the loader.
+    const loader = typeof PanelResources !== 'undefined' && Number(data.panels) > 0
+      ? PanelResources.loaderSettings(Number(data.panels), navigator.hardwareConcurrency,
+        typeof BrickLoader !== 'undefined' ? BrickLoader.DEFAULTS : null)
+      : (data.loader && typeof data.loader === 'object' ? data.loader : null);
     const vram = Number(data.vramBytes) > 0 ? Number(data.vramBytes) : null;
     const key = JSON.stringify([loader, vram]);
     if (key === _panelResourcesKey) return;
@@ -7080,9 +7427,18 @@ const ViewerApp = (() => {
     if (loader && typeof BrickLoader !== 'undefined' && typeof BrickLoader.configure === 'function') {
       try { BrickLoader.configure(loader); } catch (err) { console.warn('[ViewerApp] Loader settings refused:', err); }
     }
-    if (typeof SVRManager !== 'undefined' && typeof SVRManager.setVramBudget === 'function') {
-      // Never more than the page would allow itself alone; null gives the whole card back.
-      SVRManager.setVramBudget(vram === null ? null : (natural ? Math.min(vram, natural) : vram));
+    // The Studio's native pass decodes planes and cut bricks in pools of their own:
+    // their share of the cores too.
+    const studioWorkers = Number(loader?.studioWorkers) > 0 ? Number(loader.studioWorkers) : null;
+    if (studioWorkers) {
+      if (typeof CutStore !== 'undefined' && typeof CutStore.configure === 'function') CutStore.configure({ workers: studioWorkers });
+      if (typeof PlaneLoader !== 'undefined' && typeof PlaneLoader.configure === 'function') PlaneLoader.configure({ workers: studioWorkers });
+    }
+    if (typeof SVRManager !== 'undefined' && typeof SVRManager.setVramCap === 'function') {
+      // A cap, not an override: the page's own budget (the card, halved after each context
+      // loss) still applies under it, so a lost context reloads coarser here as it does in a
+      // lone viewer. Null gives the whole card back.
+      SVRManager.setVramCap(vram);
       // A smaller share is honoured now, not at the next frame that lands.
       VolumeViewer.trimCache?.();
     }
@@ -7277,7 +7633,8 @@ const ViewerApp = (() => {
           calibrated: _studioCalibrated(),
           physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
           channelState,
-          timepoint: _currentTimepoint
+          // The frame of the volume rendered, as the Studio preview names it.
+          timepoint: _displayedTimepoint()
         };
       } finally {
         VolumeSlicer.releaseHiPass?.();
@@ -7592,6 +7949,7 @@ const ViewerApp = (() => {
     openStudio,
     askExportQuality: _askExportQuality,
     withLosslessQuality: _withLosslessQuality,
+    holdForExport: _holdTimelineForExport,
     getCurrentSliceResult,
     getCaptureCanvas,
     getSamplingVolume,
@@ -7608,7 +7966,9 @@ const ViewerApp = (() => {
     // Exposed for early module-level TOGGLE_ZSTACK listener:
     _applyZstackState,
     _setPendingZstack: (v) => { _pendingZstackState = v; }, // v = {desired, slice}
-    _isReady: () => _isInitialized
+    _isReady: () => _isInitialized,
+    // The host listener of _bindIframeSync is in place (it answers REQUEST_SCREENSHOT).
+    _hearsHost: () => _hostListenerBound
   };
 })();
 
@@ -7646,6 +8006,22 @@ window.addEventListener('message', (e) => {
   // handler of _bindIframeSync applies it (with the slicer-overlay teardown), so
   // it must not be applied twice from here.
   if (!ViewerApp._isReady?.()) ViewerApp._setPendingZstack?.(payload);
+});
+
+// Early answer to REQUEST_SCREENSHOT: the admin preview shows its "set the preview"
+// button as soon as the frame has loaded, before init() binds the handler that
+// renders a thumbnail (or after a boot that failed and never will). Unanswered, the
+// button would wait forever; it is told the page is not ready instead.
+window.addEventListener('message', (e) => {
+  if (!_fromViewerHost(e)) return;
+  const data = e.data;
+  if (!data || data.type !== 'REQUEST_SCREENSHOT' || ViewerApp._hearsHost?.()) return;
+  window.parent.postMessage({
+    type: 'SCREENSHOT_RESPONSE',
+    requestId: typeof data.requestId === 'string' ? data.requestId : null,
+    success: false,
+    error: 'not_ready'
+  }, Utils.trustedTargetOrigin());
 });
 
 // Boot-level safety net (defense in depth): init() is async — if any UI-build step

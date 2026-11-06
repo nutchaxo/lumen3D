@@ -3,6 +3,8 @@
 // bc-codec.js — the very blocks BCCodec.encodeBox gives for the raw assembly — with
 // the box rounded up to whole blocks; a box that does not hold the assembly's voxels
 // is an error, not a wrong upload; no assembly at all encodes the zero brick.
+// TAKE with `split: true` returns the assembly as the RG and R planes of a split atlas
+// (bytes 0–1 interleaved, byte 2 alone, byte 3 dropped), the cells taken before.
 //
 // Run: node tests/js/test_brick_decode_encode.mjs
 import assert from 'node:assert/strict';
@@ -56,8 +58,8 @@ function makeWorker() {
         packing: { mode: 'grid', cols: 9 }, expect: { width: 594, height: 528 }, assemble: { key, slot, components } } });
       for (let i = 0; i < 20; i++) await tick();
     },
-    async take(id, key, voxels, components, encode, cells) {
-      self.onmessage({ data: { type: 'TAKE', id, batch: 1, key, voxels, components, ...(encode ? { encode } : {}), ...(cells ? { cells } : {}) } });
+    async take(id, key, voxels, components, encode, cells, split = false) {
+      self.onmessage({ data: { type: 'TAKE', id, batch: 1, key, voxels, components, ...(encode ? { encode } : {}), ...(cells ? { cells } : {}), ...(split ? { split: true } : {}) } });
       for (let i = 0; i < 5; i++) await tick();
       return results.find(m => m.id === id);
     },
@@ -138,6 +140,33 @@ const V = 66 * 66 * 66;
   assert.equal(res.ok, false);
   assert.match(res.message, /does not hold/);
   console.log('mismatched box refused: OK');
+}
+
+// Split planes: the very bytes of the raw assembly, de-interleaved; cells unchanged.
+{
+  const raw = makeWorker();
+  for (let c = 0; c < 3; c++) await raw.decode(1 + c, 'k', c, 4);
+  const plain = await raw.take(9, 'k', V, 4, null, { w: 66, h: 66, d: 66, apron: 1, margin: 0, blocks: false });
+  assert.ok(plain.ok && plain.buffer, 'raw assembly');
+  const rgba = new Uint8Array(plain.buffer);
+  const rgExpected = new Uint8Array(V * 2);
+  const rExpected = new Uint8Array(V);
+  for (let i = 0; i < V; i++) { rgExpected[i * 2] = rgba[i * 4]; rgExpected[i * 2 + 1] = rgba[i * 4 + 1]; rExpected[i] = rgba[i * 4 + 2]; }
+
+  const w = makeWorker();
+  for (let c = 0; c < 3; c++) await w.decode(1 + c, 'k', c, 4);
+  const res = await w.take(9, 'k', V, 4, null, { w: 66, h: 66, d: 66, apron: 1, margin: 0, blocks: false }, true);
+  assert.ok(res.ok, res.message);
+  assert.equal(res.buffer, undefined, 'no RGBA buffer next to the planes');
+  assert.equal(res.split.planes.length, 2);
+  assert.equal(Buffer.compare(Buffer.from(res.split.planes[0]), Buffer.from(rgExpected.buffer)), 0, 'RG plane = bytes 0 and 1 of each voxel');
+  assert.equal(Buffer.compare(Buffer.from(res.split.planes[1]), Buffer.from(rExpected.buffer)), 0, 'R plane = byte 2 of each voxel');
+  assert.equal(Buffer.compare(Buffer.from(res.cellMax), Buffer.from(plain.cellMax)), 0, 'cells of the split brick = cells of the assembly');
+
+  const two = makeWorker();
+  const refused = await two.take(10, 'z', V, 2, null, null, true);
+  assert.equal(refused.ok, false, 'two components cannot be split');
+  console.log('worker-side split planes = de-interleaved assembly: OK');
 }
 
 console.log('brick decode encode: OK');

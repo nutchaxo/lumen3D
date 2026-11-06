@@ -98,19 +98,17 @@ const Explorer = (() => {
     const btnGrid = document.getElementById('btn-view-grid');
     const btnList = document.getElementById('btn-view-list');
 
-    btnGrid?.addEventListener('click', () => {
-      _currentView = 'grid';
-      btnGrid.classList.add('active');
-      btnList.classList.remove('active');
+    const showView = (view) => {
+      _currentView = view;
+      [[btnGrid, 'grid'], [btnList, 'list']].forEach(([btn, v]) => {
+        if (!btn) return;
+        btn.classList.toggle('active', v === view);
+        btn.setAttribute('aria-pressed', String(v === view));
+      });
       _render();
-    });
-
-    btnList?.addEventListener('click', () => {
-      _currentView = 'list';
-      btnList.classList.add('active');
-      btnGrid.classList.remove('active');
-      _render();
-    });
+    };
+    btnGrid?.addEventListener('click', () => showView('grid'));
+    btnList?.addEventListener('click', () => showView('list'));
 
     // Search Input
     const searchInput = document.getElementById('search-input');

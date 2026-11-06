@@ -511,22 +511,6 @@ const ExportManager = (() => {
     }
   }
 
-  function exportMetadata() {
-    const dataset = _ctx.dataset;
-    if (!dataset) {
-      _toast(_t('download.noMetadata', 'No metadata available'));
-      return;
-    }
-    const payload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      dataset,
-      citation: _citationBlock()
-    };
-    const name = _safeName(dataset.name || dataset.id || 'metadata');
-    _downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `${name}_metadata.json`);
-  }
-
   function _plotlyCsv(graph) {
     const traces = graph.data || graph._fullData || [];
     const rows = [['trace', 'x', 'y']];
@@ -676,7 +660,6 @@ const ExportManager = (() => {
     exportGraph,
     exportWorkspace,
     exportMeasures,
-    exportMetadata,
     downloadBlob: _downloadBlob,
     toast: _toast,
     saveWorkspace,

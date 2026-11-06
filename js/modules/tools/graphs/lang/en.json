@@ -32,6 +32,7 @@
   "x_allChannels": "Intensity (every channel)",
   "x_summary": "— one value per series —",
   "computing": "Computing…",
+  "reading": "Reading the volume… {pct} %",
   "err_notReady": "The data is not ready yet. Wait for the dataset to finish loading.",
   "err_noData": "Nothing to plot with these choices.",
   "err_timeout": "A dataset took too long to answer.",

@@ -14,9 +14,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
   <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 
-  <!-- Lucide Icons -->
-  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
-
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
@@ -230,8 +227,8 @@
           </div>
         </div>
         <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
-          <div class="panel-title" data-i18n="viewer.layers">Layers</div>
-          <div class="studio-layers-list" id="studio-layers-list"></div>
+          <div class="panel-title" id="studio-layers-title" data-i18n="viewer.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list" role="list" aria-labelledby="studio-layers-title"></div>
         </div>
       </div>
       <div class="studio-workspace" id="studio-workspace">
@@ -256,6 +253,7 @@
     </div>
   </div>
 
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
   <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>

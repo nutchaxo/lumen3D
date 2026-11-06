@@ -121,8 +121,11 @@ class SVRManager {
    * >= 8 GB, else 1 GiB. Each WebGL context loss noted in the last week halves it (floor
    * 256 MiB), and an allocation that failed in this session caps it below that size.
    * SVRManager.setVramBudget replaces all of it for the session (tests, tooling).
+   * SVRManager.setVramCap bounds the result from above (a Compare panel's share of the
+   * machine) without replacing it, so a context loss still lowers what a capped page
+   * plans against; `uncapped` reads the budget the page would give itself alone.
    */
-  static vramBudget(renderer) {
+  static vramBudget(renderer, { uncapped = false } = {}) {
     const info = SVRManager.gpuInfo(renderer);
     const GiB = 1024 * 1024 * 1024;
     const MiBb = 1024 * 1024;
@@ -142,12 +145,20 @@ class SVRManager {
     const losses = SVRManager._recentContextLosses();
     if (losses > 0 && source !== 'override') bytes = Math.max(256 * MiBb, bytes / Math.pow(2, losses));
     if (Number.isFinite(SVRManager._failedAllocBytes)) bytes = Math.min(bytes, SVRManager._failedAllocBytes - 1);
-    return { bytes: Math.max(0, Math.floor(bytes)), source, contextLosses: losses, vramGB: modelGB, ...info };
+    const cap = uncapped ? null : SVRManager._sessionCapBytes;
+    const capped = Boolean(cap && cap < bytes);
+    if (capped) bytes = cap;
+    return { bytes: Math.max(0, Math.floor(bytes)), source, capped, contextLosses: losses, vramGB: modelGB, ...info };
   }
 
   /** Session override of the budget, in bytes (null clears it). */
   static setVramBudget(bytes) {
     SVRManager._sessionOverrideBytes = Number.isFinite(Number(bytes)) && Number(bytes) > 0 ? Number(bytes) : null;
+  }
+
+  /** Upper bound on the budget for the session, in bytes (null clears it). */
+  static setVramCap(bytes) {
+    SVRManager._sessionCapBytes = Number.isFinite(Number(bytes)) && Number(bytes) > 0 ? Number(bytes) : null;
   }
 
   static _overrideBytes() {
@@ -162,11 +173,12 @@ class SVRManager {
   static noteContextLost() {
     const now = Date.now();
     SVRManager._sessionLosses = (SVRManager._sessionLosses || 0) + 1;
-    // A context lost while a compressed atlas was alive: this device's driver may claim RGTC and
-    // fail to allocate it (Adreno 740 under ANGLE/GL: texStorage3D 0x500, then the context is
-    // lost on every load, and Chrome ends up refusing the page any WebGL context). Never again
-    // on this device.
-    if (SVRManager._liveCompressed.size) SVRManager.noteCompressionFailed();
+    // A compressed atlas alive, or one whose allocation was attempted moments ago (an atlas
+    // refused while the context went down is disposed before the loss event arrives).
+    const sinceAlloc = now - SVRManager._lastCompressedAllocAt;
+    if (SVRManager._liveCompressed.size || (sinceAlloc >= 0 && sinceAlloc < SVRManager.COMPRESSION_SUSPECT_MS)) {
+      SVRManager._noteCompressedLoss(now);
+    }
     try {
       if (typeof localStorage === 'undefined') return;
       const list = SVRManager._storedLosses().filter(t => now - t < SVRManager.CONTEXT_LOSS_MEMORY_MS);
@@ -175,19 +187,60 @@ class SVRManager {
     } catch (e) { /* storage blocked: the session count still applies */ }
   }
 
-  /** Forget the recorded context losses and the failure cap (operator action). */
+  /**
+   * A context lost while a compressed atlas was alive. Some drivers claim RGTC and break on
+   * a real atlas (Adreno 740 under ANGLE/GL: texStorage3D 0x500, then the context is lost on
+   * every load, and Chrome ends up refusing the page any WebGL context). But a desktop GPU
+   * loses its context for reasons of its own (a driver reset after a heavy frame, a GPU
+   * process restart, a laptop switching GPUs), and since every bricked volume is compressed
+   * a volume is almost always compressed when that happens. So compression is suspected only
+   * when the loss follows a compressed allocation closely, or when it is the second loss with
+   * compression alive within CONTEXT_LOSS_MEMORY_MS — a driver that cannot hold the atlas
+   * loses the context on every load, so it is caught on the next one.
+   */
+  static _noteCompressedLoss(now = Date.now()) {
+    SVRManager._sessionCompressedLosses = (SVRManager._sessionCompressedLosses || 0) + 1;
+    const memory = SVRManager.CONTEXT_LOSS_MEMORY_MS;
+    const recent = SVRManager._storedStamps('lumen3d.gpuCompressedLosses').filter(t => now - t < memory);
+    recent.push(now);
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompressedLosses', JSON.stringify(recent.slice(-8)));
+    } catch (e) { /* storage blocked: the session count still applies */ }
+    const sinceAlloc = now - SVRManager._lastCompressedAllocAt;
+    const soonAfterAlloc = sinceAlloc >= 0 && sinceAlloc < SVRManager.COMPRESSION_SUSPECT_MS;
+    if (soonAfterAlloc || Math.max(recent.length, SVRManager._sessionCompressedLosses) >= 2) {
+      SVRManager.noteCompressionFailed(now);
+    }
+  }
+
+  /** Forget the recorded context losses, the failure cap and the compression refusal (operator action). */
   static resetGpuBudget() {
     SVRManager._sessionLosses = 0;
+    SVRManager._sessionCompressedLosses = 0;
     SVRManager._failedAllocBytes = Infinity;
-    try { if (typeof localStorage !== 'undefined') localStorage.removeItem('lumen3d.gpuContextLosses'); } catch (e) { /* storage blocked */ }
+    SVRManager._compressionFailed = false;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('lumen3d.gpuContextLosses');
+        localStorage.removeItem('lumen3d.gpuCompressedLosses');
+        localStorage.removeItem('lumen3d.gpuCompressionFailed');
+      }
+    } catch (e) { /* storage blocked */ }
+  }
+
+  /** A stored list of timestamps (ms); a bare number (the form written before lists) is one stamp. */
+  static _storedStamps(key) {
+    try {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+      if (!raw) return [];
+      const value = JSON.parse(raw);
+      const list = Array.isArray(value) ? value : [value];
+      return list.map(Number).filter(Number.isFinite);
+    } catch (e) { return []; }
   }
 
   static _storedLosses() {
-    try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen3d.gpuContextLosses') : null;
-      const list = raw ? JSON.parse(raw) : [];
-      return Array.isArray(list) ? list.filter(Number.isFinite) : [];
-    } catch (e) { return []; }
+    return SVRManager._storedStamps('lumen3d.gpuContextLosses');
   }
 
   static _recentContextLosses() {
@@ -213,6 +266,28 @@ class SVRManager {
   }
 
   /**
+   * Compression broke this device (its atlas was refused, or it lost the context — see
+   * _noteCompressedLoss): no compressed atlas for the rest of the session, nor on this
+   * browser profile for CONTEXT_LOSS_MEMORY_MS — a driver update or a one-off reset must
+   * not cost the device its compression for good.
+   */
+  static noteCompressionFailed(now = Date.now()) {
+    SVRManager._compressionFailed = true;
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const list = SVRManager._storedStamps('lumen3d.gpuCompressionFailed').filter(t => now - t < SVRManager.CONTEXT_LOSS_MEMORY_MS);
+      list.push(now);
+      localStorage.setItem('lumen3d.gpuCompressionFailed', JSON.stringify(list.slice(-4)));
+    } catch (e) { /* storage blocked: this session only */ }
+  }
+
+  static compressionFailedBefore() {
+    if (SVRManager._compressionFailed) return true;
+    const now = Date.now();
+    return SVRManager._storedStamps('lumen3d.gpuCompressionFailed').some(t => now - t < SVRManager.CONTEXT_LOSS_MEMORY_MS);
+  }
+
+  /**
    * Can this renderer hold a compressed ('bc') atlas? A hardware GPU, WebGL2 with
    * EXT_texture_compression_rgtc and a BC5 2D array texture the driver actually
    * accepts (allocated and written once, 4 × 4 × 1, then deleted). Cached per context.
@@ -222,17 +297,6 @@ class SVRManager {
    * that (tests of the compressed path in a software browser, with tiny atlases).
    * → { bc: boolean, reason: string|null, formats: { bc4, bc5 }|null }
    */
-  /** Compression made this device lose its context once: it is never used here again. */
-  static noteCompressionFailed() {
-    SVRManager._compressionFailed = true;
-    try { if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompressionFailed', String(Date.now())); } catch (e) { /* storage blocked: this session only */ }
-  }
-
-  static compressionFailedBefore() {
-    if (SVRManager._compressionFailed) return true;
-    try { return typeof localStorage !== 'undefined' && Boolean(localStorage.getItem('lumen3d.gpuCompressionFailed')); } catch (e) { return false; }
-  }
-
   static compressionSupport(renderer) {
     let gl = null;
     try { gl = renderer?.getContext?.() || null; } catch (e) { gl = null; }
@@ -526,6 +590,8 @@ class SVRManager {
     this.errorCheckInterval = 32;
     this.onUploadError = null;
     this._scratch = null;
+    this._splitRG = null;
+    this._splitR = null;
   }
 
   /**
@@ -655,15 +721,25 @@ class SVRManager {
         continue;
       }
       try {
+        if (this.compressed) SVRManager._lastCompressedAllocAt = Date.now();
         this._allocatePages(plan);
         allocated = plan;
         break;
       } catch (err) {
         lastError = err;
+        const lostContext = Boolean(this.renderer?.getContext?.()?.isContextLost?.());
+        // An RGTC page refused for anything but its size: the driver advertises a format it
+        // cannot store (the Adreno case gives INVALID_ENUM). Same level, uncompressed — the
+        // caller's SVR_BAD_FORMAT path — and no compressed atlas on this device for a while.
+        if (this.compressed && !lostContext && Number.isFinite(err?.glError) && err.glError !== SVRManager.GL_OUT_OF_MEMORY) {
+          SVRManager.noteCompressionFailed();
+          SVRManager._liveCompressed.delete(this);
+          this.compressed = false;
+          throw Object.assign(new Error(`SVR atlas: compressed pages refused by the GPU (glError ${err.glError})`), { code: 'SVR_BAD_FORMAT' });
+        }
         // Never try this size again in this session, and never a larger one now — unless
         // the context was lost: then every call fails, whatever its size, and the cap
         // would outlive the restored context (noteContextLost lowers the budget instead).
-        const lostContext = Boolean(this.renderer?.getContext?.()?.isContextLost?.());
         if (!lostContext) SVRManager._failedAllocBytes = Math.min(SVRManager._failedAllocBytes, plan.bytes);
         console.warn(`[SVRManager] Atlas ${plan.dim}x${plan.dim}x${plan.depth}x${plan.pages} (${Math.round(plan.bytes / MiBb)} MiB) rejected by the GPU.`, err);
         if (targeted || plan.slots <= 16) break;
@@ -867,7 +943,7 @@ class SVRManager {
       if (prevBinding !== null) {
         gl.bindTexture(target, prevBinding);
       }
-      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}${this.split ? ` ${plane.channels.length === 2 ? 'RG8' : 'R8'}` : ''}, glError=${err})`);
+      throw Object.assign(new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}${this.split ? ` ${plane.channels.length === 2 ? 'RG8' : 'R8'}` : ''}, glError=${err})`), { glError: err });
     }
     if (prevBinding !== null) {
       gl.bindTexture(target, prevBinding);
@@ -1117,6 +1193,26 @@ class SVRManager {
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadEncoded(coord, encoded));
   }
 
+  /**
+   * A brick already in the two textures of a split atlas (BrickLoader compose
+   * `split: true`, de-interleaved in the decode worker): `planes` = [rg, r], bytes 0–1
+   * of each voxel interleaved (bw·bh·bd × 2) and byte 2 (bw·bh·bd), the bw × bh × bd
+   * box at the slot origin. Returns false when this atlas is not split or the planes do
+   * not hold that box (the page-table entry is then left empty).
+   */
+  writeSplitBrick(bx, by, bz, planes, bw, bh, bd, cells = null) {
+    if (!this.split || !Array.isArray(planes) || planes.length !== 2) return false;
+    const n = bw * bh * bd;
+    const [rg, r] = planes;
+    if (!(n > 0) || bw > this.slotStride || bh > this.slotStride || bd > this.slotStride) return false;
+    if (!rg || !r || rg.length !== n * 2 || r.length !== n) return false;
+    const slotIndex = this.getSlot(bx, by, bz);
+    const coord = this._slotCoord(slotIndex);
+    const ptIdx = this._pointPageTable(bx, by, bz, coord);
+    this._writeCells(bx, by, bz, cells);
+    return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadSplitPlanes(coord, bw, bh, bd, rg, r));
+  }
+
   _encodedFits(enc) {
     if (!enc || !Array.isArray(enc.planes) || enc.planes.length !== this.planes.length) return false;
     if (!(enc.width > 0 && enc.height > 0 && enc.depth > 0)) return false;
@@ -1142,13 +1238,24 @@ class SVRManager {
     if (!rgba) return false;
     const n = bw * bh * bd;
     if (rgba.length < n * 4) return false;
-    const rg = new Uint8Array(n * 2);
-    const b = new Uint8Array(n);
+    // texSubImage3D copies synchronously, so one pair of scratch planes serves every upload.
+    const full = this.slotStride * this.slotStride * this.slotStride;
+    if (!this._splitR || this._splitR.length < n) {
+      this._splitRG = new Uint8Array(Math.max(n, full) * 2);
+      this._splitR = new Uint8Array(Math.max(n, full));
+    }
+    const rg = this._splitRG.subarray(0, n * 2);
+    const b = this._splitR.subarray(0, n);
     for (let i = 0, s = 0; i < n; i++, s += 4) {
       rg[i * 2] = rgba[s];
       rg[i * 2 + 1] = rgba[s + 1];
       b[i] = rgba[s + 2];
     }
+    return this._uploadSplitPlanes(coord, bw, bh, bd, rg, b);
+  }
+
+  /** The RG and R planes of a box into the two textures of a split atlas, at a slot's origin. */
+  _uploadSplitPlanes(coord, bw, bh, bd, rg, b) {
     const p = this.slotPitch;
     const sx = coord.x * p, sy = coord.y * p, sz = coord.z * p;
     const first = this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, rg, 0);
@@ -1441,6 +1548,8 @@ class SVRManager {
     this.slotToBrick = [];
     this._unchecked = [];
     this._scratch = null;
+    this._splitRG = null;
+    this._splitR = null;
   }
 }
 
@@ -1450,13 +1559,19 @@ SVRManager.BRICK_INTERIOR = 64;
 // Slots per side of a page: 4, 8 or 16 (256/512/1024 texels at stride 64).
 SVRManager.SLOTS_PER_SIDE = [4, 8, 16];
 SVRManager.CONTEXT_LOSS_MEMORY_MS = 7 * 24 * 3600 * 1000;
+// A context lost this soon after a compressed atlas was allocated is laid on the compression.
+SVRManager.COMPRESSION_SUSPECT_MS = 15 * 1000;
+SVRManager.GL_OUT_OF_MEMORY = 0x0505;
 SVRManager._live = new Set();
 SVRManager._failedAllocBytes = Infinity;
 SVRManager._sessionLosses = 0;
 SVRManager._sessionOverrideBytes = null;
+SVRManager._sessionCapBytes = null;
 SVRManager._supportCache = new WeakMap();
 SVRManager._liveCompressed = new Set();     // compressed atlases not disposed yet
 SVRManager._compressionFailed = false;
+SVRManager._sessionCompressedLosses = 0;
+SVRManager._lastCompressedAllocAt = -Infinity;
 SVRManager.allowSoftwareCompression = false;
 
 window.SVRManager = SVRManager;

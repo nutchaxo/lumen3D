@@ -16,9 +16,10 @@
    an equal part of what is left, for its frame cache. The panel then plans and
    evicts against that figure instead of the card's.
 
-   CPU / network: workers, concurrent decodes, pack bodies in flight (one HTTP/1.1
-   host gives the browser six sockets for everything) and compressed-pack caches
-   are divided by the number of volume panels.
+   CPU / network: workers (brick decode, and the Studio's plane / cut decode pools),
+   concurrent decodes, pack bodies in flight (one HTTP/1.1 host gives the browser
+   six sockets for everything) and compressed-pack caches are divided by the
+   number of volume panels.
    ============================================================ */
 
 const PanelResources = (() => {
@@ -58,22 +59,43 @@ const PanelResources = (() => {
     return out;
   }
 
+  // What a lone page's BrickLoader starts from, for a caller that has no loader to ask
+  // (the panel passes BrickLoader.DEFAULTS, the values its configure() really holds).
+  const LOADER_DEFAULTS = Object.freeze({
+    concurrentLoads: 24, packFetchSlots: 4,
+    packCacheBytes: 192 * MiB, rangeCacheBytes: 64 * MiB, prefetchCacheBytes: 32 * MiB
+  });
+
   /**
    * Loader settings of one panel when `panels` volume panels share the page and
-   * `cores` logical processors (BrickLoader.configure's own names).
+   * `cores` logical processors: `defaults` (BrickLoader.DEFAULTS) divided between the
+   * panels, in BrickLoader.configure's own names, plus `studioWorkers`: the Studio's
+   * plane and cut decode pools, CutStore.configure and PlaneLoader.configure
+   * `workers`, each at most four in a lone page. `maxConcurrency` caps every batch of
+   * the panel, the per-quality concurrency its volume loads ask for included; a lone
+   * page has none (null lifts it).
    */
-  function loaderSettings(panels, cores) {
+  function loaderSettings(panels, cores, defaults) {
     const n = Math.max(1, Math.floor(Number(panels)) || 1);
     const c = Math.max(2, Math.floor(Number(cores)) || 4);
+    // The floors keep a panel able to stream, never above what a lone page would hold.
+    const d = {};
+    for (const key of Object.keys(LOADER_DEFAULTS)) {
+      const v = Number(defaults?.[key]);
+      d[key] = Number.isFinite(v) && v > 0 ? v : LOADER_DEFAULTS[key];
+    }
+    const loads = Math.max(Math.min(6, d.concurrentLoads), Math.floor(d.concurrentLoads / n));
     return {
       decodeWorkers: Math.max(1, Math.min(8, Math.floor((c - 1) / n))),
-      concurrentLoads: Math.max(6, Math.floor(24 / n)),
-      packFetchSlots: Math.max(1, Math.floor(4 / n)),
-      packCacheBytes: Math.max(48 * MiB, Math.floor(192 * MiB / n)),
-      rangeCacheBytes: Math.max(16 * MiB, Math.floor(64 * MiB / n)),
-      prefetchCacheBytes: Math.max(8 * MiB, Math.floor(32 * MiB / n))
+      studioWorkers: Math.max(1, Math.min(4, Math.floor((c - 1) / n))),
+      concurrentLoads: loads,
+      maxConcurrency: n > 1 ? loads : null,
+      packFetchSlots: Math.max(1, Math.floor(d.packFetchSlots / n)),
+      packCacheBytes: Math.max(Math.min(48 * MiB, d.packCacheBytes), Math.floor(d.packCacheBytes / n)),
+      rangeCacheBytes: Math.max(Math.min(16 * MiB, d.rangeCacheBytes), Math.floor(d.rangeCacheBytes / n)),
+      prefetchCacheBytes: Math.max(Math.min(8 * MiB, d.prefetchCacheBytes), Math.floor(d.prefetchCacheBytes / n))
     };
   }
 
-  return { totalBudget, vramShares, loaderSettings, HEADROOM, GPU_SHARE, GPU_FALLBACK };
+  return { totalBudget, vramShares, loaderSettings, LOADER_DEFAULTS, HEADROOM, GPU_SHARE, GPU_FALLBACK };
 })();

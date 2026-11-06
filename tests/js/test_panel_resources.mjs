@@ -61,13 +61,15 @@ assert.equal(PR.vramShares([], GiB).size, 0, 'no panel, no share');
 // ── loaderSettings ──
 {
   const one = PR.loaderSettings(1, 22);
-  assert.deepEqual({ ...one }, { decodeWorkers: 8, concurrentLoads: 24, packFetchSlots: 4, packCacheBytes: 192 * MiB, rangeCacheBytes: 64 * MiB, prefetchCacheBytes: 32 * MiB },
-    'a lone panel keeps the defaults of a lone viewer');
+  assert.deepEqual({ ...one }, { decodeWorkers: 8, studioWorkers: 4, concurrentLoads: 24, maxConcurrency: null, packFetchSlots: 4, packCacheBytes: 192 * MiB, rangeCacheBytes: 64 * MiB, prefetchCacheBytes: 32 * MiB },
+    'a lone panel keeps the defaults of a lone viewer, and no cap on its batches');
   const four = PR.loaderSettings(4, 8);
   assert.equal(four.decodeWorkers, 1, '7 helper cores over 4 panels: one worker each, never zero');
   assert.equal(four.packFetchSlots, 1, 'four panels share the four pack bodies a host allows: one each');
   assert.equal(four.packCacheBytes, 48 * MiB);
   assert.ok(four.concurrentLoads >= 6, 'a floor keeps a panel able to stream');
+  assert.equal(four.maxConcurrency, four.concurrentLoads, 'several panels: the share caps every batch (a volume load asks for 32 of its own)');
+  assert.equal(PR.loaderSettings(2, 8).maxConcurrency, 12);
   let last = Infinity;
   for (const n of [1, 2, 3, 4]) {
     const s = PR.loaderSettings(n, 22);
@@ -75,8 +77,36 @@ assert.equal(PR.vramShares([], GiB).size, 0, 'no panel, no share');
     assert.ok(s.packCacheBytes <= last, 'caches shrink as panels join');
     last = s.packCacheBytes;
   }
+  // The defaults divided are the loader's own, not copies: a retune reaches the panels.
+  const BL = loadModule('js/core/brick-loader.js', 'BrickLoader', {
+    document: { createElement: () => ({ getContext: () => ({}) }) },
+    navigator: { hardwareConcurrency: 4 }, performance: { now: () => Date.now() }, window: {},
+  });
+  assert.deepEqual({ ...PR.loaderSettings(1, 22, BL.DEFAULTS) }, { ...one }, 'BrickLoader.DEFAULTS give the figures pinned above');
+  for (const key of Object.keys(PR.LOADER_DEFAULTS)) assert.equal(PR.LOADER_DEFAULTS[key], BL.DEFAULTS[key], `the host-side fallback ${key} matches the loader`);
+  const retuned = { concurrentLoads: 40, packFetchSlots: 3, packCacheBytes: 256 * MiB, rangeCacheBytes: 96 * MiB, prefetchCacheBytes: 16 * MiB };
+  const lone = PR.loaderSettings(1, 22, retuned);
+  assert.equal(lone.packFetchSlots, 3, 'a lone panel takes the retuned slots, not the old 4');
+  assert.equal(lone.packCacheBytes, 256 * MiB);
+  assert.equal(lone.concurrentLoads, 40);
+  assert.equal(lone.prefetchCacheBytes, 16 * MiB);
+  const pair = PR.loaderSettings(2, 22, retuned);
+  assert.equal(pair.packCacheBytes, 128 * MiB, 'divided from the retuned figure');
+  assert.equal(pair.concurrentLoads, 20);
+  assert.equal(pair.packFetchSlots, 1);
+  const small = PR.loaderSettings(1, 22, { packCacheBytes: 32 * MiB, concurrentLoads: 4 });
+  assert.equal(small.packCacheBytes, 32 * MiB, 'a floor never lifts a panel above what a lone page holds');
+  assert.equal(small.concurrentLoads, 4);
+  assert.equal(small.rangeCacheBytes, 64 * MiB, 'a missing key falls back to the shipped default');
   assert.equal(PR.loaderSettings(0, 0).decodeWorkers, 3, 'nonsense in: one panel, an assumed four cores — a working pool out');
   assert.equal(PR.loaderSettings('3', '12').decodeWorkers, 3);
+  // The Studio's plane and cut decode pools (four workers each in a lone page) are divided too.
+  assert.equal(four.studioWorkers, 1, 'four panels on 8 cores: one Studio decoder per pool each');
+  for (const n of [1, 2, 3, 4]) {
+    const s = PR.loaderSettings(n, 8);
+    assert.ok(s.studioWorkers >= 1 && s.studioWorkers <= 4);
+    assert.ok(s.studioWorkers * n <= 7 || s.studioWorkers === 1, `${n} panels: the Studio pools do not over-subscribe the cores`);
+  }
 }
 
 // ── the wiring, on the sources ──
@@ -92,6 +122,8 @@ assert.ok(viewerHtml.indexOf('panel-resources.js') < viewerHtml.indexOf('js/page
 // The host: the number of volume panels rides on the address, and the shares go out on every change.
 assert.ok(/params\.set\('panels'/.test(compare), 'the panel is told how many volume panels share the machine at boot');
 assert.ok(/type: 'PANEL_RESOURCES'/.test(compare), 'and again by message when the count or the plan moves');
+assert.ok(!/PanelResources\.loaderSettings\(/.test(compare) && !/PANEL_RESOURCES', panels: count, loader/.test(compare),
+  'the host sends the count only: the loader is divided in the panel, where its defaults live');
 for (const where of ['function _addPanel', 'function _removePanel', 'function _onPanelReady', 'function _drainQualityQueue', 'function _finishQuality']) {
   const at = compare.indexOf(where);
   assert.ok(at > 0, `${where} exists`);
@@ -111,9 +143,14 @@ assert.ok(compare.includes("attributeFilter: ['class']") && compare.includes('_n
 // The page: applies it at boot and on message, reports what it would allow itself, never past it.
 assert.ok(viewer.includes("_applyPanelResources({ panels: Number(params.get('panels')) || 1 })"), 'viewer.js sizes itself from ?panels= before its first brick');
 assert.ok(viewer.includes("data.type === 'PANEL_RESOURCES'"), 'viewer.js receives PANEL_RESOURCES');
+assert.ok(viewer.includes('BrickLoader.DEFAULTS'), "the panel divides its own loader's defaults");
 assert.ok(viewer.includes('gpuBudgetBytes: _naturalGpuBudgetBytes()'), 'PANEL_READY reports the page\'s own budget');
-assert.ok(/Math\.min\(vram, natural\)/.test(viewer), 'a share is never above what the page would give itself alone');
+assert.ok(viewer.includes('SVRManager.setVramCap(vram)'), "a share caps the page's own budget (never above what it would give itself alone)");
+assert.ok(!/SVRManager\.setVramBudget\(/.test(viewer), "a share is not an override: a context loss must still lower a panel's budget");
+assert.ok(viewer.includes('SVRManager.vramBudget(VolumeViewer.getRenderer(), { uncapped: true })'), "the budget reported to the host is the page's own, the share left out");
 assert.ok(viewer.includes('VolumeViewer.trimCache?.()'), 'a smaller share evicts at once');
+assert.ok(viewer.includes('CutStore.configure({ workers: studioWorkers })') && viewer.includes('PlaneLoader.configure({ workers: studioWorkers })'),
+  'the share of the cores reaches the Studio decode pools');
 assert.ok(/if \(!VolumeViewer\.getRenderer\?\.\(\)\) return null;/.test(viewer), 'the natural budget is not read before the renderer exists (the unknown-card figure would stick)');
 assert.ok(read('js/viewers/volume-viewer.js').includes('trimCache: () => _trimVolumeCache(null)'), 'VolumeViewer exposes trimCache');
 

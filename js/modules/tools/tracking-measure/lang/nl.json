@@ -11,5 +11,8 @@
   "cellA": "Cel A",
   "clickSecond": "Klik op een tweede cel.",
   "exportCsv": "CSV van de afstanden",
-  "exportJson": "JSON van de afstanden"
+  "exportJson": "JSON van de afstanden",
+  "hideMeasure": "Meting verbergen",
+  "showMeasure": "Meting tonen",
+  "deleteMeasure": "Meting verwijderen"
 }

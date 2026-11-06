@@ -32,6 +32,7 @@
   "x_allChannels": "Intensidad (todos los canales)",
   "x_summary": "— un valor por serie —",
   "computing": "Calculando…",
+  "reading": "Leyendo el volumen… {pct} %",
   "err_notReady": "Los datos aún no están listos. Espere a que termine la carga.",
   "err_noData": "Nada que graficar con estas opciones.",
   "err_timeout": "Un conjunto de datos tardó demasiado en responder.",

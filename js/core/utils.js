@@ -86,52 +86,6 @@ const Utils = (() => {
   }
 
   /**
-   * Parse a dataset name into structured metadata
-   * @param {string} name - e.g. "Egfl7eGFP-E75-Em1-18112025-GFP555-Pecam1-10x-2xzoom-4avg"
-   * @returns {object}
-   */
-  function parseDatasetName(name) {
-    const result = {
-      line: null,
-      stage: null,
-      stageNumeric: null,
-      embryo: null,
-      date: null,
-      markers: [],
-      objective: null,
-      interval: null,
-      raw: name
-    };
-
-    // Try to extract components
-    const parts = name.split('-');
-
-    for (const part of parts) {
-      // Line (e.g., Egfl7eGFP)
-      if (/^Egfl7/i.test(part)) result.line = part;
-      // Stage (e.g., E75, E7, E8, E775)
-      else if (/^E\d+$/i.test(part)) {
-        result.stage = part;
-        result.stageNumeric = parseFloat(_stageDigitsToDecimal(part.slice(1)));
-      }
-      // Embryo (e.g., Em1, Em10)
-      else if (/^Em\d+$/i.test(part)) result.embryo = part;
-      // Date (e.g., 18112025)
-      else if (/^\d{8}$/.test(part)) result.date = part;
-      // Interval (e.g., 10min, 30min)
-      else if (/^\d+min$/i.test(part)) result.interval = part;
-      // Objective (e.g., 10x)
-      else if (/^\d+x$/i.test(part)) result.objective = part;
-      // Markers
-      else if (/^(GFP|DAPI|Pecam|Flk1|Alexa|RFP|mCherry)/i.test(part)) {
-        result.markers.push(part);
-      }
-    }
-
-    return result;
-  }
-
-  /**
    * Format embryonic stage for display
    * @param {string} stage - e.g. "E75"
    * @returns {string} e.g. "E7.5"
@@ -148,7 +102,8 @@ const Utils = (() => {
    * "75" → "7.5", "775" → "7.75", "105" → "10.5", "10" → "10". Stages run from E7 to E18, so
    * the integer part is one digit or two: three or more digits starting with 10-20 carry a
    * two-digit integer part, two digits are a decimal only from 50 up (E75 = 7.5; E10 = 10).
-   * Same rule as Catalog._stageNumber.
+   * The one client-side copy of the rule (formatStage, stageNumber and through it the
+   * catalog's stage sort); the pipeline's reference is 4-catalog_generator._parse_stage.
    */
   function _stageDigitsToDecimal(digits) {
     if (digits.length <= 1) return digits;
@@ -156,6 +111,21 @@ const Utils = (() => {
     const firstTwo = parseInt(digits.slice(0, 2), 10);
     if (firstTwo >= 10 && firstTwo <= 20) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
     return `${digits[0]}.${digits.slice(1)}`;
+  }
+
+  /**
+   * Numeric embryonic day of a stage, for ordering: a number is returned as is, "E8.5" is
+   * read as written, compact digits ("E75", "E105") follow _stageDigitsToDecimal, so the
+   * value is always the one formatStage displays. Anything else is 0.
+   * @param {string|number} stage
+   * @returns {number}
+   */
+  function stageNumber(stage) {
+    if (typeof stage === 'number') return Number.isFinite(stage) ? stage : 0;
+    const match = stage && String(stage).match(/^E(\d+)(?:\.(\d+))?$/i);
+    if (!match) return 0;
+    if (match[2]) return parseFloat(`${match[1]}.${match[2]}`);
+    return parseFloat(_stageDigitsToDecimal(match[1]));
   }
 
   /**
@@ -636,6 +606,106 @@ const Utils = (() => {
     return `${datasetPage(dataset)}?id=${encodeURIComponent(dataset.id)}`;
   }
 
+  // A staged import is read through the admin blob proxy, whose `path` query parameter
+  // absorbs the tail: both forms answer `<base>/<relative path>` (or `<base><name>` for
+  // the proxy), so every URL built on them works unchanged.
+  const STAGING_PREFIX = 'staging:';
+
+  /** Where a dataset's bytes are served from: DATA_WEB/<type>/<folder>, or the blob proxy. */
+  function datasetBaseUrl(datasetPath) {
+    const p = String(datasetPath || '');
+    if (!p.startsWith(STAGING_PREFIX)) return `DATA_WEB/${p}`;
+    return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(STAGING_PREFIX.length))}&path=`;
+  }
+
+  // ─── Plugin-mounted UI ──────────────────────────────────────────────────────
+  // A marketplace plugin is not shipped with the page's markup, so it asks the page
+  // for a surface: a sidebar section or a floating panel over the canvas. Each page
+  // picks the container; these build the node and the handle that owns it, so a
+  // plugin written for several pages gets one contract.
+
+  function _pluginDomId(prefix, id) {
+    const safe = String(id ?? '').replace(/[^A-Za-z0-9_-]/g, '');
+    return safe ? `${prefix}${safe}` : '';
+  }
+
+  function _refreshIcons(node) {
+    if (typeof window !== 'undefined' && window.lucide) window.lucide.createIcons({ nodes: [node] });
+  }
+
+  /**
+   * A plugin section in a sidebar. def = {id, title, html, hidden, bind(body, handle)};
+   * returns {root, section (alias of root), body, setTitle, setHtml, show, hide, remove},
+   * null without a container (or without an id when `requireId`). The id is sanitised
+   * and prefixed (`idPrefix`); a section the plugin added earlier under the same id is
+   * replaced, and an id already held by a node that is not a plugin section is left off.
+   */
+  function mountPluginSection(container, def = {}, options = {}) {
+    const { idPrefix = 'plugin-section-', requireId = true, bodyClass = 'plugin-section-body' } = options;
+    if (!container || (requireId && !def.id)) return null;
+    const domId = _pluginDomId(idPrefix, def.id);
+    if (requireId && !domId) return null;
+    const doc = container.ownerDocument || document;
+    const previous = domId ? doc.getElementById(domId) : null;
+    if (previous && previous.classList.contains('plugin-section')) previous.remove();
+    const root = doc.createElement('div');
+    root.className = 'panel-section plugin-section';
+    if (domId && !doc.getElementById(domId)) root.id = domId;
+    const title = doc.createElement('div');
+    title.className = 'panel-title';
+    const label = doc.createElement('span');
+    label.textContent = def.title == null ? '' : String(def.title);
+    title.appendChild(label);
+    const body = doc.createElement('div');
+    body.className = bodyClass;
+    body.innerHTML = def.html || '';
+    root.appendChild(title);
+    root.appendChild(body);
+    if (def.hidden) root.hidden = true;
+    container.appendChild(root);
+    _refreshIcons(root);
+    const handle = {
+      root, section: root, body,
+      setTitle(text) { label.textContent = text == null ? '' : String(text); },
+      setHtml(html) { body.innerHTML = html || ''; _refreshIcons(body); },
+      show() { root.hidden = false; },
+      hide() { root.hidden = true; },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(body, handle);
+    return handle;
+  }
+
+  /**
+   * A floating panel over a canvas. def = {id, className, style, html, bind(root, handle)};
+   * returns {root, setHtml, show, hide, toggle, isVisible, remove}, null without a
+   * container or an id. A panel added earlier under the same id is replaced.
+   */
+  function mountPluginPanel(container, def = {}) {
+    const domId = _pluginDomId('plugin-panel-', def.id);
+    if (!container || !domId) return null;
+    const doc = container.ownerDocument || document;
+    doc.getElementById(domId)?.remove();
+    const root = doc.createElement('div');
+    root.className = `scientific-panel ${def.className || ''}`.trim();
+    root.id = domId;
+    if (def.style) root.style.cssText = def.style;
+    root.innerHTML = def.html || '';
+    container.appendChild(root);
+    _refreshIcons(root);
+    const handle = {
+      root,
+      setHtml(html) { root.innerHTML = html || ''; _refreshIcons(root); },
+      show() { root.classList.add('visible'); },
+      hide() { root.classList.remove('visible'); },
+      toggle(force) { return root.classList.toggle('visible', force); },
+      isVisible() { return root.classList.contains('visible'); },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(root, handle);
+    return handle;
+  }
+
   function trustedTargetOrigin() {
     return (typeof window !== 'undefined' && window.location && window.location.origin)
       ? window.location.origin
@@ -775,8 +845,8 @@ const Utils = (() => {
     formatNumber,
     byteUnits,
     formatDate,
-    parseDatasetName,
     formatStage,
+    stageNumber,
     debounce,
     throttle,
     toggleDropdown,
@@ -810,6 +880,9 @@ const Utils = (() => {
     datasetTypeBadgeClass,
     datasetTypeGradient,
     datasetPage,
-    datasetUrl
+    datasetUrl,
+    datasetBaseUrl,
+    mountPluginSection,
+    mountPluginPanel
   };
 })();

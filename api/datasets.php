@@ -60,9 +60,12 @@ if (!LUMEN_DATASETS_AS_LIB) {
     if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 }
 
+// admin_is_auth(), not the bare flag: the 8 h lifetime and the credential stamp are
+// what end every other session on a password change, and a session still in use is
+// never collected by PHP's GC.
 function require_auth(): void {
-    if (empty($_SESSION['admin_authenticated'])) {
-        json_out(['error' => 'Unauthorized'], 401);
+    if (!admin_is_auth()) {
+        json_out(['error' => 'Not authenticated'], 401);
     }
 }
 

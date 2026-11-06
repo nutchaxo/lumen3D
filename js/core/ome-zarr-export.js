@@ -8,7 +8,9 @@
  * one shard (16 × 16 bricks of one brick layer, one channel, one level) per batch, two shards in
  * flight; js/workers/ome-zarr-worker.js encodes each shard; the zip is written as it goes —
  * through the File System Access API when the browser has it (no size limit), else as a Blob.
- * A timelapse exports its CURRENT timepoint (axes c, z, y, x).
+ * A timelapse exports the timepoint ON SCREEN when the export starts (axes c, z, y, x): its tree
+ * is pinned (DataAccess.pinDisplayed → BrickLoader.pinTree), so the frames the prefetch mounts
+ * meanwhile, or a frame the user moves to, change nothing in the file.
  */
 const OmeZarrExport = (() => {
   const IN_FLIGHT = 2;
@@ -110,10 +112,12 @@ const OmeZarrExport = (() => {
       return { kind: 'file', write: (p) => w.write(p), close: () => w.close(), abort: () => w.abort().catch(() => {}) };
     }
     const parts = [];
+    let dropped = false;
     return {
       kind: 'blob',
-      write: (p) => { parts.push(p); },
+      write: (p) => { if (!dropped) parts.push(p); },
       close: () => {
+        if (dropped) return;
         const url = URL.createObjectURL(new Blob(parts, { type: 'application/zip' }));
         const a = document.createElement('a');
         a.href = url;
@@ -124,7 +128,7 @@ const OmeZarrExport = (() => {
         setTimeout(() => URL.revokeObjectURL(url), 60000);
         parts.length = 0;
       },
-      abort: () => { parts.length = 0; }
+      abort: () => { dropped = true; parts.length = 0; }
     };
   }
 
@@ -161,10 +165,14 @@ const OmeZarrExport = (() => {
 
   function _abortError() { return Object.assign(new Error('aborted'), { name: 'AbortError' }); }
 
-  /** The decoded interiors of one shard's bricks (BrickLoader workers), ready to transfer. */
-  async function _loadShard(shard, signal) {
+  /**
+   * The decoded interiors of one shard's bricks (BrickLoader workers), ready to transfer.
+   * `pin` = { mount, manifest, apron } of the tree the export was planned on: `mount` a
+   * pinned tree handle, else `manifest` the mounted tree's (refused once another is mounted).
+   */
+  async function _loadShard(shard, signal, pin) {
     const bySlot = new Map(shard.tasks.map(x => [`${x.t.bx}_${x.t.by}_${x.t.bz}`, x]));
-    const apron = Number(BrickLoader.getFormat()?.apron) || 0;
+    const apron = pin.apron;
     const got = [];
     const tasks = shard.tasks.map(x => ({
       ...x.t,
@@ -173,6 +181,7 @@ const OmeZarrExport = (() => {
     const result = await BrickLoader.loadBrickTasks(tasks, {
       group: `omezarr-${shard.key}-${Math.random().toString(36).slice(2)}`,
       cancelPrevious: false, byteRanges: true, streamOnly: true, signal,
+      ...(pin.mount ? { mount: pin.mount } : (pin.manifest ? { manifest: pin.manifest } : {})),
       onBrickLoaded: (row) => {
         const x = bySlot.get(`${row.bx}_${row.by}_${row.bz}`);
         const b = x && x.box;
@@ -188,10 +197,21 @@ const OmeZarrExport = (() => {
 
   /**
    * Export levels × channels into `sink`. onProgress({ done, total, bytesIn, step }) after each
-   * shard. Resolves { shards, chunks, bytesOut }.
+   * shard. Resolves { shards, chunks, bytesOut }. Rejects with code BRICKS_MOUNT_CHANGED when
+   * the dataset is switched before the last shard is read.
    */
   async function run({ levelIds, channelIds, name, channels, sink, signal, onProgress }) {
-    const all = levels().filter(L => levelIds.includes(L.level)).sort((a, b) => a.level - b.level);
+    // Every shard is read from the tree on screen now, pinned: its occupancy plans the
+    // shards and its packs fill them, whatever timepoint is mounted or shown meanwhile.
+    const handle = typeof DataAccess !== 'undefined' && typeof DataAccess.pinDisplayed === 'function'
+      ? await DataAccess.pinDisplayed({ signal }) : null;
+    const onTree = (fn) => (handle ? BrickLoader.withMount(handle, fn) : fn());
+    const pin = {
+      mount: handle,
+      manifest: handle ? null : (typeof BrickLoader.getManifest === 'function' ? BrickLoader.getManifest() : null),
+      apron: Number(onTree(() => BrickLoader.getFormat())?.apron) || 0
+    };
+    const all = onTree(() => levels()).filter(L => levelIds.includes(L.level)).sort((a, b) => a.level - b.level);
     const chans = channelIds.slice().sort((a, b) => a - b);
     if (!all.length || !chans.length) throw new Error('nothing to export');
     const zip = new OmeZarr.ZipWriter();
@@ -208,28 +228,44 @@ const OmeZarrExport = (() => {
       name, levels: all, channels: chans.map(c => channels[c] || { label: `C${c}` })
     }))));
     for (const L of all) write(zip.add(`${root}/${L.level}/zarr.json`, json(OmeZarr.arrayMeta(chans.length, L.dims))));
-    const work = plan(all.map(L => L.level), chans);
+    const work = onTree(() => plan(all.map(L => L.level), chans));
     const total = work.length;
     let done = 0, chunks = 0, bytesIn = 0;
     const step = (s) => _t('download.omezarr.step', 'Level {level} · channel {channel} · layer {z}', { level: s.level, channel: s.channel, z: s.sz });
     let next = 0;
+    // One runner failing stops the other before it writes another shard into the dropped sink.
+    const stop = new AbortController();
+    const onAbort = () => stop.abort();
+    if (signal) {
+      if (signal.aborted) stop.abort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
     const one = async () => {
       while (next < work.length) {
-        if (signal?.aborted) throw _abortError();
+        if (stop.signal.aborted) throw _abortError();
         const s = work[next++];
-        bytesIn += BrickLoader.estimateTaskBytes(s.tasks.map(x => x.t));
-        const bricks = await _loadShard(s, signal);
+        bytesIn += onTree(() => BrickLoader.estimateTaskBytes(s.tasks.map(x => x.t)));
+        const bricks = await _loadShard(s, stop.signal, pin);
         const r = await _encode(bricks);
+        // An encode already posted to the worker still resolves after the other runner failed:
+        // its shard is dropped, never added to the zip of a failed export.
+        if (stop.signal.aborted) throw _abortError();
         if (r.bytes) {
           const key = `${s.level}/c/${chans.indexOf(s.channel)}/${s.sz}/${s.sy}/${s.sx}`;
           await write(zip.add(`${root}/${key}`, new Uint8Array(r.bytes), r.crc));
           chunks += r.chunks;
         }
+        if (stop.signal.aborted) throw _abortError();
         done++;
         onProgress?.({ done, total, bytesIn, bytesOut, step: step(s) });
       }
     };
-    await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, Math.max(1, work.length)) }, one));
+    const runners = Array.from({ length: Math.min(IN_FLIGHT, Math.max(1, work.length)) },
+      () => one().catch((err) => { stop.abort(); throw err; }));
+    const settled = await Promise.allSettled(runners);
+    signal?.removeEventListener?.('abort', onAbort);
+    const failures = settled.filter(r => r.status === 'rejected').map(r => r.reason);
+    if (failures.length) throw failures.find(e => !e || e.name !== 'AbortError') || failures[0];
     await write(zip.finish());
     await chain;
     return { shards: total, chunks, bytesOut };
@@ -351,7 +387,9 @@ const OmeZarrExport = (() => {
         if (!err || err.name !== 'AbortError') console.error('[OmeZarrExport] Export failed:', err);
         label.textContent = err && err.name === 'AbortError'
           ? _t('download.omezarr.cancelled', 'Export cancelled.')
-          : _t('download.omezarr.failed', 'Export failed: {error}', { error: _why(err) });
+          : err && err.code === 'BRICKS_MOUNT_CHANGED'
+            ? _t('download.omezarr.datasetChanged', 'Another dataset was opened during the export. Open this dataset again, then start the export again.')
+            : _t('download.omezarr.failed', 'Export failed: {error}', { error: _why(err) });
       } finally {
         _job = null;
         q('[data-oz-cancel]').hidden = true;

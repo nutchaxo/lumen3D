@@ -59,6 +59,11 @@ function row(p, isProtected) {
   const untrusted = tier === 'untrusted';
   const dis = (p.enabled && !incompatible && !untrusted) ? '' : 'is-off';
   const lock = (isProtected || incompatible) ? 'disabled' : '';
+  // Why the switch is frozen: a tooltip for the mouse, a description for a screen reader.
+  const lockWhy = isProtected
+    ? t('admin.lastShaderWarn', 'Au moins un mode de rendu doit rester actif.')
+    : (incompatible ? t('admin.compatIntro', 'Un plugin incompatible n\'est pas chargé par le viewer ; il redevient actif dès qu\'une mise à jour satisfait sa contrainte de version.') : '');
+  const whyId = `plugin-lock-${String(p.path || p.id || '').replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const [badgeCls, badgeKey, badgeDef] = TRUST_BADGE[tier] || ['', '', ''];
   const badgeTxt = badgeKey ? t(badgeKey, badgeDef) : '';
   const meta = [p.version ? `v${escHtml(p.version)}` : '', p.creator ? escHtml(p.creator) : '', escHtml(p.path)]
@@ -86,10 +91,11 @@ function row(p, isProtected) {
         ${updRow}
         ${untrusted ? trustControls(p) : ''}
       </div>
-      ${untrusted ? '' : `<label class="adm-switch" title="${isProtected ? escHtml(t('admin.lastShaderWarn', 'Au moins un mode de rendu doit rester actif.')) : (incompatible ? escHtml(t('admin.compatIntro', 'Un plugin incompatible n\'est pas chargé par le viewer ; il redevient actif dès qu\'une mise à jour satisfait sa contrainte de version.')) : '')}">
-        <input type="checkbox" class="adm-plugin-toggle" data-path="${escHtml(p.path)}" ${p.enabled && !incompatible ? 'checked' : ''} ${lock}>
+      ${untrusted ? '' : `<label class="adm-switch" title="${escHtml(lockWhy)}">
+        <input type="checkbox" class="adm-plugin-toggle" data-path="${escHtml(p.path)}" ${p.enabled && !incompatible ? 'checked' : ''} ${lock}
+               aria-label="${escHtml(t('admin.enablePlugin', 'Enable {name}', { name: p.name || p.id || p.path }))}"${lockWhy ? ` aria-describedby="${whyId}"` : ''}>
         <span class="adm-switch-track"><span class="adm-switch-thumb"></span></span>
-      </label>`}
+      </label>${lockWhy ? `<span class="adm-sr-only" id="${whyId}">${escHtml(lockWhy)}</span>` : ''}`}
       ${(tier === 'approved-trusted' || tier === 'sandboxed') ? trustControls(p) : ''}
     </div>`;
 }
@@ -245,24 +251,49 @@ async function onToggle(cb) {
   }
 }
 
-async function load() {
+async function fetchList() {
   _state = 'loading';
   render();
   const data = await apiFetch(`${API_ADMIN}?action=plugins`);
   if (data && Array.isArray(data.plugins)) { _plugins = data.plugins; _state = 'loaded'; }
   else { _state = 'error'; }
   render();
-  // The catalog lives on GitHub, so it can take a moment and can fail outright.
-  // Deliberately NOT awaited above: enabling and disabling plugins is this tab's
-  // job and must not wait on the network, nor break when it is unavailable — the
-  // update affordances simply appear once (and if) the catalog answers.
-  loadUpdates();
 }
 
-async function loadUpdates() {
-  const r = await fetchPluginUpdates();
-  _updates = r.error ? {} : r.byPath;
-  if (_state === 'loaded') render();
+let _loading = null;
+let _loadAgain = false;
+
+/**
+ * One listing at a time. A load asked for while one is in flight (an approval,
+ * a retry) may follow a server change that the running request already missed,
+ * so it is not dropped: the list is fetched once more when the running one ends.
+ */
+function load() {
+  if (_loading) { _loadAgain = true; return _loading; }
+  _loading = (async () => {
+    try {
+      do { _loadAgain = false; await fetchList(); } while (_loadAgain);
+    } finally { _loading = null; }
+    // The catalog lives on GitHub, so it can take a moment and can fail outright.
+    // Deliberately NOT awaited: enabling and disabling plugins is this tab's job
+    // and must not wait on the network, nor break when it is unavailable — the
+    // update affordances simply appear once (and if) the catalog answers.
+    loadUpdates();
+  })();
+  return _loading;
+}
+
+let _loadingUpdates = null;
+function loadUpdates() {
+  if (_loadingUpdates) return _loadingUpdates;
+  _loadingUpdates = (async () => {
+    try {
+      const r = await fetchPluginUpdates();
+      _updates = r.error ? {} : r.byPath;
+      if (_state === 'loaded') render();
+    } finally { _loadingUpdates = null; }
+  })();
+  return _loadingUpdates;
 }
 
 export const PluginsTab = {
@@ -270,7 +301,7 @@ export const PluginsTab = {
   titleKey: 'admin.navPlugins',
   titleDefault: 'Plugins',
   mounted: false,
-  mount() { load(); },
+  mount() { render(); },
   activate() { load(); },
   relabel() { render(); },
 };

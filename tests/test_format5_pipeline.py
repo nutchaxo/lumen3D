@@ -76,11 +76,15 @@ class PipelineFormat5(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _dataset(self, dtype, W, H, D, C, n_tp, seed, voxel=(0.6, 0.6, 2.4)):
+    def _dataset(self, dtype, W, H, D, C, n_tp, seed, voxel=(0.6, 0.6, 2.4), f5_ladder=False):
+        """A dataset packed from step-2 files. f5_ladder=False: the levels of a format-4
+        pyramid are all on disk (an older step 2); True: what step 2 writes for formats
+        5/6 — level 0 only, with format5's own ladder as lod_levels — then its clean-up."""
         work = self.tmp / "work"
         work.mkdir()
         vs = {"x": voxel[0], "y": voxel[1], "z": voxel[2]}
-        lod_levels = step2.pyramid_levels(W, H, D, vs)
+        lod_levels = (step2.format5_levels(W, H, D, vs) if f5_ladder
+                      else step2.pyramid_levels(W, H, D, vs))
         (work / "processing_meta.json").write_text(json.dumps({
             "lod_levels": lod_levels, "n_channels": C, "n_timepoints": n_tp, "datasetFormat": 5,
             "voxel_size": vs, "channel_names": [f"c{c}" for c in range(C)],
@@ -96,13 +100,15 @@ class PipelineFormat5(unittest.TestCase):
                 vol.tofile(work / f"t{t:03d}_c{c}_lod0.bin")
                 vols[(t, c)] = vol
                 prev = vol
-                for li in lod_levels[1:]:
+                for li in ([] if f5_ladder else lod_levels[1:]):
                     import bricks_v3_writer as v3
                     prev = v3.reduce_level(prev, li["halveZ"])
                     prev.tofile(work / f"t{t:03d}_c{c}_lod{li['lod']}.bin")
             packed = step3.pack_timepoint_v5(work, ds / "bricks", t, lod_levels, C, _Serial(),
                                              f"t{t:03d}" if n_tp > 1 else "")
             (work / f"pack_t{t:03d}.json").write_text(json.dumps(packed), encoding="utf-8")
+            if f5_ladder:
+                step2._drop_packed_files(work, t, C, lod_levels)
         step3.build_packs(work, ds)
         step4.generate_catalog_metadata(work, ds)
         return work, ds, vols, vs
@@ -145,6 +151,55 @@ class PipelineFormat5(unittest.TestCase):
         # Without the v5 tree the dataset no longer claims format 5.
         (ds / "bricks" / "index" / "ll.bin").unlink()
         self.assertLess(step4.dataset_format_version(ds), 5)
+
+    def _resampled(self, vol, li):
+        return np.stack([f5.resample_plane(vol[z], li["width"], li["height"])
+                         for z in range(vol.shape[0])])
+
+    def test_step2_writes_level0_only_and_the_tree_hands_back_what_is_read(self):
+        # Native 1100 px: format5's ladder is native, 1024, 512, 256 — the thumbnail reads
+        # level 1, the histograms level 3; level 2 is never needed outside the tree.
+        W, H, D, C = 1100, 200, 6, 1
+        work, ds, vols, vs = self._dataset("3d", W, H, D, C, 1, 77, f5_ladder=True)
+        meta = json.loads((work / "processing_meta.json").read_text(encoding="utf-8"))
+        levels = meta["lod_levels"]
+        self.assertEqual([li["target"] for li in levels], ["native", 1024, 512, 256])
+        self.assertEqual(step3.thumbnail_lod(levels), 1)
+        left = sorted(p.name for p in work.glob("t000_c*_lod*.bin"))
+        self.assertEqual(left, ["t000_c0_lod1.bin", "t000_c0_lod3.bin"])
+        for k in (1, 3):
+            li = levels[k]
+            got = np.fromfile(work / f"t000_c0_lod{k}.bin", dtype=np.uint8)
+            self.assertTrue(np.array_equal(got.reshape(li["depth"], li["height"], li["width"]),
+                                           self._resampled(vols[(0, 0)], li)), k)
+        coarsest = self._resampled(vols[(0, 0)], levels[3])
+        counts, _ = np.histogram(coarsest, bins=64, range=(0, 255))
+        manifest = json.loads((ds / "bricks" / "manifest.json").read_bytes())
+        self.assertEqual(manifest["histograms"][0]["counts"], counts.tolist())
+        self.assertEqual(manifest["histograms"][0]["total"], coarsest.size)
+        run_preprocess = _load("lumen_f5_pipe_run", "run_preprocess.py")
+        run_preprocess.build_thumbnail(work, ds, meta)
+        self.assertTrue((ds / "thumbnail.webp").is_file())
+        self.assertFalse([p for p in work.iterdir() if p.name.startswith("f5work") and any(p.iterdir())])
+        self._same_as_writer(ds, "", vols, 0, C, W, H, D, vs)
+
+    def test_live_format5_ladder_keeps_the_coarsest_level_of_every_frame(self):
+        W, H, D, C = 300, 280, 12, 2
+        work, ds, vols, vs = self._dataset("live", W, H, D, C, 2, 93, f5_ladder=True)
+        meta = json.loads((work / "processing_meta.json").read_text(encoding="utf-8"))
+        levels = meta["lod_levels"]
+        self.assertEqual([li["target"] for li in levels], ["native", 256])
+        self.assertEqual(sorted(p.name for p in work.glob("t*_c*_lod*.bin")),
+                         ["t000_c0_lod0.bin", "t000_c0_lod1.bin", "t000_c1_lod0.bin",
+                          "t000_c1_lod1.bin", "t001_c0_lod1.bin", "t001_c1_lod1.bin"])
+        manifest = json.loads((ds / "bricks" / "manifest.json").read_bytes())
+        for t in range(2):
+            for c in range(C):
+                counts, _ = np.histogram(self._resampled(vols[(t, c)], levels[1]),
+                                         bins=64, range=(0, 255))
+                self.assertEqual(manifest["timepointHistograms"]["t%03d" % t][c]["counts"],
+                                 counts.tolist())
+            self._same_as_writer(ds, "t%03d" % t, vols, t, C, W, H, D, vs)
 
     def test_live(self):
         W, H, D, C = 300, 280, 12, 1

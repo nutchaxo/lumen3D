@@ -24,7 +24,9 @@
 
 'use strict';
 
-import { API_UPLOAD, Utils, apiFetch, apiFetchStatus, getCsrf, t } from './shared.js';
+import {
+  API_UPLOAD, Utils, apiFetch, apiFetchStatus, getCsrf, onCsrfChange, refreshCsrf, fmtBytes, t,
+} from './shared.js';
 
 // ── Model ──────────────────────────────────────────────────────────────────────
 
@@ -55,6 +57,37 @@ export const DS_STALLED = 'stalled';
 
 const _listeners = new Set();
 let _worker = null;
+// True from an enqueue until the worker reports `idle` (or dies, or is aborted):
+// whether bytes are still owed, whatever the phase a second drop is passing through.
+let _workerActive = false;
+// The worker went idle while a later drop was being scanned or planned (its `idle`
+// was not the end of that run): the run that resumes the phase owes the wrap-up.
+let _idleDuringRun = false;
+
+// Ceiling on the chunk size once a chunk was refused as too large. A reverse proxy's
+// body limit (nginx client_max_body_size, a WAF) is invisible to `limits`, which
+// would otherwise put the refused size back on the next attempt. Kept for the tab's
+// session: a reload must not start over at the size that cannot get through.
+const MIN_CHUNK = 262144;
+const CEILING_KEY = 'lumen3d.upload.chunkCeiling';
+let _chunkCeiling = (() => {
+  try {
+    const v = Number(sessionStorage.getItem(CEILING_KEY));
+    return Number.isFinite(v) && v >= MIN_CHUNK ? Math.floor(v) : null;
+  } catch (_) { return null; }
+})();
+
+function lowerChunkCeiling(bytes) {
+  const next = Math.max(MIN_CHUNK, Math.floor(bytes));
+  if (_chunkCeiling !== null && _chunkCeiling <= next) return _chunkCeiling;
+  _chunkCeiling = next;
+  try { sessionStorage.setItem(CEILING_KEY, String(next)); } catch (_) { /* storage off: this page only */ }
+  return next;
+}
+
+function cappedChunkSize(n) {
+  return _chunkCeiling === null ? n : Math.min(n, _chunkCeiling);
+}
 
 const _state = {
   phase: PHASE_IDLE,
@@ -315,7 +348,23 @@ export async function startImport(entries, options = {}) {
   // A drop while the transfer is paused: the new files join the paused queue, and
   // dropping them is an explicit request to go on.
   const wasPaused = _state.phase === PHASE_PAUSED;
-  const failPhase = wasPaused ? PHASE_PAUSED : PHASE_IDLE;
+  // A drop while an earlier transfer still runs must hand that transfer its phase
+  // back when it ends without jobs of its own; the earlier transfer may also have
+  // finished during the scan, in which case its wrap-up is owed here. Decided when
+  // the drop ends, not when it starts.
+  _idleDuringRun = false;
+  const settlePhase = async (quiet) => {
+    if (wasPaused) return PHASE_PAUSED;
+    if (_workerActive) return PHASE_UPLOADING;
+    if (_idleDuringRun) {
+      _idleDuringRun = false;
+      _state.speed = 0;
+      _state.etaS = null;
+      // The nothing-to-do path refreshes the staged list itself.
+      if (quiet !== PHASE_DONE) await refreshStaged();
+    }
+    return quiet;
+  };
   _lastEntries = entries;
   _state.phase = PHASE_SCANNING;
   _state.error = null;
@@ -329,6 +378,7 @@ export async function startImport(entries, options = {}) {
     _state.backend = limits.backend || null;
     _state.staleAfterS = limits.staleAfterS || _state.staleAfterS;
   }
+  _state.chunkSize = cappedChunkSize(_state.chunkSize);
 
   const { datasets, orphans, flatDrop, untyped } = await groupIntoDatasets(entries);
   // Set here rather than after the plan so a drop that yields nothing still
@@ -338,7 +388,7 @@ export async function startImport(entries, options = {}) {
     ...untyped.map((u) => ({ path: u.folder, reason: 'unknown_type' })),
   ];
   if (!datasets.length) {
-    _state.phase = failPhase;
+    _state.phase = await settlePhase(PHASE_IDLE);
     if (untyped.length) {
       const u = untyped[0];
       _state.error = u.declared
@@ -370,7 +420,7 @@ export async function startImport(entries, options = {}) {
       }),
     });
     if (!plan.ok || !plan.data || !plan.data.ok) {
-      _state.phase = failPhase;
+      _state.phase = await settlePhase(PHASE_IDLE);
       _state.error = plan.status === 413
         ? t('upl.errPlanTooBig', 'La liste des fichiers de « {folder} » dépasse la taille de requête acceptée par le serveur (post_max_size).', { folder: d.folder })
         : plan.status === 0
@@ -379,7 +429,7 @@ export async function startImport(entries, options = {}) {
       emit();
       return { ok: false };
     }
-    _state.chunkSize = plan.data.chunkSize || _state.chunkSize;
+    _state.chunkSize = cappedChunkSize(plan.data.chunkSize || _state.chunkSize);
     planned.push(...(plan.data.datasets || []));
   }
 
@@ -442,7 +492,7 @@ export async function startImport(entries, options = {}) {
   }
 
   if (!jobs.length) {
-    _state.phase = wasPaused ? PHASE_PAUSED : PHASE_DONE;
+    _state.phase = await settlePhase(PHASE_DONE);
     await refreshStaged();
     emit();
     return { ok: true, nothingToDo: true };
@@ -454,8 +504,10 @@ export async function startImport(entries, options = {}) {
     _state.error = t('upl.errUnreadable', '{n} élément(s) du dossier n\'ont pas pu être lus et seront absents de l\'import.', { n: unread });
   }
   emit();
+  _idleDuringRun = false;
   ensureWorker();
   _worker.postMessage({ type: 'enqueue', jobs });
+  _workerActive = true;
   // The worker is still paused from before the drop: without this the panel would
   // read "uploading" while nothing moves.
   if (wasPaused) _worker.postMessage({ type: 'resume' });
@@ -495,6 +547,9 @@ function workerConfig() {
   return { type: 'config', endpoint: ENDPOINT_URL, csrf: getCsrf(), parallel: _state.parallel };
 }
 
+// A sign-in in this tab (or a renewal after another tab's) replaces the token.
+onCsrfChange(() => { if (_worker) _worker.postMessage(workerConfig()); });
+
 function ensureWorker() {
   if (_worker) {
     _worker.postMessage(workerConfig());
@@ -509,8 +564,9 @@ function ensureWorker() {
     // Nulling it makes the next drop spawn a fresh one.
     try { _worker?.terminate(); } catch (_) { /* already gone */ }
     _worker = null;
-    _state.error = t('upl.errWorker', 'Le moteur de transfert n\'a pas pu démarrer. Reglissez le dossier pour réessayer.')
-      + (e.message ? ` (${e.message})` : '');
+    _workerActive = false;
+    console.error('[import] transfer worker failed:', e && (e.message || e), e && e.filename ? `${e.filename}:${e.lineno}` : '');
+    _state.error = t('upl.errWorker', 'Le moteur de transfert n\'a pas pu démarrer. Reglissez le dossier pour réessayer.');
     _state.phase = PHASE_IDLE;
     emit();
   };
@@ -566,16 +622,34 @@ async function onWorkerMessage(e) {
       break;
 
     case 'chunk-too-large':
-      // A PHP host refused our chunk size. Shrink and re-plan; the already-stored
-      // chunks stay valid because the server keys resume on the file's OWN
-      // recorded chunk size, not on whatever the client is using now.
-      _state.chunkSize = Math.max(262144, Math.floor((msg.maxChunkSize || _state.chunkSize / 2)));
+      // The host (or a proxy before it) refused a chunk of `bytes`. Every later plan
+      // asks for at most the ceiling, and the server re-expresses an unfinished
+      // file planned larger at that size, keeping every byte already stored. Several
+      // refusals of one size lower it once, not once each. The host's own limit is
+      // believed only when it is below what was refused: a proxy in front of a PHP
+      // host refuses bodies PHP would have taken.
+      {
+        const refused = msg.bytes || _state.chunkSize;
+        _state.chunkSize = lowerChunkCeiling(msg.maxChunkSize && msg.maxChunkSize < refused
+          ? msg.maxChunkSize : refused / 2);
+      }
       _state.error = t('upl.errChunkSize', 'Taille de bloc réduite à {n} — relancez le dossier pour reprendre.',
                        { n: formatBytes(_state.chunkSize) });
       emit();
       break;
 
+    case 'csrf-stale': {
+      // A chunk was refused for its CSRF token: the session was signed in again
+      // (here or in another tab) since the worker got its copy. The worker holds
+      // its requests until it hears back; the same token again ends the transfer.
+      await refreshCsrf();
+      if (_worker) _worker.postMessage({ type: 'csrf', csrf: getCsrf() });
+      break;
+    }
+
     case 'fatal':
+      _workerActive = false;
+      _idleDuringRun = false;
       _state.error = msg.reason === 'unauthorized'
         ? t('upl.errAuth', 'Session expirée — reconnectez-vous puis reglissez le dossier.')
         : msg.reason === 'insecure_context'
@@ -591,6 +665,8 @@ async function onWorkerMessage(e) {
       break;
 
     case 'idle':
+      _workerActive = false;
+      if (_state.phase === PHASE_SCANNING || _state.phase === PHASE_PLANNING) _idleDuringRun = true;
       if (_state.phase === PHASE_UPLOADING) {
         _state.phase = PHASE_DONE;
         _state.speed = 0;
@@ -622,6 +698,9 @@ export function pause() {
 
 export function resume() {
   if (!_worker || _state.phase !== PHASE_PAUSED) return;
+  // The session may have been signed in again while paused (logout overlay, an
+  // expired session): the worker must not resume with the token of the old one.
+  _worker.postMessage(workerConfig());
   _worker.postMessage({ type: 'resume' });
   _state.phase = PHASE_UPLOADING;
   // A transient failure banner from before the pause would otherwise stay red
@@ -633,6 +712,8 @@ export function resume() {
 
 export function cancelAll() {
   if (_worker) _worker.postMessage({ type: 'abort' });
+  _workerActive = false;
+  _idleDuringRun = false;
   _state.phase = PHASE_IDLE;
   _state.failed = [];
   _state.network = 'online';
@@ -719,11 +800,7 @@ const _speed = (() => {
 // ── Formatting (shared by both views) ──────────────────────────────────────────
 
 export function formatBytes(n) {
-  if (!Number.isFinite(n) || n < 0) return '—';
-  const units = ['o', 'Ko', 'Mo', 'Go', 'To'];
-  let i = 0, v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+  return fmtBytes(n);
 }
 
 export function formatSpeed(bytesPerS) {

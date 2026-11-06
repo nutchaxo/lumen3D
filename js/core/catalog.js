@@ -156,33 +156,6 @@ const Catalog = (() => {
     );
   }
 
-  function getRelationMeta(sourceId, targetId) {
-    const source = getById(sourceId);
-    const target = getById(targetId);
-    if (!source || !target) return null;
-
-    const explicitRelated = Array.isArray(source.relatedIds) && source.relatedIds.includes(target.id)
-      || Array.isArray(target.relatedIds) && target.relatedIds.includes(source.id);
-    const sameEmbryoStage = Boolean(source.embryo && target.embryo && source.embryo === target.embryo && source.stage === target.stage);
-    const registration = source.registration || target.registration || null;
-    const qc = registration?.qcSummary || null;
-
-    let type = 'context';
-    if (registration) type = 'registered';
-    else if (explicitRelated) type = 'related';
-    else if (sameEmbryoStage) type = 'same-embryo';
-
-    return {
-      type,
-      registration,
-      qcSummary: qc,
-      calibrationAvailable: Boolean(registration?.transforms?.length),
-      appliedToVolume: Boolean(registration?.appliedToVolume),
-      label: _relationLabel(type),
-      description: _relationDescription(type, registration, qc)
-    };
-  }
-
   /**
    * Get statistics summary
    * @returns {object}
@@ -261,50 +234,12 @@ const Catalog = (() => {
     return sorted;
   }
 
-  // White-label: the relation type key stays 'same-embryo' (it is only emitted for
-  // datasets carrying specimen+stage metadata), but the human label uses the
-  // operator's specimen noun instead of a hardcoded 'embryo'.
-  function _specimenNoun() {
-    try {
-      if (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) {
-        // `specimen.singular` is localizable: the stored value is a flat string OR
-        // a per-locale object, so a bare get() can hand back an object that the
-        // template literals below would render as '[object Object]'.
-        const v = InstanceConfig.localized
-          ? InstanceConfig.localized(InstanceConfig.get('specimen.singular'))
-          : InstanceConfig.get('specimen.singular');
-        if (typeof v === 'string' && v) return v;
-      }
-    } catch (_) { /* fall through */ }
-    return 'sample';
-  }
-
   /** The displayed name of a dataset type — never the raw id, which is an
    *  internal token the operator can rename in config/instance.json. */
   function _typeLabel(type) {
     if (!type) return '';
     if (typeof Utils !== 'undefined' && Utils.datasetTypeLabel) return Utils.datasetTypeLabel(type);
     return String(type);
-  }
-
-  function _relationLabel(type) {
-    return {
-      registered: 'Registered',
-      related: 'Related dataset',
-      'same-embryo': `Same ${_specimenNoun()}/stage`,
-      context: 'Context dataset'
-    }[type] || 'Related dataset';
-  }
-
-  function _relationDescription(type, registration, qc) {
-    if (registration) {
-      const method = registration.method || 'registration';
-      const median = Number.isFinite(qc?.medianRmsAfter) ? `, median RMS ${qc.medianRmsAfter.toFixed(3)}` : '';
-      return `${method}${median}`;
-    }
-    if (type === 'same-embryo') return `Matched by ${_specimenNoun()} and stage metadata.`;
-    if (type === 'related') return 'Explicitly linked by dataset metadata.';
-    return 'Related by experimental context.';
   }
 
   /**
@@ -320,25 +255,10 @@ const Catalog = (() => {
     return typeof channel === 'string' ? channel : (channel.name || '');
   }
 
+  // The stage rule lives in Utils (loaded before this file on every page that has a catalog).
   function _stageNumber(stage) {
-    if (typeof stage === 'number') return stage;
-    if (!stage) return 0;
-    const match = String(stage).match(/^E(\d+)(?:\.(\d+))?$/i);
-    if (!match) return 0;
-    if (match[2]) return parseFloat(`${match[1]}.${match[2]}`);
-
-    const digits = match[1];
-    if (digits.length <= 1) return parseFloat(digits);
-    if (digits.length === 2) {
-      const value = parseFloat(digits);
-      return value >= 50 ? parseFloat(`${digits[0]}.${digits.slice(1)}`) : value;
-    }
-
-    const firstTwo = parseInt(digits.slice(0, 2), 10);
-    if (firstTwo >= 10 && firstTwo <= 20) {
-      return parseFloat(`${digits.slice(0, 2)}.${digits.slice(2)}`);
-    }
-    return parseFloat(`${digits[0]}.${digits.slice(1)}`);
+    if (typeof Utils !== 'undefined' && typeof Utils.stageNumber === 'function') return Utils.stageNumber(stage);
+    return (typeof stage === 'number' && Number.isFinite(stage)) ? stage : 0;
   }
 
   return {
@@ -349,7 +269,6 @@ const Catalog = (() => {
     filter,
     getStages,
     getRelated,
-    getRelationMeta,
     getStats,
     sort
   };

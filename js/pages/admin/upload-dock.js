@@ -20,7 +20,7 @@
 'use strict';
 
 import { t, escHtml, refreshIcons, toast, storageGet, storageSet } from './shared.js';
-import { navigateTo, openDataset } from './bus.js';
+import { navigateTo, openDataset, openDatasetId, isDirty, discardDirty } from './bus.js';
 import * as Upload from './upload-manager.js';
 
 const SIZE_KEY = 'adm-upload-dock-size';
@@ -31,6 +31,14 @@ let _size = 'bar';
 let _unsub = null;
 let _bound = false;
 let _structureSig = '';
+
+// Screen-reader announcements (#upload-dock-status). The dock itself is not a live
+// region: it repaints bytes, speed and ETA several times a second for hours.
+let _announcer = null;
+let _announceTimer = null;
+let _lastStatus = null;          // statusLabel() last seen, null before the first render
+let _lastMilestone = -1;         // last 10 % step of the global progress announced
+const _lastRowState = new Map(); // dataset key → "state|error" last seen
 
 function loadSize() {
   const v = storageGet(SIZE_KEY);
@@ -50,6 +58,19 @@ export function mount() {
   if (!_root) return;
   _size = loadSize();
   _root.dataset.size = _size;
+  _announcer = document.getElementById('upload-dock-status');
+  if (!_announcer) {
+    _announcer = document.createElement('div');
+    _announcer.id = 'upload-dock-status';
+    _announcer.className = 'adm-sr-only';
+    _announcer.setAttribute('role', 'status');
+    _announcer.setAttribute('aria-live', 'polite');
+    _announcer.setAttribute('aria-atomic', 'true');
+    _root.insertAdjacentElement('afterend', _announcer);
+  }
+  _lastStatus = null;
+  _lastMilestone = -1;
+  _lastRowState.clear();
 
   // mount() runs from enterApp(), which runs again after a logout/login round
   // trip. Binding unconditionally would stack a second click handler, and every
@@ -95,7 +116,21 @@ function openInEditor(key) {
   openDataset(`staging:${key}`);
 }
 
+/**
+ * The dock floats over every tab, the Datasets editor included. Publishing or
+ * discarding the import that editor holds with unsaved edits would drop them
+ * without a word (the staged id stops existing), so ask first, like a tab switch.
+ * Returns false when the operator keeps their edits.
+ */
+export function releaseOpenEditor(key) {
+  if (openDatasetId() !== `staging:${key}` || !isDirty('datasets')) return true;
+  if (!confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'))) return false;
+  discardDirty('datasets');
+  return true;
+}
+
 async function doPublish(key) {
+  if (!releaseOpenEditor(key)) return;
   const r = await Upload.publish(key);
   if (r.ok && r.data?.ok) {
     toast(t('upl.published', 'Dataset publié ✓ (masqué de l\'explorer — activez-le dans l\'onglet Datasets)'));
@@ -108,6 +143,7 @@ async function doPublish(key) {
 
 async function doDiscard(key) {
   if (!confirm(t('upl.confirmDiscard', 'Supprimer définitivement les fichiers déjà envoyés pour ce dataset ?'))) return;
+  if (!releaseOpenEditor(key)) return;
   await Upload.discard(key);
   toast(t('upl.discarded', 'Import supprimé.'));
 }
@@ -140,11 +176,18 @@ function render() {
   const anything = live || staged.length > 0;
 
   _root.hidden = !anything;
-  if (!anything) { _structureSig = ''; return; }
+  if (!anything) {
+    _structureSig = '';
+    _lastStatus = null;
+    _lastMilestone = -1;
+    _lastRowState.clear();
+    return;
+  }
 
   const pct = s.totalBytes > 0 ? Math.min(100, (s.sentBytes / s.totalBytes) * 100) : (live ? 0 : 100);
   const working = Upload.isBusy();
   const paused = Upload.isPaused();
+  announce(announcements(s, pct, working, paused));
 
   const sig = structureSig(s, staged);
   if (sig === _structureSig && _root.firstChild) { patch(s, pct, working); return; }
@@ -157,6 +200,51 @@ function render() {
       : renderPanel(s, pct, working, paused, staged);
   refreshIcons(_root);
   patch(s, pct, working);
+}
+
+/**
+ * What changed since the last emit that a screen-reader user needs to hear: the
+ * transfer's status, a dataset reaching a new state or failing, and each 10 % of
+ * the global progress while bytes move. The first render of a session only
+ * records the state (an import resumed after a login is not news).
+ */
+export function announcements(s, pct, working, paused) {
+  const out = [];
+  const first = _lastStatus === null;
+  const status = statusLabel(s, working, paused);
+  if (!first && status !== _lastStatus) out.push(status);
+  _lastStatus = status;
+
+  for (const d of s.datasets) {
+    const sig = `${d.state}|${d.error || ''}`;
+    const before = _lastRowState.get(d.key);
+    _lastRowState.set(d.key, sig);
+    if (first || before === sig) continue;
+    const name = d.name || d.folder || d.key;
+    if (d.error) out.push(t('upl.srRowError', '{name}: {error}', { name, error: d.error }));
+    else if (before !== undefined) out.push(`${name} — ${stateInfo(d.state).label}`);
+  }
+  const keys = new Set(s.datasets.map((d) => d.key));
+  for (const k of Array.from(_lastRowState.keys())) if (!keys.has(k)) _lastRowState.delete(k);
+
+  const step = Math.floor(pct / 10) * 10;
+  if (first || step < _lastMilestone || !working) {
+    _lastMilestone = step;
+  } else if (step > _lastMilestone) {
+    _lastMilestone = step;
+    if (step > 0 && step < 100) out.push(t('upl.srProgress', 'Import: {pct} % sent', { pct: step }));
+  }
+  return out;
+}
+
+function announce(messages) {
+  if (!_announcer || !messages.length) return;
+  const text = messages.join('. ');
+  if (_announceTimer) { clearTimeout(_announceTimer); _announceTimer = null; }
+  if (_announcer.textContent !== text) { _announcer.textContent = text; return; }
+  // The same sentence again (a second pause, say) is only read if the text changes.
+  _announcer.textContent = '';
+  _announceTimer = setTimeout(() => { _announceTimer = null; _announcer.textContent = text; }, 120);
 }
 
 const RING_R = 22;
@@ -177,6 +265,10 @@ function patch(s, pct, working) {
   set('[data-dock-sub]', subLine(s, working));
   const fill = _root.querySelector('.dock-global [data-dock-fill], .dock-bar [data-dock-fill]');
   if (fill) fill.style.width = `${pct.toFixed(1)}%`;
+  const meter = _root.querySelector('[data-dock-meter]');
+  if (meter && meter.getAttribute('aria-valuenow') !== String(Math.round(pct))) {
+    meter.setAttribute('aria-valuenow', String(Math.round(pct)));
+  }
 
   s.datasets.forEach((d) => {
     const row = _root.querySelector(`.dock-row[data-key="${cssEscape(d.key)}"]`);
@@ -187,6 +279,11 @@ function patch(s, pct, working) {
     set('[data-dock-bytes]', `${Upload.formatBytes(d.receivedBytes)} / ${Upload.formatBytes(d.totalBytes)}`, row);
     set('[data-dock-files]', `${d.doneCount}/${d.fileCount} ${t('upl.files', 'fichiers')}`, row);
   });
+}
+
+function meterAttrs(pct) {
+  return `data-dock-meter role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"`
+    + ` aria-label="${escHtml(t('upl.dockTitle', 'Import de datasets'))}"`;
 }
 
 function subLine(s, working) {
@@ -230,7 +327,7 @@ function renderBar(s, pct, working, paused) {
           <span class="dock-bar-title">${escHtml(statusLabel(s, working, paused))}</span>
           <span class="dock-bar-pct" data-dock-pct>${Math.round(pct)} %</span>
         </div>
-        <div class="dock-progress"><div class="dock-progress-fill" data-dock-fill style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="dock-progress" ${meterAttrs(pct)}><div class="dock-progress-fill" data-dock-fill style="width:${pct.toFixed(1)}%"></div></div>
         <div class="dock-bar-sub" data-dock-sub>${escHtml(subLine(s, working))}</div>
       </div>
       <div class="dock-bar-actions">
@@ -262,7 +359,7 @@ function renderPanel(s, pct, working, paused, staged) {
           <span class="dock-bar-title">${escHtml(statusLabel(s, working, paused))}</span>
           <span class="dock-bar-pct" data-dock-pct>${Math.round(pct)} %</span>
         </div>
-        <div class="dock-progress"><div class="dock-progress-fill" data-dock-fill style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="dock-progress" ${meterAttrs(pct)}><div class="dock-progress-fill" data-dock-fill style="width:${pct.toFixed(1)}%"></div></div>
         <div class="dock-bar-sub" data-dock-sub>${escHtml(subLine(s, working))}</div>
       </div>
       ${s.error ? `<div class="dock-error"><i data-lucide="alert-triangle"></i> ${escHtml(s.error)}</div>` : ''}

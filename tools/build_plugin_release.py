@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -39,6 +40,34 @@ except Exception:
 # Identity-bearing files only (mirrors the trust hash extension set); skip dotfiles.
 _HASH_EXT = {".js", ".json", ".mjs", ".css", ".html"}
 _FIXED_DT = (1980, 1, 1, 0, 0, 0)
+
+# The id names a folder (marketplace/plugins/<id>, js/modules/<placement>/<id>) and the
+# version a file (plugin-<id>-<version>.zip), so both must be one plain path segment.
+# Same id rule as the installer (dev_server._SAFE_FOLDER_RE), which refuses any other id:
+# it already excludes ".", "..", separators and drive letters. \Z, not $, so a trailing
+# newline cannot slip through.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*\Z", re.ASCII)
+_SAFE_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]*\Z", re.ASCII)
+
+
+def id_problem(pid) -> str | None:
+    """Why ``pid`` cannot be a plugin id, or None when it can."""
+    if not isinstance(pid, str) or not pid:
+        return "the plugin id must be a non-empty string"
+    if not _SAFE_ID_RE.match(pid):
+        return (f"invalid plugin id {pid!r}: letters, digits, '_', '.', '-' only, "
+                "starting with a letter, digit or '_'")
+    return None
+
+
+def version_problem(version) -> str | None:
+    """Why ``version`` cannot be a plugin version, or None when it can."""
+    if not isinstance(version, str) or not version:
+        return "the plugin version must be a non-empty string"
+    if not _SAFE_VERSION_RE.match(version) or ".." in version:
+        return (f"invalid plugin version {version!r}: letters, digits, '.', '+', '-' only, "
+                "no '..'")
+    return None
 
 
 def _sha256_bytes(b: bytes) -> str:
@@ -57,9 +86,12 @@ def build(plugin_dir: Path, out_dir: Path, seed_hex: str | None) -> dict:
     if not meta_path.is_file():
         raise SystemExit(f"plugin.json introuvable dans {plugin_dir}")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    pid = str(meta.get("id") or plugin_dir.name)
+    pid = meta.get("id") or plugin_dir.name
     placement = meta.get("placement") or plugin_dir.parent.name
-    version = str(meta.get("version") or "0.0.0")
+    version = meta.get("version") or "0.0.0"
+    problem = id_problem(pid) or version_problem(version)
+    if problem:
+        raise SystemExit(f"ERROR: {problem} ({meta_path})")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     zip_name = f"plugin-{pid}-{version}.zip"

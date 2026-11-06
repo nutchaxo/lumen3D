@@ -17,6 +17,7 @@ PluginRegistry.implement('figure-panel', {
   _options: { columns: 'auto', scale: 'physical', label: 'stage', background: 'dark', bar: 'auto' },
   _result: null,
   _images: new Map(),       // dataset id -> { promise, pixels }: decoded photographs, newest last
+  _releaseFocus: null,
 
   MAX_WIDTH: 6000,
   MAX_SIDE: 16000,              // what a browser reliably allocates for one canvas side
@@ -36,13 +37,34 @@ PluginRegistry.implement('figure-panel', {
     if (!this._selected.size) this._selected.add(this._ctx.dataset.getId());
     this._renderList();
     this._modal.hidden = false;
+    // A second activation while the dialog is open keeps the first trap: re-trapping
+    // would record a control inside the dialog as the place to return focus to.
+    if (!this._releaseFocus && typeof Utils !== 'undefined' && typeof Utils.trapFocus === 'function') {
+      this._releaseFocus = Utils.trapFocus(this._modal.querySelector('.p2d-modal-card'), {
+        initialFocus: this._modal.querySelector('[data-fp="close"]')
+      });
+    }
     this._preview();
   },
 
   dispose() {
+    this._releaseTrap();
     this._releaseImages();
     this._modal?.remove();
     this._modal = null;
+  },
+
+  _releaseTrap() {
+    const release = this._releaseFocus;
+    this._releaseFocus = null;
+    if (release) release();
+  },
+
+  _close() {
+    if (!this._modal) return;
+    this._modal.hidden = true;
+    this._releaseTrap();
+    this._releaseImages();
   },
 
   // ── Modal ─────────────────────────────────────────────────────────────────
@@ -52,7 +74,7 @@ PluginRegistry.implement('figure-panel', {
     modal.className = 'p2d-modal';
     modal.hidden = true;
     modal.innerHTML = `
-      <div class="p2d-modal-card" role="dialog" aria-label="${esc(this._t('title'))}">
+      <div class="p2d-modal-card" role="dialog" aria-modal="true" aria-label="${esc(this._t('title'))}">
         <div class="p2d-modal-head">
           <h2>${esc(this._t('title'))}</h2>
           <button type="button" class="btn btn-ghost btn-sm" data-fp="all">${esc(this._t('selectAll'))}</button>
@@ -103,6 +125,12 @@ PluginRegistry.implement('figure-panel', {
     this._ctx.ui.createIcons({ nodes: [modal] });
     modal.addEventListener('click', (e) => this._onClick(e));
     modal.addEventListener('change', (e) => this._onChange(e));
+    // The page's own shortcuts (Escape closes the browser, arrows step the photograph,
+    // letters toggle panels) must not act behind the dialog.
+    modal.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { e.preventDefault(); this._close(); }
+    });
     return modal;
   },
 
@@ -120,7 +148,7 @@ PluginRegistry.implement('figure-panel', {
   _onClick(e) {
     const action = e.target.closest('[data-fp]')?.dataset.fp;
     if (!action) return;
-    if (action === 'close') { this._modal.hidden = true; this._releaseImages(); }
+    if (action === 'close') this._close();
     else if (action === 'all') { this._ctx.dataset.getCollection().forEach(d => this._selected.add(d.id)); this._renderList(); this._preview(); }
     else if (action === 'none') { this._selected.clear(); this._renderList(); this._preview(); }
     else if (action === 'png') this._exportPng();
@@ -427,14 +455,16 @@ PluginRegistry.implement('figure-panel', {
 
   _openStudio() {
     if (!this._result) return;
-    const px = this._result.pixelSizeUm;
+    const result = this._result;
+    const px = result.pixelSizeUm;
+    // Closed first, so the focus handed back to the page does not land after
+    // (and over) whatever the Studio focuses when it opens.
+    this._close();
     this._ctx.ui.openStudioWith({
-      canvas: this._result.canvas, width: this._result.canvas.width, height: this._result.canvas.height,
+      canvas: result.canvas, width: result.canvas.width, height: result.canvas.height,
       source: '2d-figure', quality: 'native', timepoint: 0,
-      pixelSizeUm: { x: px, y: px }, calibrated: this._result.calibrated, layoutMaps: this._result.layoutMaps,
-      dataset: { name: `figure_panel_${this._result.count}` }, channelState: []
+      pixelSizeUm: { x: px, y: px }, calibrated: result.calibrated, layoutMaps: result.layoutMaps,
+      dataset: { name: `figure_panel_${result.count}` }, channelState: []
     });
-    this._modal.hidden = true;
-    this._releaseImages();
   }
 });

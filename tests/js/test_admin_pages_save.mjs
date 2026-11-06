@@ -274,6 +274,35 @@ const sec = (id, text) => [{ id, props: {}, columns: [{ id: id + 'c', width: 12,
   assert.equal(s[0].columns[0].widgets.length, 1);
 }
 
+// ── 8b. Empty objects an old PHP host stored as [] take settings again ─
+{
+  const { T, server } = load();
+  // The controls' own path writer, so the test writes exactly as the sidebar does.
+  const ctlSrc = readFileSync(path.join(ROOT, 'js/pages/admin/pages-controls.js'), 'utf8');
+  const putSrc = ctlSrc.match(/export function pathPut\([^)]*\) \{.*\}$/m)[0].replace(/^export /, '');
+  const pathPut = new Function(`${putSrc}; return pathPut;`)();
+  server.docs.set('pages/a', { draft: { sections: [{ id: 's', props: [], columns: [{ id: 'c', width: 6, props: [],
+    widgets: [{ id: 'w', type: 'spacer', props: [] }, { id: 'h', type: 'hero', props: { style: [], cta: [], badge: [] } }] }] }] } });
+  await T.selectPage('a');
+  const s = T.state().sections;
+  const col = s[0].columns[0];
+  for (const [what, v] of [['section props', s[0].props], ['column props', col.props], ['widget props', col.widgets[0].props],
+    ['props.style', col.widgets[1].props.style], ['props.cta', col.widgets[1].props.cta], ['props.badge', col.widgets[1].props.badge]]) {
+    assert.ok(v && typeof v === 'object' && !Array.isArray(v), `${what} loads as an object`);
+  }
+  pathPut(col, 'props.vAlign', 'center');
+  pathPut(col, 'props.style.padTop', '12px');
+  pathPut(col.widgets[0], 'props.height', 40);
+  pathPut(col.widgets[1], 'props.cta.text', 'Go');
+  T._afterMutate();
+  await T.saveDraft();
+  const saved = server.log.filter((l) => l.action === 'save_draft').pop().body.draft.sections[0].columns[0];
+  assert.equal(saved.props.vAlign, 'center', 'a column setting survives the save');
+  assert.equal(saved.props.style.padTop, '12px', 'a column style survives the save');
+  assert.equal(saved.widgets[0].props.height, 40, 'a widget setting survives the save');
+  assert.equal(saved.widgets[1].props.cta.text, 'Go', 'a nested widget object survives the save');
+}
+
 // ── 9. Frame messages with hostile indices cannot throw or mutate ─
 {
   const { T, server, sandbox } = load();

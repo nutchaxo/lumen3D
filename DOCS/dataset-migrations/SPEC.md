@@ -180,6 +180,14 @@ idempotent.
   that clearly.
 * Both executors write the same journal, so a paused job can be resumed by the other one (the
   tab fixes a dataset's executor while it runs; the operator changes it between runs).
+* Cost per unit (web 1.82). A server run keeps its own schedule of the units still to start
+  (every key formatted once; the units whose gate is open — m004 lower levels, m005 stage A —
+  in a heap; a gate opened by a counter as units finish) and journals what it stored in
+  batches: one journal read, source check and rewrite per 32 units or per second, and always
+  before it answers. A unit stored but not yet journaled when a run dies is done again (stored
+  units are idempotent). `unit_inputs_many` and `unit_put_many` read the journal and count the
+  unfinished stage-A units once per request, not once per unit. Neither grows with the square
+  of the unit count (a 100-frame timelapse has ~140 000 m005 units).
 
 ## 7. Speed test (web 1.59.1; replaces the per-dataset benchmark of 1.58/1.59)
 
@@ -818,7 +826,10 @@ Units are tuples `(stage, t, k, c, a, b, d)`; keys:
   most 64 per request on both twins): their inputs in ONE POST `unit_inputs_many {dataset,
   migration, units}` → `{ok, items}` (each item the `unit_inputs` answer, or `{ok: false, unit,
   error, status, detail?}`), every byte run of the batch read once (one or a few `read_ranges`,
-  48 MiB prefetch), the units computed one after another, their results in POST
+  48 MiB prefetch; a run leaves the worker's batch cache after the last unit that lists it, and
+  a run the prefetch missed is kept for a later unit only while the cache stays within those
+  48 MiB, so a batch holds at most 48 MiB of runs beside the input of the unit being computed),
+  the units computed one after another, their results in POST
   `unit_put_many?dataset=&migration=` with the raw body `u32 n`, then n × `{u16 key length, key
   (ASCII), u32 length, body}` (little-endian, ≤ 64 units, nothing after the last) → `{ok,
   results: [{unit, ok, error?, status?, detail?}], done, total}`. Each unit is checked as
@@ -836,8 +847,19 @@ Units are tuples `(stage, t, k, c, a, b, d)`; keys:
   past them is 409 `bad_blob`, a repeated one is written again), kept in the job's tile store
   under `.parts/`, and the last one (offset + length = total) is stored as `unit_put` would and
   answers its reply + `complete: true` (before: `{ok, complete: false, received}`).
+  Since web 1.82 the pieces serve EVERY migration (an m002 unit of 64 PNG tiles or an m004
+  super-block of 64 lossless 66³ bricks tops out near 17 MB, over a PHP host's default 8 MB): the
+  key is checked by the migration's own unit parser, an m002–m004 unit totals at most 32 MiB
+  (`body_too_large`, 413), and the last piece stores it through that migration's `unit_put`.
+  A piece is refused before anything is written unless the job exists (`no_job`, 404), its source
+  is unchanged and it is `running` (`job_not_running`, 409), so a piece in flight at a cancel or a
+  pause never recreates the store. A piece at `offset` > 0 of a unit already in `done` with no
+  part file left is answered `{ok, done, total, complete: true}`: the retry of a last piece whose
+  answer was lost (a proxy 504 after the unit was stored), which the worker re-sends on no answer
+  or a 5xx; the worker stops at the first `complete: true`.
   Tests `tests/test_format5_batches.py` (both twins, a whole job of batches and pieces = the
-  server executor's tree), `tests/js/test_mig_worker_batches.mjs`.
+  server executor's tree; an m004 unit in pieces; the retried last piece; a piece of a cancelled
+  job), `tests/js/test_mig_worker_batches.mjs`.
 * Other route (web 1.65): `tools/convert_dataset.py <DATA_WEB>/<type>/<folder>` runs every pending
   migration with the Python server executor on the operator's machine; the converted folder is then
   dragged into the admin Import tab, whose allowlist accepts a v5 tree (`index/{col}.bin` core tier,
@@ -957,6 +979,11 @@ all unchanged, the stores stay lossless) with **exactly two columns**, in this o
   `?v=` stamps unchanged for them); then the `b2`, `b4`, `q80`, `q50` packs and indexes are deleted;
   then `metadata.json` `formatVersion` = 6. A finalize interrupted after the commit point resumes
   with the deletions. `keepPrevious` does not apply (the format-5 columns are not kept).
+  The journal records `oldManifestSha` just before the commit and `state: swapped` just after:
+  a job that died between the two (v6 manifest live, journal still `assembling`) is promoted to
+  `swapped` by `plan` as by `finalize`, so the re-stamp of `planes/` and `mips/` from the old
+  sha still runs, and `cancel` refuses it (409 `finalize_in_progress`) — cancelling would leave
+  them stamped with the format-5 manifest and offer full m002/m003 rebuilds (web 1.82).
 * Registry: `m006-q30`, from 5 to 6, types `3d` and `live`, after `m005-matrix`; LATEST = 6 on both
   backends.
 

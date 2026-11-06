@@ -12,5 +12,9 @@
   "clickSecond": "Klik een tweede punt aan om de afstand te meten.",
   "distance": "Afstand",
   "deltaZ": "Delta Z",
-  "measuredBetween": "Gemeten tussen twee aangeklikte oppervlaktepunten in gekalibreerde fysieke coördinaten."
+  "measuredBetween": "Gemeten tussen twee aangeklikte oppervlaktepunten in gekalibreerde fysieke coördinaten.",
+  "changeColor": "Kleur wijzigen",
+  "hideMeasure": "Meting verbergen",
+  "showMeasure": "Meting tonen",
+  "deleteMeasure": "Meting verwijderen"
 }

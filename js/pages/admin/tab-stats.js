@@ -101,7 +101,23 @@ function render() {
       </tr>`).join('')
     : `<tr><td colspan="4" class="adm-td-empty">${escHtml(t('admin.statsEmpty', 'Aucune donnée d\'utilisation pour le moment.'))}</td></tr>`;
 
-  const sortIc = (k) => _sortKey === k ? (_sortDir < 0 ? ' ▾' : ' ▴') : '';
+  // A real button per sortable header (keyboard + screen reader), the order
+  // announced through aria-sort; the arrow glyph is decoration only.
+  const sortTh = (k, label, cls = '') => {
+    const active = _sortKey === k;
+    const order = active ? (_sortDir < 0 ? 'descending' : 'ascending') : 'none';
+    const glyph = active ? `<span aria-hidden="true">${_sortDir < 0 ? ' ▾' : ' ▴'}</span>` : '';
+    return `<th class="adm-th-sort${cls}" aria-sort="${order}"><button type="button" class="adm-th-sort-btn" data-sort="${k}">${escHtml(label)}${glyph}</button></th>`;
+  };
+
+  // The rebuild below replaces every node: put the keyboard focus back on the
+  // control that held it, or it falls to <body>.
+  const focused = document.activeElement;
+  let refocus = null;
+  if (focused && focused !== root && root.contains(focused)) {
+    if (focused.classList.contains('adm-th-sort-btn')) refocus = `.adm-th-sort-btn[data-sort="${focused.dataset.sort}"]`;
+    else if (focused.id) refocus = `#${focused.id}`;
+  }
 
   root.innerHTML = `
     <div class="adm-page-head">
@@ -120,9 +136,9 @@ function render() {
       <div class="adm-table-wrap">
         <table class="adm-table">
           <thead><tr>
-            <th data-sort="name" class="adm-th-sort">${escHtml(t('admin.colDataset', 'Dataset'))}${sortIc('name')}</th>
-            <th data-sort="views" class="adm-th-sort adm-th-num">${escHtml(t('admin.colViews', 'Vues'))}${sortIc('views')}</th>
-            <th data-sort="downloads" class="adm-th-sort adm-th-num">${escHtml(t('admin.colDownloads', 'Téléch.'))}${sortIc('downloads')}</th>
+            ${sortTh('name', t('admin.colDataset', 'Dataset'))}
+            ${sortTh('views', t('admin.colViews', 'Vues'), ' adm-th-num')}
+            ${sortTh('downloads', t('admin.colDownloads', 'Téléch.'), ' adm-th-num')}
             <th>${escHtml(t('admin.colLastViewed', 'Dernière vue'))}</th>
           </tr></thead>
           <tbody>${tableRows}</tbody>
@@ -131,15 +147,16 @@ function render() {
     </div>`;
 
   el('stats-refresh').addEventListener('click', load);
-  root.querySelectorAll('.adm-th-sort').forEach((th) => th.addEventListener('click', () => {
-    const k = th.dataset.sort;
+  root.querySelectorAll('.adm-th-sort-btn').forEach((btn) => btn.addEventListener('click', () => {
+    const k = btn.dataset.sort;
     if (_sortKey === k) _sortDir = -_sortDir; else { _sortKey = k; _sortDir = k === 'name' ? 1 : -1; }
     render();
   }));
   refreshIcons(root);
+  if (refocus) root.querySelector(refocus)?.focus();
 }
 
-async function load() {
+async function fetchStats() {
   const data = await apiFetch(`${API_ADMIN}?action=stats`);
   if (data && typeof data === 'object' && !data.error) { _stats = data; _failed = false; }
   else {
@@ -150,12 +167,30 @@ async function load() {
   render();
 }
 
+let _loading = null;
+let _loadAgain = false;
+
+/**
+ * One request at a time. A refresh pressed while one is in flight is not
+ * dropped (the running answer may predate what the operator wants to see):
+ * the figures are read once more when the running request ends.
+ */
+function load() {
+  if (_loading) { _loadAgain = true; return _loading; }
+  _loading = (async () => {
+    try {
+      do { _loadAgain = false; await fetchStats(); } while (_loadAgain);
+    } finally { _loading = null; }
+  })();
+  return _loading;
+}
+
 export const StatsTab = {
   id: 'stats',
   titleKey: 'admin.navStats',
   titleDefault: 'Statistiques',
   mounted: false,
-  mount() { render(); load(); },
+  mount() { render(); },
   activate() { load(); },
   relabel() { render(); },
 };

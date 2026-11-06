@@ -33,6 +33,9 @@ function makeEl(tag) {
       while (n.parent) n = n.parent;
       return n.__root === true;
     },
+    // Like a real <img>, src is reflected as an attribute (getAttribute('src')).
+    get src() { return el.attrs.src || ''; },
+    set src(v) { el.attrs.src = String(v); },
     get textContent() { return el._text || ''; },
     set textContent(v) { el._text = String(v); el.children = []; },
     appendChild(child) { child.parent = el; el.children.push(child); return child; },
@@ -229,4 +232,78 @@ function fresh() {
   assert.equal(dockOf().hidden, true, 'a dock whose every tile failed to load hides itself');
 }
 
-console.log('gallery dock (mount, states, persistence, lightbox, empty dataset): OK');
+// ── 7. A missing file leaves the gallery entirely, not just the grid ──
+{
+  const FIVE = [
+    { file: 'a.png', title: 'A' },
+    { file: 'b.png', title: 'B' },
+    { file: 'c.png' },
+    { file: 'd.png', title: 'D' },
+    { file: 'e.png', title: 'E' },
+  ];
+  const G = fresh();
+  G.init({ basePath: 'g', items: FIVE });
+  const dock = dockOf();
+  const tileOf = (file) => find(dock, 'gallery-thumb')
+    .find((t) => t.children[0].src.endsWith(`/${file}`));
+
+  // b.png is gone: its thumbnail (none declared → the original) fails in the dock.
+  tileOf('b.png').children[0].fire('error');
+  assert.equal(find(dock, 'gallery-thumb').length, 4, 'its tile leaves the grid');
+  assert.equal(G.count(), 4, 'count() no longer includes it');
+  assert.equal(find(dock, 'gallery-dock-count')[0].textContent, '4', 'the header count drops');
+  assert.equal(find(dock, 'gallery-dock-chip-count')[0].textContent, '4', 'the puce count drops');
+  assert.equal(tileOf('c.png').getAttribute('aria-label'), 'Image 2',
+    'an untitled image is renumbered after the one before it left');
+
+  // The lightbox no longer steps onto it, and its counter reads 4 images.
+  doc.activeElement = body;                   // a mouse click does not focus the tile
+  tileOf('a.png').fire('click');
+  const lb = body.children.find((c) => c.className === 'gallery-lightbox');
+  const lbImg = find(lb, 'gallery-lb-img')[0];
+  const caption = find(lb, 'gallery-lb-caption')[0];
+  G.step(1);
+  assert.equal(lbImg.src, 'g/gallery/c.png', '→ skips the missing file');
+  assert.match(caption.textContent, /2 \/ 4$/, 'the counter counts the images that exist');
+
+  // e.png lives in a lazy tile that never loaded: the lightbox finds out first.
+  G.step(1);
+  G.step(1);
+  assert.equal(lbImg.src, 'g/gallery/e.png');
+  lbImg.fire('error');
+  assert.equal(G.count(), 3, 'an image that fails in the lightbox is dropped too');
+  assert.equal(tileOf('e.png'), undefined, 'together with its tile');
+  assert.equal(lbImg.src, 'g/gallery/a.png', 'going forward from the last image wraps to the first');
+  assert.match(caption.textContent, /1 \/ 3$/);
+
+  // Going backward onto a missing image carries on backward.
+  G.step(1);                                   // c
+  const dTile = tileOf('d.png');
+  G.step(1);                                   // d
+  G.step(-1);                                  // c again
+  assert.equal(lbImg.src, 'g/gallery/c.png');
+  // A stale error of an image no longer on screen must not drop the current one.
+  lbImg.attrs.src = 'g/gallery/d.png';
+  lbImg.fire('error');
+  assert.equal(G.count(), 3, 'an error for a src no longer shown is ignored');
+  lbImg.attrs.src = 'g/gallery/c.png';
+  lbImg.fire('error');
+  assert.equal(G.count(), 2, 'c is dropped');
+  assert.equal(lbImg.src, 'g/gallery/a.png', '← onto a missing image lands on the one before it');
+
+  // Escape focuses the tile of the image that was shown, found by item.
+  G.step(1);
+  assert.equal(lbImg.src, 'g/gallery/d.png');
+  G.close();
+  assert.equal(doc.activeElement, dTile, 'focus returns to the tile of the image on screen');
+
+  // Losing every image closes the lightbox and hides the dock.
+  tileOf('a.png').fire('click');
+  lbImg.fire('error');
+  lbImg.fire('error');
+  assert.equal(G.count(), 0);
+  assert.equal(lb.hidden, true, 'the lightbox closes when nothing is left');
+  assert.equal(dock.hidden, true, 'and the dock hides');
+}
+
+console.log('gallery dock (mount, states, persistence, lightbox, empty dataset, missing files): OK');

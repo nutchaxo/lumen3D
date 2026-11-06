@@ -242,7 +242,8 @@ _WRITE_LOCK = threading.Lock()
 # never held nested in the same order, so no deadlock (threading.Lock isn't reentrant).
 _STATS_LOCK = threading.Lock()
 # Live self-update progress, polled by the admin UI via /api/admin.php?action=update_status.
-_UPDATE_STATE = {"phase": "idle", "pct": 0, "message": "", "error": None, "running": False, "target": None}
+_UPDATE_STATE = {"phase": "idle", "pct": 0, "message": "", "error": None, "running": False, "target": None,
+                 "done": None, "total": None}
 # Closes the check-then-set race on _UPDATE_STATE["running"] (two concurrent
 # update_apply POSTs must never both launch the pipeline).
 _UPDATE_LOCK = threading.Lock()
@@ -1921,6 +1922,11 @@ TELEMETRY_GLOBAL_BURST = 600
 TELEMETRY_GLOBAL_RATE = 20
 TELEMETRY_SLOTS = 4096
 _TELEMETRY_STATE = bytearray(16 * (1 + TELEMETRY_SLOTS))
+# The download counter spends from its own table (same constants), so a loop of GETs
+# of a public download/ file can neither forge the Downloads figures without bound
+# nor drain the buckets the visit/view beacon relies on — and vice versa. Twin:
+# api/_admin_lib.php lumen_download_throttle_store (.telemetry/downloads.bin).
+_DOWNLOAD_THROTTLE_STATE = bytearray(16 * (1 + TELEMETRY_SLOTS))
 _TELEMETRY_LOCK = threading.Lock()
 
 
@@ -3264,8 +3270,12 @@ def _update_error_code(exc: BaseException, phase: str) -> str:
     return getattr(exc, "code", None) or _UPDATE_PHASE_CODES.get(phase, "update_failed")
 
 
-def _set_update(phase: str, pct: int, message: str, error=None, persist: bool = False) -> None:
-    _UPDATE_STATE.update({"phase": phase, "pct": pct, "message": message})
+def _set_update(phase: str, pct: int, message: str, error=None, persist: bool = False,
+                done: int | None = None, total: int | None = None) -> None:
+    # `message` is the log/journal line (French, never shown): the admin UI builds its
+    # own translated line from `phase` and, while downloading, `done`/`total` bytes.
+    _UPDATE_STATE.update({"phase": phase, "pct": pct, "message": message,
+                          "done": done, "total": total})
     if error is not None:
         _UPDATE_STATE["error"] = error
     if persist:
@@ -3312,7 +3322,8 @@ def _start_update():
                                 "reason": info.get("assetError") or "no_release_asset",
                                 "info": info}
         _UPDATE_STATE.update({"phase": "starting", "pct": 0, "message": "Préparation…",
-                              "error": None, "target": info.get("latest")})
+                              "error": None, "target": info.get("latest"),
+                              "done": None, "total": None})
         threading.Thread(target=_run_update, args=(info,), daemon=True).start()
         return True, 200, {"ok": True, "target": info.get("latest")}
     except BaseException:
@@ -4051,7 +4062,8 @@ def _run_update(info: dict) -> None:
         def _dl_progress(done, total):
             if total:
                 _set_update("download", min(15 + int(35 * done / total), 50),
-                            f"Téléchargement… {done / 1e6:.1f} / {total / 1e6:.1f} Mo")
+                            f"Téléchargement… {done / 1e6:.1f} / {total / 1e6:.1f} Mo",
+                            done=int(done), total=int(total))
         _http_download(url, zip_path, expected_size=info.get("assetSize"),
                        progress=_dl_progress)
 
@@ -6166,18 +6178,20 @@ def _content_disposition_attachment(name: str) -> str:
 # /api/plugins hashes every plugin file (trust classification) and inlines every
 # plugin dictionary; it is called on each page boot, by anyone. The response is
 # rebuilt only when something it depends on changes.
-_PLUGINS_CACHE: dict = {"sig": None, "body": None}
+# One tuple (signature, body, gzip body), replaced in one assignment so a concurrent
+# request never pairs a body with another build's compressed bytes.
+_PLUGINS_CACHE: dict = {"entry": None}
+# The per-file walk of js/modules is the expensive half of the signature (~170 stats
+# per /api/plugins, and every page boot asks — a Compare page five times at once), so
+# it is reused for _CATALOG_SIG_TTL_S like the catalog's. Keyed on the trust epoch
+# and the modules dir: an install, uninstall, approval or revocation bumps the epoch
+# and re-walks on the next request; only a plugin folder edited by hand shows up to
+# that many seconds late.
+_PLUGINS_WALK: dict = {"entry": None}  # (key, digest, monotonic time of the walk)
 
 
-def _plugins_signature() -> str:
+def _plugins_walk_digest() -> str:
     h = hashlib.sha256()
-    h.update(f"{_DEV_TRUST}|{_TRUST_EPOCH}|{MODULES_DIR}".encode("utf-8", "surrogatepass"))
-    for f in (TRUST_FILE, ROOT / "version.json", DISABLED_PLUGINS_FILE, CHANGELOG_DIR):
-        try:
-            st = os.stat(f)
-            h.update(f"|{f.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
-        except OSError:
-            h.update(f"|{f.name}:-".encode("utf-8", "surrogatepass"))
     for placement in PLUGIN_PLACEMENTS:
         base = MODULES_DIR / placement
         for dirpath, dirnames, filenames in os.walk(base):
@@ -6190,6 +6204,27 @@ def _plugins_signature() -> str:
                     continue
                 rel = os.path.relpath(full, MODULES_DIR)
                 h.update(f"|{rel}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
+    return h.hexdigest()
+
+
+def _plugins_signature() -> str:
+    h = hashlib.sha256()
+    h.update(f"{_DEV_TRUST}|{_TRUST_EPOCH}|{MODULES_DIR}".encode("utf-8", "surrogatepass"))
+    for f in (TRUST_FILE, ROOT / "version.json", DISABLED_PLUGINS_FILE, CHANGELOG_DIR):
+        try:
+            st = os.stat(f)
+            h.update(f"|{f.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
+        except OSError:
+            h.update(f"|{f.name}:-".encode("utf-8", "surrogatepass"))
+    key = (_TRUST_EPOCH, str(MODULES_DIR))
+    now = time.monotonic()
+    walk = _PLUGINS_WALK["entry"]
+    if walk is not None and walk[0] == key and now - walk[2] < _CATALOG_SIG_TTL_S:
+        digest = walk[1]
+    else:
+        digest = _plugins_walk_digest()
+        _PLUGINS_WALK["entry"] = (key, digest, now)
+    h.update(f"|walk:{digest}".encode("ascii"))
     return h.hexdigest()
 
 
@@ -6379,6 +6414,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # keeps this counter and the telemetry beacon writing the SAME key.
         safe = _safe_dataset_dir(f"{m.group(1).lower()}/{m.group(2)}")
         if safe and safe[2].is_dir():
+            # Only the count is throttled: the caller serves the file either way.
+            if not _telemetry_allow(_client_ip(self), state=_DOWNLOAD_THROTTLE_STATE):
+                return
             try:
                 _record_event("download", f"{safe[0]}/{safe[1]}")
             except Exception:
@@ -6595,7 +6633,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         builds any UI) so the load-order invariant is preserved; the persisted manifest
         mirrors the filtered list so static hosts inherit the same exclusions."""
         sig = _plugins_signature()
-        body = _PLUGINS_CACHE["body"] if _PLUGINS_CACHE["sig"] == sig else None
+        cached = _PLUGINS_CACHE["entry"]
+        body, gz = (cached[1], cached[2]) if cached is not None and cached[0] == sig else (None, None)
         if body is None:
             disabled = _load_disabled_plugins()
             ver = _max_version(CHANGELOG_DIR)
@@ -6623,10 +6662,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             body = json.dumps({"plugins": plugins, "devTrust": _DEV_TRUST,
                                "trustEpoch": _TRUST_EPOCH},
                               ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            _PLUGINS_CACHE.update({"sig": sig, "body": body})
+            gz = gzip.compress(body, compresslevel=6, mtime=0) if len(body) >= _GZIP_MIN_BYTES else None
+            _PLUGINS_CACHE["entry"] = (sig, body, gz)
         encoding = None
-        if len(body) >= _GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding")):
-            body = gzip.compress(body, compresslevel=6, mtime=0)
+        if gz is not None and _accepts_gzip(self.headers.get("Accept-Encoding")):
+            body = gz
             encoding = "gzip"
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -6827,8 +6867,16 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             doc = doc.replace('<base href="./">', '<base href="/">')
             status = 404
         body = doc.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
+        # Twin of the Apache DEFLATE filter on text/html. The page reflects no request
+        # input (only the random nonce varies), so compression leaks nothing (BREACH).
+        gzipped = len(body) >= _GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding"))
+        if gzipped:
+            body = gzip.compress(body, compresslevel=6, mtime=0)
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Security-Policy", _csp_policy(nonce))
         self.send_header("X-Frame-Options", "SAMEORIGIN")  # clickjacking (legacy; CSP frame-ancestors covers modern)

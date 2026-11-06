@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.23.0"
+__version__ = "0.23.1"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -454,8 +454,48 @@ def _remove_path(path: Path) -> None:
             pass
 
 
-def _rename(src: Path, dst: Path) -> None:
-    _retry_os(lambda: os.rename(src, dst))
+# Renaming a directory on Windows fails while any file inside it is open, and the web
+# server keeps a pack open for as long as the client takes to read it: seconds on a slow
+# link, and a viewer streaming the dataset opens the next one straight away. Swapping a
+# dataset someone is viewing therefore waits for those reads to drain (backing off up to
+# _BACKOFF_CAP_S between tries) rather than throwing away hours of processing.
+PUBLISH_PATIENCE_S = 120.0
+_BACKOFF_START_S = 0.1
+_BACKOFF_CAP_S = 2.0
+UNPUBLISHED_PREFIX = ".unpublished_"
+TEMP_PREFIX = ".temp_preprocess_"
+
+
+class PublishError(RuntimeError):
+    """publish_dataset gave up and put the published dataset back as it was.
+
+    `stage_intact` is True when every staged entry is back in the staging tree, which
+    can then be published later (publish_staged) without running the pipeline again."""
+
+    def __init__(self, message: str, stage_intact: bool):
+        super().__init__(message)
+        self.stage_intact = stage_intact
+
+
+def _rename(src: Path, dst: Path, patience_s: float = None) -> None:
+    patience = PUBLISH_PATIENCE_S if patience_s is None else patience_s
+    deadline = time.monotonic() + patience
+    delay = _BACKOFF_START_S
+    told = False
+    while True:
+        try:
+            os.rename(src, dst)
+            return
+        except PermissionError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            if not told:
+                print(_dim(f"   [..] {Path(src).name} occupe (le serveur le lit), nouvel essai "
+                           f"pendant {patience:.0f} s au plus"), flush=True)
+                told = True
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, _BACKOFF_CAP_S)
 
 
 def recover_interrupted_publish(final_dir: Path) -> None:
@@ -506,6 +546,47 @@ def _merge_with_published(stage_dir: Path, final_dir: Path) -> None:
     atomic_write_json(staged, merged, indent=2, ensure_ascii=False)
 
 
+def _move_aside(final_dir: Path, entries, moved: list) -> None:
+    """Rename every published entry to its SWAP_SUFFIX name, all of them or none.
+
+    The wait for a busy dataset happens with the published folder whole: an entry that
+    cannot move yet (planes/ held by the Studio, mips/ by the z-stack browser) puts the
+    entries already moved in this round back before the next try, so a viewer opening
+    the dataset meanwhile never finds bricks/ missing for longer than one round of
+    renames. `moved` holds what is aside at any moment, for the caller's rollback."""
+    deadline = time.monotonic() + PUBLISH_PATIENCE_S
+    delay = _BACKOFF_START_S
+    told = False
+    while True:
+        try:
+            for entry in entries:
+                current = final_dir / entry
+                if current.exists():
+                    stale = final_dir / (entry + SWAP_SUFFIX)
+                    if stale.exists():
+                        _remove_path(stale)
+                    _rename(current, stale, patience_s=0.0)
+                    moved.append(entry)
+            return
+        except PermissionError as exc:
+            # Nobody requests a SWAP_SUFFIX name, so moving an entry back is not refused
+            # by a reader; it still gets the full patience of _rename.
+            while moved:
+                entry = moved[-1]
+                _rename(final_dir / (entry + SWAP_SUFFIX), final_dir / entry)
+                moved.pop()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            if not told:
+                print(_dim(f"   [..] {Path(exc.filename or final_dir).name} occupe (le serveur "
+                           f"le lit), nouvel essai pendant {PUBLISH_PATIENCE_S:.0f} s au plus"),
+                      flush=True)
+                told = True
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, _BACKOFF_CAP_S)
+
+
 def publish_dataset(stage_dir: Path, final_dir: Path) -> None:
     """Move a complete staged dataset into DATA_WEB, metadata.json last.
 
@@ -519,51 +600,121 @@ def publish_dataset(stage_dir: Path, final_dir: Path) -> None:
 
     if not final_dir.exists():
         final_dir.parent.mkdir(parents=True, exist_ok=True)
-        _rename(stage_dir, final_dir)
+        try:
+            _rename(stage_dir, final_dir)
+        except Exception as exc:
+            raise PublishError(f"publication de {final_dir.name} impossible : {exc}",
+                               stage_intact=staged_meta.is_file()) from exc
         return
 
-    recover_interrupted_publish(final_dir)
-    _merge_with_published(stage_dir, final_dir)
-
-    entries = [e for e in PIPELINE_ENTRIES if (stage_dir / e).exists()
-               or (e in DERIVED_ENTRIES and (final_dir / e).exists())]
-    if (stage_dir / "tracks.json").exists():
-        # A newly attached tracking replaces the whole previous set, including a surface
-        # the new analysis no longer has.
-        entries += list(TRACKING_ENTRIES)
     marker = final_dir / SWAP_MARKER
-    atomic_write_json(marker, {"metadataSha256": _sha256_file(staged_meta), "entries": entries})
+    try:
+        recover_interrupted_publish(final_dir)
+        _merge_with_published(stage_dir, final_dir)
+        entries = [e for e in PIPELINE_ENTRIES if (stage_dir / e).exists()
+                   or (e in DERIVED_ENTRIES and (final_dir / e).exists())]
+        if (stage_dir / "tracks.json").exists():
+            # A newly attached tracking replaces the whole previous set, including a
+            # surface the new analysis no longer has.
+            entries += list(TRACKING_ENTRIES)
+        atomic_write_json(marker, {"metadataSha256": _sha256_file(staged_meta), "entries": entries})
+    except Exception as exc:
+        # Nothing has moved yet: the staged tree is whole.
+        raise PublishError(f"publication de {final_dir.name} impossible : {exc}",
+                           stage_intact=staged_meta.is_file()) from exc
 
     moved_aside, installed = [], []
     try:
-        for entry in entries:
-            current = final_dir / entry
-            if current.exists():
-                stale = final_dir / (entry + SWAP_SUFFIX)
-                if stale.exists():
-                    _remove_path(stale)
-                _rename(current, stale)
-                moved_aside.append(entry)
+        _move_aside(final_dir, entries, moved_aside)
         for entry in entries:
             if (stage_dir / entry).exists():
                 _rename(stage_dir / entry, final_dir / entry)
                 installed.append(entry)
         _retry_os(lambda: os.replace(staged_meta, final_dir / "metadata.json"))
-    except BaseException:
+    except BaseException as exc:
+        intact = True
         for entry in reversed(installed):
             try:
                 _rename(final_dir / entry, stage_dir / entry)
             except OSError:
                 _remove_path(final_dir / entry)
+                intact = False
         for entry in reversed(moved_aside):
             _rename(final_dir / (entry + SWAP_SUFFIX), final_dir / entry)
         marker.unlink()
-        raise
+        if not isinstance(exc, Exception):
+            raise
+        raise PublishError(f"publication de {final_dir.name} impossible : {exc}",
+                           stage_intact=intact and staged_meta.is_file()) from exc
     marker.unlink()
     for entry in moved_aside:
         _remove_path(final_dir / (entry + SWAP_SUFFIX))
     if (final_dir / LEGACY_ROLLBACK).exists():
         _remove_path(final_dir / LEGACY_ROLLBACK)
+
+
+def unpublished_dir(output_root: Path, dataset_type: str, dataset_name: str) -> Path:
+    """Where a complete staging tree whose publication failed is kept: a dot-folder at
+    the root of DATA_WEB, never served and never read by the catalog."""
+    return output_root / f"{UNPUBLISHED_PREFIX}{dataset_type}__{dataset_name}"
+
+
+def keep_unpublished_stage(stage_dir: Path, output_root: Path, dataset_type: str,
+                           dataset_name: str):
+    """Move a staging tree out of the run's temp directory before it is cleaned, so a
+    publication that failed (the dataset busy for longer than PUBLISH_PATIENCE_S) can be
+    finished with --publish-staged instead of re-running the whole pipeline. Returns the
+    kept path, or None when the tree could not be moved."""
+    kept = unpublished_dir(output_root, dataset_type, dataset_name)
+    try:
+        if kept.exists():
+            _remove_path(kept)
+        _rename(stage_dir, kept, patience_s=10.0)
+    except OSError as exc:
+        print(_warn(f"   [!] preparation non deplacee : {exc}"), file=sys.stderr)
+        return None
+    return kept
+
+
+def _staged_target(kept: Path):
+    """(DATA_WEB folder the dataset is published to, run temp dir to drop afterwards or
+    None) for a preparation kept by a failed publication: either the
+    <out>/.unpublished_<type>__<folder> keep_unpublished_stage made, or, when that move
+    failed too, the run's own staging tree <out>/.temp_preprocess_*/stage/<type>/<folder>."""
+    name = kept.name
+    if name.startswith(UNPUBLISHED_PREFIX) and "__" in name:
+        dataset_type, dataset_name = name[len(UNPUBLISHED_PREFIX):].split("__", 1)
+        output_root, temp_dir = kept.parent, None
+    elif (len(kept.parents) >= 4 and kept.parent.parent.name == "stage"
+          and kept.parents[2].name.startswith(TEMP_PREFIX)):
+        dataset_type, dataset_name = kept.parent.name, name
+        temp_dir = kept.parents[2]
+        output_root = temp_dir.parent
+    else:
+        raise ValueError(f"{kept} n'est pas une preparation conservee "
+                         f"({UNPUBLISHED_PREFIX}<type>__<dossier> ou "
+                         f"{TEMP_PREFIX}<nom>/stage/<type>/<dossier>)")
+    if dataset_type not in ("3d", "live") or not dataset_name:
+        raise ValueError(f"{kept} : type de dataset inconnu {dataset_type!r}")
+    return output_root / dataset_type / dataset_name, temp_dir
+
+
+def publish_staged(kept: Path) -> Path:
+    """Publish a staging tree kept after a failed publication into the DATA_WEB that holds
+    it. Returns the published dataset folder; raises PublishError when it is still busy
+    (the kept tree then stays where it is for another try)."""
+    kept = Path(kept).resolve()
+    if not kept.is_dir():
+        raise ValueError(f"{kept} n'est pas une preparation conservee (dossier introuvable)")
+    final_dir, temp_dir = _staged_target(kept)
+    publish_dataset(kept, final_dir)
+    if kept.exists():
+        # Into an existing dataset only the pipeline's entries move; the emptied
+        # staging folder stays behind.
+        _remove_path(kept)
+    if temp_dir is not None:
+        _remove_path(temp_dir)
+    return final_dir
 
 
 def dataset_folder_name(stem: str, type_dir: Path) -> str:
@@ -574,6 +725,12 @@ def dataset_folder_name(stem: str, type_dir: Path) -> str:
     if slug != stem and (type_dir / stem).is_dir():
         return stem
     return slug
+
+
+def temp_dir_for(output_root: Path, ims_path: Path) -> Path:
+    """The working tree of one source file's run. Its name is the source's alone, so runs
+    over other files into the same output never share (or clean up) each other's."""
+    return output_root / f"{TEMP_PREFIX}{slugify(ims_path.stem) or 'dataset'}"
 
 
 def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0,
@@ -587,12 +744,13 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
     print(_dim(f"   source : {ims_path}"))
     t0 = datetime.now()
 
-    temp_dir = output_root / f".temp_preprocess_{slugify(display_name) or 'dataset'}"
+    temp_dir = temp_dir_for(output_root, ims_path)
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     published = None
+    keep_temp = False
     try:
         # Step 1: Extraction of metadata
         temp_meta_json = temp_dir / "meta.json"
@@ -644,6 +802,26 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
 
         publish_dataset(stage_dir, final_dir)
         published = final_dir
+        superseded = unpublished_dir(output_root, dataset_type, dataset_name)
+        if superseded.exists():
+            # A preparation kept by an earlier failed publication is now out of date.
+            _remove_path(superseded)
+    except PublishError as e:
+        print(_err(f"   [X] {display_name} : {e}"), file=sys.stderr)
+        print(_warn("   [<] le dataset publie (s'il existe) est inchange"), file=sys.stderr)
+        kept = None
+        if e.stage_intact:
+            kept = keep_unpublished_stage(stage_dir, output_root, dataset_type, dataset_name)
+            if kept is None:
+                keep_temp = True
+                kept = stage_dir
+        if kept is not None:
+            print(_warn(f"   [<] preparation complete conservee : {kept}"), file=sys.stderr)
+            print(_warn(f"       pour la publier sans tout refaire : python "
+                        f"{Path(__file__).name} --publish-staged \"{kept}\""), file=sys.stderr)
+            if keep_temp:
+                print(_warn(f"       (avant de relancer {ims_path.name} : un nouveau passage "
+                            f"efface {temp_dir.name})"), file=sys.stderr)
     except Exception as e:
         print(_err(f"   [X] {display_name} : {e}"), file=sys.stderr)
         traceback.print_exc()
@@ -651,7 +829,7 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
     finally:
         # ignore_errors: on a Ctrl+C teardown a just-killed worker may still hold a
         # handle for a few ms — never let cleanup mask the interruption.
-        if temp_dir.exists():
+        if temp_dir.exists() and not keep_temp:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     if published is None:
@@ -671,6 +849,9 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
                            "--raw-dir", str(ims_path.parent),
                            "--dataset", f"{published.parent.name}/{published.name}",
                            "--ims", str(ims_path),
+                           # Step 7 always follows a fresh publication: the archive and
+                           # the README of a previous run describe superseded bricks.
+                           "--refresh-web",
                            label="download/ (archive, ImageJ TIFF, MIP)")
             except subprocess.CalledProcessError as exc:
                 print(_warn(f"   [!] download/ incomplet (code {exc.returncode}) — "
@@ -696,8 +877,13 @@ def _folder_collisions(ims_files) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="IRIBHM Microscopy Preprocessing Unified Pipeline")
-    parser.add_argument("--input", required=True, help="Input directory containing raw .ims files.")
-    parser.add_argument("--output", required=True, help="Output DATA_WEB directory of the web platform.")
+    parser.add_argument("--input", help="Input directory containing raw .ims files.")
+    parser.add_argument("--output", help="Output DATA_WEB directory of the web platform.")
+    parser.add_argument("--publish-staged", metavar="DIR", default=None,
+                        help="Publish a complete preparation a previous run kept after its "
+                             "publication failed (DATA_WEB/.unpublished_<type>__<folder>, or "
+                             "DATA_WEB/.temp_preprocess_<name>/stage/<type>/<folder> when it "
+                             "could not be moved there), without processing anything again.")
     parser.add_argument("--only", default=None, help="Glob pattern to filter files to process (e.g. '*E8*').")
     parser.add_argument("--with-downloads", action="store_true",
                         help="After each dataset, also build its download/ bundle "
@@ -713,6 +899,16 @@ def main():
                              "the .ims itself, then the exported .xls/.xlsx statistics. 'off' "
                              "skips it. A path forces that file for every dataset processed.")
     args = parser.parse_args()
+
+    if args.publish_staged:
+        try:
+            final_dir = publish_staged(Path(args.publish_staged))
+        except (ValueError, OSError, RuntimeError) as exc:
+            sys.exit(_err(f"[X] {exc}"))
+        print(_ok(f"  Publie : {final_dir}"))
+        return
+    if not args.input or not args.output:
+        parser.error("--input et --output sont requis (sauf avec --publish-staged)")
 
     input_dir = Path(args.input)
     output_dir = Path(args.output)
@@ -747,7 +943,7 @@ def main():
     clashes = _folder_collisions(ims_files)
 
     # One dataset at a time (bounded RAM) — each step already multithreads internally.
-    interrupted = False
+    interrupted = None
     failed = []
     for i, ims_file in enumerate(ims_files):
         if ims_file in clashes:
@@ -762,15 +958,18 @@ def main():
             if not ok:
                 failed.append(ims_file.name)
         except KeyboardInterrupt:
-            interrupted = True
+            interrupted = ims_file
             break
         except Exception as exc:
             print(_err(f"   [X] {ims_file.name} : {exc}"))
             failed.append(ims_file.name)
 
-    if interrupted:
-        # Remove any half-written temp folder left by the aborted dataset.
-        for stray in output_dir.glob(".temp_preprocess_*"):
+    if interrupted is not None:
+        # process_ims_file's own cleanup may have left files a just-killed worker still
+        # held open (Windows); this second pass takes them. Only the aborted dataset's
+        # tree: another run writing into the same output keeps its own.
+        stray = temp_dir_for(output_dir, interrupted)
+        if stray.exists():
             shutil.rmtree(stray, ignore_errors=True)
         print()
         print(_warn("  Pipeline interrompu par l'utilisateur (Ctrl+C). Etat nettoye."))

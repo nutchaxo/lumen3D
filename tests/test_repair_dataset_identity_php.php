@@ -88,5 +88,33 @@ lumen_migration_metadata();
 check('a second pass changes nothing', file_get_contents("$DATA_WEB/live/tl/metadata.json") === $tlAfter);
 check('the sound file is still untouched', file_get_contents("$DATA_WEB/3d/sound/metadata.json") === $soundBefore);
 
+echo "\nan unchanged tree is not walked again\n";
+$stamp = lumen_migration_metadata_stamp_file();
+@unlink($stamp);
+lumen_migration_metadata();
+check('a clean pass leaves a stamp', is_file($stamp));
+// Damage a file without changing its size or mtime: invisible to the stat signature,
+// so a gated pass must leave it alone (proof that it read nothing).
+$demoPath = "$DATA_WEB/3d/demo/metadata.json";
+$clean = (string)file_get_contents($demoPath);
+$mtime = (int)filemtime($demoPath);
+$hidden = str_replace('"type"', '"tyqe"', $clean);
+check('the same-size damage is a real change', $hidden !== $clean && strlen($hidden) === strlen($clean));
+file_put_contents($demoPath, $hidden);
+touch($demoPath, $mtime);
+clearstatcache();
+lumen_migration_metadata();
+check('the gated pass did not read the datasets', file_get_contents($demoPath) === $hidden);
+file_put_contents($demoPath, $hidden . ' ');
+lumen_migration_metadata();
+check('a file whose size changed is repaired', (stored("$DATA_WEB/3d/demo")['type'] ?? null) === '3d');
+$stampBefore = (string)@file_get_contents($stamp);
+lumen_migration_metadata();
+check('the next clean pass stamps the new tree', is_file($stamp) && (string)file_get_contents($stamp) !== $stampBefore);
+put("$DATA_WEB/2d/photo", ['name' => 'Photo']);
+lumen_migration_metadata();
+check('a new dataset is repaired despite the stamp', ($m2 = stored("$DATA_WEB/2d/photo")) && ($m2['type'] ?? null) === '2d' && ($m2['id'] ?? null) === '2d/photo');
+check('the sound file is still untouched', file_get_contents("$DATA_WEB/3d/sound/metadata.json") === $soundBefore);
+
 echo $fails ? "\n$fails FAILURE(S)\n" : "\nALL PASS\n";
 exit($fails ? 1 : 0);

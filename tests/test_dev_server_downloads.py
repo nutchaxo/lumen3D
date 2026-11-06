@@ -104,5 +104,56 @@ class ListEntriesTests(unittest.TestCase):
         self.assertEqual(dev_server._list_download_entries(self.root, ghost, "3d/Foo", "x"), [])
 
 
+class DownloadCountThrottleTests(unittest.TestCase):
+    """A public download/ file can be fetched in a loop: the counter spends from its
+    own token-bucket table (never the visit/view beacon's), so the Downloads figures
+    stop growing past the per-client burst. Twin: tests/test_download_count_php.py."""
+
+    class _FakeHandler:
+        def __init__(self, ip, headers=None):
+            self.client_address = (ip, 50000)
+            self.headers = headers or {}
+            self._head_only = False
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.ds_dir = Path(self.tmp)
+        self.events = []
+        self._saved = (dev_server._safe_dataset_dir, dev_server._record_event,
+                       dev_server._DOWNLOAD_THROTTLE_STATE, bytes(dev_server._TELEMETRY_STATE))
+        dev_server._safe_dataset_dir = lambda ds_id: ("3d", "Foo", self.ds_dir)
+        dev_server._record_event = lambda kind, ds_id=None: self.events.append((kind, ds_id))
+        dev_server._DOWNLOAD_THROTTLE_STATE = bytearray(len(self._saved[2]))
+
+    def tearDown(self):
+        (dev_server._safe_dataset_dir, dev_server._record_event,
+         dev_server._DOWNLOAD_THROTTLE_STATE, _beacon) = self._saved
+
+    def count(self, ip, n, headers=None):
+        h = self._FakeHandler(ip, headers)
+        for _ in range(n):
+            dev_server.AdminHandler._maybe_count_download(h, "DATA_WEB/3d/Foo/download/raw.ims")
+
+    def test_burst_is_capped_per_client(self):
+        self.count("203.0.113.7", dev_server.TELEMETRY_IP_BURST + 25)
+        # Refill is 1 token per second; the loop takes far less than one.
+        self.assertIn(len(self.events), (dev_server.TELEMETRY_IP_BURST, dev_server.TELEMETRY_IP_BURST + 1))
+        self.assertEqual(set(self.events), {("download", "3d/Foo")})
+        # Another client still counts.
+        before = len(self.events)
+        self.count("198.51.100.9", 1)
+        self.assertEqual(len(self.events), before + 1)
+
+    def test_beacon_buckets_untouched(self):
+        self.count("203.0.113.7", 5)
+        self.assertEqual(bytes(dev_server._TELEMETRY_STATE), self._saved[3])
+        self.assertNotEqual(bytes(dev_server._DOWNLOAD_THROTTLE_STATE), bytes(len(self._saved[2])))
+
+    def test_range_and_head_spend_nothing(self):
+        self.count("203.0.113.7", 5, {"Range": "bytes=10-"})
+        self.assertEqual(self.events, [])
+        self.assertEqual(bytes(dev_server._DOWNLOAD_THROTTLE_STATE), bytes(len(self._saved[2])))
+
+
 if __name__ == "__main__":
     unittest.main()

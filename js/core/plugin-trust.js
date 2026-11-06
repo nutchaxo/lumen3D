@@ -51,20 +51,15 @@ const PluginTrust = (() => {
     // Every file of a plugin is fetched concurrently (they were fetched one after the
     // other, which stretched the viewer boot by the sum of the round-trips).
     //
-    // Cache policy, and why it does not weaken INV-2:
-    //  - Anything the page may EXECUTE (index.js, workers, helpers — i.e. everything that
-    //    is not a .json data file) is read with 'no-store': the bytes hashed are the
-    //    bytes from the origin right now, nothing a cache could have kept.
-    //  - .json files (plugin.json, lang/<code>.json) are never executed; they are only
-    //    folded into the composite hash. They use 'no-cache': the browser must
-    //    revalidate with the origin (If-None-Match / If-Modified-Since) and only a 304
-    //    reuses the stored body, so a file edited on disk is always re-read. The hash is
-    //    still computed over the real bytes. With a Last-Modified-only validator the
-    //    resolution is one second, which is acceptable because these bytes never run.
+    // Every file is read with 'no-cache': the browser revalidates with the origin
+    // (If-None-Match / If-Modified-Since) and reuses its stored body only on a 304, so
+    // an unchanged plugin costs a round-trip, not a re-download, on every boot and in
+    // every Compare panel. INV-2 does not rest on bypassing the cache: the bytes hashed
+    // here are the bytes executed, and their hash must match the server vouch, so a
+    // stale or tampered body (e.g. an edit within a Last-Modified second) is refused.
     const entries = await Promise.all(relFiles.map(async rel => {
       try {
-        const executable = !/\.json$/i.test(rel);
-        const resp = await fetch(`${basePath}/${modPath}/${rel}`, { cache: executable ? 'no-store' : 'no-cache' });
+        const resp = await fetch(`${basePath}/${modPath}/${rel}`, { cache: 'no-cache' });
         if (!resp.ok) return null;
         const b = new Uint8Array(await resp.arrayBuffer());
         return { rel, b, h: _subtle ? await fileHash(b) : null };

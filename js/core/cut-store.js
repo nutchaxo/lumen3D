@@ -36,6 +36,89 @@ const CutStore = (() => {
 
   function _pad5(n) { return String(n).padStart(5, '0'); }
 
+  function _abortError() {
+    return typeof DOMException === 'function'
+      ? new DOMException('Cut read cancelled', 'AbortError')
+      : Object.assign(new Error('Cut read cancelled'), { name: 'AbortError' });
+  }
+  function _isAbort(err) {
+    return Boolean(err) && err.name === 'AbortError';
+  }
+  /** Settles with `promise`, or rejects (AbortError) once `signal` aborts; the work behind `promise` goes on. */
+  function _awaitWithSignal(promise, signal) {
+    if (!signal) return promise;
+    if (signal.aborted) {
+      Promise.resolve(promise).catch(() => {});   // its failure is no longer anyone's
+      return Promise.reject(_abortError());
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(_abortError());
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+        (e) => { signal.removeEventListener('abort', onAbort); reject(e); }
+      );
+    });
+  }
+
+  // A shared read (a cut index, an XZ / YZ pack header every row read waits on) runs
+  // under no caller's signal: past this long without an answer it is dropped (configure).
+  let _stallMs = 30000;
+
+  /**
+   * GET `url` for a read no caller owns: its own controller and a deadline — no response
+   * headers, then no body bytes, for `fetchStallMs` — so a server that accepts the
+   * connection and never answers rejects the read (code CUT_FETCH_STALL) and the cached
+   * promise is dropped: the next reader asks again instead of waiting on a dead request.
+   * `accept(resp)` runs on the headers and may refuse the answer (throw), which drops its
+   * body unread. → the body bytes.
+   */
+  async function _sharedFetch(url, init, accept) {
+    const controller = new AbortController();
+    let stalled = false;
+    let timer = null;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        stalled = true;
+        try { controller.abort(); } catch (e) { /* settled */ }
+      }, _stallMs);
+    };
+    try {
+      arm();
+      const resp = await _awaitWithSignal(fetch(url, { ...init, signal: controller.signal }), controller.signal);
+      try {
+        accept(resp);
+      } catch (err) {
+        try { controller.abort(); } catch (e) { /* settled */ }
+        throw err;
+      }
+      arm();
+      if (!resp.body || typeof resp.body.getReader !== 'function') {
+        return new Uint8Array(await _awaitWithSignal(resp.arrayBuffer(), controller.signal));
+      }
+      const reader = resp.body.getReader();
+      const parts = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await _awaitWithSignal(reader.read(), controller.signal);
+        if (done) break;
+        arm();
+        parts.push(value);
+        total += value.length;
+      }
+      const out = new Uint8Array(total);
+      let o = 0;
+      for (const p of parts) { out.set(p, o); o += p.length; }
+      return out;
+    } catch (err) {
+      if (stalled) throw Object.assign(new Error(`${String(url).split('?')[0]}: no answer within ${_stallMs} ms`), { code: 'CUT_FETCH_STALL' });
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** A tiny counting semaphore: at most `n` reads of this store in flight. */
   function _slots(n) {
     let free = n;
@@ -62,16 +145,39 @@ const CutStore = (() => {
     const llRef = manifest.index && manifest.index.columns && manifest.index.columns.ll;
     const stamp = llRef && typeof llRef.sha256 === 'string' ? llRef.sha256.slice(0, 12) : '';
     const whole = new Map();          // url → Promise<Uint8Array> when the host ignores Range
+    let rangeless = false;            // a shared header read was answered with a whole pack
     const cutIndexes = new Map();     // level → Promise<index>
     const slots = _slots(FETCH_SLOTS);
 
     const urlOf = (rel) => `${root}/${rel}${stamp ? `?v=${stamp}` : ''}`;
 
+    /**
+     * The whole body of `url` when a host without Range support already sent it, else
+     * null. That body is read under the signal of the request that received it: if its
+     * caller cancelled, the entry is gone and a caller whose own signal is live reads
+     * the bytes itself rather than failing with somebody else's AbortError.
+     */
+    async function cachedWhole(url, signal) {
+      const cached = whole.get(url);
+      if (!cached) return null;
+      try {
+        return await _awaitWithSignal(cached, signal);
+      } catch (err) {
+        if ((signal && signal.aborted) || !_isAbort(err)) throw err;
+        return null;
+      }
+    }
+
+    function keepWhole(url, p) {
+      whole.set(url, p);
+      p.catch(() => { if (whole.get(url) === p) whole.delete(url); });
+    }
+
     /** Bytes [start, end) of `rel`. */
     async function readRange(rel, start, end, signal) {
       const url = urlOf(rel);
-      const cached = whole.get(url);
-      if (cached) return (await cached).subarray(start, end);
+      const cached = await cachedWhole(url, signal);
+      if (cached) return cached.subarray(start, end);
       await slots.take();
       try {
         const resp = await fetch(url, { headers: { Range: `bytes=${start}-${end - 1}` }, signal });
@@ -83,7 +189,7 @@ const CutStore = (() => {
         if (!resp.ok) throw Object.assign(new Error(`${rel}: HTTP ${resp.status}`), { status: resp.status });
         // A host without Range support: the whole pack, once.
         const p = resp.arrayBuffer().then(b => new Uint8Array(b));
-        whole.set(url, p);
+        keepWhole(url, p);
         return (await p).subarray(start, end);
       } finally {
         slots.give();
@@ -99,9 +205,8 @@ const CutStore = (() => {
     async function readRuns(rel, runs, signal) {
       const out = new Map();
       const url = urlOf(rel);
-      const cached = whole.get(url);
-      if (cached) {
-        const all = await cached;
+      const all = await cachedWhole(url, signal);
+      if (all) {
         for (const r of runs) out.set(r.start, all.subarray(r.start, r.end));
         return out;
       }
@@ -135,7 +240,7 @@ const CutStore = (() => {
             }
           } else if (resp.ok) {
             const p = resp.arrayBuffer().then(b => new Uint8Array(b));
-            whole.set(url, p);
+            keepWhole(url, p);
             const all = await p;
             for (const r of chunk) out.set(r.start, all.subarray(r.start, r.end));
             ok = true;
@@ -153,19 +258,54 @@ const CutStore = (() => {
     // ── XZ / YZ ──────────────────────────────────────────────────────────────
     const orthHeads = new Map();      // rel → Promise<{first, count, ta, tz}>
 
-    function _orthHead(rel, kind, signal) {
+    function _parseOrthHead(rel, kind, h) {
+      const dv = new DataView(h.buffer, h.byteOffset, h.byteLength);
+      const magic = String.fromCharCode(h[0], h[1], h[2], h[3]);
+      if (magic !== ORTH_MAGIC[kind] || dv.getUint16(4, true) !== 1) throw new Error(`${rel}: not an ${kind} pack`);
+      return { ta: dv.getUint16(6, true), tz: dv.getUint16(8, true), first: dv.getUint32(12, true), count: dv.getUint32(16, true) };
+    }
+
+    function _rangelessError(rel) {
+      return Object.assign(new Error(`${rel}: the host ignores Range`), { code: 'CUT_RANGELESS' });
+    }
+
+    // Shared by every row read of the pack: read under no caller's signal (20 bytes,
+    // bounded by `fetchStallMs`); each caller stops waiting on its own. A host that ignores
+    // Range sends whole packs: that download is never a shared one nobody can cancel
+    // (CUT_RANGELESS, the caller reads the header through readRange under its signal).
+    function _orthHead(rel, kind) {
       let p = orthHeads.get(rel);
-      if (!p) {
-        p = readRange(rel, 0, ORTH_HEADER, signal).then((h) => {
-          const dv = new DataView(h.buffer, h.byteOffset, h.byteLength);
-          const magic = String.fromCharCode(h[0], h[1], h[2], h[3]);
-          if (magic !== ORTH_MAGIC[kind] || dv.getUint16(4, true) !== 1) throw new Error(`${rel}: not an ${kind} pack`);
-          return { ta: dv.getUint16(6, true), tz: dv.getUint16(8, true), first: dv.getUint32(12, true), count: dv.getUint32(16, true) };
-        });
-        orthHeads.set(rel, p);
-        p.catch(() => orthHeads.delete(rel));
-      }
+      if (p) return p;
+      if (rangeless || whole.has(urlOf(rel))) return Promise.reject(_rangelessError(rel));
+      p = (async () => {
+        await slots.take();
+        try {
+          const h = await _sharedFetch(urlOf(rel), { headers: { Range: `bytes=0-${ORTH_HEADER - 1}` } }, (resp) => {
+            if (resp.status === 206) return;
+            if (resp.ok) { rangeless = true; throw _rangelessError(rel); }
+            throw Object.assign(new Error(`${rel}: HTTP ${resp.status}`), { status: resp.status });
+          });
+          if (h.length !== ORTH_HEADER) throw new Error(`${rel}: ${h.length} bytes for a range of ${ORTH_HEADER}`);
+          return _parseOrthHead(rel, kind, h);
+        } finally {
+          slots.give();
+        }
+      })();
+      orthHeads.set(rel, p);
+      const own = p;
+      own.catch(() => { if (orthHeads.get(rel) === own) orthHeads.delete(rel); });
       return p;
+    }
+
+    async function _orthHeadFor(rel, kind, signal) {
+      try {
+        return await _awaitWithSignal(_orthHead(rel, kind), signal);
+      } catch (err) {
+        if (!err || err.code !== 'CUT_RANGELESS') throw err;
+      }
+      const head = _parseOrthHead(rel, kind, await readRange(rel, 0, ORTH_HEADER, signal));
+      if (!orthHeads.has(rel)) orthHeads.set(rel, Promise.resolve(head));
+      return head;
     }
 
     /**
@@ -175,7 +315,21 @@ const CutStore = (() => {
     async function orthRow(kind, level, channel, row, { signal, onBytes } = {}) {
       const block = Math.floor(row / ORTH_ROWS);
       const rel = `${kind}/l${level}/c${channel}/b${_pad5(block)}.bin`;
-      const head = await _orthHead(rel, kind, signal);
+      const lv = Number.isInteger(level) && level >= 0 && Array.isArray(manifest.levels) ? manifest.levels[level] : null;
+      const levelDims = lv && lv.dimensions;
+      if (!levelDims) throw new Error(`${rel}: level ${level} is not in the manifest`);
+      const width = kind === 'xz' ? levelDims.x : levelDims.y;
+      const height = levelDims.z;
+      if (!(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0)) {
+        throw new Error(`${rel}: level ${level} has no valid dimensions`);
+      }
+      const head = await _orthHeadFor(rel, kind, signal);
+      // The writer's grid: ceil(A/512) tiles along the row × ceil(Z/512) along z. A pack of
+      // another level or tree would place (and index) every tile wrongly.
+      const needA = Math.ceil(width / 512), needZ = Math.ceil(height / 512);
+      if (head.ta !== needA || head.tz !== needZ) {
+        throw new Error(`${rel}: ${head.ta}×${head.tz} tiles, level ${level} needs ${needA}×${needZ}`);
+      }
       const r = row - head.first;
       if (r < 0 || r >= head.count) throw new Error(`${rel}: row ${row} outside ${head.first}+${head.count}`);
       const per = head.ta * head.tz;
@@ -191,9 +345,6 @@ const CutStore = (() => {
         tiles.push({ off, len });
         if (len) { lo = Math.min(lo, off); hi = Math.max(hi, off + len); }
       }
-      const levelDims = level >= 0 && Array.isArray(manifest.levels) ? manifest.levels[level].dimensions : null;
-      const width = kind === 'xz' ? levelDims.x : levelDims.y;
-      const height = levelDims.z;
       const data = new Uint8Array(width * height);
       if (hi > 0) {
         // The row's tiles are contiguous in the pack: one read.
@@ -204,7 +355,12 @@ const CutStore = (() => {
           for (let ta = 0; ta < head.ta; ta++) {
             const t = tiles[tz * head.ta + ta];
             if (!t.len) continue;
+            const ew = Math.min(512, width - ta * 512), eh = Math.min(512, height - tz * 512);
             jobs.push(_decodePng(run.subarray(t.off - lo, t.off - lo + t.len)).then((img) => {
+              // A tile of another size would spill into the next image row (scrambled, not failed).
+              if (img.width !== ew || img.height !== eh) {
+                throw new Error(`${rel}: tile ${ta},${tz} is ${img.width}×${img.height}, expected ${ew}×${eh}`);
+              }
               for (let y = 0; y < img.height; y++) {
                 data.set(img.data.subarray(y * img.width, (y + 1) * img.width), (tz * 512 + y) * width + ta * 512);
               }
@@ -217,16 +373,18 @@ const CutStore = (() => {
     }
 
     // ── Oblique cut bricks ─────────────────────────────────────────────────────
-    function _cutIndex(level, signal) {
+    // One index per level, shared by every pass on this tree: fetched under no
+    // caller's signal; each caller stops waiting on its own.
+    function _cutIndex(level) {
       let p = cutIndexes.get(level);
       if (!p) {
         const ref = manifest.index && Array.isArray(manifest.index.cuts) ? manifest.index.cuts[level] : null;
         if (!ref || typeof ref.url !== 'string') return Promise.reject(new Error(`no cut index for level ${level}`));
         p = (async () => {
           const url = `${root}/${ref.url.replace(/^\/+/, '')}?v=${String(ref.sha256 || '').slice(0, 12)}`;
-          const resp = await fetch(url, { signal });
-          if (!resp.ok) throw new Error(`cut index level ${level}: HTTP ${resp.status}`);
-          const u8 = new Uint8Array(await resp.arrayBuffer());
+          const u8 = await _sharedFetch(url, {}, (resp) => {
+            if (!resp.ok) throw new Error(`cut index level ${level}: HTTP ${resp.status}`);
+          });
           if (u8.length !== ref.bytes) throw new Error(`cut index level ${level}: ${u8.length} bytes, manifest says ${ref.bytes}`);
           if (typeof PlaneLoader !== 'undefined' && PlaneLoader.sha256Hex) {
             const digest = await PlaneLoader.sha256Hex(u8);
@@ -243,7 +401,8 @@ const CutStore = (() => {
           return { dv, channels, sgx, sgy, sgz, slots, base: 28 };
         })();
         cutIndexes.set(level, p);
-        p.catch(() => cutIndexes.delete(level));
+        const own = p;
+        own.catch(() => { if (cutIndexes.get(level) === own) cutIndexes.delete(level); });
       }
       return p;
     }
@@ -255,7 +414,7 @@ const CutStore = (() => {
      * stored is all zero and is not reported. Returns the count delivered.
      */
     async function loadCutBricks(level, channel, bz, list, { signal, onBytes, onBrick } = {}) {
-      const ix = await _cutIndex(level, signal);
+      const ix = await _awaitWithSignal(_cutIndex(level), signal);
       if (channel < 0 || channel >= ix.channels) throw new Error(`channel ${channel} outside the cut index`);
       // Group the bricks by super-block record.
       const bySb = new Map();
@@ -341,6 +500,60 @@ const CutStore = (() => {
   let _pool = null;            // [{ w, pending }] once created; [] = no worker here
   let _seq = 0;
   const _waiting = new Map();  // id → { resolve, reject, slot }
+  // Every job is one self-contained message, so the pool is idle as soon as nothing is
+  // waiting: IDLE_MS later its workers go (a Studio pass is a burst, and a Compare page
+  // with four panels would otherwise keep sixteen decoders and their heaps for good).
+  const IDLE_MS = 5000;
+  let _idleTimer = null;
+  let _maxWorkers = 0;         // 0 = this page's own default (configure)
+
+  function _poolSize() {
+    const own = Math.max(1, Math.min(4, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2) - 1));
+    return _maxWorkers > 0 ? Math.min(own, _maxWorkers) : own;
+  }
+
+  /** Workers of a pool that left: each goes once it has answered what it still owes. */
+  function _retire(slots) {
+    for (const slot of slots) {
+      slot.retired = true;
+      if (slot.pending <= 0) { try { slot.w.terminate(); } catch (e) { /* gone */ } }
+    }
+  }
+
+  function _releasePool() {
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
+    if (!_pool) return;
+    const old = _pool;
+    _pool = null;
+    _retire(old);
+  }
+
+  function _armIdle() {
+    if (_idleTimer) clearTimeout(_idleTimer);
+    _idleTimer = null;
+    if (_waiting.size || !_pool || !_pool.length) return;
+    _idleTimer = setTimeout(() => {
+      _idleTimer = null;
+      if (!_waiting.size) _releasePool();
+    }, IDLE_MS);
+  }
+
+  /**
+   * Settings of this page's cut reads.
+   *   workers       most decode workers at once, 1–4 (a Compare panel gets its share of
+   *                 the machine's cores); null gives the page's own default back.
+   *   fetchStallMs  how long a shared read (a cut index, a pack header) may go without an
+   *                 answer before it is dropped, ≥ 1000 (default 30 s).
+   */
+  function configure(options = {}) {
+    if (!options) return;
+    const stall = Number(options.fetchStallMs);
+    if ('fetchStallMs' in options && Number.isFinite(stall)) _stallMs = Math.max(1000, stall);
+    if (!('workers' in options)) return;
+    const n = Number(options.workers);
+    _maxWorkers = options.workers === null || !Number.isFinite(n) ? 0 : Math.max(1, Math.min(4, Math.round(n)));
+    if (_pool && _pool.length > _poolSize()) _releasePool();
+  }
 
   function _poolSlots() {
     if (_pool) return _pool;
@@ -348,23 +561,28 @@ const CutStore = (() => {
     if (typeof Worker === 'undefined' || typeof document === 'undefined') return _pool;
     const src = document.querySelector('script[src*="cut-store.js"]')?.getAttribute('src') || '';
     const q = (src.match(/\?[^#]*/) || [''])[0];
-    const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+    const n = _poolSize();
     for (let i = 0; i < n; i++) {
       try {
         const w = new Worker('js/workers/cut-decode-worker.js' + q);
-        const slot = { w, pending: 0 };
+        const slot = { w, pending: 0, retired: false };
         w.onmessage = (e) => {
           const m = e.data || {};
           const job = _waiting.get(m.id);
           if (!job) return;
           _waiting.delete(m.id);
           slot.pending--;
+          if (slot.retired && slot.pending <= 0) { try { w.terminate(); } catch (err) { /* gone */ } }
           if (m.error) job.reject(new Error(m.error)); else job.resolve(m);
+          _armIdle();
         };
         w.onerror = (e) => {
           // A dead worker leaves the pool; its jobs fail over to this thread.
-          _pool = _pool.filter(x => x !== slot);
+          if (_pool) _pool = _pool.filter(x => x !== slot);
+          slot.pending = 0;
+          try { w.terminate(); } catch (err) { /* gone */ }
           for (const [id, job] of _waiting) if (job.slot === slot) { _waiting.delete(id); job.reject(Object.assign(new Error(e.message || 'cut decode worker failed'), { workerFailed: true })); }
+          _armIdle();
         };
         _pool.push(slot);
       } catch (e) {
@@ -375,6 +593,7 @@ const CutStore = (() => {
   }
 
   function _remote(msg, bytes) {
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
     const pool = _poolSlots();
     if (!pool.length) return null;
     const slot = pool.reduce((a, b) => (b.pending < a.pending ? b : a));
@@ -457,5 +676,5 @@ const CutStore = (() => {
     return Math.min(32, Math.max(1, 2 ** Math.round(Math.log2(r))));
   }
 
-  return { open, decodeCutBrick, decodeCutBrickLocal, cutDepth, CUT_XY, ORTH_ROWS };
+  return { open, configure, decodeCutBrick, decodeCutBrickLocal, cutDepth, CUT_XY, ORTH_ROWS };
 })();

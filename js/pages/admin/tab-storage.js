@@ -13,7 +13,7 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, el, refreshIcons, toast, Utils } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, el, refreshIcons, toast, Utils, fmtBytes as fmtBytesShared } from './shared.js';
 
 let _report = null;
 let _loading = false;
@@ -69,21 +69,12 @@ const SEG = {
   free: 'var(--adm-success)',
 };
 
-function units() { return t('admin.storageUnits', 'B|KB|MB|GB|TB').split('|'); }
-
 // The page language, not the browser's: the labels around a number are in it.
 function locale() {
   try { return (typeof I18n !== 'undefined' && I18n?.getLanguage) ? I18n.getLanguage() : undefined; } catch { return undefined; }
 }
 
-function fmtBytes(n) {
-  n = Number(n) || 0;
-  const u = units();
-  let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  const digits = i === 0 || n >= 100 ? 0 : 1;
-  return `${n.toLocaleString(locale(), { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${u[i]}`;
-}
+const fmtBytes = (n) => fmtBytesShared(Number(n) || 0);
 
 function pct(part, total) {
   if (!total || total <= 0) return 0;

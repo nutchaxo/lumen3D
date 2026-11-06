@@ -14,20 +14,14 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
   <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 
-  <!-- Lucide Icons -->
-  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
-  
-  <!-- Three.js (r147) -->
-  <script src="js/vendor/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
-
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
   <link rel="stylesheet" href="config/theme.css">
   <link rel="stylesheet" href="css/base.css">
-  <link rel="stylesheet" href="css/components.css?v=20260615-fixed1">
-  <link rel="stylesheet" href="css/viewer.css?v=20261017-qm1">
-  <link rel="stylesheet" href="css/tools.css?v=20260615-fixed1">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/viewer.css">
+  <link rel="stylesheet" href="css/tools.css">
   <script src="js/core/theme-boot.js"></script>
 </head>
 <body data-page="viewer">
@@ -474,8 +468,8 @@
       </div>
       
       <!-- Decomposition Panel (right panel, hidden by default) -->
-      <aside class="decomposition-panel hidden" id="decomposition-panel" style="width: 250px; flex-shrink: 0; background: var(--bg-surface); border-left: 1px solid var(--border-light); display: flex; flex-direction: column;">
-        <div class="panel-section" style="flex-shrink: 0; border-bottom: 1px solid var(--border-light);">
+      <aside class="decomposition-panel hidden" id="decomposition-panel" style="width: 250px; flex-shrink: 0; background: var(--bg-surface); border-left: 1px solid var(--border-default); display: flex; flex-direction: column;">
+        <div class="panel-section" style="flex-shrink: 0; border-bottom: 1px solid var(--border-default);">
           <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;">
             <span data-i18n="viewer.split">Channel Split</span>
             <button class="btn btn-icon btn-ghost btn-sm" id="btn-close-decomposition" title="Close Decomposition" data-i18n-title="tips.closeDecomp" aria-label="Close" data-i18n-aria="tips.close">
@@ -540,8 +534,8 @@
           </div>
         </div>
         <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
-          <div class="panel-title" data-i18n="viewer.layers">Layers</div>
-          <div class="studio-layers-list" id="studio-layers-list">
+          <div class="panel-title" id="studio-layers-title" data-i18n="viewer.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list" role="list" aria-labelledby="studio-layers-title">
             <!-- Populated via JS -->
           </div>
         </div>
@@ -569,38 +563,40 @@
       </div>
     </div>
   </div>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
   <script src="js/core/utils.js"></script>
-  <script src="js/core/instance-config.js?v=20260706"></script>
+  <script src="js/core/instance-config.js"></script>
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/i18n.js"></script>
   <script src="js/core/theme.js"></script>
-  <script src="js/core/colorblind.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
+  <script src="js/core/colorblind.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js"></script>
   <script src="js/core/display-presets.js"></script>
   <script src="js/core/volume-source-manager.js"></script>
   <script src="js/core/dialog.js"></script>
   <script src="js/core/workspace-state.js"></script>
   <script src="js/core/measurement-store.js"></script>
-  <script src="js/core/url-state.js?v=20260615-fixed1"></script>
-  <script src="js/core/export-manager.js?v=20260615-fixed1"></script>
-  <script src="js/core/tool-manager.js?v=20260615-fixed1"></script>
+  <script src="js/core/url-state.js"></script>
+  <script src="js/core/export-manager.js"></script>
+  <script src="js/core/tool-manager.js"></script>
   <script src="js/core/perf-telemetry.js"></script>
   <script src="js/core/compat.js"></script>
   <script src="js/core/plugin-trust.js"></script>
   <script src="js/core/plugin-sandbox.js" nonce="{{CSP_NONCE}}"></script>
-  <script src="js/core/plugin-registry.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
+  <script src="js/core/plugin-registry.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/bc-codec.js"></script>
   <script src="js/core/cell-max.js"></script>
-  <script src="js/core/svr-manager.js?v=20260615-fixed1"></script>
-  <script src="js/core/brick-loader.js?v=20260615-fixed1"></script>
+  <script src="js/core/svr-manager.js"></script>
+  <script src="js/core/brick-loader.js"></script>
   <script src="js/core/panel-resources.js"></script>
 
-  <script src="js/components/channel-panel.js?v=20260615-fixed1"></script>
+  <script src="js/components/channel-panel.js"></script>
   <script src="js/components/dataset-gallery.js"></script>
   <script src="js/components/decomposition-panel.js"></script>
-  <script src="js/components/timeline.js?v=20260615-fixed1"></script>
-  <script src="js/components/studio-editor.js?v=20260615-fixed1"></script>
-  <script src="js/viewers/volume-grid.js?v=20260615-fixed1"></script>
+  <script src="js/components/timeline.js"></script>
+  <script src="js/components/studio-editor.js"></script>
+  <script src="js/viewers/volume-grid.js"></script>
 
   <script src="js/core/slice-compositor.js"></script>
   <script src="js/workers/studio-plane-ops.js"></script>
@@ -611,10 +607,10 @@
   <script src="js/core/ome-zarr.js"></script>
   <script src="js/core/ome-zarr-export.js"></script>
   <script src="js/core/q30-export.js"></script>
-  <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
-  <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
-  <script src="js/viewers/tracking-overlay.js?v=20260615-fixed1"></script>
-  <script src="js/pages/viewer.js?v=20261017-qm1"></script>
+  <script src="js/viewers/volume-slicer.js"></script>
+  <script src="js/viewers/volume-viewer.js"></script>
+  <script src="js/viewers/tracking-overlay.js"></script>
+  <script src="js/pages/viewer.js"></script>
   <script src="js/core/font-loader.js"></script>
   <!-- Modules are loaded dynamically by PluginRegistry.loadModules() in viewer.js -->
   <!-- Quality guide of a v5 dataset: viewer.js _openQualityGuide fills the body when it opens. -->

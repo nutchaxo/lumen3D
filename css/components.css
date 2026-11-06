@@ -411,6 +411,18 @@
   border: 0;
 }
 
+/* The timeline scrubber is a div slider (role="slider"): its handle stands 4 px above
+   and below the track, so the ring sits clear of it, and the handle itself is ringed
+   so the focused position reads at a glance. */
+.scrubber-track:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 6px;
+}
+
+.scrubber-track:focus-visible .scrubber-handle {
+  box-shadow: 0 0 0 2px var(--color-primary), var(--shadow-sm);
+}
+
 /* ── Toggle Switch ───────────────────────────────────────── */
 .toggle {
   position: relative;

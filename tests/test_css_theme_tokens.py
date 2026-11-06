@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 PENDING = {
-    "*": {"--border-light", "--border-color", "--bg-card"},
+    "*": set(),
     "admpan.html": {"--text-muted", "--z-viewer-base", "--z-admin-overlay"},
 }
 

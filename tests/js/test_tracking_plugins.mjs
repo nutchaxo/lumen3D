@@ -11,7 +11,9 @@
      (c) tracking-charts — the four series (population, velocity, neighbours,
          mitoses), per region, in timepoint order;
      (d) tracking-measure — a follow-cells measurement re-resolved at a frame
-         where one cell is missing reports 'out-of-frame';
+         where one cell is missing reports 'out-of-frame'; a snapshot is drawn
+         in the frame of reference on screen (stabilised or raw) and a switch
+         between the two redraws it;
      (e) the plugin manifests: every tracking plugin is a `live`-only tool that
          hides itself without a tracking block, and the tool ids do not collide.
 
@@ -76,7 +78,7 @@ function makeFacade(data, opts = {}) {
   return {
     isAvailable: () => true, isLoaded: () => true, getData: () => data,
     getFrame: () => frame, setFrame: (f) => { frame = f; },
-    isStabilized: () => stabilized,
+    isStabilized: () => stabilized, setStabilized: (v) => { stabilized = Boolean(v); },
     positionUm,
     cellsAt: (f) => {
       const fr = Number.isFinite(f) ? (f | 0) : frame;
@@ -297,6 +299,59 @@ ok('malformed documents are refused', () => {
     assert.equal(r.status, 'ok');
     assert.equal(r.distance, 30);
     assert.equal(measure.resolve({ ...row, mode: 'snapshot' }).distance, 30, 'a snapshot keeps its own numbers');
+  });
+}
+
+// ── (d') a snapshot follows a switch between the stabilised and raw frames ───
+{
+  const measure = loadPlugin('tracking-measure');
+  const T = makeFacade(data, { frame: 0, stabilized: true });
+  measure._T = T;
+  // Taken at the first timepoint with stabilisation on: stored points are stabilised.
+  const c1 = measure._lookup('1'), c2 = measure._lookup('2');
+  const snap = { id: 's1', mode: 'snapshot', timepoint: 0, cells: ['1', '2'],
+    points: [plain(T.positionUm(c1, 0)), plain(T.positionUm(c2, 0))], distance: 30,
+    metadata: { coordinateSpace: 'stabilized', tracks: [1000000001, 1000000002] } };
+  ok('a snapshot is drawn in the frame of reference on screen', () => {
+    T.setFrame(2);
+    T.setStabilized(false);
+    const r = measure.resolve(snap);
+    assert.deepEqual(plain(r.points), [plain(T.positionUm(c1, 0, { stabilized: false })), plain(T.positionUm(c2, 0, { stabilized: false }))],
+      'points re-read at the snapshot timepoint in the raw frame');
+    assert.deepEqual(plain(r.points[0]), [0, 0, 0]);
+    assert.equal(r.distance, 30, 'the stored distance is kept');
+    assert.equal(r.timepoint, 0, 'a snapshot keeps its own timepoint');
+    assert.equal(r.metadata.coordinateSpace, 'raw');
+    assert.deepEqual(plain(r.metadata.tracks), [1000000001, 1000000002], 'other metadata survive');
+    T.setStabilized(true);
+    assert.deepEqual(plain(measure.resolve(snap).points[0]), [10, 0, 0]);
+    assert.equal(measure.resolve(snap).metadata.coordinateSpace, 'stabilized');
+  });
+  ok('a snapshot whose cells are unknown keeps its stored points', () => {
+    const lost = { ...snap, cells: ['99', '2'] };
+    assert.deepEqual(plain(measure.resolve(lost).points), plain(snap.points));
+    const legacy = { ...snap, timepoint: undefined };
+    assert.deepEqual(plain(measure.resolve(legacy).points), plain(snap.points));
+  });
+  ok('a follow-cells row says which frame of reference its points are in', () => {
+    T.setFrame(0);
+    T.setStabilized(false);
+    assert.equal(measure.resolve({ ...snap, mode: 'follow-cells' }).metadata.coordinateSpace, 'raw');
+  });
+  ok('switching the frame of reference redraws snapshot-only measurements', () => {
+    let renders = 0;
+    measure._renderAll = () => { renders++; };
+    measure._measurements = [snap];
+    measure._draft = [];
+    T.setStabilized(true);
+    measure._lastStabilized = true;
+    measure._onFrame();
+    assert.equal(renders, 0, 'a plain frame change leaves a snapshot alone');
+    T.setStabilized(false);
+    measure._onFrame();
+    assert.equal(renders, 1, 'the switch to raw redraws');
+    measure._onFrame();
+    assert.equal(renders, 1, 'a second event in the same frame of reference does not');
   });
 }
 

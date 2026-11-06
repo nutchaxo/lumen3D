@@ -7,13 +7,14 @@
   "notchTitle": "Vista 3D de todos los cortes conservados. Arrastre el cursor hacia abajo, a la pista, para recorrer corte a corte.",
   "trackTitle": "Arrastre para recorrer los cortes. Suba el cursor a la muesca 3D para mostrarlos todos.",
   "cursorTitle": "Arrastre para mover. Tire de un borde para cambiar cuántos cortes se muestran.",
-  "trimAboveTitle": "Recortar los cortes de arriba",
-  "trimBelowTitle": "Recortar los cortes de abajo",
+  "trimAboveTitle": "Recortar los cortes de arriba (Mayús+↑/↓)",
+  "trimBelowTitle": "Recortar los cortes de abajo (Alt+↑/↓)",
   "thickness": "Grosor",
   "thicknessTitle": "Cortes mostrados a la vez",
   "kept": "Conservados {lo}–{hi} · {n} de {total} cortes",
   "keptAll": "Se conservan los {total} cortes",
   "resetTrim": "Restablecer todos los cortes",
   "spin": "Rotación",
-  "spinTitle": "Girar los cortes en pantalla"
+  "spinTitle": "Girar los cortes en pantalla",
+  "keysHelp": "↑/↓ mueven el cursor, Inicio muestra en 3D todos los cortes conservados, Fin va al último corte, + y − cambian el grosor, Mayús+↑/↓ mueve el recorte superior y Alt+↑/↓ el inferior."
 }

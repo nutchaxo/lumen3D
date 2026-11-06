@@ -22,7 +22,7 @@
 
 'use strict';
 
-import { API_ADMIN, I18n, t, escHtml, apiFetch, toast, el, refreshIcons } from './shared.js';
+import { API_ADMIN, I18n, t, escHtml, apiFetch, toast, el, refreshIcons, fmtBytes } from './shared.js';
 
 let _data = null;          // null = not loaded yet
 let _loading = true;
@@ -84,9 +84,7 @@ function prettyTitle(id) {
 }
 
 function fmtSize(bytes) {
-  if (!bytes) return '';
-  const mb = bytes / 1024 / 1024;
-  return mb >= 1 ? `${mb.toFixed(1)} Mo` : `${Math.round(bytes / 1024)} Ko`;
+  return bytes ? fmtBytes(bytes) : '';
 }
 
 function fmtDate(iso) {

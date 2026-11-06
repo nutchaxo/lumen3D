@@ -7,6 +7,10 @@
 
 /* ── Initialization ──────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
+  // The catalog needs neither the instance config nor the translations: its
+  // request runs beside them. Catalog.load() never rejects (a failure is kept
+  // for Catalog.getLoadError()).
+  const catalogReady = Catalog.load();
   // Init core systems. Instance config loads FIRST so I18n.t() can interpolate
   // the brand/specimen tokens and the head/brand reflect the operator's identity.
   await InstanceConfig.load();
@@ -15,8 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   InstanceConfig.applyHead();
   InstanceConfig.applyDom();
 
-  // Load catalog
-  await Catalog.load();
+  await catalogReady;
 
   // Update theme icon
   updateThemeIcon();

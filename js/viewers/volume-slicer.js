@@ -1010,7 +1010,9 @@ const VolumeSlicer = (() => {
     const target = new THREE.WebGLRenderTarget(size, size, {
       format: THREE.RGBAFormat, type: THREE.UnsignedByteType
     });
-    pass = { target, buf: new Uint8Array(size * size * 4), img: null };
+    // The readback lands straight in the ImageData the canvas is filled from (`view`,
+    // created by the first draw): no second frame-sized copy on the CPU.
+    pass = { target, img: null, view: null };
     _passes.set(size, pass);
     return pass;
   }
@@ -1078,10 +1080,13 @@ const VolumeSlicer = (() => {
     _mat.uniforms.uvWindow.value.set(0, 0, 1, 1);
     // Drawn upside down: the readback is already in canvas order.
     _mat.uniforms.flipY.value = 1;
-    _drawInto(_mat, pass.target, size, size, pass.buf);
+    if (!pass.img) {
+      pass.img = _previewCtx.createImageData(size, size);
+      const px = pass.img.data;
+      pass.view = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
+    }
+    _drawInto(_mat, pass.target, size, size, pass.view);
 
-    if (!pass.img) pass.img = _previewCtx.createImageData(size, size);
-    pass.img.data.set(pass.buf);
     // Resizing the bitmap clears it; putImageData refills it in the same task.
     if (_previewCanvas.width !== size || _previewCanvas.height !== size) {
       _previewCanvas.width = size;

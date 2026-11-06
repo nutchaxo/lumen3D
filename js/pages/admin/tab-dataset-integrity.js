@@ -12,7 +12,7 @@
 
 'use strict';
 
-import { t, escHtml, apiFetch, el, refreshIcons, Utils } from './shared.js';
+import { t, escHtml, apiFetch, el, refreshIcons, Utils, fmtBytes } from './shared.js';
 
 const API_INTEGRITY = 'api/integrity.php';
 const PARALLEL = 2;
@@ -25,9 +25,20 @@ let _running = false;
 let _done = 0;
 let _runToken = 0;
 let _filter = 'all';       // 'all' | 'problems'
+let _listError = false;    // the last run could not load the list of datasets
+const _openDetails = new Set();   // dsParam of the rows whose findings are unfolded
+// Keyboard focus that the last rebuild could not put back (its control was disabled or
+// absent while a check ran); taken up again by a later rebuild if focus is still lost.
+let _pendingFocus = null;
 
 const typeLabel = (type) => (Utils && Utils.datasetTypeLabel) ? Utils.datasetTypeLabel(type) : type;
 const dsParam = (row) => (row.staged ? 'staging:' : '') + row.id;
+
+// t() with {name} parameters, also applied to the built-in default (t returns it raw).
+function tp(key, def, params) {
+  return String(t(key, def, params)).replace(/\{([A-Za-z0-9_]+)\}/g,
+    (m, name) => (Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : m));
+}
 
 function findingText(f) {
   const base = t(`dint.code.${f.code}`, f.code);
@@ -40,14 +51,6 @@ function fixText(code) {
   const exact = t(`dint.fix.${code}`, '');
   if (exact) return exact;
   return family ? t(`dint.fix.${family}`, '') : '';
-}
-
-function fmtBytes(n) {
-  n = Number(n) || 0;
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(i === 0 || n >= 100 ? 0 : 1)} ${u[i]}`;
 }
 
 function statusOf(row) { return row.result ? row.result.status : 'pending'; }
@@ -92,7 +95,7 @@ function renderRow(row) {
       <td><span class="badge badge-${escHtml(row.type)}">${escHtml(typeLabel(row.type))}</span></td>
       <td>${formatCell}</td>
       <td>${res && res.findings.length
-        ? `<details><summary>${escHtml(t('dint.details', 'Details'))}</summary>${renderFindings(res)}</details>`
+        ? `<details data-int-details="${escHtml(dsParam(row))}"${_openDetails.has(dsParam(row)) ? ' open' : ''}><summary>${escHtml(t('dint.details', 'Details'))}</summary>${renderFindings(res)}</details>`
         : ''}</td>
       <td>${['warn', 'error'].includes(st)
         ? `<button class="adm-btn" data-int-recheck="${escHtml(dsParam(row))}" ${_running || row.busy ? 'disabled' : ''}><i data-lucide="refresh-cw"></i> ${escHtml(t('dint.recheck', 'Recheck'))}</button>`
@@ -100,9 +103,45 @@ function renderRow(row) {
     </tr>`;
 }
 
+// The tab is rebuilt as a whole on every result, so the control that holds keyboard
+// focus is named by what identifies it across rebuilds, not by the node itself.
+function focusKeyOf(root, node) {
+  if (!node || node === root || typeof root.contains !== 'function' || !root.contains(node)) return null;
+  if (node.id) return { kind: 'id', value: node.id };
+  const recheck = node.getAttribute && node.getAttribute('data-int-recheck');
+  if (recheck != null) return { kind: 'recheck', value: recheck };
+  const details = String(node.tagName || '').toUpperCase() === 'SUMMARY' && node.closest
+    ? node.closest('[data-int-details]') : null;
+  if (details) return { kind: 'details', value: details.getAttribute('data-int-details') };
+  return null;
+}
+
+function nodeForKey(root, key) {
+  if (key.kind === 'id') return el(key.value);
+  const attr = key.kind === 'recheck' ? 'data-int-recheck' : 'data-int-details';
+  const node = Array.from(root.querySelectorAll(`[${attr}]`)).find((n) => n.getAttribute(attr) === key.value);
+  if (!node) return null;
+  return key.kind === 'details' ? node.querySelector('summary') : node;
+}
+
+function focusLost(root, active) {
+  return !active || active === document.body || active === document.documentElement || active === root;
+}
+
+function restoreFocus(root, key) {
+  const node = key ? nodeForKey(root, key) : null;
+  if (!node || node.disabled) return false;
+  node.focus({ preventScroll: true });
+  return true;
+}
+
 function render() {
   const root = el('dataset-integrity-root');
   if (!root) return;
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  const heldKey = focusKeyOf(root, active);
+  if (heldKey) _pendingFocus = heldKey;
+  else if (!focusLost(root, active)) _pendingFocus = null;
   const c = counts();
   const shown = _rows.filter((r) => _filter === 'all' || ['warn', 'error'].includes(statusOf(r)));
   const progress = _running && _rows.length
@@ -126,6 +165,10 @@ function render() {
           <label class="adm-int-filter"><input type="checkbox" id="int-problems" ${_filter === 'problems' ? 'checked' : ''}>
             ${escHtml(t('dint.onlyProblems', 'Only datasets with findings'))}</label>
         </div>
+        ${!_rows.length && _listError && !_running
+          ? `<div class="adm-int-f" role="alert"><span class="adm-int-error"><i data-lucide="x-circle"></i></span><div>${escHtml(t('dint.listFailed',
+            'The list of datasets could not be loaded. Check the server log, then run the check-up again.'))}</div></div>`
+          : ''}
         ${_rows.length ? `<div class="adm-stat-grid">
           ${stat(t('dint.sumOk', 'Healthy'), c.ok, 'ok')}
           ${stat(t('dint.sumWarn', 'Warnings'), c.warn, 'warn')}
@@ -154,7 +197,12 @@ function render() {
   el('int-run')?.addEventListener('click', run);
   root.querySelectorAll('[data-int-recheck]').forEach((b) => b.addEventListener('click', () => recheck(b.getAttribute('data-int-recheck'))));
   el('int-problems')?.addEventListener('change', (e) => { _filter = e.target.checked ? 'problems' : 'all'; render(); });
+  root.querySelectorAll('[data-int-details]').forEach((d) => d.addEventListener('toggle', () => {
+    const key = d.getAttribute('data-int-details');
+    if (d.open) _openDetails.add(key); else _openDetails.delete(key);
+  }));
   refreshIcons(root);
+  if (_pendingFocus && restoreFocus(root, _pendingFocus)) _pendingFocus = null;
 }
 
 /** One dataset's verdict; a failed request keeps what the server said (status + start of the body). */
@@ -169,11 +217,16 @@ async function fetchCheck(row) {
     let data = null;
     try { data = JSON.parse(text); } catch { /* not JSON */ }
     if (data && data.result) return data.result;
-    if (res.status === 401) return failed('HTTP 401: session expired, sign in again');
+    if (res.status === 401) return failed(t('dint.err401', 'Your session expired: sign in again, then press Recheck.'));
+    // The server's own words (start of the body) stay as they are: they name the cause.
     const body = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
-    return failed(`HTTP ${res.status}${body ? ': ' + body : ' with an empty answer (a gateway or PHP timeout, or PHP ran out of memory)'}`);
+    if (body) return failed(`HTTP ${res.status}: ${body}`);
+    return failed(tp('dint.errEmpty',
+      'HTTP {status}: empty answer from the server (a gateway or PHP timeout, or PHP ran out of memory).',
+      { status: res.status }));
   } catch (err) {
-    return failed(`network error: ${err && err.message ? err.message : err}`);
+    console.error('Integrity check: request failed', dsParam(row), err);
+    return failed(t('dint.errNetwork', 'Network error: the server could not be reached.'));
   }
 }
 
@@ -197,6 +250,8 @@ async function run() {
   _running = true;
   _done = 0;
   _rows = [];
+  _listError = false;
+  _openDetails.clear();
   render();
   try {
     const list = await apiFetch(`${API_INTEGRITY}?action=list`);
@@ -215,8 +270,10 @@ async function run() {
       }
     };
     await Promise.all(Array.from({ length: PARALLEL }, worker));
-  } catch {
+  } catch (err) {
+    console.error('Integrity check: the list of datasets could not be loaded', err);
     _rows = [];
+    _listError = true;
   } finally {
     if (token === _runToken) { _running = false; render(); }
   }

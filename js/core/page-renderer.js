@@ -135,11 +135,16 @@ const PageRenderer = (() => {
   // widget that throws should degrade to nothing on a LIVE page, but stay a
   // visible, selectable, fixable placeholder while editing.
   function _editMode() { try { return !!(document.body && document.body.dataset && document.body.dataset.editing); } catch (_) { return false; } }
-  function _errorBox(w, err) {
+  // `kind` is 'unknown' (no renderer for the type) or 'error' (the renderer threw).
+  // The exception itself goes to the console, never into the page.
+  function _errorBox(w, kind) {
     const box = _el('div', 'margin:0 0 10px');
     const inner = _el('div', 'padding:12px 14px;border:1px dashed var(--color-danger,#e5484d);border-radius:8px;' +
       'color:var(--color-danger,#e5484d);font-size:12px;background:color-mix(in srgb,var(--color-danger,#e5484d) 8%,transparent)');
-    inner.textContent = '⚠ ' + ((w && w.type) || 'widget') + ' — ' + (err ? String(err.message || err).slice(0, 90) : 'rendu impossible');
+    const reason = kind === 'unknown'
+      ? _tr('pages.widgetUnknown', 'Unknown widget type: remove it or pick another.')
+      : _tr('pages.widgetError', 'This widget could not be drawn: check its settings or remove it.');
+    inner.textContent = '⚠ ' + ((w && w.type) || 'widget') + ' — ' + reason;
     box.appendChild(inner);
     return box;
   }
@@ -1514,7 +1519,7 @@ const PageRenderer = (() => {
 
   function renderWidget(w) {
     const fn = RENDERERS[w && w.type];
-    if (!fn) return _editMode() ? _errorBox(w, new Error('type inconnu')) : null;
+    if (!fn) return _editMode() ? _errorBox(w, 'unknown') : null;
     try {
       const node = fn(w);
       if (!node) return null;
@@ -1534,7 +1539,7 @@ const PageRenderer = (() => {
       box.appendChild(node);
       return box;
     } catch (e) {
-      if (_editMode()) { try { console.warn('[PageRenderer] widget render failed:', w && w.type, e); } catch (_) {} return _errorBox(w, e); }
+      if (_editMode()) { try { console.warn('[PageRenderer] widget render failed:', w && w.type, e); } catch (_) {} return _errorBox(w, 'error'); }
       return null;
     }
   }

@@ -79,6 +79,19 @@ def _seed() -> bytes:
     return seed
 
 
+def _plugin_folder(pid) -> Path:
+    """marketplace/plugins/<pid>, refusing any id that is not one plain folder name of it
+    (pathlib drops "." and resolves ".." lexically, so "." would name plugins/ itself)."""
+    problem = bpr.id_problem(pid)
+    if problem:
+        sys.exit(f"ERROR: {problem}.")
+    root = MARKETPLACE / "plugins"
+    folder = root / pid
+    if folder.name != pid or folder.resolve().parent != root.resolve():
+        sys.exit(f"ERROR: plugin id {pid!r} does not name a folder inside {root}.")
+    return folder
+
+
 def _load_catalog() -> dict:
     if CATALOG.exists():
         try:
@@ -174,12 +187,17 @@ def publish(plugin_dir: Path, recommended_arg, push: bool) -> None:
     if not meta_path.is_file():
         sys.exit(f"ERROR: no plugin.json in {src}")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if not isinstance(meta, dict):
+        sys.exit(f"ERROR: {meta_path} is not a JSON object.")
     pid = meta.get("id")
     if not pid:
         sys.exit("ERROR: plugin.json has no 'id'.")
+    out = _plugin_folder(pid)
+    problem = bpr.version_problem(meta.get("version") or "0.0.0")
+    if problem:
+        sys.exit(f"ERROR: {problem}.")
     seed = _seed()
 
-    out = MARKETPLACE / "plugins" / pid
     # Build beside the published folder and swap afterwards: a plugin.json that fails
     # to build must not leave the catalog pointing at a folder that is gone.
     building = out.with_name(pid + ".building")
@@ -216,12 +234,13 @@ def publish(plugin_dir: Path, recommended_arg, push: bool) -> None:
 
 
 def remove(pid: str, push: bool) -> None:
+    folder = _plugin_folder(pid)
     seed = _seed()
     cat = _load_catalog()
     if not any(e.get("id") == pid for e in cat["plugins"]):
         sys.exit(f"ERROR: '{pid}' is not in the catalog.")
     cat["plugins"] = [e for e in cat["plugins"] if e.get("id") != pid]
-    shutil.rmtree(MARKETPLACE / "plugins" / pid, ignore_errors=True)
+    shutil.rmtree(folder, ignore_errors=True)
     _write_signed_catalog(cat, seed)
     print(f"✓ {pid} removed from catalog ({len(cat['plugins'])} plugins left)")
     if push:

@@ -19,6 +19,7 @@ import base64
 import io
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -219,7 +220,11 @@ def check_against_truth(tc, planes_dir: Path, truth, typ):
 
 
 def strip_times(d):
-    return {k: v for k, v in d.items() if k not in ("createdAt", "updatedAt", "assembledAt")}
+    """Timestamps aside; a job id is random per job, so only its presence and shape count."""
+    out = {k: v for k, v in d.items() if k not in ("createdAt", "updatedAt", "assembledAt")}
+    if "jobId" in out:
+        out["jobId"] = bool(re.fullmatch(r"[0-9a-f]{16}", str(out["jobId"])))
+    return out
 
 
 @unittest.skipIf(PHP is None, "php with GD/WebP not found")

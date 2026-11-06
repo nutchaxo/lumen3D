@@ -18,6 +18,8 @@ rem ===== Configuration (injectee par le generateur) ===========================
 set "PP_VERSION=@@@PP_VERSION@@@"
 set "PY_VERSION=@@@PY_VERSION@@@"
 set "SCRIPTS=@@@SCRIPTS@@@"
+set "SHARED_MODULES=@@@SHARED_MODULES@@@"
+set "SHARED_INDEX=@@@SHARED_INDEX@@@"
 set "ENTRY=@@@ENTRY@@@"
 set "REQUIRED_DEPS=@@@DEPS@@@"
 set "IMPORT_CHECK=@@@IMPORT_CHECK@@@"
@@ -168,7 +170,42 @@ for %%S in (!SCRIPTS!) do (
     set "_skip="
 )
 if "!_fail!"=="1" exit /b 1
+call :ensure_shared_modules
+if errorlevel 1 exit /b 1
 call :ensure_download_script
+exit /b 0
+
+rem ---- Modules partages (format5.py) : racine du depot, sinon extraction -----
+rem  Dans le depot, les etapes les trouvent un dossier plus haut : une copie a cote
+rem  des scripts masquerait celle du depot et vieillirait avec elle.
+:ensure_shared_modules
+set "_idx=!SHARED_INDEX!"
+set "_fail=0"
+for %%S in (!SHARED_MODULES!) do (
+    set "_dst=!WORK!\%%S"
+    set "_keep="
+    if not "!FORCE_EXTRACT!"=="1" (
+        if exist "!BATDIR!\..\%%S" (
+            call :info "%%S !DIM!(depot, conserve)!R!"
+            set "_keep=1"
+        ) else if exist "!_dst!" (
+            call :info "%%S !DIM!(present, conserve)!R!"
+            set "_keep=1"
+        )
+    )
+    if not "!_keep!"=="1" (
+        call :extract !_idx! "!_dst!"
+        if exist "!_dst!" (
+            call :ok "%%S !DIM!(extrait)!R!"
+        ) else (
+            call :errmsg "%%S : extraction impossible"
+            set "_fail=1"
+        )
+    )
+    set /a "_idx+=1"
+)
+set "_keep="
+if "!_fail!"=="1" exit /b 1
 exit /b 0
 
 rem ---- build_download_bundles.py : tools/ du depot, sinon extraction (dernier bloc)

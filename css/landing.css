@@ -270,14 +270,6 @@
   .type-cards {
     grid-template-columns: 1fr;
   }
-  .navbar-links {
-    display: none;
-  }
-  .footer-content {
-    flex-direction: column;
-    gap: var(--space-4);
-    text-align: center;
-  }
 }
 
 @media (max-width: 600px) {

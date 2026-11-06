@@ -1,7 +1,7 @@
 {
   "id": "tracking-surface",
   "name": "Tracking Surface",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "platformCompat": ">=1.60.7",
   "dataTypes": [
     "live"

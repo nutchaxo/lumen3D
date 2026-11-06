@@ -589,11 +589,17 @@ def save_journal(journal: dict) -> bool:
 #       record and at compaction.
 #
 # Compaction (fold the log into the journal, write it, delete the log) happens at
-# plan, at file completion and on every journal write; status reads fold in memory.
+# plan and on every journal write; status reads fold in memory. File completion
+# compacts only when it changes the entry beyond what the log already says, or
+# once the log holds _LOG_COMPACT_RECORDS records: rewriting the journal for every
+# finished file cost O(files) per file under the dataset lock.
 
 _LOG_RECORD = struct.Struct("<II4sI")
 _LOG_MAGIC = b"LUC1"
 _LOG_SYNC_EVERY = 32
+# Bounds the log every load re-reads and CRC-checks (64 KiB). Twin:
+# LUMEN_UP_LOG_COMPACT_RECORDS.
+_LOG_COMPACT_RECORDS = 4096
 _TABLE_HEADER = struct.Struct("<4sIII")
 _TABLE_RECORD = struct.Struct("<QII16s")
 _TABLE_MAGIC = b"LUFT"
@@ -704,6 +710,14 @@ def _new_id(journal: dict, entry: dict) -> None:
     """A fresh incarnation of a file: its old id (and every log record naming it)
     no longer applies."""
     _ensure_ids(journal)
+    _take_id(journal, entry)
+
+
+def _take_id(journal: dict, entry: dict) -> None:
+    """``_new_id`` for a caller that already ran ``_ensure_ids`` on this journal
+    under the lock and has assigned ids only through here since. The plan loop
+    numbers every new file of a drop: re-checking the whole journal per file made
+    planning 20 000 files take a minute."""
     entry["id"] = journal["nextId"]
     journal["nextId"] += 1
 
@@ -761,6 +775,28 @@ def _append_log(type_dir: str, folder: str, file_id: int, index: int) -> None:
         fh.flush()
         if (fh.tell() // _LOG_RECORD.size) % _LOG_SYNC_EVERY == 0:
             os.fsync(fh.fileno())
+
+
+def _log_record_count(type_dir: str, folder: str) -> int:
+    lp = log_path(type_dir, folder)
+    if lp is None:
+        return 0
+    try:
+        return lp.stat().st_size // _LOG_RECORD.size
+    except OSError:
+        return 0
+
+
+def _sync_log(type_dir: str, folder: str) -> None:
+    """Make every record appended so far durable (they are fsync'ed in batches)."""
+    lp = log_path(type_dir, folder)
+    if lp is None:
+        return
+    try:
+        with open(lp, "r+b") as fh:   # never creates the log
+            os.fsync(fh.fileno())
+    except OSError:
+        pass
 
 
 def _remove_state_files(type_dir: str, folder: str) -> None:
@@ -872,6 +908,45 @@ def missing_chunks(entry: dict) -> list[int]:
     return [i for i in range(nbits) if not _bit_get(bits, i)]
 
 
+def _needs_rechunk(entry: dict, size: int, chunk_size: int) -> bool:
+    """A partial file planned at a larger chunk size than the client now asks for.
+
+    The client asks for less after a chunk was refused as too large (a reverse
+    proxy's body limit no server setting reveals): resuming at the recorded size
+    would have every chunk refused again. A file no larger than the new size has
+    the same single chunk either way and is left alone."""
+    recorded = int(entry.get("chunkSize", DEFAULT_CHUNK_SIZE)) or DEFAULT_CHUNK_SIZE
+    return recorded > chunk_size and size > chunk_size
+
+
+def _rechunked_bits(entry: dict, chunk_size: int) -> bytearray:
+    """The received bitmap of ``entry`` re-expressed at ``chunk_size``.
+
+    Chunks land at byte offset ``index · chunkSize``, so the bytes on disk do not
+    depend on the chunk size: a new chunk [j·c, min((j+1)·c, size)) is received
+    iff every old chunk overlapping it is. When the old size is a multiple of the
+    new one (the client halves) no stored byte is sent again."""
+    size = int(entry.get("size", 0))
+    old_chunk = int(entry.get("chunkSize", DEFAULT_CHUNK_SIZE)) or DEFAULT_CHUNK_SIZE
+    old_bits = _bitmap_decode(entry.get("bits", ""), _bits_len(size, old_chunk))
+    nbits = _bits_len(size, chunk_size)
+    bits = bytearray((nbits + 7) // 8)
+    for j in range(nbits):
+        start = j * chunk_size
+        end = min(start + chunk_size, size)
+        if all(_bit_get(old_bits, i) for i in range(start // old_chunk, (end - 1) // old_chunk + 1)):
+            _bit_set(bits, j)
+    return bits
+
+
+def _rechunked(entry: dict, chunk_size: int) -> dict:
+    """A copy of ``entry`` at ``chunk_size`` (same id: the caller assigns a new one)."""
+    out = dict(entry)
+    out["chunkSize"] = chunk_size
+    out["bits"] = _bitmap_encode(_rechunked_bits(entry, chunk_size))
+    return out
+
+
 # ── Plan ───────────────────────────────────────────────────────────────────────
 
 def plan(datasets: list, chunk_size: int = DEFAULT_CHUNK_SIZE) -> dict:
@@ -961,6 +1036,8 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
             for item in accepted:
                 entry = jfiles.get(item["path"])
                 if entry and int(entry.get("size", -1)) == item["size"]:
+                    if not entry.get("done") and _needs_rechunk(entry, item["size"], chunk_size):
+                        entry = _rechunked(entry, chunk_size)
                     needed += 0 if entry.get("done") else item["size"] - received_bytes(entry)
                 else:
                     needed += item["size"]
@@ -999,6 +1076,11 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
                 item["skip"] = "complete"
                 continue
             if entry and int(entry.get("size", -1)) == item["size"]:
+                if _needs_rechunk(entry, item["size"], chunk_size):
+                    # A new incarnation: the old id's log records count old indices.
+                    entry = _rechunked(entry, chunk_size)
+                    _take_id(journal, entry)
+                    jfiles[rel] = entry
                 # Same file, partially received — resume against the stored bitmap.
                 item["received"] = received_bytes(entry)
                 item["chunkSize"] = int(entry.get("chunkSize", chunk_size))
@@ -1013,7 +1095,7 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
                 "tier": item["tier"], "bits": _bitmap_encode(bytearray((nbits + 7) // 8)),
                 "done": item["size"] == 0, "sha": None,
             }
-            _new_id(journal, fresh)
+            _take_id(journal, fresh)
             jfiles[rel] = fresh
             item["fileId"] = fresh["id"]
             item["received"] = 0
@@ -1227,6 +1309,9 @@ def finalize_file(type_dir: str, folder: str, rel: str, root_hex: str | None) ->
         entry = journal.get("files", {}).get(rel)
         if entry is None:
             return 409, {"error": "file_not_planned"}
+        # Done already after the fold and not flagged invalid: the journal plus its
+        # log already say everything this call would record.
+        settled = bool(entry.get("done")) and "invalid" not in entry
         size = int(entry.get("size", 0))
         chunk_size = int(entry.get("chunkSize", DEFAULT_CHUNK_SIZE)) or DEFAULT_CHUNK_SIZE
         nbits = _bits_len(size, chunk_size)
@@ -1271,8 +1356,15 @@ def finalize_file(type_dir: str, folder: str, rel: str, root_hex: str | None) ->
         entry.pop("invalid", None)
         entry["done"] = True
         if root_hex:
+            # Informational only (nothing reads it back), so it reaches the journal
+            # file at the next compaction.
             entry["sha"] = str(root_hex)[:128]
-        save_journal(journal)
+        if settled and _log_record_count(type_dir, folder) < _LOG_COMPACT_RECORDS:
+            # The 200 below tells the client the file is in: its log records must
+            # survive a power loss as the journal write would have.
+            _sync_log(type_dir, folder)
+        else:
+            save_journal(journal)
         return 200, {"ok": True, "path": rel, "size": size,
                      "state": dataset_state(type_dir, folder, journal)}
 

@@ -3,7 +3,8 @@
 
 Reads `launcher_template.bat.in`, injects configuration, and appends every
 pipeline script (run_preprocess.py, the numbered steps, the planes writer, the 2D
-importer and the tracking attachment) base64-encoded so the single .bat can
+importer and the tracking attachment), the download-bundle tool and the modules of the
+repository root the steps import (format5.py) base64-encoded so the single .bat can
 reconstruct them on a machine that has never seen Python.
 
 Run this whenever a pipeline .py or the template changes:
@@ -43,6 +44,14 @@ ENTRY = "run_preprocess.py"
 # scripts) so the self-contained launcher can extract it on a fresh machine. The
 # orchestrator finds it in either tools/ (repo) or next to itself (extracted).
 DOWNLOAD_TOOL = "build_download_bundles.py"
+# Modules of the repository root the steps import (shared with the web platform, so both
+# producers of a format write the same bytes), embedded after the download tool. In a
+# checkout the steps find them one folder up (their own sys.path fallback), so the .bat
+# extracts them only where that copy is absent — a copy beside the scripts would shadow
+# the repository's file and go stale with it.
+SHARED_MODULES = [
+    "format5.py",
+]
 PY_VERSION = "3.12.8"
 # Pinned: the pipeline's output must not change between two machines because one of
 # them installed a newer numpy or scipy. These are the versions the preprocessing tests
@@ -84,6 +93,12 @@ def main() -> None:
         sys.exit(f"[FATAL] Outil download introuvable : {dl_path}")
     embedded += encode_block(len(SCRIPTS), dl_path)
 
+    for offset, name in enumerate(SHARED_MODULES):
+        path = HERE.parent / name
+        if not path.exists():
+            sys.exit(f"[FATAL] Module partage introuvable : {path}")
+        embedded += encode_block(len(SCRIPTS) + 1 + offset, path)
+
     template = TEMPLATE.read_text(encoding="utf-8")
     batch = (template
              .replace("@@@PP_VERSION@@@", read_pp_version())
@@ -92,6 +107,8 @@ def main() -> None:
              .replace("@@@ENTRY@@@", ENTRY)
              .replace("@@@DEPS@@@", DEPS)
              .replace("@@@DOWNLOAD_INDEX@@@", str(len(SCRIPTS)))
+             .replace("@@@SHARED_MODULES@@@", " ".join(SHARED_MODULES))
+             .replace("@@@SHARED_INDEX@@@", str(len(SCRIPTS) + 1))
              .replace("@@@IMPORT_CHECK@@@", IMPORT_CHECK)
              .replace("@@@EMBEDDED@@@", "\n".join(embedded)))
 
@@ -100,7 +117,8 @@ def main() -> None:
     OUTPUT.write_bytes(data.encode("ascii"))
 
     kb = OUTPUT.stat().st_size / 1024
-    print(f"[OK] {OUTPUT.name} genere ({kb:.1f} Ko, {len(SCRIPTS) + 1} scripts embarques)")
+    print(f"[OK] {OUTPUT.name} genere ({kb:.1f} Ko, "
+          f"{len(SCRIPTS) + 1 + len(SHARED_MODULES)} scripts embarques)")
 
 
 if __name__ == "__main__":

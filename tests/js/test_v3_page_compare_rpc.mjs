@@ -75,7 +75,17 @@ const Rpc = loadModule('js/pages/compare-policy.js', 'ComparePanelRpc');
   // ok:false rejects with the panel's error.
   const q = rpc.request(3, 'REQUEST_CAPTURE');
   rpc.settle('3', { type: 'CAPTURE', requestId: sent.at(-1).msg.requestId, ok: false, error: 'nothing to capture' });
-  await assert.rejects(q, (e) => e.code === 'COMPARE_PANEL_ERROR' && /nothing to capture/.test(e.message));
+  await assert.rejects(q, (e) => e.code === 'COMPARE_PANEL_ERROR' && /nothing to capture/.test(e.message) && e.panelCode === null);
+  // The panel's own code travels beside the transport's.
+  const q2 = rpc.request(3, 'REQUEST_GRAPH_DATA');
+  rpc.settle('3', { type: 'GRAPH_DATA', requestId: sent.at(-1).msg.requestId, ok: false, error: 'NOT_READY', code: 'NOT_READY' });
+  await assert.rejects(q2, (e) => e.code === 'COMPARE_PANEL_ERROR' && e.panelCode === 'NOT_READY');
+  const q3 = rpc.request(3, 'REQUEST_GRAPH_DATA');
+  rpc.settle('3', { type: 'GRAPH_DATA', requestId: sent.at(-1).msg.requestId, ok: false, error: 'NO_TABLE' });
+  await assert.rejects(q3, (e) => e.panelCode === 'NO_TABLE', 'an error that is a code counts as one');
+  const q4 = rpc.request(3, 'REQUEST_GRAPH_DATA');
+  rpc.settle('3', { type: 'GRAPH_DATA', requestId: sent.at(-1).msg.requestId, ok: false, error: 'x', code: { toString: () => 'NOT_READY' } });
+  await assert.rejects(q4, (e) => e.panelCode === null, 'only a code-shaped string');
   // Timeout.
   const r = rpc.request('0', 'REQUEST_STUDIO_SLICE', {}, { timeoutMs: 5000 });
   const timer = timers.filter(t => t.live).at(-1);

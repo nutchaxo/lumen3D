@@ -373,6 +373,40 @@ const isStorage = (s, w, h, d) => s.w === w && s.h === h && s.d === d;
   console.log('coarse first: OK');
 }
 
+// ── 6b. the frame on screen: a first visit's coarse level is the new frame at once ─
+// A timelapse's first visit to a frame streams with coarseFirst and no deferred
+// activation, so its coarsest level takes the screen long before the load resolves
+// (the page's _currentTimepoint still names the previous frame until then): what is
+// rendered — and labelled, e.g. a Studio preview — is the frame VolumeViewer reports.
+{
+  const W = makeWorld();
+  W.SVR.setVramBudget(1024 * MiB);
+  W.VV.init('webgl-canvas');
+  const metaX = serveDataset(W, 'D/tx');
+  const metaY = serveDataset(W, 'D/ty');
+  assert.equal(W.VV.getDisplayedTimepoint(), null, 'no volume, no frame');
+  await W.VV.loadBrickedVolumeStream('D/tx', metaX, 4, null, { quality: '256x256' });
+  assert.equal(W.VV.getDisplayedTimepoint(), 4);
+  assert.equal(W.VV.getDisplayedTree().timepoint, 4);
+  let during = null;
+  const res = await W.VV.loadBrickedVolumeStream('D/ty', metaY, 5, null, {
+    quality: 'native', coarseFirst: true,
+    onFirstPicture: () => { during = { timepoint: W.VV.getDisplayedTimepoint(), tree: W.VV.getDisplayedTree() }; },
+  });
+  assert.equal(res.available, true);
+  assert.ok(during, 'a first picture before the load resolved');
+  assert.equal(during.timepoint, 5, 'the coarse level on screen is the new frame');
+  assert.equal(during.tree.timepoint, 5);
+  assert.equal(during.tree.path, 'D/ty/bricks');
+  assert.equal(W.VV.getDisplayedTimepoint(), 5, 'and so is the requested level');
+  const back = await W.VV.loadBrickedVolumeStream('D/tx', metaX, 4, null, { quality: '256x256' });
+  assert.equal(back.fromCache, true);
+  assert.equal(W.VV.getDisplayedTimepoint(), 4, 'a frame shown from the cache names itself');
+  W.VV.dispose();
+  W.SVR.setVramBudget(null);
+  console.log('displayed timepoint (coarse first, cache hit): OK');
+}
+
 // ── 7. first picture without coarse-first: a quarter of the bricks on the GPU ─
 {
   const W = makeWorld();
@@ -472,6 +506,97 @@ const isStorage = (s, w, h, d) => s.w === w && s.h === h && s.d === d;
   assert.equal(W.gl.log.readLayers, 64, 'no second read-back');
   W.VV.dispose();
   console.log('denoise on a dense volume (read-back, filter, upload, failure): OK');
+}
+
+// ── 10. a display load served from the cache supersedes a stream still starting ─
+{
+  const W = makeWorld();
+  W.SVR.setVramBudget(1024 * MiB);
+  W.VV.init('webgl-canvas');
+  const meta = serveDataset(W, 'D/j');
+  await W.VV.loadBrickedVolumeStream('D/j', meta, null, null, { quality: '256x256' });
+  assert.equal(W.VV.hasCachedVolume('D/j', '256x256', null), true);
+  // Another level starts streaming (still in its manifest fetch, no abort slot yet),
+  // then the cached level is asked again: the older stream must not take the screen.
+  const older = W.VV.loadBrickedVolumeStream('D/j', meta, null, null, { quality: 'native' });
+  const hit = await W.VV.loadBrickedVolumeStream('D/j', meta, null, null, { quality: '256x256' });
+  assert.equal(hit.fromCache, true);
+  const res = await older;
+  assert.equal(res.stale, true, 'the stream started before the cache hit is stale');
+  assert.equal(W.VV.getActiveLevel().level, 1, 'the cached level stays on screen');
+  assert.equal(W.VV.getSamplingVolume().width, 256);
+  console.log('a cache hit supersedes a display stream still starting: OK');
+
+  // A prefetch is not a display stream: playback running through cached frames leaves
+  // the prefetch of the frames ahead alone.
+  const ahead = W.VV.loadBrickedVolumeStream('D/j', meta, null, null, { quality: '512x512', preload: true });
+  const hit2 = await W.VV.loadBrickedVolumeStream('D/j', meta, null, null, { quality: '256x256' });
+  assert.equal(hit2.fromCache, true);
+  const aheadRes = await ahead;
+  assert.ok(aheadRes.stale !== true && aheadRes.available !== false, 'the prefetch is not superseded by a cache hit');
+  assert.equal(W.VV.hasCachedVolume('D/j', '512x512', null), true, 'it fills the cache');
+  console.log('a cache hit leaves a running prefetch alone: OK');
+
+  // A prefetch cancelled before its abort slot exists stops instead of mounting its tree.
+  const pre = W.VV.loadBrickedVolumeStream('D/j', meta, null, null, { quality: 'native', preload: true });
+  W.VV.cancelPreload();
+  const preRes = await pre;
+  assert.equal(preRes.stale, true, 'the cancelled prefetch stops at its next check');
+  assert.equal(W.VV.hasCachedVolume('D/j', 'native', null), false, 'and fills nothing');
+  W.VV.dispose();
+  W.SVR.setVramBudget(null);
+  console.log('a prefetch cancelled in its manifest fetch stops: OK');
+}
+
+// ── 11. cancelDisplayLoad: the frame on screen stays, and so does its replay ────
+// The Studio's native pass drops a load of another frame streaming hidden behind the
+// figure's frame (a revisit, activation deferred) instead of reloading the frame on
+// screen: that stream must never swap in, and a context-loss replay afterwards must
+// reload the frame on screen, not the dropped one.
+{
+  const W = makeWorld();
+  W.SVR.setVramBudget(1024 * MiB);
+  W.VV.init('webgl-canvas');
+  const metaX = serveDataset(W, 'D/kx');
+  const metaY = serveDataset(W, 'D/ky');
+  await W.VV.loadBrickedVolumeStream('D/kx', metaX, 4, null, { quality: '256x256' });
+  assert.equal(W.VV.getDisplayedTimepoint(), 4);
+  // Dropped while it is still fetching its manifest (no abort slot yet).
+  const early = W.VV.loadBrickedVolumeStream('D/ky', metaY, 5, null, { quality: '256x256', deferActivation: true, hideTransition: true });
+  W.VV.cancelDisplayLoad();
+  assert.equal((await early).stale, true, 'a stream dropped before its abort slot stops at its next check');
+  assert.equal(W.VV.getDisplayedTimepoint(), 4, 'the frame on screen stays');
+  // Dropped in the middle of its bricks.
+  let dropped = false;
+  const mid = W.VV.loadBrickedVolumeStream('D/ky', metaY, 5, (p) => {
+    if (!dropped && p > 0) { dropped = true; W.VV.cancelDisplayLoad(); }
+  }, { quality: '256x256', deferActivation: true, hideTransition: true });
+  const midRes = await mid;
+  assert.ok(dropped, 'the stream was dropped while its bricks landed');
+  assert.equal(midRes.stale, true, 'a stream dropped mid-way reports stale');
+  assert.equal(W.VV.getDisplayedTimepoint(), 4, 'it never swaps its frame in');
+  assert.equal(W.VV.getDisplayedTree().path, 'D/kx/bricks');
+  assert.equal(W.VV.hasCachedVolume('D/ky', '256x256', 5), false, 'nor fills the cache');
+  // A context loss now replays the frame on screen, not the dropped load.
+  let restored = null;
+  W.VV.onContextRestored((info) => { restored = info; });
+  W.listeners.get('webglcontextlost').fn({ preventDefault() {} });
+  assert.equal(W.VV.getDisplayedTimepoint(), null, 'nothing on screen while the context is lost');
+  W.listeners.get('webglcontextrestored').fn({});
+  assert.ok(restored?.reloading, 'the restore replays a load');
+  await restored.reload;
+  assert.equal(W.VV.getDisplayedTimepoint(), 4, 'the replay brings back the frame that was on screen');
+  assert.equal(W.VV.getDisplayedTree().path, 'D/kx/bricks');
+  // Nothing on screen: a dropped load leaves nothing to replay.
+  W.listeners.get('webglcontextlost').fn({ preventDefault() {} });
+  W.VV.cancelDisplayLoad();
+  W.listeners.get('webglcontextrestored').fn({});
+  assert.equal(restored.reloading, false, 'no volume was on screen: nothing is replayed');
+  assert.equal(W.VV.getDisplayedTimepoint(), null);
+  W.VV.dispose();
+  W.SVR.setVramBudget(null);
+  W.SVR.resetGpuBudget();
+  console.log('cancelDisplayLoad keeps the frame on screen and its replay: OK');
 }
 
 console.log('VolumeViewer streaming integration (dense, sparse, budget, holes, coarse-first, pick, denoise, context loss, dispose): OK');

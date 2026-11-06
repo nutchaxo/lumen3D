@@ -106,7 +106,11 @@ const Timeline = (() => {
   function _bindLanguage() {
     if (_langBound || typeof I18n === 'undefined' || typeof I18n.onLanguageChange !== 'function') return;
     _langBound = true;
-    I18n.onLanguageChange(() => _syncSpeedButton());
+    I18n.onLanguageChange(() => {
+      _syncSpeedButton();
+      _syncPlayButton();
+      _syncScrubberLabel();
+    });
   }
 
   let _lastTickFrame = NaN;
@@ -118,7 +122,7 @@ const Timeline = (() => {
     container.innerHTML = `
       <div class="viewer-timeline" style="width:100%; display:flex; align-items:center;">
         <div class="play-controls" style="display:flex; align-items:center; gap:8px;">
-          <button class="btn btn-icon btn-ghost" id="timeline-btn-play">
+          <button type="button" class="btn btn-icon btn-ghost" id="timeline-btn-play">
             <i data-lucide="play" id="timeline-icon-play"></i>
           </button>
           ${_options.speedToggle ? `
@@ -128,7 +132,7 @@ const Timeline = (() => {
           <span style="font-family:var(--font-mono); font-size:var(--text-sm);" id="timeline-time-display">000 / 000</span>
         </div>
         <div class="scrubber-container flex-1 mx-4">
-          <div class="scrubber-track ${_options.stepped ? 'scrubber-stepped' : ''}" id="timeline-scrubber-track">
+          <div class="scrubber-track ${_options.stepped ? 'scrubber-stepped' : ''}" id="timeline-scrubber-track" role="slider" tabindex="0" aria-orientation="horizontal" aria-valuemin="0">
             <div class="scrubber-buffer" id="timeline-scrubber-buffer"></div>
             <div class="scrubber-fill" id="timeline-scrubber-fill" style="width:0%;"></div>
             <div class="scrubber-handle" id="timeline-scrubber-handle" style="left:0%;"></div>
@@ -159,8 +163,35 @@ const Timeline = (() => {
     sliderSpeed = container.querySelector('#timeline-slider-speed');
     sliderSmooth = container.querySelector('#timeline-slider-smooth');
     btnSpeed = container.querySelector('#timeline-btn-speed');
+    _ariaCache = {};
 
+    _syncPlayButton();
+    _syncScrubberLabel();
     if (window.lucide) lucide.createIcons({ root: container });
+  }
+
+  // The playhead moves every animation frame during playback, the frame it shows a few
+  // times a second: write an ARIA attribute only when its value changes, so a focused
+  // slider is not re-announced (nor the DOM touched) sixty times a second for nothing.
+  let _ariaCache = {};
+  function _setAria(el, name, value) {
+    if (!el) return;
+    const v = String(value);
+    const key = `${el.id}|${name}`;
+    if (_ariaCache[key] === v) return;
+    _ariaCache[key] = v;
+    el.setAttribute(name, v);
+  }
+
+  function _syncPlayButton() {
+    if (!btnPlay) return;
+    const label = _isPlaying ? _tr('viewer.pause', 'Pause') : _tr('viewer.play', 'Play');
+    _setAria(btnPlay, 'aria-label', label);
+    _setAria(btnPlay, 'title', label);
+  }
+
+  function _syncScrubberLabel() {
+    _setAria(scrubberTrack, 'aria-label', _tr('viewer.timepoint', 'Timepoint'));
   }
 
   /** Frames per second the playhead advances at.
@@ -252,6 +283,14 @@ const Timeline = (() => {
     const label = getSmoothing() > 0 ? f.toFixed(1) : String(Math.round(f)).padStart(3, '0');
     timeDisplay.textContent = `${label} / ${String(_totalFrames - 1).padStart(3, '0')}`;
 
+    // The slider speaks the same indices the display shows (first frame 0), so a
+    // screen-reader user and a sighted one name a timepoint alike.
+    const last = Math.max(0, _totalFrames - 1);
+    const spoken = getSmoothing() > 0 ? f.toFixed(1) : String(Math.round(f));
+    _setAria(scrubberTrack, 'aria-valuemax', last);
+    _setAria(scrubberTrack, 'aria-valuenow', spoken);
+    _setAria(scrubberTrack, 'aria-valuetext', `${spoken} / ${last}`);
+
     if (notify && _onChangeCallback) {
       _onChangeCallback({ frame: f, isPlaying: _isPlaying, speed: _options.speedValue, smooth: _options.smoothValue, fps: _playbackFps() });
     }
@@ -277,6 +316,7 @@ const Timeline = (() => {
     if (window.lucide) {
       lucide.createIcons({ nameAttr: 'data-lucide', root: btnPlay });
     }
+    _syncPlayButton();
   }
 
   function play() {
@@ -329,7 +369,7 @@ const Timeline = (() => {
     if (next) _stalledSince = performance.now();
   }
 
-  function pause() {
+  function _stopPlayback() {
     _isPlaying = false;
     setStalled(false);
     if (_playTimer) {
@@ -337,7 +377,28 @@ const Timeline = (() => {
       _playTimer = null;
     }
     setPlayIcon('play');
+  }
+
+  function pause() {
+    _stopPlayback();
     setFrame(_currentFrame, true, true);
+  }
+
+  // Keys of the focused scrubber, as the ARIA slider pattern defines them. Only the
+  // track listens — never the document — so the arrows keep their meaning everywhere
+  // else (the 3D canvas, a Compare host, the sidebar's own sliders).
+  const PAGE_STEP = 10;
+  function _keyTarget(key, frame) {
+    const last = _totalFrames - 1;
+    switch (key) {
+      case 'ArrowLeft': case 'ArrowDown': return frame - 1;
+      case 'ArrowRight': case 'ArrowUp': return frame + 1;
+      case 'PageDown': return frame - PAGE_STEP;
+      case 'PageUp': return frame + PAGE_STEP;
+      case 'Home': return 0;
+      case 'End': return last;
+      default: return null;
+    }
   }
 
   function togglePlay() {
@@ -389,6 +450,17 @@ const Timeline = (() => {
     };
     scrubberTrack.addEventListener('pointerup', _endScrub);
     scrubberTrack.addEventListener('pointercancel', _endScrub);
+
+    scrubberTrack.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = _keyTarget(e.key, Math.round(_currentFrame));
+      if (target === null) return;
+      e.preventDefault();
+      // Stopped without the notification pause() sends: the consumer is told once,
+      // about the frame the key asked for, not first about the one it leaves.
+      if (_isPlaying) _stopPlayback();
+      setFrame(target, true, true);
+    });
 
     // 'click', not 'pointerdown' like the play button: it is the only event the
     // keyboard also raises, so Enter/Space on the focused button cycles too.

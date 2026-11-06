@@ -103,7 +103,7 @@ class PhpServer(unittest.TestCase):
         return d.get("global", {}).get("downloads", 0), {k: v.get("downloads", 0) for k, v in d.get("datasets", {}).items()}
 
     def test_counting(self):
-        base, _ = self.downloads()
+        base, base_per = self.downloads()
         # php -S: router.php counts a full GET and serves the file.
         st, _, body = self.req("GET", "/DATA_WEB/3d/embryo-1/download/volume.ims")
         self.assertEqual((st, len(body)), (200, 1000))
@@ -122,7 +122,7 @@ class PhpServer(unittest.TestCase):
         self.assertEqual(h.get("Cache-Control"), "no-store")
         total, per = self.downloads()
         self.assertEqual(total, base + 2)
-        self.assertEqual(per.get("3d/embryo-1"), 2)
+        self.assertEqual(per.get("3d/embryo-1"), base_per.get("3d/embryo-1", 0) + 2)
 
         # Never counted: a missing file, an unknown dataset, a traversal, a non-download path.
         for lp in ("DATA_WEB/3d/embryo-1/download/missing.bin",
@@ -138,6 +138,37 @@ class PhpServer(unittest.TestCase):
         self.assertEqual(st, 404)
         self.assertEqual(self.downloads()[0], base + 2)
 
+    def test_burst_from_one_client_is_capped(self):
+        # Downloads spend from their own bucket table (.telemetry/downloads.bin), not
+        # from the visit/view beacon's (throttle.bin). Past the per-client burst the
+        # count stops, while the redirect and the file are still answered.
+        tdir = self.tmp / "api" / ".telemetry"
+        store = tdir / "downloads.bin"
+        beacon = tdir / "throttle.bin"
+        store.unlink(missing_ok=True)
+        beacon_before = beacon.read_bytes() if beacon.exists() else None
+        try:
+            before, _ = self.downloads()
+            n = 75
+            t0 = time.monotonic()
+            for _ in range(n):
+                st, h, _ = self.req("GET", "/api/download.php?lumen_path=" +
+                                    "DATA_WEB%2F3d%2Fembryo-1%2Fdownload%2Fvolume.ims")
+                self.assertEqual(st, 302)
+                self.assertEqual(h.get("Location"), "volume.ims?lumen_dl=1")
+            elapsed = time.monotonic() - t0
+            st, _, body = self.req("GET", "/DATA_WEB/3d/embryo-1/download/volume.ims")
+            self.assertEqual((st, len(body)), (200, 1000))
+            counted = self.downloads()[0] - before
+            # Burst 60, refilled at 1 token per second while the loop ran.
+            self.assertGreaterEqual(counted, 60)
+            self.assertLessEqual(counted, 60 + int(elapsed) + 2)
+            if elapsed < n - 62:
+                self.assertLess(counted, n)
+            self.assertTrue(store.exists())
+            self.assertEqual(beacon.read_bytes() if beacon.exists() else None, beacon_before)
+        finally:
+            store.unlink(missing_ok=True)
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

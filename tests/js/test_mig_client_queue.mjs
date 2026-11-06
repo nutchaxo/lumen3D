@@ -97,7 +97,7 @@ function fakePool(api, opts = {}) {
     async runUnit(d, m, unit) {
       await new Promise((r) => setTimeout(r, 1));
       ran.push(`${d}|${m}|${unit}`);
-      if (opts.fail && opts.fail(d, m, unit)) return { type: 'unit_failed', key: unit, error: 'boom', fatal: true, status: 422 };
+      if (opts.fail && opts.fail(d, m, unit)) return { type: 'unit_failed', key: unit, error: 'boom', fatal: true, status: 422, ...(opts.failCode ? { code: opts.failCode } : {}) };
       opts.onRun?.(d, m, unit);
       const r = api.put(d, m, unit);
       return { type: 'unit_done', key: unit, ...r, bytesIn: 1000, bytesOut: 400, seconds: 0.01 };
@@ -364,13 +364,17 @@ const until = async (fn) => { for (let i = 0; i < 2000 && !fn(); i++) await new 
 {
   const api = fakeServer({ '3d/a|m002-planes': 5 });
   let crashes = 1;
-  const pool = fakePool(api, { fail: (d, m, u) => u.endsWith('x3') && crashes-- > 0 });
+  const pool = fakePool(api, { fail: (d, m, u) => u.endsWith('x3') && crashes-- > 0, failCode: 'bad_blob' });
   const events = [];
   const r = new Runner({ api, pool: () => pool, datasetBase: (id) => `http://h/DATA_WEB/${id}/`, onEvent: (e) => events.push(e), autoRetryDelaysMs: [1, 1] });
   r.enqueue([{ dataset: '3d/a', migration: 'm002-planes' }]);
   await until(() => r.state === 'idle');
   assert.equal(events.filter((e) => e.type === 'job_failed').length, 0, 'recovered');
   assert.equal(events.filter((e) => e.code === 'auto_retry').length, 1);
+  // The restart names its cause by code (the tab words it); the exception text is for the console only.
+  const retry = events.find((e) => e.code === 'auto_retry');
+  assert.equal(retry.errCode, 'bad_blob', 'the cause of a restart travels as a code');
+  assert.equal(retry.error, 'boom');
   assert.ok(api.journals.get('3d/a|m002-planes').finalized, 'finished after the restart');
 
   const api2 = fakeServer({ '3d/a|m002-planes': 5 });
@@ -379,6 +383,7 @@ const until = async (fn) => { for (let i = 0; i < 2000 && !fn(); i++) await new 
   r2.enqueue([{ dataset: '3d/a', migration: 'm002-planes' }]);
   await until(() => r2.state === 'idle');
   assert.equal(events2.filter((e) => e.code === 'auto_retry').length, 2, 'bounded by the delays');
+  assert.ok(events2.filter((e) => e.code === 'auto_retry').every((e) => e.errCode === null), 'an uncoded failure restarts with no code');
   assert.equal(events2.filter((e) => e.type === 'job_failed').length, 1);
 }
 

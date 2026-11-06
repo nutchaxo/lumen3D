@@ -4,12 +4,14 @@
  *
  * What the viewer DISPLAYS may be a compressed cell of the quality matrix (a coarser level,
  * a ±2 / ±4 quantizer, WebP lossy); anything that reports a number — an intensity profile,
- * a region histogram, a measurement — reads here instead: level 0 of the mounted tree, its
+ * a region histogram, a measurement — reads here instead: level 0 of the tree ON SCREEN (a timelapse frame), its
  * lossless column (`ll` of a v5 tree; the only column of a v3 or v2 tree), decoded by the
  * loader's workers, never the GPU atlas.
  *
  * Frames:
- *   screen pixel → display box [0, 1]³ (VolumeViewer.pickVolumePoint)
+ *   screen pixel → display box (VolumeViewer.pickVolumePoint) → texture [0, 1]³ of the
+ *     timepoint on screen (the pick's `acquisition`: through the stabilisation warp on a
+ *     stabilised timelapse, whose display frame is not the frame the voxels are stored in)
  *   → physical µm: µm = voxel · voxelSize₀, origin at the corner of voxel (0, 0, 0)
  *   → level-k voxel: v_k = µm / voxelSize_k (voxelSize_k = voxelSize₀ · dims₀ / dims_k per
  *     XY axis; Z is never reduced in format 5)
@@ -29,6 +31,66 @@ const DataAccess = (() => {
     const info = BrickLoader.getLevelInfo?.(k);
     if (!info) throw Object.assign(new Error(`DataAccess: level ${k} does not exist`), { code: 'NO_LEVEL' });
     return info;
+  }
+
+  // ── The tree on screen ────────────────────────────────────────────────────
+  // BrickLoader's mounted tree is not always the frame on screen: the background prefetch
+  // of a timelapse mounts the timepoints after it, and a cached frame is shown without a
+  // mount. Every read that reports voxel values pins the displayed frame's tree
+  // (BrickLoader.pinTree) and reads it whatever is mounted meanwhile.
+
+  /**
+   * The brick tree of the volume on screen: { path, manifest }. A page with a VolumeViewer
+   * answers from it alone: when it shows no brick tree (nothing activated yet, the volumes
+   * released by a WebGL context loss, a slice stack) the answer is { path: null } — the
+   * mounted tree is then whatever the prefetch left, another frame than the one the
+   * timeline names. Only a page without a viewer falls back to the mounted tree.
+   */
+  function displayedTree() {
+    if (typeof VolumeViewer !== 'undefined' && typeof VolumeViewer.getDisplayedTree === 'function') {
+      const shown = VolumeViewer.getDisplayedTree();
+      return shown && shown.path && shown.manifest
+        ? { path: String(shown.path).replace(/\/$/, ''), manifest: shown.manifest }
+        : { path: null, manifest: null };
+    }
+    if (typeof BrickLoader === 'undefined') return { path: null, manifest: null };
+    return { path: BrickLoader.getBasePath?.() || null, manifest: BrickLoader.getManifest?.() || null };
+  }
+
+  let _pin = null;   // { path, manifest, handle } of the last tree pinned
+
+  /**
+   * A BrickLoader handle on the tree on screen (for `loadBrickTasks(…, { mount })` and
+   * `BrickLoader.withMount`), or null from a loader that cannot pin (the read then
+   * addresses the mounted tree). Rejects BRICKS_MOUNT_CHANGED when the volume on screen
+   * belongs to another dataset than the mounted one (a dataset switch under way), and
+   * NO_DATASET when the viewer shows no brick tree (displayedTree() has no path): reading
+   * the mounted tree then would report a frame nobody sees.
+   */
+  async function pinDisplayed({ signal } = {}) {
+    _ready();
+    if (typeof BrickLoader.pinTree !== 'function') return null;
+    const t = displayedTree();
+    if (!t.path || !t.manifest) {
+      throw Object.assign(new Error('DataAccess: no brick tree is on screen'), { code: 'NO_DATASET' });
+    }
+    const handle = await BrickLoader.pinTree(t.path, t.manifest, { signal });
+    _pin = { path: t.path, manifest: t.manifest, handle };
+    return handle;
+  }
+
+  /** `fn()` answered by the pinned tree on screen when it is still the one shown, else by the mounted tree. */
+  function _onShownTree(fn) {
+    const t = _pin ? displayedTree() : null;
+    if (t && _pin.path === t.path && _pin.manifest === t.manifest) {
+      try {
+        return BrickLoader.withMount(_pin.handle, fn);
+      } catch (err) {
+        if (!err || err.code !== 'BRICKS_MOUNT_CHANGED') throw err;
+        _pin = null;
+      }
+    }
+    return fn();
   }
 
   /** Voxel size (µm) of level k, derived from level 0 and the level's dimensions. */
@@ -91,27 +153,32 @@ const DataAccess = (() => {
   }
 
   /**
-   * The native voxel under a screen point: { um, voxel (integer, level 0), voxelFloat,
-   * onBoundingBox, depthSource } — or null when nothing of the volume is there.
+   * The native voxel under a screen point: { um (acquisition frame, = voxelFloat ·
+   * voxelSize₀), voxel (integer, level 0), voxelFloat, onBoundingBox, depthSource } — or
+   * null when nothing of the volume is there, including a point of a stabilised
+   * timelapse's display box that the timepoint on screen does not cover.
    */
   function screenToVoxel(clientX, clientY) {
     _ready();
     const hit = VolumeViewer.pickVolumePoint?.(clientX, clientY);
-    if (!hit || !hit.physicalUm) return null;
-    const vf = toVoxel(hit.physicalUm, { level: 0 });
+    const t = hit?.acquisition;
+    if (!t) return null;
     const d = _level(0).dims;
+    // Texture coordinate → voxel the way the shader reads it (voxel floor(t · dims)).
+    const vf = { x: t.x * d.x, y: t.y * d.y, z: t.z * d.z };
     const voxel = {
       x: Math.min(d.x - 1, Math.max(0, Math.floor(vf.x))),
       y: Math.min(d.y - 1, Math.max(0, Math.floor(vf.y))),
       z: Math.min(d.z - 1, Math.max(0, Math.floor(vf.z)))
     };
-    return { um: { ...hit.physicalUm }, voxel, voxelFloat: vf, onBoundingBox: Boolean(hit.onBoundingBox), depthSource: hit.depthSource || null };
+    return { um: toUm(vf, { level: 0 }), voxel, voxelFloat: vf, onBoundingBox: Boolean(hit.onBoundingBox), depthSource: hit.depthSource || null };
   }
 
   /**
    * Where a native voxel's lossless value is stored: { brick: {bx, by, bz}, inBrick: {x,y,z},
    * pack: {url (relative to the tree), offset, length} | null (the brick holds only zeros),
-   * plane: {url, tile: {tx, ty}} | null (format ≥ 2: planes/zNNNNN.bin) }.
+   * plane: {url, tile: {tx, ty}} | null (format ≥ 2: planes/zNNNNN.bin) }. The pack is the
+   * one of the tree on screen once it is pinned (any readRegion / valueAt, or pinDisplayed()).
    */
   function locate(voxel, channel = 0) {
     _ready();
@@ -121,7 +188,7 @@ const DataAccess = (() => {
       throw Object.assign(new Error('DataAccess.locate: voxel outside the volume'), { code: 'OUTSIDE' });
     }
     const brick = { bx: Math.floor(x / BS), by: Math.floor(y / BS), bz: Math.floor(z / BS) };
-    const pack = BrickLoader.brickLocation({ lod: 0, channel, ...brick, column: 'll' });
+    const pack = _onShownTree(() => BrickLoader.brickLocation({ lod: 0, channel, ...brick, column: 'll' }));
     return {
       brick,
       inBrick: { x: x - brick.bx * BS, y: y - brick.by * BS, z: z - brick.bz * BS },
@@ -134,10 +201,15 @@ const DataAccess = (() => {
    * The lossless voxels of `box` ({x0, x1, y0, y1, z0, z1}, voxel bounds, end exclusive) of
    * level `level` (0 = native) for `channels`: { dims: {x, y, z}, data: [Uint8Array] one per
    * channel (z-major, then y, then x) }. Refused above 512 MiB (code REGION_TOO_LARGE).
+   * `onProgress(f)`: the fraction of the region's bricks settled, 0..1, ending at 1.
    */
-  async function readRegion(box, channels = [0], { level = 0, signal } = {}) {
+  async function readRegion(box, channels = [0], { level = 0, signal, onProgress } = {}) {
     _ready();
-    const L = _level(level);
+    // The occupancy and the reads below are the tree on screen's, pinned now: another
+    // timepoint mounted meanwhile (the prefetch of the next frames) changes nothing.
+    const handle = await pinDisplayed({ signal });
+    const onTree = (fn) => (handle ? BrickLoader.withMount(handle, fn) : fn());
+    const L = onTree(() => _level(level));
     const d = L.dims;
     const b = {
       x0: Math.max(0, Math.floor(box.x0)), x1: Math.min(d.x, Math.ceil(box.x1)),
@@ -150,26 +222,35 @@ const DataAccess = (() => {
     if (w * h * dd * chans.length > MAX_REGION_BYTES) {
       throw Object.assign(new Error('DataAccess.readRegion: the region exceeds 512 MiB'), { code: 'REGION_TOO_LARGE' });
     }
-    const fmt = BrickLoader.getFormat();
-    const apron = Number(fmt.apron) || 0;
+    const apron = Number(onTree(() => BrickLoader.getFormat()).apron) || 0;
+    // Without a pin (an older loader), the read names the mounted manifest it was planned
+    // on, so a timepoint mounted meanwhile fails it rather than mixing two frames.
+    const manifest = handle ? null : (typeof BrickLoader.getManifest === 'function' ? BrickLoader.getManifest() : null);
     const out = chans.map(() => new Uint8Array(w * h * dd));
     const tasks = [];
-    for (let bz = Math.floor(b.z0 / BS); bz * BS < b.z1; bz++) {
-      for (let by = Math.floor(b.y0 / BS); by * BS < b.y1; by++) {
-        for (let bx = Math.floor(b.x0 / BS); bx * BS < b.x1; bx++) {
-          if (BrickLoader.hasBrick && !BrickLoader.hasBrick(bx, by, bz, level)) continue;
-          // The box of this brick's interior inside the region, in the brick's frame.
-          const r = {
-            x0: Math.max(b.x0, bx * BS) - bx * BS, x1: Math.min(b.x1, bx * BS + BS) - bx * BS,
-            y0: Math.max(b.y0, by * BS) - by * BS, y1: Math.min(b.y1, by * BS + BS) - by * BS,
-            z0: Math.max(b.z0, bz * BS) - bz * BS, z1: Math.min(b.z1, bz * BS + BS) - bz * BS
-          };
-          const region = { x0: r.x0 + apron, x1: r.x1 + apron, y0: r.y0 + apron, y1: r.y1 + apron, z0: r.z0 + apron, z1: r.z1 + apron };
-          chans.forEach((c, i) => tasks.push({ bx, by, bz, lod: level, channel: c, column: 'll', region, _slot: i, _r: r }));
+    onTree(() => {
+      for (let bz = Math.floor(b.z0 / BS); bz * BS < b.z1; bz++) {
+        for (let by = Math.floor(b.y0 / BS); by * BS < b.y1; by++) {
+          for (let bx = Math.floor(b.x0 / BS); bx * BS < b.x1; bx++) {
+            if (BrickLoader.hasBrick && !BrickLoader.hasBrick(bx, by, bz, level)) continue;
+            // The box of this brick's interior inside the region, in the brick's frame.
+            const r = {
+              x0: Math.max(b.x0, bx * BS) - bx * BS, x1: Math.min(b.x1, bx * BS + BS) - bx * BS,
+              y0: Math.max(b.y0, by * BS) - by * BS, y1: Math.min(b.y1, by * BS + BS) - by * BS,
+              z0: Math.max(b.z0, bz * BS) - bz * BS, z1: Math.min(b.z1, bz * BS + BS) - bz * BS
+            };
+            const region = { x0: r.x0 + apron, x1: r.x1 + apron, y0: r.y0 + apron, y1: r.y1 + apron, z0: r.z0 + apron, z1: r.z1 + apron };
+            chans.forEach((c, i) => tasks.push({ bx, by, bz, lod: level, channel: c, column: 'll', region, _slot: i, _r: r }));
+          }
         }
       }
-    }
-    if (!tasks.length) return { dims: { x: w, y: h, z: dd }, data: out };
+    });
+    // A failing progress callback is the caller's bug: it must not abort the read.
+    const progress = (f) => {
+      if (typeof onProgress !== 'function') return;
+      try { onProgress(Math.min(1, Math.max(0, Number(f) || 0))); } catch (err) { console.error('[DataAccess] onProgress failed:', err); }
+    };
+    if (!tasks.length) { progress(1); return { dims: { x: w, y: h, z: dd }, data: out }; }
     const bySlot = new Map(tasks.map(t => [`${t.bx}_${t.by}_${t.bz}_${t.channel}`, t]));
     const result = await BrickLoader.loadBrickTasks(tasks.map(({ _slot, _r, ...t }) => t), {
       group: `data-access-${Math.random().toString(36).slice(2)}`,
@@ -177,6 +258,8 @@ const DataAccess = (() => {
       byteRanges: true,
       streamOnly: true,
       signal,
+      ...(handle ? { mount: handle } : (manifest ? { manifest } : {})),
+      onProgress: progress,
       onBrickLoaded: (row) => {
         const t = bySlot.get(`${row.bx}_${row.by}_${row.bz}_${row.channel}`);
         if (!t || !row.data) return;
@@ -207,5 +290,5 @@ const DataAccess = (() => {
     return r.data.map(a => a[0]);
   }
 
-  return { info, levels, voxelSize, toVoxel, toUm, screenToVoxel, locate, readRegion, valueAt, MAX_REGION_BYTES };
+  return { info, levels, voxelSize, toVoxel, toUm, screenToVoxel, locate, readRegion, valueAt, displayedTree, pinDisplayed, MAX_REGION_BYTES };
 })();

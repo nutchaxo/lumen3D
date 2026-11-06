@@ -183,12 +183,33 @@ const ERRORS = {
   no_executor: () => t('dupd.errNoExecutor', 'neither this browser nor the server can run this update'),
   unit_timeout: () => t('dupd.errUnitTimeout', 'the server cannot convert one unit within its time limit'),
   speedtest_sample_missing: () => t('dupd.errSample', 'the test block is missing from this installation'),
+  body_truncated: () => bodyLimitText(),
+  body_too_large: () => bodyLimitText(),
 };
+/** A request body over the host's limit: on PHP that limit is post_max_size (status.server.maxUnitBody). */
+function bodyLimitText() {
+  const limit = Number(_status && _status.server && _status.server.maxUnitBody) || 0;
+  return t('dupd.errBodyTooLarge', 'a converted unit is larger than the server accepts in one request ({limit}); raise post_max_size in the PHP settings',
+    { limit: limit ? fmtMB(limit) : '?' });
+}
 /** A server/worker error code in words, with its detail when there is one. */
 function errorText(code, detail) {
   const base = code ? (ERRORS[code] ? ERRORS[code]() : code) : '';
   if (detail && detail !== base) return base ? `${base} (${detail})` : String(detail);
   return base || t('dupd.errUnknown', 'unknown error');
+}
+/**
+ * A failure the browser met (a job, a retry, the speed test) in words. Its exception text
+ * ("Failed to fetch", a worker's message) is English and technical: it goes to the console
+ * where it happens, and only a code this tab knows is put into words.
+ */
+function failureText(code, detail) {
+  if (code && ERRORS[code]) return errorText(code, detail);
+  return t('dupd.errUnexpected', 'an unexpected error occurred (details in the browser console)');
+}
+/** A history row's failure; an automatic restart keeps its cause in errCode. */
+function logFailureText(e) {
+  return failureText(e.code === 'auto_retry' ? e.errCode : e.code, e.detail);
 }
 
 function execName(x) {
@@ -365,8 +386,9 @@ function onLaneEvent(x, e) {
     return;
   }
   if (e.type === 'log' && e.code === 'auto_retry') {
-    pushLog({ ok: false, retrying: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, error: e.error, code: e.code, attempt: e.attempt });
-    toast(t('dupd.toastAutoRetry', '{name}: {error} — restarting by itself in {s} s (attempt {n})', { name: nameOf(e.dataset), error: e.error, s: Math.round(e.delayMs / 1000), n: e.attempt }), 'warning');
+    console.error('Data update of', e.dataset, 'failed, restarting:', e.errCode || '', e.error);
+    pushLog({ ok: false, retrying: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, error: e.error, code: e.code, errCode: e.errCode || null, detail: e.detail || null, attempt: e.attempt });
+    toast(t('dupd.toastAutoRetry', '{name}: {error} — restarting by itself in {s} s (attempt {n})', { name: nameOf(e.dataset), error: failureText(e.errCode, e.detail), s: Math.round(e.delayMs / 1000), n: e.attempt }), 'warning');
     return;
   }
   if (e.type === 'job_done') {
@@ -380,10 +402,11 @@ function onLaneEvent(x, e) {
     return;
   }
   if (e.type === 'job_failed') {
+    console.error('Data update of', e.dataset, 'failed:', e.code || '', e.error, e.detail || '');
     pushLog({ ok: false, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, error: e.error, code: e.code, detail: e.detail });
     _progress.delete(e.dataset);
     if (e.code === 'unit_timeout' && x === 'server') { onUnitTimeout(e); return; }
-    toast(t('dupd.toastFailed', 'Update of {name} failed: {error}', { name: nameOf(e.dataset), error: e.code ? errorText(e.code, e.detail) : e.error }), 'error');
+    toast(t('dupd.toastFailed', 'Update of {name} failed: {error}', { name: nameOf(e.dataset), error: failureText(e.code, e.detail) }), 'error');
     load();
     return;
   }
@@ -506,12 +529,17 @@ async function runSpeed() {
     });
   } catch (err) {
     res = null;
-    toast(t('dupd.speedFailed', 'The speed test could not run: {error}', { error: String(err && err.message || err) }), 'error');
+    console.error('Speed test failed:', err);
+    toast(t('dupd.speedFailed', 'The speed test could not run: {error}', { error: failureText(err && err.code, null) }), 'error');
   } finally {
     pool.terminate();
   }
   if (res) {
     if (!serverCap.available) { res.server.code = 'server_unavailable'; res.server.detail = (serverCap.reasons || []).join(','); }
+    for (const x of ['browser', 'server']) {
+      const s = res[x];
+      if (s && s.error && s.error !== 'skipped' && s.code !== 'server_unavailable') console.error('Speed test,', x, 'side:', s.code || '', s.error);
+    }
     const side = (s) => ({ blocks: s.blocks, seconds: s.seconds, bytesIn: s.bytesIn, bytesOut: s.bytesOut, error: s.error, code: s.code, detail: s.detail });
     _speed.result = { at: new Date().toISOString(), seconds: res.seconds, browser: side(res.browser), server: side(res.server), scores: speedtestScores(res) };
     storageSet(SPEED_KEY, JSON.stringify(_speed.result));
@@ -529,8 +557,7 @@ function speedSideError(x, s) {
     return codes.length ? codes.map((c) => reasonText(c, 'server')).join('; ') : t('dupd.serverOff', 'the server cannot convert data itself');
   }
   if (s.code && (REASONS[s.code] || EXEC_REASONS[s.code])) return reasonText(s.code, x);
-  if (s.code && ERRORS[s.code]) return errorText(s.code, null);
-  return s.error;
+  return failureText(s.code, null);
 }
 
 // ── Guards: leaving the tab or the page pauses every lane ─────────────────────
@@ -728,7 +755,7 @@ function rowLive(ds) {
     // The browser's own verdict (a crashed worker, a lost link) never reaches the server journal:
     // the history keeps it.
     const last = readLog().find((l) => l.dataset === ds.id && l.error && l.code !== 'auto_retry');
-    const why = j.error ? errorText(j.error, j.detail) : (last ? last.error : '');
+    const why = j.error ? errorText(j.error, j.detail) : (last ? logFailureText(last) : '');
     return `<div class="dupd-live-line"><span class="dupd-state is-bad">${escHtml(t('dupd.stFailed', 'Failed'))}</span><span>${escHtml(why)}</span></div>`;
   }
   const ws = workStats(j);
@@ -861,7 +888,7 @@ function infoCard() {
     const when = new Date(e.at).toLocaleString(lang());
     const what = e.ok
       ? t('dupd.logOk', 'format {v} · {units} units · {dur} · {exec}', { v: e.formatVersion, units: e.units, dur: fmtDuration(e.seconds), exec: execName(e.executor) })
-      : (e.code ? errorText(e.code, e.detail) : (e.error || ''));
+      : logFailureText(e);
     return `<li class="${e.ok ? '' : 'is-failed'}"><i data-lucide="${e.ok ? 'check-circle-2' : 'x-circle'}"></i>
       <div><b>${escHtml(e.name || e.dataset)}</b> — ${escHtml(migTitle(e.migration))}
       <span class="adm-muted dupd-small dupd-block">${escHtml(when)} · ${escHtml(what)}</span></div></li>`;

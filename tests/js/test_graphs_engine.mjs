@@ -11,8 +11,9 @@ function loadPlugin() {
   const ctx = {
     console, Math, Number, String, Object, Array, Map, Set, JSON, Error, Date, Promise, Symbol, RegExp,
     Float32Array, Float64Array, Int32Array, Int16Array, Uint8Array, Uint8ClampedArray, Uint16Array, Uint32Array,
+    AbortController, setTimeout, clearTimeout,
     PluginRegistry: { implement: (_id, obj) => { impl = obj; }, syncToolbarButton() {} },
-    window: {}, document: {}, Utils: { trustedTargetOrigin: () => 'http://x', isTrustedMessageOrigin: () => true }
+    window: {}, document: { documentElement: { getAttribute: () => null } }, Utils: { trustedTargetOrigin: () => 'http://x', isTrustedMessageOrigin: () => true }
   };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(path.join(ROOT, 'js/modules/tools/graphs/index.js'), 'utf8'), ctx, { filename: 'graphs/index.js' });
@@ -340,6 +341,199 @@ function cellTable() {
   deepEqual(c0.map(r => [r[1], +r[2].toFixed(6)]), [[2, 1], [4, 4]]);
   const msd = await provider.compute('msd', { x: 'lag', y: ['msd'], agg: 'mean', group: 'region' });
   assert.ok(msd.series.length >= 1);
+}
+
+// The binning of an X is computed once per table: threshold, aggregation and Y changes
+// reuse it, and the numbers are those of a fresh table.
+{
+  const tb = voxelTable();
+  const s1 = Engine.normalizeSpec(tb, { x: 'z', y: ['a'], agg: 'fraction', threshold: 0 });
+  const b1 = Engine.makeBins(tb, 'z', s1);
+  const b2 = Engine.makeBins(tb, 'z', Engine.normalizeSpec(tb, { x: 'z', y: ['b'], agg: 'mean', threshold: 9 }));
+  assert.equal(b1, b2, 'same X and binning: the cached bins');
+  assert.equal(b1.idx.BYTES_PER_ELEMENT, 2, 'two bytes per row');
+  assert.notEqual(Engine.makeBins(tb, 'z', Engine.normalizeSpec(tb, { x: 'z', y: ['a'], bins: 2 })), b1, 'other bin count: computed anew');
+  assert.notEqual(Engine.makeBins(tb, 'z', { ...s1, xDomain: [0, 6] }), b1, 'other X range: computed anew');
+  assert.notEqual(Engine.makeBins(voxelTable(), 'z', s1), b1, 'another table: its own cache');
+  for (const spec of [
+    { x: 'z', y: ['a'], agg: 'fraction', threshold: 5 }, { x: 'z', y: ['a'], agg: 'fraction', threshold: 15 },
+    { x: 'z', y: ['@int'], agg: 'median' }, { x: 'zr', y: ['b'], agg: 'mean', band: true }, { x: '@int', agg: 'count' }
+  ]) {
+    deepEqual(Engine.compute(tb, spec).series, Engine.compute(voxelTable(), spec).series, JSON.stringify(spec));
+  }
+  // An axis described by data is filled like the voxel source always did: x fastest.
+  const ax = Engine.fillAxis({ dims: [2, 3, 2], axis: 1, scale: 10 });
+  deepEqual(Array.from(ax), [5, 5, 15, 15, 25, 25, 5, 5, 15, 15, 25, 25]);
+  const lazyTb = { id: 'p', n: 6, cols: {}, lazy: { xr: { fill: 'axis', dims: [3, 2], axis: 0, scale: 100 / 3 } }, vars: [{ id: 'xr', label: 'X', kind: 'num', dom: [0, 100] }] };
+  assert.equal(Engine.colOf(lazyTb, 'xr').length, 6);
+  assert.equal(lazyTb.cols.xr, Engine.colOf(lazyTb, 'xr'), 'filled once');
+}
+
+// latestOnly: one call at a time; a call waiting is replaced by a newer one.
+{
+  const started = [];
+  const gates = [];
+  const run = G.latestOnly((v) => { started.push(v); return new Promise(r => gates.push(() => r(v))); });
+  const a = run('a'), b = run('b'), c = run('c');
+  await Promise.resolve();
+  deepEqual(started, ['a'], 'only the first runs at once');
+  await assert.rejects(b, (e) => e.code === 'SUPERSEDED' && e.name === 'AbortError');
+  gates.shift()();
+  assert.equal(await a, 'a');
+  await new Promise(r => setTimeout(r, 0));
+  deepEqual(started, ['a', 'c'], 'then the newest');
+  gates.shift()();
+  assert.equal(await c, 'c');
+}
+
+// latestOnly.cancel: the waiting call is rejected and never runs; the running one is left alone.
+{
+  const started = [];
+  const gates = [];
+  const run = G.latestOnly((v) => { started.push(v); return new Promise(r => gates.push(() => r(v))); });
+  const a = run('a'), b = run('b');
+  run.cancel();
+  await assert.rejects(b, (e) => e.code === 'SUPERSEDED');
+  gates.shift()();
+  assert.equal(await a, 'a');
+  await new Promise(r => setTimeout(r, 0));
+  deepEqual(started, ['a'], 'the cancelled call never ran');
+  run.cancel();                            // nothing waiting: a no-op
+  const d = run('d');
+  await Promise.resolve();
+  deepEqual(started, ['a', 'd'], 'the wrapper still runs the next call');
+  gates.shift()();
+  assert.equal(await d, 'd');
+}
+
+// A restored state (workspace, #state= link, Compare) cannot write markup into the controls.
+{
+  function fakeRoot() {
+    const boxes = { '[data-g="controls"]': { innerHTML: '' }, '[data-g="status"]': { textContent: '', style: {} }, '[data-g="notes"]': { innerHTML: '' } };
+    return { boxes, querySelector: (sel) => boxes[sel] || null, addEventListener() {}, removeEventListener() {} };
+  }
+  const root = fakeRoot();
+  const desc = { tables: [{ id: 'voxels', label: 'Voxels', presets: [], defaults: { x: 'z', y: ['a'], agg: 'mean' }, vars: voxelTable().vars }] };
+  const ui = G.createUI(root, { t, multi: false, describe: () => desc, compute: async () => { throw new Error('not drawn here'); } });
+  ui.refreshDescription();
+  const evil = '"><a href="https://evil.example/" style="position:fixed;inset:0"></a><meta http-equiv="refresh" content="0;url=https://evil.example">';
+  ui.setState({ table: 'voxels', spec: { x: 'z', y: ['a', { toString: () => evil }], agg: 'count', signalOnly: true, bins: evil, threshold: evil, normalize: evil, yScale: evil, band: 'yes', extra: evil }, preset: { evil }, colorBy: evil });
+  const html = root.boxes['[data-g="controls"]'].innerHTML;
+  assert.ok(!/<a\b|<meta\b|evil\.example/.test(html), 'no markup from the restored state');
+  assert.ok(/data-g="bins"/.test(html) && /value="" data-g="bins"/.test(html), 'an unreadable bin count shows as automatic');
+  assert.ok(/value="0" data-g="threshold"[^>]*><output data-g="thrOut">0<\/output>/.test(html), 'an unreadable threshold shows as 0');
+  const st = ui.getState();
+  assert.equal(st.spec.bins, 0);
+  assert.equal(st.spec.threshold, 0);
+  assert.equal(st.spec.normalize, 'none');
+  assert.equal(st.spec.yScale, 'linear');
+  assert.equal(st.spec.band, false);
+  assert.equal('extra' in st.spec, false, 'unknown fields are dropped');
+  deepEqual(st.spec.y, ['a'], 'only variable ids');
+  assert.equal(st.preset, null);
+  assert.equal(st.colorBy, 'dataset');
+  // Well-formed values are kept, clamped to what the controls can hold.
+  ui.setState({ spec: { bins: '1000', threshold: 400, agg: 'median', normalize: 'max', yScale: 'log', signalOnly: true } });
+  const ok = ui.getState().spec;
+  assert.equal(ok.bins, 400);
+  assert.equal(ok.threshold, 254);
+  assert.equal(ok.agg, 'median');
+  assert.equal(ok.normalize, 'max');
+  assert.equal(ok.yScale, 'log');
+  assert.equal(ok.signalOnly, true);
+  assert.ok(/value="400" data-g="bins"/.test(root.boxes['[data-g="controls"]'].innerHTML));
+  ui.destroy();
+  deepEqual(G.sanitizeUiSpec({ agg: 'wat', bins: 2.4, threshold: -3, x: 7, group: 'region' }), {
+    x: null, y: [], agg: 'mean', group: 'region', bins: 2, threshold: 0, signalOnly: false, band: false, normalize: 'none', yScale: 'linear', xScale: 'linear'
+  });
+}
+
+// A channel colour from metadata.json reaches a style attribute: only a hex colour passes.
+{
+  assert.equal(G.safeColor('#0af'), '#0af');
+  assert.equal(G.safeColor(' #00AAFF '), '#00AAFF');
+  assert.equal(G.safeColor('#00f;position:fixed;inset:0;z-index:99999;background:#000'), null);
+  assert.equal(G.safeColor('red'), null);
+  assert.equal(G.safeColor(null), null);
+  const evilColor = '#00f;position:fixed;inset:0;z-index:99999;background:#000';
+  const ctx = {
+    dataset: { getMeta: () => ({ type: '3d', name: 'E', dimensions: { c: 2 }, channels: [{ name: 'DAPI', color: evilColor }, { name: 'GFP', color: '#0f0' }] }), getId: () => '3d/E' },
+    data: { info: () => ({ channels: 2 }), levels: () => [], readRegion: async () => { throw new Error('not read here'); } }
+  };
+  const vars = G.createProvider(ctx, t).describe().tables[0].vars;
+  assert.equal(vars.find(v => v.id === 'ch_dapi').color, null, 'a colour carrying declarations is dropped at the source');
+  assert.equal(vars.find(v => v.id === 'ch_gfp').color, '#0f0', 'a 3-digit hex colour is kept');
+  // The Compare host draws colours a panel sent: the swatch checks them again.
+  const boxes = { '[data-g="controls"]': { innerHTML: '' }, '[data-g="status"]': { textContent: '', style: {} }, '[data-g="notes"]': { innerHTML: '' } };
+  const root = { querySelector: (sel) => boxes[sel] || null, addEventListener() {}, removeEventListener() {} };
+  const tvars = voxelTable().vars.map(v => (v.id === 'a' ? { ...v, color: evilColor } : v));
+  const desc = { tables: [{ id: 'voxels', label: 'Voxels', presets: [], defaults: { x: 'z', y: ['a'], agg: 'mean' }, vars: tvars }] };
+  const ui = G.createUI(root, { t, multi: true, describe: () => desc, compute: async () => { throw new Error('not drawn here'); } });
+  ui.refreshDescription();
+  const html = boxes['[data-g="controls"]'].innerHTML;
+  assert.ok(/data-y="a"/.test(html) && /data-y="b"/.test(html), 'both chips are drawn');
+  assert.ok(!/position:fixed|z-index/.test(html), 'no declaration from a channel colour');
+  assert.ok(/background:#[0-9a-f]{6}/i.test(html), 'a valid colour keeps its swatch');
+  ui.destroy();
+}
+
+// Reading the voxel table reports the fraction read, to every query waiting on it.
+{
+  const dims = { x: 4, y: 2, z: 3 };
+  const tb0 = voxelTable();
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const ctx = {
+    dataset: { getMeta: () => ({ type: '3d', name: 'E', dimensions: { c: 2 }, channels: [{ name: 'A' }, { name: 'B' }] }), getId: () => '3d/E' },
+    data: {
+      info: () => ({ channels: 2 }),
+      levels: () => [{ level: 0, dims, voxelSize: { x: 2, y: 2, z: 2 } }],
+      readRegion: async (box, chans, opts) => {
+        opts.onProgress(0.25);
+        await gate;
+        opts.onProgress(1);
+        return { dims, data: [tb0.cols.a, tb0.cols.b] };
+      }
+    }
+  };
+  const provider = G.createProvider(ctx, t);
+  const first = [], second = [];
+  const a = provider.compute('voxels', { x: 'z', y: ['ch_a'], agg: 'mean' }, { onProgress: f => first.push(f) });
+  await new Promise(r => setTimeout(r, 0));
+  const b = provider.compute('voxels', { x: 'z', y: ['ch_b'], agg: 'mean' }, { onProgress: f => { second.push(f); throw new Error('a listener that fails'); } });
+  deepEqual(second, [0.25], 'a query joining a read in flight hears where it is');
+  release();
+  await a; await b;
+  deepEqual(first, [0.25, 1]);
+  deepEqual(second, [0.25, 1], 'a failing listener does not stop the read');
+  const later = [];
+  await provider.compute('voxels', { x: 'z', y: ['ch_a'], agg: 'mean' }, { onProgress: f => later.push(f) });
+  deepEqual(later, [1], 'a cached table reports itself read');
+
+  // The panel shows the percentage while the read runs, the static text before it.
+  const boxes = { '[data-g="controls"]': { innerHTML: '' }, '[data-g="status"]': { textContent: '', style: {} }, '[data-g="notes"]': { innerHTML: '' }, '[data-g="plot"]': {} };
+  const root = { querySelector: (sel) => boxes[sel] || null, addEventListener() {}, removeEventListener() {} };
+  const desc = { tables: [{ id: 'voxels', label: 'Voxels', presets: [], defaults: { x: 'z', y: ['a'], agg: 'mean' }, vars: voxelTable().vars }] };
+  let fail;
+  let seen = null;
+  const ui = G.createUI(root, {
+    t, multi: false, describe: () => desc,
+    compute: (table, spec, o) => new Promise((_, reject) => {
+      seen = boxes['[data-g="status"]'].textContent;
+      o.onProgress(0.4);
+      fail = reject;
+    })
+  });
+  ui.refreshDescription();
+  ui.setState({ table: 'voxels', spec: { x: 'z', y: ['a'], agg: 'mean' } });
+  for (let i = 0; i < 20 && !fail; i++) await new Promise(r => setTimeout(r, 5));
+  assert.ok(fail, 'the panel queried the table');
+  assert.equal(seen, 'computing');
+  assert.equal(boxes['[data-g="status"]'].textContent, 'reading:{"pct":40}');
+  fail(Object.assign(new Error('x'), { code: 'NO_DATA' }));
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(boxes['[data-g="status"]'].textContent, 'err_noData');
+  ui.destroy();
 }
 
 console.log('graphs engine: ok');

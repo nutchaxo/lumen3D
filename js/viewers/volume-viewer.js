@@ -89,9 +89,21 @@ const VolumeViewer = (() => {
   const _qualityListeners = new Set();
   let _brickStreamAbort = null;
   let _preloadStreamAbort = null;
+  // Bumped by cancelPreload: a prefetch cancelled before its abort slot exists (its
+  // manifest fetch, its mount) stops at its next check instead of mounting its tree.
+  let _preloadCancelSeq = 0;
+  // Bumped by every display load, the ones served from the cache included: a display
+  // stream still before its abort slot exists stops at its next check. A cache hit does
+  // not bump _loadCounter, which would also kill the prefetch filling the frames ahead
+  // of a playback running through cached frames.
+  let _displayLoadSeq = 0;
   // The last display load (brick stream or slice stack), replayed after a WebGL
   // context loss: { kind, basePath, metadata, timepoint, onProgress, options }.
   let _lastDisplayRequest = null;
+  // The display request of the volume on screen: the one a display load had made when it
+  // activated that volume (_lastDisplayRequest at that moment). cancelDisplayLoad puts it
+  // back, so a context-loss replay never reloads a load that was dropped.
+  let _shownDisplayRequest = null;
   // Bumped on every context loss: a stream started before it stops writing into
   // textures that no longer exist.
   let _contextEpoch = 0;
@@ -2737,14 +2749,17 @@ const VolumeViewer = (() => {
       : webVx;
     const physicalX = sourceWidth * webVx;
     const physicalY = sourceHeight * webVy;
-    const thicknessMeta = _positiveNumber(metadata.optical_section_thickness_um)
-      ?? _positiveNumber(metadata.slice_thickness_um)
-      ?? _positiveNumber(metadata.section_thickness_um);
+    const thicknessMeta = _explicitSliceThickness(metadata);
     const sliceThickness = _resolveSliceThickness(metadata, vz || 1, rawVx || webVx || 1);
     const zCount = Math.max(1, Number(sourceDepth) || 1);
+    // The texture spreads its zCount planes evenly over [0, 1] (plane k centred at
+    // (k + ½)/zCount), so plane k covers [k, k+1)·vz and the box is zCount·vz deep,
+    // the extent DataAccess and the manifests' voxelSize assume. The slice thickness is reported, never part of the extent: (n−1)·vz + t
+    // would shrink every Z coordinate by (vz − t)/(n·vz) and put the far planes one
+    // voxel short in µm → voxel conversions.
     const physicalZ = zCount <= 1
       ? sliceThickness
-      : ((zCount - 1) * (vz || 1)) + sliceThickness;
+      : zCount * (vz || 1);
     const reference = Math.max(physicalX, physicalY, 1);
     const calibrationStatus = hasVoxelMetadata
       ? (thicknessMeta !== null ? 'exact' : 'estimated')
@@ -2779,10 +2794,15 @@ const VolumeViewer = (() => {
     };
   }
 
-  function _resolveSliceThickness(metadata, zSpacing, rawVoxelX) {
-    const explicit = _positiveNumber(metadata.optical_section_thickness_um)
+  function _explicitSliceThickness(metadata) {
+    return _positiveNumber(metadata.optical_section_thickness_um)
       ?? _positiveNumber(metadata.slice_thickness_um)
-      ?? _positiveNumber(metadata.section_thickness_um);
+      ?? _positiveNumber(metadata.section_thickness_um)
+      ?? _positiveNumber(metadata.physicalSizeUm?.sliceThickness);
+  }
+
+  function _resolveSliceThickness(metadata, zSpacing, rawVoxelX) {
+    const explicit = _explicitSliceThickness(metadata);
     if (explicit !== null) return explicit;
     return Math.min(zSpacing, rawVoxelX);
   }
@@ -2987,6 +3007,9 @@ const VolumeViewer = (() => {
       _emitQualityState({ message: `${entry.quality || 'volume'} dropped (GPU atlas released before display)` });
       return false;
     }
+    // Only a display load (or its replay) activates a volume, and a later one would have
+    // superseded it: _lastDisplayRequest is the request of the volume shown from now on.
+    _shownDisplayRequest = _lastDisplayRequest;
     const previous = _activeVolumeEntry;
     if (entry.svrManager) {
       // The manager it replaces belongs to `previous`, released below unless cached.
@@ -3051,6 +3074,13 @@ const VolumeViewer = (() => {
     }
     material.needsUpdate = true;
     material.uniforms.numChannels.value = Math.min(channels, 4);
+    // A timelapse frame carries its own rigid transform (null = the acquisition frame):
+    // the warp is one uniform shared with the transition cube, so it changes when the
+    // frame becomes the one on screen — never before (the previous frame would move)
+    // nor after its first picture (the new frame would be drawn displaced).
+    if (Object.prototype.hasOwnProperty.call(options, 'timepointTransform')) {
+      setTimepointTransform(options.timepointTransform);
+    }
 
     _recompileShaderForActiveChannels();
 
@@ -3214,14 +3244,6 @@ const VolumeViewer = (() => {
   function _isEntryCached(entry) {
     if (!entry) return false;
     return _volumeCache.get(entry.key) === entry;
-  }
-
-  function _isSvrManagerCached(manager) {
-    if (!manager) return false;
-    for (const entry of _volumeCache.values()) {
-      if (entry?.svrManager === manager) return true;
-    }
-    return false;
   }
 
   function _shouldCacheVolumeEntry(entry) {
@@ -5123,8 +5145,10 @@ const VolumeViewer = (() => {
 
   /**
    * The volume point under a client-space position.
-   * @returns {{normalized:{x,y,z}, physicalUm:{x,y,z}|null, screen:{x,y},
+   * @returns {{normalized:{x,y,z}, physicalUm:{x,y,z}|null, acquisition:{x,y,z}|null,
+   *   acquisitionUm:{x,y,z}|null, screen:{x,y},
    *   depthSource:'projection'|'volume'|'bounding-box', onBoundingBox:boolean}|null}
+   *   (frames: _pickResult).
    *   depthSource 'volume': the depth of the first visible structure under the pixel
    *   (GPU pick, see the shader's PICK_MODE); 'projection': a grid projection wall;
    *   'bounding-box': nothing visible there (or no GPU pick possible) — the point is
@@ -5159,34 +5183,61 @@ const VolumeViewer = (() => {
       local = _gpuPickPoint(clientX - rect.left, clientY - rect.top, rect.width, rect.height);
       if (local) source = 'volume';
     }
+    // The box the march runs in: the acquisition box unwarped, the display box (every
+    // frame's box carried into the stabilised frame) on a stabilised timelapse.
+    const warp = material?.defines?.VOLUME_WARP && material.uniforms?.clipBoxMin
+      ? { matrix: material.uniforms.volumeWarp.value, boxMin: material.uniforms.clipBoxMin.value, boxSize: material.uniforms.clipBoxSize.value }
+      : null;
     if (!local && material && material.visible) {
       const localRay = _raycaster.ray.clone().applyMatrix4(new THREE.Matrix4().copy(cube.matrixWorld).invert());
-      local = localRay.intersectBox(
-        new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5)),
-        new THREE.Vector3()
-      );
+      const box = warp
+        ? new THREE.Box3(warp.boxMin.clone(), warp.boxMin.clone().add(warp.boxSize))
+        : new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+      local = localRay.intersectBox(box, new THREE.Vector3());
       if (local) source = 'bounding-box';
     }
 
     if (!local) return null;
-    const isProj = source === 'projection';
-
-    const norm = {
-      x: isProj ? local.x + 0.5 : Math.max(0, Math.min(1, local.x + 0.5)),
-      y: isProj ? local.y + 0.5 : Math.max(0, Math.min(1, local.y + 0.5)),
-      z: isProj ? local.z + 0.5 : Math.max(0, Math.min(1, local.z + 0.5))
-    };
-    const physical = getPhysicalSize();
     return {
-      normalized: norm,
-      physicalUm: physical ? {
-        x: norm.x * physical.x,
-        y: norm.y * physical.y,
-        z: norm.z * physical.z
-      } : null,
+      ..._pickResult(local, source, getPhysicalSize(), warp),
       screen: { x: clientX - rect.left, y: clientY - rect.top },
       depthSource: source,
       onBoundingBox: source === 'bounding-box'
+    };
+  }
+
+  /**
+   * The frames of a picked object-space point.
+   *   normalized / physicalUm: the point in the displayed frame (object + ½, times the
+   *     physical size) — the stabilised frame on a stabilised timelapse, where the
+   *     display box reaches past [0, 1] by the drift of the series. Measurements,
+   *     markers and the cut plane work in this frame.
+   *   acquisition / acquisitionUm: the same point in the texture of the timepoint on
+   *     screen ([0, 1]³; volumeWarp · object under stabilisation, object + ½ without),
+   *     the frame the stored voxels live in. null where this timepoint holds no voxel
+   *     (the drift margin of the display box, a projection wall outside the volume).
+   * A volume or box hit is confined to the box the march ran in (`warp.boxMin/boxSize`,
+   * else [−½, ½]³); a projection wall keeps its own position.
+   */
+  function _pickResult(local, source, physical, warp) {
+    const isProj = source === 'projection';
+    const lo = warp ? warp.boxMin : { x: -0.5, y: -0.5, z: -0.5 };
+    const size = warp ? warp.boxSize : { x: 1, y: 1, z: 1 };
+    const confine = (v, a) => (isProj ? v : Math.max(lo[a], Math.min(lo[a] + size[a], v)));
+    const p = new THREE.Vector3(confine(local.x, 'x'), confine(local.y, 'y'), confine(local.z, 'z'));
+    const norm = { x: p.x + 0.5, y: p.y + 0.5, z: p.z + 0.5 };
+    const tex = warp ? p.clone().applyMatrix4(warp.matrix) : new THREE.Vector3(norm.x, norm.y, norm.z);
+    // A face hit lands on 0 or 1 up to the float error of the 16-bit pick / the matrix.
+    const EPS = 1e-6;
+    const inData = [tex.x, tex.y, tex.z].every(v => Number.isFinite(v) && v >= -EPS && v <= 1 + EPS);
+    const unit = (v) => Math.max(0, Math.min(1, v));
+    const acquisition = inData ? { x: unit(tex.x), y: unit(tex.y), z: unit(tex.z) } : null;
+    const scale = (q) => (physical ? { x: q.x * physical.x, y: q.y * physical.y, z: q.z * physical.z } : null);
+    return {
+      normalized: norm,
+      physicalUm: scale(norm),
+      acquisition,
+      acquisitionUm: acquisition ? scale(acquisition) : null
     };
   }
 
@@ -5706,26 +5757,34 @@ const VolumeViewer = (() => {
     }
   }
 
+  /**
+   * Puts a saved camera on the volume (distance, pose, position; each part only when
+   * valid). → true when the distance or the pose came from `state`, false when nothing
+   * usable was applied (no volume yet, another kind of view, no valid field): the
+   * caller then frames the volume itself.
+   */
   function setCameraState(state) {
-    if (!state || !camera || !cube) return;
-    if (state.kind && state.kind !== 'volume') return;
-    if (!Number.isFinite(state.cameraZ) && !Array.isArray(state.quaternion) && !Array.isArray(state.position)) return;
-    
+    if (!state || !camera || !cube) return false;
+    if (state.kind && state.kind !== 'volume') return false;
+    if (!Number.isFinite(state.cameraZ) && !Array.isArray(state.quaternion) && !Array.isArray(state.position)) return false;
+
     // Prevent default fitCameraToVolume from overwriting this restored state
     _hasLoadedVolume = true;
-    if (Number.isFinite(state.cameraZ)) camera.position.z = state.cameraZ;
+    let applied = false;
+    if (Number.isFinite(state.cameraZ)) { camera.position.z = state.cameraZ; applied = true; }
     if (Number.isFinite(state.zDisplayScale)) {
       setZDisplayScale(state.zDisplayScale, { notify: false });
     }
     // BUG-029: validate restored transform — reject non-finite / degenerate quaternions and normalize before copy.
     if (Array.isArray(state.quaternion) && state.quaternion.length === 4 && state.quaternion.every(Number.isFinite)) {
       const q = new THREE.Quaternion().fromArray(state.quaternion);
-      if (q.lengthSq() > 1e-8) { _poseAnim = null; cube.quaternion.copy(q.normalize()); }
+      if (q.lengthSq() > 1e-8) { _poseAnim = null; cube.quaternion.copy(q.normalize()); applied = true; }
     }
     if (Array.isArray(state.position) && state.position.length === 3 && state.position.every(Number.isFinite)) {
       cube.position.fromArray(state.position);
     }
     _scheduleFrame();
+    return applied;
   }
 
   function onCameraChange(callback) {
@@ -5808,10 +5867,6 @@ const VolumeViewer = (() => {
         if (typeof VolumeGrid !== 'undefined') VolumeGrid.dispose();
       });
     }
-  }
-
-  function _updateGridsAndAxes() {
-    if (typeof VolumeGrid !== 'undefined') VolumeGrid.rebuild();
   }
 
   function _syncGridRotation() {
@@ -5999,6 +6054,17 @@ const VolumeViewer = (() => {
    */
   function _exportTileFragOffset(t, height) {
     return [t.x, height - t.y - t.h];
+  }
+
+  /**
+   * The largest square tile one export draw may cover: a tile marches up to
+   * tile² × steps pixel·samples in ONE draw call, held to the same per-draw watchdog
+   * budget as a screen frame (SETTLED_PIXEL_SAMPLE_BUDGET × the learned scale). The
+   * steps stay the screen's, so the picture is the same; only the tile count grows.
+   */
+  function _exportTileBudgetCap(steps, budgetScale) {
+    const budget = SETTLED_PIXEL_SAMPLE_BUDGET * Math.max(0.05, Math.min(1, Number(budgetScale) || 1));
+    return Math.max(256, Math.floor(Math.sqrt(budget / Math.max(1, Number(steps) || 1))));
   }
 
   /**
@@ -6481,7 +6547,8 @@ const VolumeViewer = (() => {
         caps.maxTextureSize || 2048,
         gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || 2048,
         viewportMax[0] || 2048,
-        viewportMax[1] || 2048
+        viewportMax[1] || 2048,
+        _exportTileBudgetCap(_targetSteps, _settledBudgetScale)
       );
       const configs = _exportTileConfigs(maxTile, caps.isWebGL2 ? Math.min(4, caps.maxSamples || 0) : 0);
       let configIndex = 0;
@@ -6571,7 +6638,6 @@ const VolumeViewer = (() => {
   return {
     init,
     dispose,
-    releaseDataset,
     renderNow,
     measureFrameMs,
     setCellSkip,
@@ -6583,6 +6649,9 @@ const VolumeViewer = (() => {
     getQualityLevels,
     getQualityMatrix,
     getActiveLevel,
+    getDisplayedTree,
+    getDisplayedTimepoint,
+    cancelDisplayLoad,
     selectBrickManifest: (manifest, timepoint) => _selectBrickManifestForTimepoint(manifest, timepoint),
     getGpuCompression,
     setGpuCompression,
@@ -6662,8 +6731,6 @@ const VolumeViewer = (() => {
     /** SVRManager.vramBudget of this page's renderer: { bytes, source, gpuClass, contextLosses, … }. */
     getGpuBudget: () => (typeof SVRManager !== 'undefined' && SVRManager.vramBudget ? SVRManager.vramBudget(renderer) : null),
     getMaterial: () => material,
-    makeRgbaBrickFromScalarChannels: _composeRgbaBrickFromScalarChannels,
-    applyRgbaBrickLuts: _applyRgbaBrickLuts,
     floorLutsFromManifest: (manifest, channels, histograms = null) => _floorLuts(_floorsFromManifest(manifest, channels, histograms), channels),
     getScene: () => scene,
     getCamera: () => camera,
@@ -6690,7 +6757,7 @@ const VolumeViewer = (() => {
     setPlayheadHint,
     /** Abort a background prefetch in flight (quality change, dataset change,
      *  tab hidden). Cooperative: the batch stops at its next brick boundary. */
-    cancelPreload: () => _cancelStream(_preloadStreamAbort),
+    cancelPreload: () => { _preloadCancelSeq++; _cancelStream(_preloadStreamAbort); },
     getVolumeObject: () => cube,
     getMassCenterLocal: _massCenterLocal,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
@@ -6816,6 +6883,12 @@ const VolumeViewer = (() => {
           _perf()?.end(perfId, { status: 'ok', fromCache: true, quality, preload: true });
           return { stale: false, available: true, cached: true, quality, preload: true };
         }
+        // A display load served from the cache supersedes every display stream still
+        // running, like any other display load: one still before its abort slot exists
+        // (its manifest fetch, its mount, its coarse preview) would otherwise pass its
+        // checks, detach this entry and show its own frame. A coarse preview shares the
+        // load it previews and bumps nothing.
+        if (!isPreview) _displayLoadSeq++;
         _activateVolumeEntry(cached, metadata, cached.sourceDepth, cached.sourceWidth, cached.channels, options);
         emitState({ active: shownQuality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
         onProgress?.(1, quality);
@@ -6848,6 +6921,11 @@ const VolumeViewer = (() => {
       // prefetch. A coarse preview shares the id of the load it previews.
       const loadId = preload ? _loadCounter : (isPreview ? options._sharedLoadId : ++_loadCounter);
       const epoch = _contextEpoch;
+      if (!preload && !isPreview) _displayLoadSeq++;
+      const preloadSeq = _preloadCancelSeq;
+      const displaySeq = _displayLoadSeq;
+      const superseded = () => loadId !== _loadCounter
+        || (preload ? preloadSeq !== _preloadCancelSeq : displaySeq !== _displayLoadSeq);
       const brickDir = metadata?.qualities?.native?.directory || 'bricks';
       let manifest;
       try {
@@ -6856,7 +6934,7 @@ const VolumeViewer = (() => {
         _perf()?.end(perfId, { status: 'unavailable', quality, reason: err.message || String(err) });
         return { available: false, reason: err.message || String(err), code: err?.code || 'BRICKS_MANIFEST_UNAVAILABLE', status: err?.status };
       }
-      if (loadId !== _loadCounter) {
+      if (superseded()) {
         _perf()?.end(perfId, { status: 'stale', quality });
         return { stale: true };
       }
@@ -6882,7 +6960,7 @@ const VolumeViewer = (() => {
         _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
         return { available: false, reason: err.message, code: err?.code || 'BRICKS_MANIFEST_INVALID' };
       }
-      if (loadId !== _loadCounter) {
+      if (superseded()) {
         _perf()?.end(perfId, { status: 'stale', quality });
         return { stale: true };
       }
@@ -6914,7 +6992,7 @@ const VolumeViewer = (() => {
           _previewOf: quality,
           _sharedLoadId: loadId
         });
-        if (loadId !== _loadCounter || epoch !== _contextEpoch) {
+        if (superseded() || epoch !== _contextEpoch) {
           _perf()?.end(perfId, { status: 'stale', quality });
           return preview?.contextLost ? preview : { stale: true };
         }
@@ -6933,7 +7011,7 @@ const VolumeViewer = (() => {
       const abortSlot = { cancelled: false, loadId, controller: typeof AbortController === 'function' ? new AbortController() : null };
       if (!preload) _brickStreamAbort = abortSlot;
       else _preloadStreamAbort = abortSlot;
-      const stopped = () => abortSlot.cancelled || loadId !== _loadCounter || epoch !== _contextEpoch;
+      const stopped = () => abortSlot.cancelled || superseded() || epoch !== _contextEpoch;
 
       // ── Level and texture, within the GPU budget ────────────────────────────────
       const max3D = renderer?.capabilities?.max3DTextureSize || 2048;
@@ -7202,7 +7280,11 @@ const VolumeViewer = (() => {
         // Another tree of the dataset was mounted while this stream yielded (the detail
         // streaming re-mounting the frame on screen during a prefetch): mount this one
         // again — a same-dataset mount cancels nothing — before asking its bricks.
-        try { await BrickLoader.init(treePath, tpSelection.manifest); } catch (e) { /* checked below */ }
+        // A stream already stopped (a prefetch cancelled for the Studio's native pass)
+        // mounts nothing: it would take the mount from the reader that stopped it.
+        if (!stopped()) {
+          try { await BrickLoader.init(treePath, tpSelection.manifest); } catch (e) { /* checked below */ }
+        }
         if (BrickLoader.getManifest?.() !== tpSelection.manifest || stopped()) {
           clearOwnTransition();
           if (streamEntry !== _activeVolumeEntry) _disposeVolumeEntry(streamEntry);
@@ -7224,6 +7306,8 @@ const VolumeViewer = (() => {
             channels, luts: floorLuts, components: footprint.components, cropToVolume: !(bordered && !streamSvrManager),
             // A compressed atlas takes the bricks as blocks, encoded in the decode worker.
             encode: streamSvrManager?.compressed ? 'bc' : null,
+            // A split atlas takes each brick as its RG and R planes, de-interleaved there too.
+            split: Boolean(streamSvrManager?.split),
             // The decode worker returns each brick's 8³ maxima, taken on the voxels the GPU
             // reads (widened to whole blocks and raised by the measured overshoot when BC).
             cells: streamSvrManager?.cellMap && typeof CellMax !== 'undefined'
@@ -7238,7 +7322,7 @@ const VolumeViewer = (() => {
             console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
           },
           onBrickLoaded: (row) => {
-            if (stopped() || !(row?.data || row?.encoded)) return;
+            if (stopped() || !(row?.data || row?.encoded || row?.split)) return;
             const r = row.region;
             // No region: a whole brick (a bordered one is its whole stored 66³).
             const bw = r ? r.x1 - r.x0 : (bordered ? slotEdge : Math.min(bs, width - row.bx * bs));
@@ -7247,6 +7331,8 @@ const VolumeViewer = (() => {
             let ok;
             if (streamSvrManager && row.encoded) {
               ok = streamSvrManager.writeEncodedBrick(row.bx, row.by, row.bz, row.encoded);
+            } else if (streamSvrManager && row.split) {
+              ok = streamSvrManager.writeSplitBrick(row.bx, row.by, row.bz, row.split.planes, bw, bh, bd, row.cellMax);
             } else if (streamSvrManager) {
               ok = streamSvrManager.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd, row.cellMax);
             } else {
@@ -7786,6 +7872,30 @@ const VolumeViewer = (() => {
   }
 
   /** The level on screen: { level, quality, dims, treeVersion, apron, components, mode }, or null. */
+  /**
+   * The brick tree of the volume on screen: { path, manifest, timepoint } (path = the
+   * tree's URL, ".../bricks" or ".../bricks/tNNN" of a timelapse frame; timepoint = the
+   * frame it holds, null without a time axis), or null when what is shown is not a brick
+   * tree. BrickLoader's mounted tree is often another frame: the background prefetch
+   * mounts the timepoints after this one, and a cached frame is shown without a mount.
+   */
+  function getDisplayedTree() {
+    const e = _activeVolumeEntry;
+    return e && e.treePath && e.manifest
+      ? { path: e.treePath, manifest: e.manifest, timepoint: Number.isInteger(e.timepoint) ? e.timepoint : null }
+      : null;
+  }
+
+  /**
+   * The timepoint of the volume on screen (an integer), or null without a time axis or
+   * volume. Not always the frame the page's last completed load names: a first visit
+   * shows the frame's coarsest level before the load of the asked one resolves.
+   */
+  function getDisplayedTimepoint() {
+    const e = _activeVolumeEntry;
+    return e && Number.isInteger(e.timepoint) ? e.timepoint : null;
+  }
+
   function getActiveLevel() {
     const e = _activeVolumeEntry;
     if (!e || !Number.isInteger(e.lod)) return null;
@@ -7890,6 +8000,20 @@ const VolumeViewer = (() => {
     _gpuTimer.ext = undefined;
   }
 
+  /**
+   * Stops the display load in flight (a brick stream, a slice stack) without starting
+   * another: what it would still bring is dropped and the volume on screen stays, as
+   * does the request a context-loss replay reloads (the one of that volume, not of the
+   * dropped load; none when nothing is on screen). A stream still before its abort slot
+   * exists stops at its next check.
+   */
+  function cancelDisplayLoad() {
+    _cancelStream(_brickStreamAbort);
+    _displayLoadSeq++;
+    _loadCounter++;
+    _lastDisplayRequest = _activeVolumeEntry ? _shownDisplayRequest : null;
+  }
+
   /** Unbind every volume texture from the material (nothing is sampled from them). */
   function _unbindVolumeUniforms() {
     if (!material?.uniforms) return;
@@ -7967,30 +8091,6 @@ const VolumeViewer = (() => {
   }
 
   /**
-   * Free what a dataset switch leaves behind: every cached volume not of `keepBasePath`
-   * (all of them when it is null; the one on screen stays), the brick manifests of
-   * other datasets, pending slice prefetches, the loader's idle packs, and the blur
-   * workers when no blur runs.
-   */
-  function releaseDataset(keepBasePath = null) {
-    for (const [key, entry] of [..._volumeCache]) {
-      if (entry === _activeVolumeEntry || entry === _transitionEntry) continue;
-      if (keepBasePath && entry.basePath === keepBasePath) continue;
-      _volumeCache.delete(key);
-      _disposeVolumeEntry(entry);
-    }
-    for (const dir of [..._manifestCache.keys()]) {
-      if (!keepBasePath || !dir.startsWith(`${keepBasePath}/`)) _manifestCache.delete(dir);
-    }
-    _imageCache.clear();
-    if (typeof BrickLoader !== 'undefined') BrickLoader.trimCaches?.();
-    if (_blurWorkerPool && _blurActiveCount === 0 && _blurAssemblers.size === 0) {
-      _blurWorkerPool.forEach(w => w.terminate());
-      _blurWorkerPool = null;
-    }
-  }
-
-  /**
    * Tear the viewer down: streams cancelled, every volume, atlas, overlay mesh,
    * material and render target released, the blur workers terminated, the listeners
    * and the resize observer removed, the render loop stopped and the renderer
@@ -8056,6 +8156,7 @@ const VolumeViewer = (() => {
     _isStreamingBricks = false;
     _fgStreamActive = 0;
     _lastDisplayRequest = null;
+    _shownDisplayRequest = null;
     _contextLost = false;
     _contextLossTimes.length = 0;
   }
@@ -8283,41 +8384,6 @@ const VolumeViewer = (() => {
     if (!(renderer.state && renderer.state.bindTexture)) {
       gl.bindTexture(gl.TEXTURE_3D, prevBinding);
     }
-  }
-
-  // Kept for callers outside the stream (the Studio's native pass): the floor LUT and
-  // the channel interleave of a brick, on the calling thread. The stream itself has the
-  // decode workers do both (BrickLoader compose).
-  function _applyRgbaBrickLuts(brickData, floorLuts = null, channels = 4) {
-    if (!brickData || !floorLuts?.length) return brickData;
-    const activeChannels = Math.max(0, Math.min(4, Number(channels) || 4, floorLuts.length));
-    if (!activeChannels) return brickData;
-    const out = new Uint8Array(brickData.length);
-    for (let i = 0; i < brickData.length; i += 4) {
-      for (let c = 0; c < 4; c++) {
-        const value = brickData[i + c] || 0;
-        const lut = c < activeChannels ? floorLuts[c] : null;
-        out[i + c] = lut ? lut[value] : value;
-      }
-    }
-    return out;
-  }
-
-  function _composeRgbaBrickFromScalarChannels(channelData, floorLuts = null, channels = 4, brickSize = 64) {
-    const activeChannels = Math.max(0, Math.min(4, Number(channels) || 4));
-    const voxelCount = brickSize * brickSize * brickSize;
-    const out = new Uint8Array(voxelCount * RGBA_TEXTURE_BYTES_PER_VOXEL);
-    for (let c = 0; c < activeChannels; c++) {
-      const src = channelData?.[c];
-      if (!src) continue;
-      const lut = floorLuts?.[c] || null;
-      const n = Math.min(voxelCount, src.length);
-      for (let i = 0, dst = c; i < n; i++, dst += RGBA_TEXTURE_BYTES_PER_VOXEL) {
-        const value = src[i] || 0;
-        out[dst] = lut ? lut[value] : value;
-      }
-    }
-    return out;
   }
 
   function _floorsFromManifest(manifest, channels, overrideHistograms = null) {

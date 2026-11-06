@@ -18,6 +18,8 @@ The same requests go to dev_server.py and to a throwaway copy of the PHP tree un
 * a failed login carries `code: bad_credentials` beside the legacy `error` text.
 * `Unknown action` (`Unknown action.` on auth.php) and `bad_request` for a login,
   setup or change_password body whose fields are not strings.
+* first-run setup refuses a cross-site request (text/plain body, Sec-Fetch-Site
+  cross-site, a foreign or null Origin) with a 403 and writes no credential.
 * catalog.json survives two datasets of one date whose names are not comparable.
 
 Python only (the findings are about dev_server.py): an anonymous POST, or a write
@@ -293,6 +295,53 @@ class TwinCases:
         self.assertEqual(st, 200, data)
         self.assertTrue(data["ok"] and isinstance(data["rev"], str))
 
+    # ── site.php: empty objects stay objects ────────────────────────────────────
+
+    def stored(self, rel):
+        return json.loads((self.tree / rel).read_text(encoding="utf-8"))
+
+    def test_site_empty_objects_round_trip(self):
+        draft = {"sections": [{"id": "s", "props": {}, "columns": [
+            {"id": "c", "width": 12, "props": {}, "widgets": [{"type": "spacer", "props": {}}]}]}]}
+        st, data, _ = self.call("POST", "/api/site.php?action=save_draft&doc=pages/emptyobj",
+                                {"title": {"en": "E"}, "draft": draft})
+        self.assertEqual(st, 200, data)
+        self.assertEqual(self.stored("api/page-drafts/emptyobj.json"), draft, "the stored draft keeps every {}")
+        self.assertEqual(self.site_doc("pages/emptyobj")["draft"], draft, "get answers {} as {}")
+        st, data, _ = self.call("POST", "/api/site.php?action=publish&doc=pages/emptyobj", {})
+        self.assertEqual(st, 200, data)
+        self.assertEqual(self.stored("config/pages/emptyobj.json")["published"], draft, "publish keeps every {}")
+        self.assertEqual(self.stored("api/page-drafts/emptyobj.json"), draft)
+
+        st, data, _ = self.call("POST", "/api/site.php?action=save_draft&doc=pages/emptyobj", {"draft": {}})
+        self.assertEqual(st, 200, "an empty draft is an object")
+        self.assertEqual(self.stored("api/page-drafts/emptyobj.json"), {})
+        self.assertEqual(self.site_doc("pages/emptyobj")["draft"], {})
+        for body, err in (({"draft": []}, "Invalid 'draft' block"), ({"draft": [1]}, "Invalid 'draft' block"),
+                          ({"draft": {"sections": {"a": {}}}}, "Invalid sections"),
+                          ({"draft": {"sections": [[1]]}}, "Invalid section"),
+                          ({"draft": {"sections": [{"columns": {"a": 1}}]}}, "Invalid columns"),
+                          ({"draft": {"sections": [{"columns": [{"widgets": [{}]}]}]}}, "Invalid widget")):
+            st, data, _ = self.call("POST", "/api/site.php?action=save_draft&doc=pages/emptyobj", body)
+            self.assertEqual((st, data), (400, {"error": err}), body)
+
+        page = {"title": {"en": "P"}, "published": {"sections": [{"props": {}, "columns": [{"props": {}}]}]}, "draft": {}}
+        st, data, _ = self.call("POST", "/api/site.php?action=save&doc=pages/emptyobj", page)
+        self.assertEqual(st, 200, data)
+        self.assertEqual(self.stored("config/pages/emptyobj.json")["published"], page["published"])
+        self.assertEqual(self.stored("api/page-drafts/emptyobj.json"), {})
+
+        st, data, _ = self.call("POST", "/api/site.php?action=save&doc=instance",
+                                {"brand": {"name": "A"}, "seo": {}, "footer": {"links": []}})
+        self.assertEqual(st, 200, data)
+        st, data, _ = self.call("POST", "/api/site.php?action=save&doc=instance&merge=brand.name",
+                                {"brand": {"name": "B"}})
+        self.assertEqual(st, 200, data)
+        inst = self.stored("config/instance.json")
+        self.assertEqual((inst["brand"], inst["seo"], inst["footer"]), ({"name": "B"}, {}, {"links": []}),
+                         "a merge rewrites the stored doc with its {} and [] intact")
+        self.assertEqual(self.site_doc("instance")["seo"], {})
+
     # ── parity bits ─────────────────────────────────────────────────────────────
 
     def test_bad_credentials_carry_a_stable_code(self):
@@ -315,6 +364,27 @@ class TwinCases:
         self.assertEqual((st, data), (400, {"error": "bad_request"}))
         st, data, _ = self.call("POST", "/api/auth.php?action=change_password", {"current": 5, "new": "y" * 10})
         self.assertEqual((st, data), (400, {"error": "bad_request"}))
+
+    def test_setup_refuses_a_cross_site_claim_of_a_fresh_install(self):
+        cred = self.tree / "api" / "admin_credential.json"
+        aside = cred.with_name("admin_credential.json.aside")
+        cred.replace(aside)
+        try:
+            body = json.dumps({"username": "x", "password": "attacker-password"}).encode()
+            for headers in ({"Content-Type": "text/plain"},
+                            {"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site"},
+                            {"Content-Type": "application/json", "Origin": "http://evil.example"},
+                            {"Content-Type": "application/json", "Origin": "null"}):
+                st, data, _ = self.call("POST", "/api/auth.php?action=setup", raw=body, auth=False, headers=headers)
+                self.assertEqual(st, 403, (headers, data))
+                self.assertFalse(cred.exists(), f"a refused setup wrote a credential: {headers}")
+        finally:
+            cred.unlink(missing_ok=True)
+            aside.replace(cred)
+        st, data, _ = self.call("POST", "/api/auth.php?action=setup",
+                                {"username": "x", "password": "y" * 12}, auth=False,
+                                headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual((st, data), (409, {"error": "already_configured"}), "same-origin JSON reaches the setup")
 
     # ── catalog ─────────────────────────────────────────────────────────────────
 

@@ -10,6 +10,12 @@ const DecompositionPanel = (() => {
   
   let _editingCustomId = null;
   let _savedGlobalState = null;
+
+  // The list is rebuilt from scratch on every change, which would drop keyboard focus on
+  // the floor. Each build records its focusable controls ({ key, role, el }); the next
+  // build focuses the matching control again, or the one an action asked for.
+  let _focusables = [];
+  let _focusIntent = null; // { key, role } requested by the action that triggers a rebuild
   let _exportLayout = 'main-right';
 
   // ELE-27 (PERF-001) / ELE-31: vignette rendering is decoupled from the hot post-render
@@ -253,6 +259,8 @@ const DecompositionPanel = (() => {
     if (_offPostRender) { _offPostRender(); _offPostRender = null; }
     if (_onChannelsUpdated) { window.removeEventListener('channels-updated', _onChannelsUpdated); _onChannelsUpdated = null; }
     _canvases = [];
+    _focusables = [];
+    _focusIntent = null;
     if (_captureFrame) { _captureFrame.remove(); _captureFrame = null; }
   }
 
@@ -310,8 +318,18 @@ const DecompositionPanel = (() => {
     const list = document.getElementById('decomposition-list');
     if (!list) return;
 
+    // What to focus once the new list exists: the action's request, else the control
+    // that held focus before the rebuild. Only when focus was inside the list, so a
+    // rebuild driven by a channel slider never pulls focus away from that slider.
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const held = active ? _focusables.find(f => f.el === active) : null;
+    const intent = _focusIntent;
+    _focusIntent = null;
+    const want = held ? (intent || { key: held.key, role: held.role }) : null;
+
     list.innerHTML = '';
     _canvases = [];
+    const focusables = [];
     
     // We use the "real" global state for the single-channel automatic views
     // If we are editing a custom view, the "real" global state is the saved one.
@@ -319,7 +337,7 @@ const DecompositionPanel = (() => {
 
     // 1. One view per active channel, 2. the custom views
     const views = _viewDescriptors(baseState);
-    views.forEach(v => _createViewItem(list, v.title, v.state, v.color, v.key));
+    views.forEach(v => _createViewItem(list, v.title, v.state, v.color, v.key, focusables));
     _listSignature = _signature(views);
 
     // 3. Add Custom button
@@ -341,9 +359,18 @@ const DecompositionPanel = (() => {
       VolumeViewer.triggerRender();
     };
     list.appendChild(btnAdd);
+    focusables.push({ key: null, role: 'add', el: btnAdd });
+    _focusables = focusables;
 
     if (typeof lucide !== 'undefined') {
       lucide.createIcons({ nodes: [list] });
+    }
+
+    if (want) {
+      const target = focusables.find(f => f.key === want.key && f.role === want.role)
+        || focusables.find(f => f.key === want.key && f.role === 'view')
+        || btnAdd;
+      if (target.el && target.el.focus) target.el.focus();
     }
   }
 
@@ -397,20 +424,20 @@ const DecompositionPanel = (() => {
     _scheduleDecompRender();
   }
 
-  function _createViewItem(container, titleText, state, titleColor, customId) {
+  function _createViewItem(container, titleText, state, titleColor, customId, focusables) {
     const item = document.createElement('div');
     item.className = 'decomposition-item';
     item.style.flexShrink = '0';
-    item.style.background = 'var(--bg-panel)';
+    item.style.background = 'var(--bg-elevated)';
     item.style.borderRadius = '8px';
     item.style.overflow = 'hidden';
     
     const isEditingThis = (_editingCustomId === customId);
     if (isEditingThis) {
-      item.style.border = '2px solid var(--primary)';
-      item.style.boxShadow = '0 0 0 2px rgba(var(--primary-rgb), 0.3)';
+      item.style.border = '2px solid var(--color-primary)';
+      item.style.boxShadow = '0 0 0 2px color-mix(in srgb, var(--color-primary) 30%, transparent)';
     } else {
-      item.style.border = '1px solid var(--border-light)';
+      item.style.border = '1px solid var(--border-default)';
     }
     
     // Header
@@ -419,7 +446,7 @@ const DecompositionPanel = (() => {
     header.style.display = 'flex';
     header.style.alignItems = 'center';
     header.style.justifyContent = 'space-between';
-    header.style.borderBottom = '1px solid var(--border-light)';
+    header.style.borderBottom = '1px solid var(--border-default)';
     header.style.fontSize = '12px';
     header.style.fontWeight = '600';
     
@@ -442,9 +469,11 @@ const DecompositionPanel = (() => {
       btnDone.appendChild(document.createTextNode(_tr('decomposition.done', 'Done')));
       btnDone.onclick = (e) => {
         e.stopPropagation();
+        _focusIntent = { key: customId, role: 'view' };
         _stopEditing();
       };
       actions.appendChild(btnDone);
+      focusables.push({ key: customId, role: 'done', el: btnDone });
     } else {
       const isBase = customId.startsWith('base_');
       if (isBase) {
@@ -458,23 +487,29 @@ const DecompositionPanel = (() => {
           btnReset.innerHTML = '<i data-lucide="rotate-ccw" style="width:12px;height:12px;"></i>';
           btnReset.onclick = (e) => {
             e.stopPropagation();
+            _focusIntent = { key: customId, role: 'view' };
             _baseViews[idx].edited = false;
             _rebuildList(); VolumeViewer.triggerRender();
           };
           actions.appendChild(btnReset);
+          focusables.push({ key: customId, role: 'reset', el: btnReset });
         }
       } else {
         const btnRemove = document.createElement('button');
         btnRemove.className = 'btn btn-icon btn-ghost btn-sm';
         btnRemove.style.width = '20px';
         btnRemove.style.height = '20px';
-        btnRemove.innerHTML = '<i data-lucide="trash-2" style="width:12px;height:12px;"></i>';
+        btnRemove.title = _tr('decomposition.remove', 'Remove this view');
+        btnRemove.setAttribute('aria-label', _tr('decomposition.removeView', 'Remove view: {name}', { name: titleText }));
+        btnRemove.innerHTML = '<i data-lucide="trash-2" style="width:12px;height:12px;" aria-hidden="true"></i>';
         btnRemove.onclick = (e) => {
           e.stopPropagation();
+          _focusIntent = { key: null, role: 'add' };
           _customViews = _customViews.filter(v => v.id !== customId);
           _rebuildList(); VolumeViewer.triggerRender();
         };
         actions.appendChild(btnRemove);
+        focusables.push({ key: customId, role: 'remove', el: btnRemove });
       }
     }
     header.appendChild(actions);
@@ -520,9 +555,21 @@ const DecompositionPanel = (() => {
     if (!isEditingThis) {
       canvasWrap.style.cursor = 'pointer';
       canvasWrap.title = _tr('decomposition.clickToEdit', 'Click to edit this view');
+      canvasWrap.setAttribute('role', 'button');
+      canvasWrap.tabIndex = 0;
+      canvasWrap.setAttribute('aria-label', _tr('decomposition.editView', 'Edit view: {name}', { name: titleText }));
       canvasWrap.onclick = () => {
+        _focusIntent = { key: customId, role: 'done' };
         _startEditing(customId);
       };
+      canvasWrap.onkeydown = (e) => {
+        if (e.target !== canvasWrap || e.altKey || e.ctrlKey || e.metaKey) return;
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        e.preventDefault();
+        _focusIntent = { key: customId, role: 'done' };
+        _startEditing(customId);
+      };
+      focusables.push({ key: customId, role: 'view', el: canvasWrap });
       // Overlay hover effect
       canvasWrap.style.transition = 'opacity 0.2s';
       canvasWrap.onmouseover = () => canvasWrap.style.opacity = '0.85';
@@ -781,8 +828,20 @@ const DecompositionPanel = (() => {
     const app = typeof window !== 'undefined' ? window.ViewerApp : null;
     const choice = app && app.askExportQuality ? await app.askExportQuality() : 'current';
     if (!choice) return;
-    if (choice === 'lossless' && app.withLosslessQuality) await app.withLosslessQuality(() => _exportImage());
-    else await _exportImage();
+    try {
+      if (choice === 'lossless' && app.withLosslessQuality) {
+        await app.withLosslessQuality(() => _exportImage());
+      } else {
+        // The main view and the vignettes are separate renders: a playing timelapse
+        // would hand them different frames.
+        if (app && app.holdForExport) await app.holdForExport();
+        await _exportImage();
+      }
+    } catch (err) {
+      console.error('[DecompositionPanel] Export failed:', err);
+      const text = typeof Utils !== 'undefined' && Utils.friendlyErrorText ? Utils.friendlyErrorText(err) : '';
+      if (text && typeof ExportManager !== 'undefined' && ExportManager.toast) ExportManager.toast(text);
+    }
   }
 
   async function _exportImage() {

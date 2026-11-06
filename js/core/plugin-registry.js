@@ -243,10 +243,12 @@ const PluginRegistry = (() => {
    * @param {string[]} modulePaths  e.g. ['tools/toggle-grid', 'shaders/fluorescence']
    */
   // version.json `files` map (release installs) — the content-addressed source of
-  // truth for 'bundled'. Fetched once per loadModules batch; null on dev/static.
+  // truth for 'bundled' when no server vouches for a plugin. Null on dev/static.
+  // 'no-cache': Compat.platformVersion() has just read the same file, so the
+  // origin answers a revalidation (304) instead of sending the hash list again.
   async function _releaseManifest() {
     try {
-      const resp = await fetch('version.json', { cache: 'no-store' });
+      const resp = await fetch('version.json', { cache: 'no-cache' });
       if (!resp.ok) return null;
       const m = await resp.json();
       return (m && m.files && typeof m.files === 'object') ? m.files : null;
@@ -259,7 +261,12 @@ const PluginRegistry = (() => {
     const platformVer = (typeof Compat !== 'undefined' && Compat.platformVersion)
       ? await Compat.platformVersion()
       : null;
-    const releaseManifest = (typeof PluginTrust !== 'undefined') ? await _releaseManifest() : null;
+    // Only a plugin WITHOUT a server vouch (a static host) is checked against the
+    // release manifest; on a Python/PHP host every plugin is vouched, and the
+    // manifest (one hash per shipped file) is never needed. Fetched on first use,
+    // shared by the whole batch.
+    let releaseManifestPromise = null;
+    const releaseManifest = () => (releaseManifestPromise ||= _releaseManifest());
 
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
@@ -351,7 +358,8 @@ const PluginRegistry = (() => {
         //   bundled/dev/approved-trusted → executed IN-PAGE from the hashed bytes.
         if (typeof PluginTrust !== 'undefined') {
           const vouch = _discoveredVouch.get(modPath) || null;
-          const verdict = await PluginTrust.evaluate(meta, vouch, basePath, modPath, releaseManifest);
+          const verdict = await PluginTrust.evaluate(meta, vouch, basePath, modPath,
+            vouch ? null : await releaseManifest());
           if (verdict.tier === 'untrusted') {
             _quarantine(modPath, 'untrusted', verdict.reason);
             return;
@@ -409,7 +417,7 @@ const PluginRegistry = (() => {
           }
           // Trusted in-page: register + execute the exact hashed bytes (no re-fetch).
           _modules.set(meta.id, { meta, impl: null, instance: null, state: 'registered' });
-          const [, execOk] = await Promise.all([_grafti18n(meta), _execTrustedInPage(meta, verdict.bytes)]);
+          const [, execOk] = await Promise.all([_grafti18n(meta, verdict.files), _execTrustedInPage(meta, verdict.bytes)]);
           if (!execOk) {
             _modules.delete(meta.id);
             _quarantine(modPath, 'script-failed', 'index.js failed to load or parse');
@@ -433,17 +441,48 @@ const PluginRegistry = (() => {
 
   /**
    * Graft a plugin's own translation dictionaries into the i18n tree before UI is
-   * built (preserves the v0.12.45 invariant). Returns a promise for the fetch
-   * fallback, or a resolved promise when dictionaries arrived inline (live endpoint).
+   * built (preserves the v0.12.45 invariant). Sources, first that holds English:
+   * the dictionaries inlined by the discovery endpoint (Python host), then the
+   * lang/<code>.json bytes the trust pass already fetched and hashed (`files`,
+   * every host), then a fetch per locale. Returns a promise for that last path.
    */
-  function _grafti18n(meta) {
+  function _grafti18n(meta, files) {
     if (typeof I18n === 'undefined') return Promise.resolve();
     if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
       I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
       return Promise.resolve();
     }
+    const fromFiles = _langDictsFromFiles(files, meta.i18nLanguages);
+    if (fromFiles && I18n.registerPluginLang) {
+      I18n.registerPluginLang(meta.id, meta._path, fromFiles, meta.i18nLanguages);
+      return Promise.resolve();
+    }
     if (I18n.loadPluginLang) return I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
     return Promise.resolve();
+  }
+
+  /**
+   * The plugin's dictionaries decoded from the verified bytes of its lang/ folder,
+   * restricted to the locales it declares (plugin.json i18nLanguages) when it
+   * declares any. A file that does not parse is left out (that locale then falls
+   * back to English, as a failed fetch would). Null without a usable English one.
+   */
+  function _langDictsFromFiles(files, langs) {
+    if (!files || typeof files !== 'object' || typeof TextDecoder === 'undefined') return null;
+    const declared = Array.isArray(langs) ? langs : null;
+    const decoder = new TextDecoder('utf-8');
+    const dicts = {};
+    for (const rel of Object.keys(files)) {
+      const m = /^lang\/([A-Za-z0-9_-]+)\.json$/.exec(rel);
+      if (!m) continue;
+      const code = m[1];
+      if (declared && code !== 'en' && !declared.includes(code)) continue;
+      try {
+        const dict = JSON.parse(decoder.decode(files[rel]));
+        if (dict && typeof dict === 'object' && !Array.isArray(dict)) dicts[code] = dict;
+      } catch (_) { /* unparsable locale: left to the English fallback */ }
+    }
+    return dicts.en ? dicts : null;
   }
 
   /**
@@ -502,6 +541,63 @@ const PluginRegistry = (() => {
     style.appendChild(document.createTextNode(''));
     document.head.appendChild(style);
     return Boolean(style.sheet);
+  }
+
+  /**
+   * Self-hosted libraries a plugin may ask for by name, with the SRI hash of the
+   * vendored file. Kept here so a library update changes one place, and so two
+   * plugins asking for the same library at once share one <script> and one parse.
+   * `style`: the <style id> the library writes its CSS into (see ensureNoncedStyle).
+   */
+  const VENDOR_LIBS = Object.freeze({
+    plotly: Object.freeze({
+      src: 'js/vendor/plotly.min.js',
+      sri: 'sha384-Hl48Kq2HifOWdXEjMsKo6qxqvRLTYqIGbvlENBmkHAxZKIGCXv43H6W1jA671RzC',
+      global: 'Plotly',
+      style: 'plotly.js-style-global'
+    })
+  });
+  const _vendorLoads = new Map();   // name -> Promise of the library's global
+
+  /**
+   * Load a library of VENDOR_LIBS once for the page and resolve with its global.
+   * A tag still in flight (`data-vendor-state="loading"`, also set by the inline
+   * loaders plugins keep for older cores) is joined instead of appending another;
+   * a failed tag is removed and the next call tries again.
+   * @param {string} name  e.g. 'plotly'
+   * @returns {Promise<any>}
+   */
+  function loadVendor(name) {
+    const lib = Object.prototype.hasOwnProperty.call(VENDOR_LIBS, name) ? VENDOR_LIBS[name] : null;
+    if (!lib) return Promise.reject(Object.assign(new Error(`unknown vendor library "${name}"`), { code: 'UNKNOWN_VENDOR' }));
+    if (typeof window !== 'undefined' && window[lib.global]) return Promise.resolve(window[lib.global]);
+    if (_vendorLoads.has(name)) return _vendorLoads.get(name);
+    const promise = new Promise((resolve, reject) => {
+      if (lib.style) ensureNoncedStyle(lib.style);
+      let script = Array.from(document.querySelectorAll('script[data-vendor-state="loading"]'))
+        .find(s => s.getAttribute('src') === lib.src) || null;
+      if (!script) {
+        script = document.createElement('script');
+        script.src = lib.src;
+        script.integrity = lib.sri;
+        script.crossOrigin = 'anonymous';
+        script.setAttribute('data-vendor-state', 'loading');
+        document.head.appendChild(script);
+      }
+      const tag = script;
+      tag.addEventListener('load', () => {
+        tag.setAttribute('data-vendor-state', 'loaded');
+        if (window[lib.global]) resolve(window[lib.global]);
+        else reject(new Error(`${name} did not define itself`));
+      });
+      tag.addEventListener('error', () => {
+        tag.remove();
+        reject(new Error(`${name} failed to load`));
+      });
+    });
+    _vendorLoads.set(name, promise);
+    promise.catch(() => { if (_vendorLoads.get(name) === promise) _vendorLoads.delete(name); });
+    return promise;
   }
 
   // ─── Implementation Binding ───────────────────────────────
@@ -1181,6 +1277,7 @@ const PluginRegistry = (() => {
     resetAll,
     collect,
     ensureNoncedStyle,
+    loadVendor,
     syncToolbarButton,
     onToolbarState,
     describeToolbar,

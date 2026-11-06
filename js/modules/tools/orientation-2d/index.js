@@ -14,7 +14,10 @@ PluginRegistry.implement('orientation-2d', {
   _unsubs: [],
 
   _t(key, params) { return this._ctx.i18n.t(key, params); },
-  onLanguageChange() { this._ui?.rebuild(); },
+  onLanguageChange() {
+    this._ui?.handle?.setTitle?.(this._t('panel'));
+    this._ui?.rebuild();
+  },
 
   init(ctx) {
     this._ctx = ctx;
@@ -50,9 +53,16 @@ PluginRegistry.implement('orientation-2d', {
 
   // ── Panel ─────────────────────────────────────────────────────────────────
   _buildPanel() {
-    const { section, body } = this._ctx.ui.addSidebarSection({ id: 'orientation-2d-section', title: this._t('panel') });
+    const handle = this._ctx.ui.addSidebarSection({ id: 'orientation-2d-section', title: this._t('panel') });
+    const { section, body } = handle;
     section.hidden = true;
-    const ui = { section, body, rebuild: () => this._render(ui) };
+    const ui = { handle, section, body, rebuild: () => this._render(ui) };
+    // Delegated once on the persistent body: _render swaps its children on every
+    // language switch, and a listener added there would stack one per switch.
+    body.addEventListener('click', (e) => {
+      const action = e.target.closest('[data-o2d]')?.dataset.o2d;
+      if (action) this._action(action);
+    });
     this._render(ui);
     return ui;
   },
@@ -77,10 +87,6 @@ PluginRegistry.implement('orientation-2d', {
     ui.value = ui.body.querySelector('#o2d-rotation-value');
     ui.flip = ui.body.querySelector('#o2d-flip');
     ui.slider.addEventListener('input', () => this._apply({ ...this._ctx.viewer.getOrientation(), rotationDeg: Number(ui.slider.value) }));
-    ui.body.addEventListener('click', (e) => {
-      const action = e.target.closest('[data-o2d]')?.dataset.o2d;
-      if (action) this._action(action);
-    });
     this._syncControls();
   },
 

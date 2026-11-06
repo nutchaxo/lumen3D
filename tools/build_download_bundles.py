@@ -13,8 +13,9 @@ Download Center's file explorer (api/downloads) will expose, in this order:
                           duplication; RAW_DATA and DATA_WEB live on the same
                           volume). Falls back to a copy across volumes.
   3. <folder>.tif       — a multi-channel ImageJ/Fiji composite hyperstack
-                          (native bit depth, µm-calibrated, per-channel display
-                          range + LUT) reconstructed from the .ims internal
+                          (native bit depth, µm-calibrated from the .ims extent
+                          and unit — pixel units when the file declares none,
+                          per-channel display range + LUT) reconstructed from the .ims internal
                           resolution pyramid at ~TARGET_PX on the long XY side.
                           ImageJ flavour rather than OME because OME-XML has no
                           display-range field: Bio-Formats then opens the stack
@@ -32,8 +33,12 @@ the MIPs are ONE frame of it — the first unless --timepoint says otherwise —
 README says which. One frame keeps the TIFF the size of a fixed stack's; the .ims beside
 it is the complete acquisition.
 
-Idempotent: existing artefacts are skipped unless --force. Each dataset is
-isolated in try/except so one failure never aborts the batch.
+Idempotent: existing artefacts are skipped unless --force. --refresh-web is what
+the preprocessing pipeline passes right after it publishes a dataset: the archive and
+the README describe the published bricks and metadata, so they are rebuilt; the .ims
+link, the TIFF and the MIPs depend only on the source .ims and are rebuilt only when
+that file changed. Each dataset is isolated in try/except so one failure never aborts
+the batch.
 
 Usage:
   py tools/build_download_bundles.py                 # all datasets, all artefacts
@@ -41,6 +46,7 @@ Usage:
   py tools/build_download_bundles.py --dry-run
   py tools/build_download_bundles.py --no-ims --no-archive   # only TIFF + MIP
   py tools/build_download_bundles.py --tiff-px 1024 --force
+  py tools/build_download_bundles.py --dataset 3d/<folder> --ims <file.ims> --refresh-web
   py tools/build_download_bundles.py --dataset live/<folder> --timepoint 12
 """
 from __future__ import annotations
@@ -110,11 +116,42 @@ def attr_str(group, key, default=""):
     return str(v).strip()
 
 
-def attr_float(group, key, default=0.0):
-    try:
-        return float(attr_str(group, key, str(default)))
-    except (TypeError, ValueError):
-        return default
+# Same table as preprocess/1-ims_metadata.UNIT_TO_UM (kept equal by
+# tests/test_preprocess_pipeline.py): this tool also runs on its own and is copied
+# alone into the pipeline pack, so it cannot rely on loading that script by path.
+UNIT_TO_UM = {"um": 1.0, "µm": 1.0, "μm": 1.0, "micron": 1.0, "microns": 1.0,
+              "micrometer": 1.0, "micrometre": 1.0, "nm": 1e-3, "mm": 1e3, "m": 1e6}
+
+
+def ims_extent_um(info):
+    """Physical extent (X, Y, Z) in micrometres from DataSetInfo/Image, or
+    (None, reason) when the file does not carry one.
+
+    The extent is the only calibration an .ims holds, written in the unit of
+    Image:Unit. A missing or unreadable ExtMin/ExtMax, or a unit outside
+    UNIT_TO_UM, is never replaced by a guess (0 and 1 would label a voxel 1/N µm),
+    exactly as read_ims_metadata does — the stack is then declared uncalibrated."""
+    def _ext(key):
+        raw = attr_str(info, key, "")
+        try:
+            v = float(raw) if raw != "" else None
+        except ValueError:
+            return None
+        return v if v is not None and np.isfinite(v) else None
+
+    unit_raw = attr_str(info, "Unit", "um") or "um"
+    to_um = UNIT_TO_UM.get(unit_raw.strip().lower())
+    if to_um is None:
+        return None, f"unknown extent unit {unit_raw!r}"
+    lo = [_ext(f"ExtMin{a}") for a in range(3)]
+    hi = [_ext(f"ExtMax{a}") for a in range(3)]
+    if None in lo or None in hi:
+        return None, "ExtMin/ExtMax incomplete"
+    extent = tuple((hi[a] - lo[a]) * to_um for a in range(3))
+    # A voxel of size 0 or below has no ImageJ representation (resolution = 1/size).
+    if any(e <= 0.0 for e in extent):
+        return None, "non-positive extent"
+    return extent, None
 
 
 def hex_to_rgb(value, fallback):
@@ -214,6 +251,38 @@ def place_ims(ims_src, out_path, force, dry):
         return f"copy {fmt_size(out_path.stat().st_size)}"
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    """b is a, or a copy of it that has not changed since (copy2 keeps the mtime)."""
+    try:
+        if os.path.samefile(a, b):
+            return True
+        sa, sb = a.stat(), b.stat()
+    except OSError:
+        return False
+    # 2 s: the mtime resolution of FAT/exFAT, where a cross-volume copy may land.
+    return sa.st_size == sb.st_size and abs(sa.st_mtime - sb.st_mtime) < 2.0
+
+
+def source_changed(ims_src: Path, placed_ims: Path, derived) -> bool:
+    """Is the source .ims another file than the one download/ was built from?
+
+    The placed copy (a hard link, or a copy) is the record of that file; without one,
+    an artefact older than the source was made from an earlier version of it."""
+    if placed_ims.exists():
+        return not _same_file(ims_src, placed_ims)
+    try:
+        src_mtime = ims_src.stat().st_mtime
+    except OSError:
+        return False
+    for path in derived:
+        try:
+            if path.stat().st_mtime < src_mtime:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 # ── Step 3/4 — ImageJ TIFF (+ per-channel MIP) from the .ims pyramid ────────
 def list_levels(f, timepoint=0):
     """[(L, Xr, Yr, Zr)] from the Imaris ResolutionLevel groups (real sizes)."""
@@ -299,7 +368,8 @@ def tiff_info(folder, level, ch_names, vox, dtype, frame=None):
         f"Dataset: {folder}",
         f"Source: Imaris .ims ResolutionLevel {level}, native {dtype}"
         + (f", timepoint {frame[0]} of 0..{frame[1] - 1}" if frame else ""),
-        f"Voxel size (um): X={vox[0]:.6g} Y={vox[1]:.6g} Z={vox[2]:.6g}",
+        (f"Voxel size (um): X={vox[0]:.6g} Y={vox[1]:.6g} Z={vox[2]:.6g}" if vox
+         else "Voxel size: uncalibrated (no extent/unit in the .ims)"),
         "Channels: " + ", ".join(f"C{i + 1}={n}" for i, n in enumerate(ch_names)),
         "Voxel values are the raw acquisition intensities; only the stored "
         "display range is scaled (Image > Adjust > Brightness/Contrast).",
@@ -314,14 +384,15 @@ class TiffTooLarge(RuntimeError):
 def write_imagej_tiff(path, vol, vox, metadata):
     """Write the composite hyperstack, refusing a silently truncated file: the
     ImageJ flavour is classic TIFF (32-bit offsets), and past ~4 GiB tifffile
-    warns and keeps only the first IFD, which no reader can open."""
+    warns and keeps only the first IFD, which no reader can open. `vox` None =
+    uncalibrated: one pixel per unit, the metadata's unit being 'pixel'."""
     import tifffile
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         tifffile.imwrite(
             str(path), vol, imagej=True, photometric="minisblack",
             compression="zlib",
-            resolution=(1.0 / (vox[0] or 1.0), 1.0 / (vox[1] or 1.0)),
+            resolution=(1.0 / vox[0], 1.0 / vox[1]) if vox else (1.0, 1.0),
             resolutionunit="NONE", metadata=metadata,
         )
     for w in caught:
@@ -384,7 +455,10 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
             return "tiff skip (exists)" if want_tiff else "nothing to do"
 
         # Physical extent is level-independent → voxel size = extent / level dims.
-        ext = lambda lo, hi: (attr_float(info, hi, 1.0) - attr_float(info, lo, 0.0))
+        extent_um, uncalibrated = ims_extent_um(info)
+        if need_vol and extent_um is None:
+            print(f"  [tiff] {uncalibrated}: the TIFF is written uncalibrated (pixel units)",
+                  file=sys.stderr)
 
         # Best level first, then every coarser one. Whether the compressed stack
         # clears the classic-TIFF offset limit is only knowable after writing it,
@@ -399,10 +473,10 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
         status, mips = [], []
         for attempt, (L, Xr, Yr, Zr) in enumerate(candidates):
             vox = (
-                ext("ExtMin0", "ExtMax0") / max(Xr, 1),
-                ext("ExtMin1", "ExtMax1") / max(Yr, 1),
-                ext("ExtMin2", "ExtMax2") / max(Zr, 1),
-            )
+                extent_um[0] / max(Xr, 1),
+                extent_um[1] / max(Yr, 1),
+                extent_um[2] / max(Zr, 1),
+            ) if extent_um else None
             base = f["DataSet"][f"ResolutionLevel {L}"][f"TimePoint {timepoint}"]
             hists = ([np.zeros(nbins, dtype=np.int64) for _ in range(n_ch)]
                      if need_vol and nbins else None)
@@ -439,7 +513,9 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                     if hists is not None:
                         ranges.extend(range_from_hist(hists[ci]))
                 meta = {
-                    "axes": "ZCYX", "spacing": vox[2], "unit": "um",
+                    "axes": "ZCYX",
+                    "spacing": vox[2] if vox else 1.0,
+                    "unit": "um" if vox else "pixel",
                     "mode": "composite", "LUTs": luts,
                     "Labels": [ch_names[c] for _ in range(Zr) for c in range(n_ch)],
                     "Info": tiff_info(folder, L, ch_names, vox, dtype, frame),
@@ -611,11 +687,12 @@ def process(ds, args):
     print(f"\n=== {ds['id']} ===")
     if not args.dry_run:
         dl.mkdir(parents=True, exist_ok=True)
+    refresh = bool(getattr(args, "refresh_web", False))
 
     # 1. archive FIRST (download/ is excluded regardless of order)
     if not args.no_archive:
         try:
-            print(f"  [archive] {build_archive(ds['dir'], folder, dl / f'{folder}_web.zip', args.force, args.dry_run)}")
+            print(f"  [archive] {build_archive(ds['dir'], folder, dl / f'{folder}_web.zip', args.force or refresh, args.dry_run)}")
         except Exception as exc:
             print(f"  [archive] FAILED: {exc}")
 
@@ -633,22 +710,31 @@ def process(ds, args):
     if ims_src is None and not (args.no_ims and args.no_tiff):
         print(f"  [.ims] not found in RAW_DATA for '{folder}' — skipping ims/tiff/mip")
 
+    tiff_out = dl / f"{folder}.tif"
+    # Decided before step 2 re-links the .ims, which is what records the source.
+    from_new_source = refresh and ims_src is not None and source_changed(
+        ims_src, dl / f"{folder}.ims",
+        [tiff_out] + sorted(q for q in (dl.iterdir() if dl.is_dir() else ())
+                            if q.name.startswith(f"{folder}_C") and q.name.endswith("_MIP.png")))
+    if from_new_source:
+        print("  [.ims] the source differs from the one download/ was built from — "
+              "rebuilding the .ims, TIFF and MIPs")
+
     # 2. original .ims (hard link)
     if not args.no_ims and ims_src is not None:
         try:
-            print(f"  [.ims] {place_ims(ims_src, dl / f'{folder}.ims', args.force, args.dry_run)}")
+            print(f"  [.ims] {place_ims(ims_src, dl / f'{folder}.ims', args.force or from_new_source, args.dry_run)}")
         except Exception as exc:
             print(f"  [.ims] FAILED: {exc}")
 
     # 3/4. ImageJ composite TIFF + per-channel MIP
     if (not args.no_tiff or not args.no_mip) and ims_src is not None:
         channels_meta = ds["meta"].get("channels", [])
-        tiff_out = dl / f"{folder}.tif"
         def mip_path(ci, name):
             safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name)).strip("_") or f"C{ci+1}"
             return dl / f"{folder}_C{ci+1}_{safe}_MIP.png"
         try:
-            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, args.force, args.dry_run, args.timepoint)}")
+            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, args.force or from_new_source, args.dry_run, args.timepoint)}")
         except Exception as exc:
             print(f"  [tiff/mip] FAILED: {exc}")
         # Drop the superseded OME-TIFF only once its replacement is on disk —
@@ -660,7 +746,7 @@ def process(ds, args):
 
     # 5. README
     try:
-        print(f"  [readme] {write_readme(dl / 'README.txt', ds, ims_src, args.force, args.dry_run, args.timepoint)}")
+        print(f"  [readme] {write_readme(dl / 'README.txt', ds, ims_src, args.force or refresh, args.dry_run, args.timepoint)}")
     except Exception as exc:
         print(f"  [readme] FAILED: {exc}")
 
@@ -684,6 +770,10 @@ def main():
     ap.add_argument("--no-tiff", action="store_true")
     ap.add_argument("--no-mip", action="store_true")
     ap.add_argument("--force", action="store_true", help="rebuild artefacts that already exist")
+    ap.add_argument("--refresh-web", action="store_true",
+                    help="after a (re)publication: rebuild the web archive and the README of a "
+                         "volume, and the .ims link, TIFF and MIPs only when the source .ims "
+                         "is another file than the one download/ was built from")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 

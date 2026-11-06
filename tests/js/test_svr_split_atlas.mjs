@@ -6,7 +6,9 @@
 //     3 bytes per voxel, SVR_SPLIT defined and removed again by the next atlas;
 //   • writers keep passing RGBA voxels (components 4); the upload drops byte 3;
 //   • one, two and four channels, a compressed atlas is not split;
-//   • sub-box and block uploads are refused; a budget that refuses the RGBA layout accepts it.
+//   • sub-box and block uploads are refused; a budget that refuses the RGBA layout accepts it;
+//   • planes de-interleaved by the decode worker (writeSplitBrick) upload the very bytes an
+//     RGBA write gives; the RGBA path de-interleaves into scratch planes reused per upload.
 //
 // Run: node tests/js/test_svr_split_atlas.mjs
 import assert from 'node:assert/strict';
@@ -131,6 +133,48 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
   assert.equal(one.length, 2);
   assert.ok(one[1][10].every(v => v === 9), 'channel 2 lands in the R8 texture');
 
+  // The RGBA path reuses its scratch planes instead of allocating two per brick.
+  hw.calls.length = 0;
+  assert.equal(m.writeRgbaBrick(3, 1, 0, rgba, 66, 66, 66), true);
+  const again = hw.calls.filter(c => c[0] === 'texSubImage3D');
+  assert.equal(again[0][10].buffer, rg.buffer, 'the RG scratch plane is reused');
+  assert.equal(again[1][10].buffer, b.buffer, 'the R scratch plane is reused');
+
+  // Planes from the decode worker: the same two uploads, byte for byte.
+  const edge = [40, 33, 66];   // a cropped edge brick
+  const ne = edge[0] * edge[1] * edge[2];
+  const box = new Uint8Array(ne * 4);
+  for (let i = 0; i < ne * 4; i++) box[i] = (i * 7 + 3) & 255;
+  hw.calls.length = 0;
+  assert.equal(m.writeRgbaBrick(1, 0, 1, box, ...edge), true);
+  const viaRgba = hw.calls.filter(c => c[0] === 'texSubImage3D').map(c => ({ at: c.slice(2, 9), bytes: Buffer.from(c[10]) }));
+  const pRG = new Uint8Array(ne * 2), pR = new Uint8Array(ne);
+  for (let i = 0; i < ne; i++) { pRG[i * 2] = box[i * 4]; pRG[i * 2 + 1] = box[i * 4 + 1]; pR[i] = box[i * 4 + 2]; }
+  const fresh = new S();
+  fresh.init(3, dims, hw.renderer, material(THREE), { targetSlots: 40, components: 4, apron: 1, split: true });
+  const freshRgba = new S();
+  freshRgba.init(3, dims, hw.renderer, material(THREE), { targetSlots: 40, components: 4, apron: 1, split: true });
+  hw.calls.length = 0;
+  assert.equal(freshRgba.writeRgbaBrick(1, 0, 1, box, ...edge), true);
+  const ref = hw.calls.filter(c => c[0] === 'texSubImage3D').map(c => ({ at: c.slice(2, 9), bytes: Buffer.from(c[10]) }));
+  hw.calls.length = 0;
+  assert.equal(fresh.writeSplitBrick(1, 0, 1, [pRG, pR], ...edge, null), true);
+  const viaPlanes = hw.calls.filter(c => c[0] === 'texSubImage3D').map(c => ({ at: c.slice(2, 9), bytes: Buffer.from(c[10]) }));
+  assert.equal(viaPlanes.length, 2, 'one upload per texture');
+  for (let k = 0; k < 2; k++) {
+    assert.deepEqual(viaPlanes[k].at, ref[k].at, `plane ${k}: same slot box as the RGBA write`);
+    assert.equal(Buffer.compare(viaPlanes[k].bytes, ref[k].bytes), 0, `plane ${k}: same bytes as the RGBA write`);
+    assert.equal(Buffer.compare(viaRgba[k].bytes, ref[k].bytes), 0, `plane ${k}: the reused scratch gives the same bytes`);
+  }
+  assert.ok(fresh.has(1, 0, 1), 'the page table points at the brick');
+  assert.equal(fresh.writeSplitBrick(2, 0, 1, [pRG, pR.subarray(1)], ...edge), false, 'planes that do not hold the box are refused');
+  assert.equal(fresh.writeSplitBrick(2, 0, 1, [pRG], ...edge), false, 'two planes or nothing');
+  assert.equal(fresh.writeSplitBrick(2, 0, 1, [pRG, pR], 67, 1, 1), false, 'a box larger than a slot is refused');
+  fresh.dispose();
+  freshRgba.dispose();
+  assert.equal(freshRgba._splitRG, null, 'dispose drops the scratch planes');
+  assert.equal(freshRgba._splitR, null);
+
   assert.equal(m.writeRgbaBrickRegion(0, 1, 1, new Uint8Array(8), 0, 0, 0, 2, 2, 1), false, 'sub-box uploads are refused');
   assert.equal(m.writeEncodedBrick(0, 0, 0, { width: 68, height: 68, depth: 66, planes: [] }), false, 'blocks are for compressed atlases');
 
@@ -138,6 +182,7 @@ const dims = { x: 300, y: 260, z: 140, apron: 1, brickStride: 66 };
   const plain = new S();
   plain.init(3, dims, hw.renderer, mat, { targetSlots: 40, components: 4, apron: 1 });
   assert.equal(plain.split, false, 'split is opt-in');
+  assert.equal(plain.writeSplitBrick(0, 0, 0, [new Uint8Array(2), new Uint8Array(1)], 1, 1, 1), false, 'planes are for split atlases');
   assert.ok(!('SVR_SPLIT' in mat.defines), 'an RGBA atlas clears SVR_SPLIT');
   m.dispose();
   assert.ok(hw.calls.some(c => c[0] === 'deleteTexture'), 'dispose deletes the pages');

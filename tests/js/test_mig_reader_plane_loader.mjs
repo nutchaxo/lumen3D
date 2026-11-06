@@ -149,7 +149,7 @@ export function mockFetch(files, opts = {}) {
 export function loadPlaneLoader(fetchImpl, extra = {}) {
   return loadModule('js/core/plane-loader.js', 'PlaneLoader', {
     fetch: fetchImpl, Worker: VmWorker, PlaneCodec, Response, DOMException, crypto: webcrypto,
-    navigator: { hardwareConcurrency: 4 }, Promise, ...extra
+    navigator: { hardwareConcurrency: 4 }, Promise, AbortController: globalThis.AbortController, ...extra
   });
 }
 
@@ -348,8 +348,12 @@ async function main() {
     const got = await tree.loadRegion(2, [0, 1, 2], r);
     [0, 1, 2].forEach((c, i) => sameBytes(got.data[i], expectRegion(2, c, r), `200 answer, c${c}`));
     assert.equal(tree.isRangeless(), true, 'the tree stops asking for ranges');
+    // The shared header read is a Range request: its 200 answer is dropped at the headers
+    // (a whole pack is never downloaded by a read no caller can cancel), then one whole-pack
+    // read under the caller's signal serves the header and the tiles.
     const packReqs = f.log.filter(e => e.path.endsWith('z00002.bin'));
-    assert.equal(packReqs.length, 1, 'the whole pack served the header and the tiles');
+    assert.equal(packReqs.length, 2, 'one dropped header probe, then the whole pack served the header and the tiles');
+    assert.ok(packReqs[0].range && !packReqs[1].range, 'the probe asked a range, the second read the whole pack');
     const mip = await tree.loadRegionMax([0, 1], [2], r);
     const exp = new Uint8Array((r.x1 - r.x0) * (r.y1 - r.y0));
     for (let i = 0; i < exp.length; i++) {

@@ -58,8 +58,9 @@ function page({ manifest, quality = '512x512', withRenderer = true }) {
   const body = `
     let _brickManifest = env.manifest;
     let _qualityMode = env.quality;
+    let _qualityOptionsKey = null;
     const datasetMeta = null;
-    function _t(k, f) { return f; }
+    function _t(k, f) { return env.native && k === 'viewer.native' ? env.native : f; }
     ${liftConst(pageSrc, 'QUALITY_KEYS_V3')}
     ${liftConst(pageSrc, 'QUALITY_KEYS_V2')}
     const QUALITY_COLUMN_LABELS = {};
@@ -68,8 +69,9 @@ function page({ manifest, quality = '512x512', withRenderer = true }) {
       '_normalizeQualityParam', '_qualityDimsLabel', '_qualityDims'].map(n => lift(pageSrc, n)).join('\n')}
     return { update: _updateQualityOptionLabels, levels: _qualityLevels, lodFor: _lodForQuality, valueFor: _qualityValueForLod, show: _showQualityInSelect };
   `;
-  const api = new Function('env', 'document', 'VolumeViewer', body)({ manifest, quality }, document, VolumeViewer);
-  return { api, select, rv };
+  const env = { manifest, quality, native: null };
+  const api = new Function('env', 'document', 'VolumeViewer', body)(env, document, VolumeViewer);
+  return { api, select, rv, env };
 }
 
 // A v3 pyramid of the 5735² reference dataset (X, Y halved; Z halved once XY catch up).
@@ -87,6 +89,22 @@ const v3 = { schema: 'iribhm-bricks-v3', version: 3, levels: v3Levels };
     ['512x512', '512 (717x717x43)']
   ], 'the SPEC §13.7 presets, labelled with the real dimensions');
   assert.equal(select.value, '512x512');
+  // Every timepoint load calls the update: the same offer keeps the same option nodes
+  // (an open list or a focused select is not torn down), a new label rebuilds them.
+  const before = select.options.slice();
+  select.value = 'native';
+  api.update();
+  assert.ok(select.options.length === before.length && select.options.every((o, i) => o === before[i]), 'an unchanged offer keeps its options');
+  assert.equal(select.value, '512x512', 'the selection is still set from the page quality');
+  {
+    const lang = page({ manifest: v3 });
+    lang.api.update();
+    const first = lang.select.options.slice();
+    lang.env.native = 'Natif';
+    lang.api.update();
+    assert.notEqual(lang.select.options[0], first[0], 'a language change rebuilds the options');
+    assert.equal(lang.select.options[0].textContent, 'Natif (5735x5735x172)');
+  }
   for (const q of ['512x512', '1024x1024', 'native', '256x256']) {
     assert.equal(api.lodFor(q), rv.lodFor(q, v3), `${q}: the page loads the renderer's level`);
   }

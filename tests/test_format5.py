@@ -262,6 +262,47 @@ class Writer(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_yz_groups_plan(self):
+        # 300 columns = 5 blocks (the last one 44 wide); 37 × 90 × 64 bytes per block.
+        shape = (37, 90, 300)
+        per_block = f5.ORTH_ROWS * 90 * 37
+        self.assertEqual(f5.yz_groups(shape, workers=1, budget=10 ** 9), [(0, 5)])
+        self.assertEqual(f5.yz_groups(shape, workers=2, budget=10 ** 9), [(0, 3), (3, 5)])
+        self.assertEqual(f5.yz_groups(shape, workers=1, budget=2 * per_block), [(0, 2), (2, 4), (4, 5)])
+        self.assertEqual(f5.yz_groups(shape, workers=1, budget=per_block - 1),
+                         [(b, b + 1) for b in range(5)])
+        self.assertEqual(f5.yz_groups((37, 90, 0), workers=1), [])
+        for workers in (1, 3, 8):
+            for budget in (1, per_block, 3 * per_block, 10 ** 9):
+                runs = f5.yz_groups(shape, workers=workers, budget=budget)
+                self.assertEqual([b for b0, b1 in runs for b in range(b0, b1)], list(range(5)))
+
+    def test_yz_group_packs_match_single_blocks(self):
+        rng = np.random.default_rng(23)
+        D, H, W = 37, 90, 300
+        vol = rng.integers(0, 256, (D, H, W), dtype=np.uint8)
+        vol[:, :, 64:128] = 0
+        path = write_raw(self.tmp, [vol])[0]
+        shape = (D, H, W)
+        blocks = f5.orth_blocks(W)
+        ref = []
+        for b in range(blocks):
+            dest = self.tmp / "ref" / ("b%d.bin" % b)
+            f5.orth_task((path, shape, "yz", b, str(dest)))
+            ref.append(dest.read_bytes())
+        for runs in ([(0, blocks)], [(0, 2), (2, 5)], [(b, b + 1) for b in range(blocks)],
+                     f5.yz_groups(shape, workers=1, budget=2 * f5.ORTH_ROWS * H * D)):
+            out = self.tmp / ("g%d" % len(runs))
+            total = 0
+            for b0, b1 in runs:
+                dests = [str(out / ("b%d.bin" % b)) for b in range(b0, b1)]
+                total += f5.yz_group_task((path, shape, b0, b1, dests))
+            got = [(out / ("b%d.bin" % b)).read_bytes() for b in range(blocks)]
+            self.assertEqual(got, ref, runs)
+            self.assertEqual(total, sum(len(r) for r in ref))
+        first, count, _ta, _tz, _e = f5.parse_orth_pack(ref[4], "yz")
+        self.assertEqual((first, count), (256, 44))
+
     def test_tree_decodes_to_references(self):
         rng = np.random.default_rng(11)
         X, Y, Z = 300, 270, 40

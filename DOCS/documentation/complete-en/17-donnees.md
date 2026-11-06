@@ -162,12 +162,12 @@ Channel settings are kept when a dataset is rebuilt **as long as the number of c
 | Block | Real content of the demonstration dataset |
 |---|---|
 | `timeline` | `{count:4, intervalMinutes:30.0, timestamps:["2026-05-12T09:00:00", …]}` |
-| `intensityNormalization` | `{mode:"global", bounds:{c0:{bgFloor, sigMax}, c1:{…}}, signalLevels:{"t000_c0":33107.0, …}}`: the common window of the whole series and one signal level per frame and channel |
+| `intensityNormalization` | `{mode:"global", bounds:{c0:{bgFloor, sigMax}, c1:{…}}, signalLevels:{"t000_c0":33107.0, …}, signalBasis:{c0:"above-floor", …}}`: the common window of the whole series, one signal level per frame and channel, and what each channel's levels were ranked over |
 | `tracking` | `{schema:"iribhm-tracks-v1", source, tracksPath:"tracks.json", surfacePath:"model.glb", surfaceOrigin:"reconstructed", cellCount:50, timepointCount:4, mitosisCount:1, fusionCount:0, regions:[{name, cells, color}], boundsUm:{stabilized, raw}, provenance:{…}, alignment:{…}}` |
 | `registration` | `{method:"tracking-procrustes", coordinateSpace:"acquisition-um", timepointOffset:-1, appliedToVolume:true, transforms:[…], qcSummary:{…}, imageBoxUnionUm:{…}}` |
 
 ::: note
-**About `intensityNormalization`.** The pipeline records these levels "so that an optional setting can one day compensate for photobleaching". **No viewer setting reads them yet**: a series whose signal fades really does display darker.
+**About `intensityNormalization`.** The pipeline records these levels "so that an optional setting can one day compensate for photobleaching". **No viewer setting reads them yet**: a series whose signal fades really does display darker. The *Graphs* tool plots them (signal over time, bleaching curve). A level is the 99.9th percentile of the frame's raw subsample, ranked over the channel's `signalBasis`: `above-floor` (only the voxels brighter than the noise floor, chosen when the pooled series holds at least 1000 of them) or `volume` (every voxel). The basis is chosen once per channel, so every frame is measured the same way, and an `above-floor` level follows how bright the signal is rather than how much of the frame the specimen fills. A series processed before pipeline 0.23.1 has no `signalBasis`: its levels are whole-volume percentiles, which drift with the specimen's share of a sparse frame — reprocess it for a trustworthy bleaching curve.
 :::
 
 The `tracking` block has three useful sub-blocks:

@@ -1730,6 +1730,13 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
                 lumen_mig_save_journal($path, $j);
             }
         }
+        if ($m['id'] === LUMEN_M006 && $j !== null && ($j['state'] ?? null) === 'assembling' && !empty($plan['v6'])) {
+            // Interrupted between the v6 manifest (commit point) and the "swapped" save: the
+            // journal still holds oldManifestSha, which the re-stamp of planes/ and mips/ needs.
+            $j['state'] = 'swapped';
+            unset($j['assembly']);
+            lumen_mig_save_journal($path, $j);
+        }
         if ($j !== null && ($j['state'] ?? null) !== 'swapped') {
             try {
                 lumen_mig_check_source($plan, $j, $path, false);
@@ -1783,7 +1790,8 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
             foreach ($ts as $t) $src[(string)$t] = $plan['sha'];
             $j = ['migration' => $m['id'], 'dataset' => $plan['dataset'], 'createdAt' => lumen_mig_now(),
                   'sourceManifests' => $src, 'units' => ['total' => $us['total'], 'empty' => $us['empty']],
-                  'done' => [], 'executors' => ['browser' => 0, 'server' => 0], 'state' => 'running'];
+                  'done' => [], 'executors' => ['browser' => 0, 'server' => 0], 'state' => 'running',
+                  'jobId' => bin2hex(random_bytes(8))];
             if ($us['inputs']) $j['inputManifests'] = $us['inputs'];
             lumen_mig_save_journal($path, $j);
         }
@@ -1899,6 +1907,11 @@ function lumen_mig_unit_put($datasetId, $mid, $key, bool $dry, ?string $body = n
         return $out;
     }
     [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
+    return lumen_mig_unit_put_any($plan, $m, $path, $key, $body);
+}
+
+/** unit_put of an opened job (dataset_migrations._unit_put_any); $body null = php://input. */
+function lumen_mig_unit_put_any(array $plan, array $m, string $path, $key, ?string $body): array {
     $mid = $m['id'];
     if ($mid === LUMEN_M005) return lumen_m005_unit_put($plan, $m, $path, $key, $body ?? (string)lumen_mig_read_body(false));
     if ($mid === LUMEN_M006) return lumen_m006_unit_put($plan, $m, $path, $key, $body ?? (string)lumen_mig_read_body(false));
@@ -3170,12 +3183,16 @@ function lumen_mig_cancel($datasetId, $mid): array {
             if (is_dir("$dir/$oldName")) @rename("$dir/$oldName", "$dir/$liveName");
         }
         if ($m['id'] === LUMEN_M006 && $j !== null) {
-            // q30 files written before the commit point are in no manifest yet: removed.
+            $live = null;
             try {
                 $live = lumen_mig_plan_for("$type/$folder");
-                if (empty($live['v6'])) lumen_m006_drop_columns($live, ['q30']);
             } catch (LumenMigError $e) {
             }
+            // The v6 manifest (the commit point) is live while the journal is not yet
+            // "swapped": only finishing re-stamps planes/ and mips/ (oldManifestSha).
+            if ($live !== null && !empty($live['v6'])) throw new LumenMigError('finalize_in_progress', 409);
+            // q30 files written before the commit point are in no manifest yet: removed.
+            if ($live !== null) lumen_m006_drop_columns($live, ['q30']);
         }
         lumen_mig_rrmdir(lumen_mig_store_dir($type, $folder, $m['id']));
         lumen_mig_rrmdir("$dir/$inc");
@@ -3454,7 +3471,6 @@ function lumen_mig_handle(string $action, array $params, array $body, ?string $r
                 $rawPart = $raw ?? lumen_mig_read_body(false);
                 if (strlen((string)$rawPart) > LUMEN_MIG_MAX_BODY) throw new LumenMigError('body_too_large', 413);
                 [$m, $plan, $path] = lumen_mig_open_job($params['dataset'] ?? null, $params['migration'] ?? null);
-                if ($m['id'] !== LUMEN_M005 && $m['id'] !== LUMEN_M006) throw new LumenMigError('not_applicable', 409, 'pieces are an m005 / m006 protocol');
                 return [200, lumen_m005_unit_put_part($plan, $m, $path, $params['unit'] ?? null, $params['offset'] ?? null, $params['total'] ?? null, (string)$rawPart)];
             case 'speedtest':
                 return [200, lumen_mig_speedtest($body['maxSeconds'] ?? 1.0)];

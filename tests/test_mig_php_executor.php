@@ -90,7 +90,7 @@ try {
     check('plan: 16 units, 2 empty, counted as done', $code === 200 && $plan['total'] === 16 && $plan['empty'] === 2 && $plan['done'] === 2 && $plan['pending'] === 14 && count($plan['units']) === 14, json_encode($plan));
     check('plan: unit keys in tuple order', $plan['units'][0] === 't0.z0.c0.y0.x0' && $plan['units'][13] === 't0.z1.c1.y1.x1');
     $j = journal('3d', 'synthA');
-    check('journal: spec + twin fields', array_keys($j) === ['migration', 'dataset', 'createdAt', 'sourceManifests', 'units', 'done', 'executors', 'state', 'updatedAt'] && $j['done'] === []);
+    check('journal: spec + twin fields', array_keys($j) === ['migration', 'dataset', 'createdAt', 'sourceManifests', 'units', 'done', 'executors', 'state', 'jobId', 'updatedAt'] && $j['done'] === [] && preg_match('/^[0-9a-f]{16}$/', $j['jobId']) === 1);
     check('journal: source manifest sha', $j['sourceManifests'] === ['0' => hash_file('sha256', "$dir3d/bricks/manifest.json")]);
     check('journal: lock file named after the job', is_file(lumen_mig_root() . '/3d__synthA__m002-planes.lock'));
     [$code2, $plan2] = api('plan', ['dataset' => '3d/synthA', 'migration' => 'm002-planes', 'offset' => 3, 'limit' => 2]);

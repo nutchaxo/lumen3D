@@ -7,6 +7,8 @@
 //   • the cap is configurable, and raising it lets the waiting bodies start;
 //   • a dataset switch aborts the bodies in flight AND empties the queue: the next
 //     dataset starts its four bodies at once.
+//   • maxConcurrency caps every batch, its own `concurrency` included, and survives a
+//     configure() that does not name it; DEFAULTS are what a fresh loader holds.
 //
 // Run: node tests/js/test_brick_loader_sockets.mjs
 import assert from 'node:assert/strict';
@@ -139,4 +141,53 @@ const landAll = async (started) => {
   assert.equal(started.length, 4 + N, 'the new dataset fetched each of its packs once');
 }
 
-console.log('BrickLoader pack-fetch slots (four bodies in flight · configurable · freed on a dataset switch): OK');
+// ── 4. maxConcurrency caps a batch whatever concurrency it asks for ──────────
+// A Compare panel is told its share of the decodes; every volume load then asks for
+// its own per-quality concurrency (32 at 512/1024), which used to win over the share.
+// With no lookahead and slots to spare, each running task fetches its own pack, so
+// the bodies started at once are the tasks in flight.
+{
+  const { BL, started } = makeLoader(makeWorld());
+  BL.configure({ packFetchSlots: 16, lookaheadBytes: 0, maxConcurrency: 3, concurrentLoads: 32 });
+  assert.equal(BL.getSettings().maxConcurrency, 3, 'the cap is recorded');
+  const rows = [];
+  const capped = BL.loadBrickTasks(tasks(), { concurrency: 32, onBrickLoaded: (r) => rows.push(r) }).catch((e) => e);
+  await settle();
+  assert.equal(started.length, 3, 'a batch asking for 32 runs three tasks at once under maxConcurrency 3');
+  await landAll(started);
+  const r = await capped;
+  assert.ok(!(r instanceof Error), `the capped batch completes (${r?.message || 'ok'})`);
+  assert.equal(rows.length, N, 'every brick delivered under the cap');
+
+  BL.configure({ concurrentLoads: 32 });
+  assert.equal(BL.getSettings().maxConcurrency, 3, 'a later configure() without the key keeps the cap (a volume load resets concurrentLoads)');
+
+  BL.configure({ maxConcurrency: null });
+  assert.equal(BL.getSettings().maxConcurrency, Infinity, 'null lifts the cap (a lone page)');
+  const before = started.length;
+  const free = load(BL);
+  await settle();
+  assert.equal(started.length - before, N, 'without the cap the batch runs every task at once');
+  await landAll(started);
+  await free.done;
+  assert.equal(free.rows.length, N);
+
+  BL.configure({ maxConcurrency: 0 });
+  assert.equal(BL.getSettings().maxConcurrency, Infinity, '0 lifts the cap too');
+  BL.configure({ maxConcurrency: 1e9 });
+  assert.equal(BL.getSettings().maxConcurrency, 96, 'clamped like concurrentLoads');
+}
+
+// ── 5. DEFAULTS are what configure() starts from ─────────────────────────────
+{
+  const { BL } = makeLoader(makeWorld());
+  const d = BL.DEFAULTS;
+  assert.ok(Object.isFrozen(d), 'DEFAULTS cannot be changed by a caller');
+  const s = BL.getSettings();
+  for (const key of ['concurrentLoads', 'packFetchSlots', 'packCacheBytes', 'rangeCacheBytes', 'prefetchCacheBytes']) {
+    assert.equal(d[key], s[key], `DEFAULTS.${key} is the setting a fresh loader holds`);
+  }
+  assert.equal(s.maxConcurrency, Infinity, 'a lone page has no cap');
+}
+
+console.log('BrickLoader pack-fetch slots (four bodies in flight · configurable · freed on a dataset switch) + concurrency cap: OK');

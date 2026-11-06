@@ -178,10 +178,10 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   }
   assert.ok(/id="zstack-spin"[^>]*min="0" max="360"/.test(read('viewer.html')), 'the spin slider spans a full turn');
   const zs = JSON.parse(read('js/modules/tools/zstack-browser/plugin.json'));
-  assert.equal(zs.version, '1.2.2');
+  assert.equal(zs.version, '1.2.3');
   assert.equal(zs.platformCompat, '>=1.55.9', 'the browser needs the core that knows spin tilt');
   const ori = JSON.parse(read('js/modules/tools/orientation-axes/plugin.json'));
-  assert.equal(ori.version, '1.3.4');
+  assert.equal(ori.version, '1.3.5');
   assert.equal(ori.platformCompat, '>=1.73.12', 'the gizmo centre needs the core that reports the mass centre');
 }
 

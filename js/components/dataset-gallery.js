@@ -40,7 +40,11 @@ const DatasetGallery = (() => {
   let _restoreState = 'open';
   let _lightbox = null;
   let _index = 0;
+  let _lastDelta = 1;
   let _lastFocus = null;
+  // item → its tile. Tiles are looked up by item, never by position: once an image
+  // that failed has been dropped, a grid position no longer names the same item.
+  let _tiles = new Map();
 
   function _t(key, fallback) {
     if (typeof I18n === 'undefined') return fallback;
@@ -220,21 +224,18 @@ const DatasetGallery = (() => {
     const dock = _dock || _buildDock();
 
     dock.grid.textContent = '';
+    _tiles = new Map();
     // A dataset with no attached image shows no dock at all — not even the puce:
     // the canvas stays as sparse as it was before the feature existed (Rule 1.3).
     dock.root.hidden = _items.length === 0;
     if (!_items.length) { close(); return; }
 
-    const n = String(_items.length);
-    dock.count.textContent = n;
-    dock.chipCount.textContent = n;
+    _syncCounts();
 
-    _items.forEach((item, i) => {
+    _items.forEach((item) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'gallery-thumb';
-      btn.setAttribute('aria-label', _label(item, i));
-      btn.title = _label(item, i);
 
       const img = document.createElement('img');
       const thumb = _thumbUrlFor(item);
@@ -244,19 +245,69 @@ const DatasetGallery = (() => {
       img.decoding = 'async';
       // A missing thumbnail falls back to the original once. A file removed from the
       // folder behind the viewer's back must not leave a broken-image tile: drop the
-      // whole tile instead (Rule 1.1 — degrade, never show a half-rendered state),
+      // whole image instead (Rule 1.1 — degrade, never show a half-rendered state),
       // and drop the dock once nothing is left.
       let triedFull = !thumb;
       img.addEventListener('error', () => {
         if (!triedFull) { triedFull = true; img.src = _urlFor(item); return; }
-        btn.remove();
-        if (!dock.grid.childElementCount) dock.root.hidden = true;
+        _dropItem(item);
       });
 
       btn.appendChild(img);
-      btn.addEventListener('click', () => open(i));
+      btn.addEventListener('click', () => open(_items.indexOf(item)));
       dock.grid.appendChild(btn);
+      _tiles.set(item, btn);
     });
+    _syncTileLabels();
+  }
+
+  function _syncCounts() {
+    if (!_dock) return;
+    const n = String(_items.length);
+    _dock.count.textContent = n;
+    _dock.chipCount.textContent = n;
+  }
+
+  // An untitled image is named by its position, which moves when one before it is dropped.
+  function _syncTileLabels() {
+    _items.forEach((item, i) => {
+      const btn = _tiles.get(item);
+      if (!btn) return;
+      const label = _label(item, i);
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+    });
+  }
+
+  // An image whose file is gone (removed from the folder behind the metadata) leaves
+  // the gallery entirely: tile, count, lightbox navigation and counter. The list is
+  // the one source of truth, so nothing can still step onto it.
+  function _dropItem(item) {
+    const at = _items.indexOf(item);
+    if (at < 0) return;
+    _items.splice(at, 1);
+    const btn = _tiles.get(item);
+    _tiles.delete(item);
+    if (btn) btn.remove();
+
+    if (!_items.length) {
+      if (_dock) _dock.root.hidden = true;
+      close();
+      return;
+    }
+    _syncCounts();
+    _syncTileLabels();
+
+    if (!_lightbox || _lightbox.root.hidden) return;
+    if (at < _index) {
+      _index -= 1;
+    } else if (at === _index) {
+      // The image on screen was the missing one: carry on in the direction the
+      // reader was going, so ← does not bounce them forward.
+      const n = _items.length;
+      _index = _lastDelta < 0 ? (at - 1 + n) % n : at % n;
+    }
+    _paint();
   }
 
   // ── Lightbox ──────────────────────────────────────────────────
@@ -273,6 +324,15 @@ const DatasetGallery = (() => {
     const img = document.createElement('img');
     img.className = 'gallery-lb-img';
     img.alt = '';
+    // A tile below the fold is lazy and may never have tried its file, so the
+    // lightbox is often the first to learn an image is gone. The src check keeps a
+    // late event of an image already replaced from dropping the one now on screen.
+    img.addEventListener('error', () => {
+      const item = _items[_index];
+      if (!_lightbox || _lightbox.root.hidden || !item) return;
+      if (img.getAttribute('src') !== _urlFor(item)) return;
+      _dropItem(item);
+    });
     stage.appendChild(img);
 
     const caption = document.createElement('div');
@@ -341,6 +401,7 @@ const DatasetGallery = (() => {
   function open(index) {
     if (!_items.length) return;
     _index = Math.max(0, Math.min(_items.length - 1, index | 0));
+    _lastDelta = 1;
     const lb = _lightbox || _buildLightbox();
     _lastFocus = document.activeElement;
     lb.root.hidden = false;
@@ -352,6 +413,7 @@ const DatasetGallery = (() => {
 
   function step(delta) {
     if (!_items.length) return;
+    _lastDelta = delta < 0 ? -1 : 1;
     _index = (_index + delta + _items.length) % _items.length;
     _paint();
   }
@@ -367,7 +429,7 @@ const DatasetGallery = (() => {
     // _lastFocus — fall back to the tile of the image that was on screen.
     const restore = (_lastFocus && _lastFocus !== document.body && _lastFocus.isConnected)
       ? _lastFocus
-      : _dock?.grid.querySelectorAll('.gallery-thumb')[_index];
+      : _tiles.get(_items[_index]);
     if (restore && typeof restore.focus === 'function') restore.focus();
     _lastFocus = null;
   }

@@ -362,6 +362,11 @@ PluginRegistry.implement('zstack-browser', {
     on($('btn-zstack-thk-plus'), 'click', () => this._setThickness(this._thickness + 1));
     on($('zstack-thickness-input'), 'change', (e) => this._setThickness(Number(e.target.value) || 1));
     on($('btn-zstack-crop-reset'), 'click', () => this._resetCrop());
+    // Enter / Space on the notch. A pointer press is the drag of _startDrag (and its
+    // click lands on the captured slider, not here); only a key click has detail 0.
+    on($('zstack-notch'), 'click', (e) => {
+      if (e.detail === 0 && this._ctx._state.zstackActive) this._enter3d();
+    });
     on($('btn-zstack-studio'), 'click', () => this._ctx.ui.openStudio());
     on($('zstack-spin'), 'input', (e) => this._setSpin(e.target.value));
 
@@ -436,7 +441,10 @@ PluginRegistry.implement('zstack-browser', {
     if (E.thkInput) E.thkInput.title = t('thicknessTitle');
     if (E.spinLabel) E.spinLabel.textContent = t('spin');
     if (E.spin) { E.spin.title = t('spinTitle'); E.spin.setAttribute('aria-label', t('spin')); }
-    if (E.root) E.root.setAttribute('aria-label', t('title'));
+    if (E.root) {
+      E.root.setAttribute('aria-label', t('title'));
+      E.root.setAttribute('aria-description', t('keysHelp'));
+    }
     const notchText = E.notch?.querySelector?.('span');
     if (notchText) notchText.textContent = t('notch');
   },
@@ -523,9 +531,27 @@ PluginRegistry.implement('zstack-browser', {
     this._els.root.classList.remove('zs-dragging');
   },
 
+  /** Move a trim boundary by `delta` slices: 'top' = first kept slice, 'bottom' = last. */
+  _moveTrim(edge, delta) {
+    const { z } = this._getDims();
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    if (edge === 'top') this._cropLo = clamp(this._cropLo + delta, 0, this._cropHi);
+    else this._cropHi = clamp(this._cropHi + delta, this._cropLo, z - 1);
+    this._clampFields();
+    this._apply();
+  },
+
   _onKey(e) {
     if (!this._ctx._state.zstackActive) return;
     const { z } = this._getDims();
+    // Shift+↑/↓ moves the upper trim, Alt+↑/↓ the lower one, each in the arrow's
+    // direction on the track (the first slice is at the top).
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && (e.shiftKey || e.altKey)
+        && !(e.shiftKey && e.altKey) && !e.ctrlKey && !e.metaKey) {
+      this._moveTrim(e.shiftKey ? 'top' : 'bottom', e.key === 'ArrowUp' ? -1 : 1);
+      e.preventDefault();
+      return;
+    }
     switch (e.key) {
       case 'ArrowUp': this._nudge(-1); break;
       case 'ArrowDown': this._nudge(1); break;

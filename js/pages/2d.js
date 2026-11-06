@@ -17,7 +17,6 @@
 const App2D = (() => {
   const TYPE = '2d';
   const LOAD_STATE_LINGER_MS = 900;
-  const STAGING_PREFIX = 'staging:';
 
   let _collection = [];
   let _meta = null;
@@ -62,12 +61,15 @@ const App2D = (() => {
   }
 
   async function _init() {
+    // The catalog needs neither the instance config nor the translations: its
+    // request runs beside them (Catalog.load() never rejects).
+    const catalogReady = Catalog.load();
     await InstanceConfig.load();
     Theme.init();
     await I18n.init();
     InstanceConfig.applyHead();
     InstanceConfig.applyDom();
-    await Catalog.load();
+    await catalogReady;
     if (window.lucide) lucide.createIcons();
     _updateThemeIcon();
     Theme.onChange(_updateThemeIcon);
@@ -111,6 +113,14 @@ const App2D = (() => {
       _setSidebarHidden(true);
       _suppressSidebarSync = false;
       _bindPaneNav();
+    } else if (!_headless && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 700px)').matches) {
+      // On a phone the 320 px sidebar leaves the photograph a strip about 55 px wide:
+      // the picture gets the screen first and the hamburger button brings the
+      // controls back (same threshold as the volume viewer). A restored workspace,
+      // applied after the load, still decides last. Headless (the admin preview, a
+      // narrow iframe on a laptop) hides the header and its hamburger, so folding
+      // there would leave the controls with no way back.
+      _setSidebarHidden(true);
     }
     // A host must not be told the panel is ready before the photograph is on
     // screen, or its Studio would capture the upscaled preview. A photograph
@@ -251,9 +261,7 @@ const App2D = (() => {
   // Published bytes live under DATA_WEB/; a staged import is read through the
   // admin blob proxy, whose `path` query parameter takes the file name.
   function _datasetBase(path) {
-    const p = String(path || '');
-    if (!p.startsWith(STAGING_PREFIX)) return `DATA_WEB/${p}`;
-    return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(STAGING_PREFIX.length))}&path=`;
+    return Utils.datasetBaseUrl(path);
   }
 
   function _fileUrl(base, file) {
@@ -361,58 +369,20 @@ const App2D = (() => {
     $('pane-fit').addEventListener('click', () => Viewer2D.fit());
   }
 
-  /**
-   * A plugin panel in the sidebar, placed after the measurements. Same contract
-   * as the volume viewer's `_addPluginSidebarSection` — {id, title, html,
-   * hidden, bind} in, {root, body, setTitle, setHtml, show, hide, remove} out —
-   * so a plugin written for both pages needs no branching. `section` is kept as
-   * an alias of `root` for the plugins that destructure it.
-   */
-  /** A floating panel over the photograph's stage (same contract as the volume viewer's). */
+  /** A floating panel over the photograph's stage (Utils.mountPluginPanel, as in the volume viewer). */
   function _addCanvasPanel(def = {}) {
-    const stage = $('p2d-canvas')?.parentElement;
-    if (!stage || !def.id) return null;
-    const safeId = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
-    document.getElementById(`plugin-panel-${safeId}`)?.remove();
-    const root = document.createElement('div');
-    root.className = `scientific-panel ${def.className || ''}`.trim();
-    root.id = `plugin-panel-${safeId}`;
-    if (def.style) root.style.cssText = def.style;
-    root.innerHTML = def.html || '';
-    stage.appendChild(root);
-    if (window.lucide) lucide.createIcons({ nodes: [root] });
-    const handle = {
-      root,
-      setHtml(html) { root.innerHTML = html; if (window.lucide) lucide.createIcons({ nodes: [root] }); },
-      show() { root.classList.add('visible'); },
-      hide() { root.classList.remove('visible'); },
-      toggle(force) { return root.classList.toggle('visible', force); },
-      isVisible() { return root.classList.contains('visible'); },
-      remove() { root.remove(); }
-    };
-    if (typeof def.bind === 'function') def.bind(root, handle);
-    return handle;
+    return Utils.mountPluginPanel($('p2d-canvas')?.parentElement, def);
   }
 
+  /**
+   * A plugin panel at the end of the sidebar (Utils.mountPluginSection: {id, title,
+   * html, hidden, bind} in, {root, section, body, setTitle, setHtml, show, hide,
+   * remove} out). The id is optional here and kept as the plugin gave it (sanitised),
+   * without the volume viewer's prefix.
+   */
   function _addSidebarSection(def = {}) {
-    const label = Utils.el('span', {}, def.title || '');
-    const body = Utils.el('div', { class: 'p2d-plugin-body' });
-    const root = Utils.el('div', def.id ? { class: 'panel-section', id: def.id } : { class: 'panel-section' },
-      Utils.el('div', { class: 'panel-title' }, label), body);
-    body.innerHTML = def.html || '';
-    if (def.hidden) root.hidden = true;
-    $('viewer-sidebar').insertBefore(root, $('gallery-section'));
-    if (window.lucide) lucide.createIcons({ nodes: [root] });
-    const handle = {
-      root, body, section: root,
-      setTitle(text) { label.textContent = text == null ? '' : String(text); },
-      setHtml(html) { body.innerHTML = html || ''; if (window.lucide) lucide.createIcons({ nodes: [body] }); },
-      show() { root.hidden = false; },
-      hide() { root.hidden = true; },
-      remove() { root.remove(); }
-    };
-    if (typeof def.bind === 'function') def.bind(body, handle);
-    return handle;
+    return Utils.mountPluginSection($('viewer-sidebar'), def,
+      { idPrefix: '', requireId: false, bodyClass: 'p2d-plugin-body' });
   }
 
   function _syncUrl(mode) {
@@ -724,6 +694,10 @@ const App2D = (() => {
 
   function _setSidebarHidden(hidden) {
     $('viewer-sidebar').classList.toggle('sidebar-hidden', hidden);
+    // A pane is folded from the first paint by `panel-boot` (theme-boot.js), whose rule
+    // outranks the bare sidebar: once this class carries the fold, the boot one must go
+    // or the sidebar can never open again.
+    document.documentElement.classList.remove('panel-boot');
     $('btn-hamburger').hidden = !hidden;
     // The host keeps a highlighted settings button per panel: a close made from
     // inside the pane (its own collapse button) has to reach it. One the host
@@ -826,6 +800,37 @@ const App2D = (() => {
     }
   }
 
+  /**
+   * The admin's "set the preview" button (REQUEST_SCREENSHOT): the view on screen,
+   * letterboxed into a 512 px square, as the volume viewer answers it. Any host of
+   * the page may ask, a Compare panel or the admin preview (which has no panel index).
+   * Errors travel as codes; `requestId` is echoed.
+   */
+  function _answerScreenshot(data) {
+    const requestId = typeof data?.requestId === 'string' ? data.requestId : null;
+    const reply = (msg) => window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, requestId, ...msg }, Utils.trustedTargetOrigin());
+    const canvas = _meta && typeof Viewer2D !== 'undefined' ? Viewer2D.getCanvas() : null;
+    if (!canvas) { reply({ success: false, error: 'not_ready' }); return; }
+    if (!canvas.width || !canvas.height) { reply({ success: false, error: 'no_canvas' }); return; }
+    try {
+      const size = 512;
+      const thumb = document.createElement('canvas');
+      thumb.width = size;
+      thumb.height = size;
+      const g = thumb.getContext('2d');
+      g.fillStyle = '#080a12';
+      g.fillRect(0, 0, size, size);
+      const scale = Math.min(size / canvas.width, size / canvas.height);
+      const w = canvas.width * scale;
+      const h = canvas.height * scale;
+      g.drawImage(canvas, (size - w) / 2, (size - h) / 2, w, h);
+      reply({ success: true, dataUrl: thumb.toDataURL('image/webp', 0.9) });
+    } catch (err) {
+      console.error('[App2D] Thumbnail capture failed:', err);
+      reply({ success: false, error: 'capture_failed' });
+    }
+  }
+
   function _postPanelReady() {
     if (_panelIndex === null || !_meta) return;
     const toolbar = (typeof PluginRegistry !== 'undefined' && PluginRegistry.describeToolbar)
@@ -912,7 +917,7 @@ const App2D = (() => {
     if (!loader) return;
     loader.classList.remove('hidden');
     loader.replaceChildren(
-      Utils.el('i', { 'data-lucide': 'alert-triangle', style: 'width:48px;height:48px;color:var(--color-danger)' }),
+      Utils.el('i', { 'data-lucide': 'alert-triangle', style: 'width:48px;height:48px;color:var(--color-error)' }),
       Utils.el('h3', {}, t('2d.errorTitle')),
       Utils.el('p', { class: 'text-muted' }, message),
       Utils.el('a', { href: 'explorer.html', class: 'btn btn-primary' }, t('nav.back'))
@@ -927,6 +932,7 @@ const App2D = (() => {
     applyWorkspaceState,
     getStudioSliceResult: _studioSliceResult,
     getCaptureCanvas: () => (_meta && typeof Viewer2D !== 'undefined' ? Viewer2D.getCanvas() : null),
+    _answerScreenshot,
     _isReady: () => Boolean(_meta)
   };
 })();
@@ -938,6 +944,13 @@ if (typeof window.addEventListener === 'function') window.addEventListener('mess
   const data = e.data;
   if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state) return;
   App2D.applyWorkspaceState(data.state);
+});
+
+// The thumbnail request of the admin preview is answered from boot on (`not_ready`
+// until the photograph is up), so its button never waits on a page that cannot answer.
+if (typeof window.addEventListener === 'function') window.addEventListener('message', (e) => {
+  if (!Utils.isTrustedMessageOrigin(e) || e.source !== window.parent || window.parent === window) return;
+  if (e.data?.type === 'REQUEST_SCREENSHOT') App2D._answerScreenshot(e.data);
 });
 
 document.addEventListener('DOMContentLoaded', App2D.init);

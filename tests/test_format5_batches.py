@@ -10,7 +10,9 @@ up in pieces through `unit_put_part`. Checked here, on both backends from the sa
 * `unit_put_many`: a malformed unit is refused alone, the others are stored; a stage-A unit
   counts for a later unit of the same batch; a malformed batch body is bad_blob;
 * `unit_put_part`: a piece past what was received is refused (409), a repeated piece is
-  accepted again, the last piece stores the unit;
+  accepted again, the last piece stores the unit; it serves every migration (an m004 unit in
+  pieces), a retried last piece of a stored unit is acknowledged, a piece of a stopped or
+  cancelled job is refused before anything is written;
 * a whole conversion made of batches and pieces finalizes to the same v5 tree as the server
   executor (Python) and byte for byte the same tree on PHP;
 * the PHP status announces min(32 MiB, post_max_size − 64 KiB) as maxUnitBody.
@@ -41,6 +43,7 @@ except Exception as exc:  # pragma: no cover
 
 PHP = base.PHP
 M5 = "m005-matrix"
+M4 = "m004-bricks-v3"
 DS = "3d/SYN3"
 PIECE = 40_000
 BATCH = 16
@@ -269,6 +272,90 @@ class Batches(unittest.TestCase):
                     self._bodies[k] = b
                     dm.unit_put(DS, M5, k, b)
         return self._bodies
+
+    # ── Pieces of every migration, retried last piece, piece of a stopped job ───
+
+    def _format3(self, name):
+        t = base.Tree(self.tmp / name)
+        for d in ("3d", "2d", "live"):
+            (t.data_web / d).mkdir(parents=True)
+        t.py()
+        make_3d(t.data_web, X=300, Y=200, Z=40, C=2, voxel=(0.5, 0.5, 1.6))
+        for mid in ("m002-planes", "m003-layer-mips"):
+            dm.plan_job(DS, mid)
+            while dm.unit_run(DS, mid, 20)["done"] < dm.plan_job(DS, mid)["total"]:
+                pass
+            while not dm.finalize(DS, mid).get("complete"):
+                pass
+        return t
+
+    def test_m004_pieces_retry_and_stopped_job(self):
+        py = self._format3("m4-py")
+        ph = None
+        if PHP is not None:
+            shutil.copytree(py.base, self.tmp / "m4-php")
+            ph = base.Tree(self.tmp / "m4-php")
+        py.py()
+        plan = dm.plan_job(DS, M4)
+        p = dm._plan_for(DS)
+        us = dm._unitset(p, M4)
+        store = dm.tile_store_dir("3d", "SYN3", M4)
+        bodies = {}
+        for key in plan["units"][:2]:
+            bricks, _n = dm.process_unit_m004(p, us, dm.parse_unit_key_for(M4, key), store)
+            bodies[key] = dm.build_v3_unit_blob(bricks)
+        k1, k2 = list(bodies)
+        b1 = bodies[k1]
+        cut = [0, len(b1) // 3, 2 * len(b1) // 3, len(b1)]
+        pieces = [(cut[i], b1[cut[i]:cut[i + 1]]) for i in range(3)]
+
+        # Python
+        for off, piece in pieces[:-1]:
+            self.assertEqual(dm.unit_put_part(DS, M4, k1, off, len(b1), piece)["complete"], False)
+        r = dm.unit_put_part(DS, M4, k1, pieces[-1][0], len(b1), pieces[-1][1])
+        self.assertTrue(r["ok"] and r["complete"], r)
+        # The answer of that last piece was lost: its retry is acknowledged, nothing counted twice.
+        again = dm.unit_put_part(DS, M4, k1, pieces[-1][0], len(b1), pieces[-1][1])
+        self.assertEqual(again, {"ok": True, "done": r["done"], "total": r["total"], "complete": True})
+        # A unit nobody stored keeps the 409 of a piece past what was received.
+        with self.assertRaises(dm.MigrationError) as cm:
+            dm.unit_put_part(DS, M4, k2, 1000, len(bodies[k2]), bodies[k2][1000:2000])
+        self.assertEqual((cm.exception.code, cm.exception.status), ("bad_blob", 409))
+        with self.assertRaises(dm.MigrationError) as cm:
+            dm.unit_put_part(DS, M4, k2, 0, dm.MAX_UNIT_BODY + 1, b"x")
+        self.assertEqual(cm.exception.code, "body_too_large")
+        jpath = dm.journal_path("3d", "SYN3", M4)
+        j = json.loads(jpath.read_text(encoding="utf-8"))
+        j["state"] = "failed"
+        jpath.write_text(json.dumps(j), encoding="utf-8")
+        with self.assertRaises(dm.MigrationError) as cm:
+            dm.unit_put_part(DS, M4, k2, 0, len(bodies[k2]), bodies[k2][:1000])
+        self.assertEqual(cm.exception.code, "job_not_running")
+        dm.cancel(DS, M4)
+        with self.assertRaises(dm.MigrationError) as cm:
+            dm.unit_put_part(DS, M4, k2, 0, len(bodies[k2]), bodies[k2][:1000])
+        self.assertEqual((cm.exception.code, cm.exception.status), ("no_job", 404))
+        self.assertFalse(store.exists(), "a piece after the cancel recreated the tile store")
+
+        if ph is None:
+            print("SKIP: php not found (PHP twin of m004 pieces not checked)")
+            return
+        self.assertEqual(ph.php_handle("plan", {"dataset": DS, "migration": M4})[0], 200)
+        params = {"dataset": DS, "migration": M4, "unit": k1, "total": str(len(b1))}
+        for off, piece in pieces[:-1]:
+            st, out = ph.php_handle("unit_put_part", params=dict(params, offset=str(off)), raw=piece)
+            self.assertEqual((st, out.get("complete")), (200, False), out)
+        st, out = ph.php_handle("unit_put_part", params=dict(params, offset=str(pieces[-1][0])), raw=pieces[-1][1])
+        self.assertEqual((st, out.get("ok"), out.get("complete"), out.get("done")), (200, True, True, r["done"]), out)
+        st, out = ph.php_handle("unit_put_part", params=dict(params, offset=str(pieces[-1][0])), raw=pieces[-1][1])
+        self.assertEqual((st, out), (200, again))
+        p2 = {"dataset": DS, "migration": M4, "unit": k2, "total": str(len(bodies[k2]))}
+        st, out = ph.php_handle("unit_put_part", params=dict(p2, offset="1000"), raw=bodies[k2][1000:2000])
+        self.assertEqual((st, out.get("error")), (409, "bad_blob"))
+        self.assertEqual(ph.php_handle("cancel", {"dataset": DS, "migration": M4})[0], 200)
+        st, out = ph.php_handle("unit_put_part", params=dict(p2, offset="0"), raw=bodies[k2][:1000])
+        self.assertEqual((st, out.get("error")), (404, "no_job"))
+        self.assertFalse((ph.uploads / "migrations" / f"3d__SYN3__{M4}").exists())
 
     # ── PHP ───────────────────────────────────────────────────────────────────
 

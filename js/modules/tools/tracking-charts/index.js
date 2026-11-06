@@ -227,20 +227,32 @@ PluginRegistry.implement('tracking-charts', {
 
   _ensurePlotly() {
     if (window.Plotly) return Promise.resolve(window.Plotly);
+    // The core loads it once for every plugin of the page.
+    if (typeof PluginRegistry.loadVendor === 'function') return PluginRegistry.loadVendor('plotly');
     if (this._plotly) return this._plotly;
+    // A core older than loadVendor: load it here, joining a tag another plugin has in flight.
     this._plotly = new Promise((resolve, reject) => {
       // Plotly writes its CSS into <style id="plotly.js-style-global"> at load and
       // reuses that element when it already exists. Under the nonce-locked CSP an
       // element it creates itself has no sheet (blocked), so the registry creates
       // it first with the page nonce — the plugin never sees the nonce.
       if (PluginRegistry.ensureNoncedStyle) PluginRegistry.ensureNoncedStyle('plotly.js-style-global');
-      const script = document.createElement('script');
-      script.src = this.PLOTLY_SRC;
-      script.integrity = this.PLOTLY_SRI;
-      script.crossOrigin = 'anonymous';
-      script.onload = () => (window.Plotly ? resolve(window.Plotly) : reject(new Error('Plotly did not define itself')));
-      script.onerror = () => reject(new Error('Plotly failed to load'));
-      document.head.appendChild(script);
+      let script = Array.from(document.querySelectorAll('script[data-vendor-state="loading"]'))
+        .find(s => s.getAttribute('src') === this.PLOTLY_SRC) || null;
+      if (!script) {
+        script = document.createElement('script');
+        script.src = this.PLOTLY_SRC;
+        script.integrity = this.PLOTLY_SRI;
+        script.crossOrigin = 'anonymous';
+        script.setAttribute('data-vendor-state', 'loading');
+        document.head.appendChild(script);
+      }
+      const tag = script;
+      tag.addEventListener('load', () => {
+        tag.setAttribute('data-vendor-state', 'loaded');
+        if (window.Plotly) resolve(window.Plotly); else reject(new Error('Plotly did not define itself'));
+      });
+      tag.addEventListener('error', () => { tag.remove(); reject(new Error('Plotly failed to load')); });
     }).catch(err => { this._plotly = null; throw err; });
     return this._plotly;
   },

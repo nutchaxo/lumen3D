@@ -105,3 +105,14 @@ export function openDataset(id) {
   navigateTo('datasets');
   if (_datasetOpener) _datasetOpener(id); else _pendingDataset = id;
 }
+
+// Which dataset the Datasets editor holds, for a caller about to publish or
+// discard an import from outside that tab (the dock). null until the tab mounts.
+let _openDatasetGetter = null;
+export function setOpenDatasetGetter(fn) {
+  _openDatasetGetter = (typeof fn === 'function') ? fn : null;
+}
+export function openDatasetId() {
+  if (!_openDatasetGetter) return null;
+  try { return _openDatasetGetter() || null; } catch { return null; }
+}

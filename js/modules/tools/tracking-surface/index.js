@@ -194,18 +194,21 @@ PluginRegistry.implement('tracking-surface', {
     return this._loader;
   },
 
+  // One request for the file the metadata names. 'no-cache' keeps the body in the
+  // HTTP cache but always revalidates it (a 304 when the ETag still matches): the
+  // model is tens of MB, a re-published dataset keeps its URL, and Apache sends no
+  // Cache-Control for .glb, so the default mode could reuse a stale surface.
   async _fetchModel(url) {
-    if ('DecompressionStream' in window) {
-      try {
-        const gz = await fetch(`${url}.gz`, { cache: 'no-store' });
-        if (gz.ok && gz.body) {
-          return await new Response(gz.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
-        }
-      } catch (_) { /* fall through to the plain file */ }
-    }
-    const resp = await fetch(url, { cache: 'no-store' });
+    const resp = await fetch(url, { cache: 'no-cache' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status} on ${url}`);
-    return await resp.arrayBuffer();
+    const bytes = await resp.arrayBuffer();
+    if (!/\.gz$/i.test(new URL(url, location.href).pathname)) return bytes;
+    // A server may already have applied Content-Encoding: the payload is then the
+    // GLB itself, recognised by its missing gzip magic (1f 8b).
+    const head = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+    if (head.length < 2 || head[0] !== 0x1f || head[1] !== 0x8b) return bytes;
+    if (typeof DecompressionStream === 'undefined') throw new Error('gzip model without DecompressionStream');
+    return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
   },
 
   _ensureModel() {

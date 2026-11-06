@@ -16,7 +16,7 @@
  *
  * Login throttling, the client address behind a declared proxy, the session rules
  * (strict ids, absolute 8 h expiry, sign-out of other sessions on a password change)
- * and the same-origin check for the token-less login/logout live in _admin_lib.php.
+ * and the same-origin check for the token-less login/logout/setup live in _admin_lib.php.
  */
 
 declare(strict_types=1);
@@ -73,7 +73,10 @@ switch ($action) {
 
     case 'setup':
         if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
-        $u = lumen_str($body['username'] ?? 'admin');
+        // A cross-site text/plain POST (no preflight) would otherwise claim a fresh
+        // install with a password of the attacker's choosing.
+        if (!admin_same_origin_json()) admin_json_out(['error' => 'cross_origin_refused'], 403);
+        $u =lumen_str($body['username'] ?? 'admin');
         $p = lumen_str($body['password'] ?? '');
         if ($u === null || $p === null) admin_json_out(['error' => 'bad_request'], 400);
         admin_bf_gate();

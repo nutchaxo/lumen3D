@@ -10,12 +10,13 @@
 //   • loadSlabMax = planes.loadRegionMax over every plane of the slab = brute force,
 //     for slabs that start/end mid-layer, cover exactly one layer, all of them, or none;
 //     with compose (LUT after the max) too; it reads fewer packs than the planes path;
-//   • abort rejects with AbortError.
+//   • abort rejects with AbortError;
+//   • a pack failing while other lanes still fetch leaves no band accumulator behind.
 //
 // Run: node tests/js/test_v3_loader_mips.mjs
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { PlaneCodec, buildTree, mockFetch, loadPlaneLoader } from './test_mig_reader_plane_loader.mjs';
+import { PlaneCodec, VmWorker, buildTree, mockFetch, loadPlaneLoader } from './test_mig_reader_plane_loader.mjs';
 
 const DIMS = { x: 700, y: 530, z: 150 };   // tiles 2 × 2 (ragged), layers 64 + 64 + 22
 const C = 2;
@@ -226,6 +227,40 @@ const sameBytes = (a, b, label) => {
   await assert.rejects(L.loadSlabMax(planes, mips, 0, 150, [0], { x0: 0, y0: 0, x1: 4, y1: 4 }, { signal: ac.signal }), (e) => e.name === 'AbortError');
   L.dispose();
   console.log('abort: OK');
+}
+
+// ── A failed pack leaves no band accumulator in the workers ──────────────────
+{
+  // The worker's own map is block-scoped; mirror it from the messages it receives,
+  // in the order it processes them: a `max` decode creates the key, take/drop free it.
+  const live = new Set();
+  class TrackWorker extends VmWorker {
+    postMessage(msg) {
+      if (msg && msg.op === 'decode' && msg.mode === 'max') live.add(msg.key);
+      else if (msg && (msg.op === 'take' || msg.op === 'drop')) live.delete(msg.key);
+      super.postMessage(msg);
+    }
+  }
+  const missing = `${BASE}/planes/z00001.bin`;
+  assert.ok(files.has(missing), 'plane pack 1 exists in the fixture');
+  const inner = mockFetch(new Map([...files].filter(([k]) => k !== missing)));
+  // Plane 1 fails at once while the lanes on planes 0 and 2 are still fetching.
+  const slowFetch = async (url, init = {}) => {
+    if (!String(url).startsWith(missing)) await new Promise(res => setTimeout(res, 40));
+    return inner(url, init);
+  };
+  const L = loadPlaneLoader(slowFetch, { Worker: TrackWorker });
+  const planes = await L.open(`${BASE}/planes`, openArgs);
+  await assert.rejects(planes.loadRegionMax([0, 1, 2, 3], [0, 1], { x0: 0, y0: 0, x1: 700, y1: 530 }, { concurrency: 3 }),
+    (e) => e.code === 'PLANES_HTTP', 'the failing pack\'s own error reaches the caller');
+  await new Promise(res => setTimeout(res, 200));   // anything a late lane could still post
+  assert.deepEqual([...live], [], 'no accumulator outlives the failed slab');
+  // The pool still serves a slab afterwards.
+  const ok = await planes.loadRegionMax([2, 3], [0], { x0: 0, y0: 0, x1: 40, y1: 40 });
+  sameBytes(ok.data[0], maxOver([2, 3], 0, { x0: 0, y0: 0, x1: 40, y1: 40 }), 'slab after a failure');
+  assert.deepEqual([...live], [], 'take frees every accumulator');
+  L.dispose();
+  console.log('failed pack: no leftover accumulator: OK');
 }
 
 console.log('PlaneLoader mips: OK');

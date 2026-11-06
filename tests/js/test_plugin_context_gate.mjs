@@ -143,4 +143,106 @@ assert.deepEqual(await loadedIds({ context: 'compare' }),
     'toggles carry the live state; hidden and action buttons are left out');
 }
 
-console.log('OK  hosting-context gate + toolbar wire: 9 checks');
+// Boot traffic. A registry whose fetches are logged and whose trust pass hands
+// back the plugin's lang/ bytes, as PluginTrust.evaluate does.
+function trafficRegistry({ list = null, langFiles = {}, i18nInline = null, langs = undefined, release = null } = {}) {
+  const requests = [];
+  const i18nCalls = [];
+  const evaluated = [];
+  const meta = { id: 'speaker', name: 'Speaker', placement: 'tools', contexts: ['page'] };
+  if (langs) meta.i18nLanguages = langs;
+  if (i18nInline) meta.i18n = i18nInline;
+  const enc = new TextEncoder();
+  const files = { 'index.js': enc.encode(''), 'plugin.json': enc.encode(JSON.stringify(meta)) };
+  for (const [code, text] of Object.entries(langFiles)) files[`lang/${code}.json`] = enc.encode(text);
+  const PR = loadModule('js/core/plugin-registry.js', 'PluginRegistry', {
+    document: {
+      createElement: () => ({ dataset: {}, setAttribute() {}, onload: null, onerror: null }),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      body: { appendChild: el => queueMicrotask(() => el.onload && el.onload()) },
+    },
+    window: {},
+    console: { ...console, warn() {}, info() {}, debug() {} },
+    I18n: {
+      t: k => k, translateDOM() {},
+      registerPluginLang: (id, path, dicts, l) => i18nCalls.push(['register', id, JSON.parse(JSON.stringify(dicts)), l]),
+      loadPluginLang: async (id, path, l) => { i18nCalls.push(['load', id, l]); },
+    },
+    queueMicrotask,
+    TextDecoder,
+    PluginTrust: {
+      evaluate: async (m, vouch, base, modPath, manifest) => {
+        evaluated.push({ vouch, manifest });
+        return { tier: vouch ? vouch.tier : 'bundled', hash: 'h', bytes: files['index.js'], files };
+      },
+    },
+    URL: { createObjectURL: () => 'blob:stub', revokeObjectURL() {} },
+    Blob: class { constructor() {} },
+    fetch: async (url, init) => {
+      requests.push([String(url), init && init.cache]);
+      if (url === 'api/plugins.php' && list) return { ok: true, status: 200, json: async () => ({ plugins: list }) };
+      if (url === 'version.json' && release) return { ok: true, status: 200, json: async () => release };
+      if (/js\/modules\/tools\/speaker\/plugin\.json$/.test(String(url))) return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(meta)) };
+      return { ok: false, status: 404 };
+    },
+  });
+  return { PR, requests, i18nCalls, evaluated, meta };
+}
+
+// A server-vouched batch never reads the release manifest: version.json holds one
+// hash per shipped file and is only the trust source of a vouch-less static host.
+{
+  const t = trafficRegistry({ list: [{ path: 'tools/speaker', id: 'speaker', name: 'Speaker', placement: 'tools', trust: { tier: 'dev', hash: 'h' } }] });
+  const paths = await t.PR.discover('js/modules');
+  await t.PR.loadModules('js/modules', paths, { context: 'page' });
+  assert.equal(t.requests.filter(([u]) => u === 'version.json').length, 0, 'vouched plugins: no version.json request');
+  assert.equal(t.evaluated.length, 1);
+  assert.equal(t.evaluated[0].manifest, null, 'a vouched plugin is evaluated without the manifest');
+}
+
+// A vouch-less (static host) batch reads it ONCE, revalidated, for all its plugins.
+{
+  const t = trafficRegistry({ release: { web: '9.9.9', files: { 'js/modules/tools/speaker/index.js': 'x' } } });
+  await t.PR.loadModules('js/modules', ['tools/speaker', 'tools/speaker'], {});
+  const reads = t.requests.filter(([u]) => u === 'version.json');
+  assert.equal(reads.length, 1, 'one version.json read per batch');
+  assert.equal(reads[0][1], 'no-cache', 'revalidated, not re-downloaded');
+  assert.ok(t.evaluated.every(e => e.manifest && e.manifest['js/modules/tools/speaker/index.js'] === 'x'),
+    'every vouch-less plugin gets the files map');
+}
+
+// Translations come from the bytes the trust pass already verified: no second
+// fetch of lang/<code>.json (PHP hosts inline nothing).
+{
+  const t = trafficRegistry({
+    langFiles: { en: '{"title":"Speak"}', fr: '﻿{"title":"Parler"}', es: '{broken', nl: '{"title":"Spreek"}' },
+    langs: ['en', 'fr', 'es'],
+  });
+  await t.PR.loadModules('js/modules', ['tools/speaker'], {});
+  assert.equal(t.i18nCalls.length, 1);
+  const [kind, id, dicts, l] = t.i18nCalls[0];
+  assert.equal(kind, 'register', 'registered from the verified bytes, not fetched again');
+  assert.equal(id, 'speaker');
+  assert.deepEqual(dicts, { en: { title: 'Speak' }, fr: { title: 'Parler' } },
+    'BOM stripped; unparsable and undeclared locales left out');
+  assert.deepEqual(Array.from(l), ['en', 'fr', 'es'], 'the declared locales travel with it');
+  assert.equal(t.requests.filter(([u]) => /\/lang\//.test(u)).length, 0, 'no lang/ request');
+}
+
+// No English among the verified bytes → the per-locale fetch stays the fallback.
+{
+  const t = trafficRegistry({ langFiles: { fr: '{"title":"Parler"}' } });
+  await t.PR.loadModules('js/modules', ['tools/speaker'], {});
+  assert.deepEqual(t.i18nCalls.map(c => c[0]), ['load'], 'no English dictionary → loadPluginLang');
+}
+
+// Dictionaries inlined by the discovery endpoint still win.
+{
+  const t = trafficRegistry({ i18nInline: { en: { title: 'Inline' } }, langFiles: { en: '{"title":"File"}' } });
+  await t.PR.loadModules('js/modules', ['tools/speaker'], {});
+  assert.equal(t.i18nCalls[0][0], 'register');
+  assert.deepEqual(t.i18nCalls[0][2], { en: { title: 'Inline' } }, 'inline dictionaries first');
+}
+
+console.log('OK  hosting-context gate + toolbar wire + boot traffic: 14 checks');

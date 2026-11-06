@@ -852,7 +852,7 @@ export class Runner {
         // The link stayed down through every retry: the journal is intact, wait for a resume.
         if (err && err.pause) { this._setState('paused', err.pause); return; }
         if (this._autoRetry(item, err)) {
-          this._emit({ type: 'log', level: 'warn', dataset: item.dataset, migration: item.migration, code: 'auto_retry', error: String(err && err.message || err), attempt: item.autoTries, delayMs: item.autoDelayMs });
+          this._emit({ type: 'log', level: 'warn', dataset: item.dataset, migration: item.migration, code: 'auto_retry', errCode: err && err.code || null, detail: err && err.detail || null, error: String(err && err.message || err), attempt: item.autoTries, delayMs: item.autoDelayMs });
           await this._sleep(item.autoDelayMs);
           continue;
         }

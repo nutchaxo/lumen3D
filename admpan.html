@@ -77,8 +77,8 @@
 
     <!-- Step 3: theme -->
     <div class="setup-step" data-step="3" style="display:none">
-      <p class="adm-gate-intro" data-i18n="wizard.themeIntro">Choisissez une couleur de marque. Vous pourrez personnaliser tout le thème plus tard.</p>
-      <div id="setup-swatches" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:8px 0"></div>
+      <p class="adm-gate-intro" id="setup-theme-intro" data-i18n="wizard.themeIntro">Choisissez une couleur de marque. Vous pourrez personnaliser tout le thème plus tard.</p>
+      <div id="setup-swatches" role="group" aria-labelledby="setup-theme-intro" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:8px 0"></div>
     </div>
 
     <!-- Step 4: texts -->
@@ -264,7 +264,8 @@
 
     <!-- Topbar -->
     <header class="adm-topbar">
-      <button class="adm-icon-btn adm-mobile-only" id="btn-mobile-menu" data-i18n-title="admin.menu" title="Menu">
+      <button class="adm-icon-btn adm-mobile-only" id="btn-mobile-menu" data-i18n-title="admin.menu" title="Menu"
+              data-i18n-aria="admin.menu" aria-label="Menu" aria-controls="adm-sidebar" aria-expanded="false">
         <i data-lucide="menu"></i>
       </button>
       <div class="adm-topbar-title">
@@ -322,7 +323,8 @@
               <span class="list-search-icon">🔍</span>
               <input type="text" class="list-search-input" id="dataset-search" aria-label="Rechercher" data-i18n-aria="admin.search"
                      placeholder="Rechercher…" data-i18n-placeholder="admin.search" autocomplete="off">
-              <button class="list-search-clear" id="search-clear" style="display:none">✕</button>
+              <button type="button" class="list-search-clear" id="search-clear" style="display:none"
+                      aria-label="Effacer la recherche" data-i18n-aria="admin.clearSearch"><span aria-hidden="true">✕</span></button>
             </div>
             <!-- Filled by js/pages/admin/tab-datasets.js: one chip per dataset
                  type (Utils.DATASET_TYPES, operator-editable labels) plus the
@@ -407,8 +409,9 @@
                     <span class="vis-badge" id="vis-badge"></span>
                     <span class="vis-hint" id="vis-hint"></span>
                   </div>
-                  <label class="adm-switch" title="">
-                    <input type="checkbox" id="f-visible">
+                  <label class="adm-switch">
+                    <input type="checkbox" id="f-visible" aria-describedby="vis-hint"
+                           aria-label="Visible dans l'explorer public" data-i18n-aria="admin.visibleInExplorer">
                     <span class="adm-switch-track"><span class="adm-switch-thumb"></span></span>
                   </label>
                 </div>
@@ -498,6 +501,8 @@
               <!-- Section: Orientation -->
               <div class="config-section">
                 <div class="config-section-title" data-i18n="admin.secOrientation">Orientation 3D</div>
+                <!-- Shown while the window is too narrow for the preview column (tab-datasets.js applyPreviewGate). -->
+                <p class="vis-hint" id="preview-narrow-hint" style="display:none" data-i18n="admin.previewNeedsWideScreen">Élargissez la fenêtre pour afficher l'aperçu : le repère et la vue par défaut se définissent en regardant le volume.</p>
 
                 <!-- Which way up the raw file shows the sample. The preview lays the volume
                      flat with the chosen top face toward the camera (SET_SAMPLE_UPSIDE_DOWN →
@@ -647,7 +652,10 @@
      underneath. Rendered by js/pages/admin/upload-dock.js; hidden whenever there
      is no import to report. -->
 <div id="upload-dock" class="upload-dock" data-size="bar" hidden
-     role="region" aria-live="polite" aria-label="Dataset import" data-i18n-aria="upl.dockTitle"></div>
+     role="region" aria-label="Dataset import" data-i18n-aria="upl.dockTitle"></div>
+<!-- What the dock announces to a screen reader: state changes and every 10 % of the
+     transfer, never the bytes / speed / ETA it repaints several times a second. -->
+<div id="upload-dock-status" class="adm-sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <!-- Exit guard: shown when an in-app navigation would kill a running transfer. -->
 <div id="upload-exit-overlay" class="upl-exit" hidden role="alertdialog"
@@ -655,7 +663,7 @@
   <div class="upl-exit-card">
     <i data-lucide="alert-triangle" class="upl-exit-icon"></i>
     <h3 class="upl-exit-title" id="upl-exit-title" data-i18n="upl.exitTitle">Un transfert est en cours</h3>
-    <p class="upl-exit-body" data-i18n="upl.exitBody">Quitter cette page mettra le transfert en pause. Les fichiers déjà envoyés sont conservés : il reprendra là où il s'est arrêté quand vous reglisserez le même dossier.</p>
+    <p class="upl-exit-body" id="upl-exit-body" data-i18n="upl.exitBody">Quitter cette page mettra le transfert en pause. Les fichiers déjà envoyés sont conservés : il reprendra là où il s'est arrêté quand vous reglisserez le même dossier.</p>
     <div class="upl-exit-actions">
       <button type="button" class="adm-btn adm-btn-ghost" id="upl-exit-stay" data-i18n="upl.exitStay">Rester sur la page</button>
       <button type="button" class="adm-btn adm-btn-accent" id="upl-exit-leave" data-i18n="upl.exitLeave">Mettre en pause et quitter</button>
@@ -663,8 +671,11 @@
   </div>
 </div>
 
-<!-- Toast container -->
+<!-- Toast stack (visual) and its two announcers (js/pages/admin/shared.js toast()):
+     the announcers exist from page load so a screen reader reads every message. -->
 <div id="toast-container"></div>
+<div id="toast-status" class="adm-sr-only" role="status" aria-live="polite" aria-atomic="false"></div>
+<div id="toast-alert" class="adm-sr-only" role="alert" aria-live="assertive" aria-atomic="false"></div>
 
 <!-- Lucide icons (pinned, CDN — allowed dep, SRI-pinned). async + onload so a
      slow/blocked CDN never delays page load; icons render once the script arrives. -->
@@ -674,11 +685,11 @@
 <!-- Core (classic scripts) — must load before the admin ES modules so I18n/Utils
      are available in the shared global lexical scope. -->
 <script src="js/core/font-loader.js"></script>
-<script src="js/core/utils.js?v=20260504"></script>
+<script src="js/core/utils.js"></script>
 <script src="js/core/ui-actions.js"></script>
-<script src="js/core/instance-config.js?v=20260706"></script>
-<script src="js/core/i18n.js?v=20260504"></script>
-<script src="js/core/catalog.js?v=20260504"></script>
-<script type="module" src="js/pages/admpan.js?v=20260710-lazy"></script>
+<script src="js/core/instance-config.js"></script>
+<script src="js/core/i18n.js"></script>
+<script src="js/core/catalog.js"></script>
+<script type="module" src="js/pages/admpan.js"></script>
 </body>
 </html>

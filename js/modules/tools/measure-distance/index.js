@@ -47,8 +47,11 @@ PluginRegistry.implement('measure-distance', {
     this._listNode?.addEventListener('click', this._onList);
     this._listNode?.addEventListener('change', this._onList);
 
-    // Bind Clear button
-    this._clearNode = document.getElementById('btn-measure-clear');
+    // Clear button: the 2D page names it btn-measure-clear, the volume viewer
+    // btn-clear-volume-measure. On the viewer the page clears the store with its own
+    // handler too; this one also drops the plugin's pending first pick.
+    this._clearNode = document.getElementById('btn-measure-clear')
+      || document.getElementById('btn-clear-volume-measure');
     this._clearNode?.addEventListener('click', this._onClear);
 
     this._render();
@@ -107,10 +110,12 @@ PluginRegistry.implement('measure-distance', {
   _commit() {
     if (this._draft.length !== 2) return;
     const [aPoint, bPoint] = this._draft;
-    const color = this.COLORS[this._measurements.length % this.COLORS.length];
+    // The page may have written the store behind this module (its own Clear, a restore).
+    const count = this._ctx.measurements.list('viewer').length;
+    const color = this.COLORS[count % this.COLORS.length];
     this._ctx.measurements.add('viewer', {
       scope: 'viewer',
-      label: this._t('measureN', { n: this._measurements.length + 1 }),
+      label: this._t('measureN', { n: count + 1 }),
       unit: 'um',
       distance: this._dist3d(aPoint.physicalUm, bPoint.physicalUm),
       points: this._draft.map(p => ({ normalized: p.normalized, physicalUm: p.physicalUm })),
@@ -127,6 +132,7 @@ PluginRegistry.implement('measure-distance', {
 
   _clear() {
     this._draft = [];
+    this._closeColorPopup();
     this._measurements = this._ctx.measurements.clear('viewer');
     this._ctx.viewer.setMeasurements(this._measurements);
     this._render();
@@ -137,32 +143,41 @@ PluginRegistry.implement('measure-distance', {
     const esc  = s => this._ctx.ui.escapeHtml(s);
 
     if (list) {
+      const colorLabel  = esc(this._t('changeColor'));
+      const deleteLabel = esc(this._t('deleteMeasure'));
+      const nameLabel   = esc(this._t('labelPlaceholder'));
       list.innerHTML = this._measurements.length
-        ? this._measurements.map(item => `
+        ? this._measurements.map(item => {
+          const visLabel = esc(this._t(item.visible === false ? 'showMeasure' : 'hideMeasure'));
+          return `
           <div class="measurement-row" style="display:flex;align-items:center;gap:4px;padding:4px 0;">
             <button class="btn btn-ghost btn-sm measure-color-btn" type="button"
               data-volume-measure-action="toggle-color" data-measurement-id="${esc(item.id)}"
+              title="${colorLabel}" aria-label="${colorLabel}" aria-haspopup="true"
               style="padding:0;width:24px;height:24px;border:none;flex-shrink:0;">
-              <span style="background:${esc(item.color)};width:16px;height:16px;display:inline-block;border-radius:3px;border:1px solid rgba(255,255,255,0.2);vertical-align:middle;"></span>
+              <span aria-hidden="true" style="background:${this._safeColor(item.color)};width:16px;height:16px;display:inline-block;border-radius:3px;border:1px solid rgba(255,255,255,0.2);vertical-align:middle;"></span>
             </button>
-            <input type="text" value="${esc(item.label || '')}" placeholder="${esc(this._t('labelPlaceholder'))}"
+            <input type="text" value="${esc(item.label || '')}" placeholder="${nameLabel}" aria-label="${nameLabel}"
               class="form-input text-xs" data-volume-measure-action="rename" data-measurement-id="${esc(item.id)}"
-              style="flex:1;min-width:0;width:50px;padding:2px 4px;background:rgba(0,0,0,0.2);border:1px solid var(--border-light);color:var(--text-primary);border-radius:4px;">
+              style="flex:1;min-width:0;width:50px;padding:2px 4px;background:rgba(0,0,0,0.2);border:1px solid var(--border-default);color:var(--text-primary);border-radius:4px;">
             <span style="white-space:nowrap;font-size:11px;color:var(--text-muted);">
               ${item.visible === false ? esc(this._t('hidden')) : this._fmtUm(item.distance)}
             </span>
             <span class="related-actions" style="display:flex;gap:2px;">
               <button class="btn btn-ghost btn-sm" type="button"
-                data-volume-measure-action="toggle" data-measurement-id="${esc(item.id)}" style="padding:2px;">
-                <i data-lucide="${item.visible === false ? 'eye-off' : 'eye'}"></i>
+                data-volume-measure-action="toggle" data-measurement-id="${esc(item.id)}"
+                title="${visLabel}" aria-label="${visLabel}" style="padding:2px;">
+                <i data-lucide="${item.visible === false ? 'eye-off' : 'eye'}" aria-hidden="true"></i>
               </button>
               <button class="btn btn-ghost btn-sm" type="button"
-                data-volume-measure-action="delete" data-measurement-id="${esc(item.id)}" style="padding:2px;">
-                <i data-lucide="trash-2"></i>
+                data-volume-measure-action="delete" data-measurement-id="${esc(item.id)}"
+                title="${deleteLabel}" aria-label="${deleteLabel}" style="padding:2px;">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </span>
           </div>
-        `).join('')
+        `;
+        }).join('')
         : esc(this._t('noMeasure'));
       this._ctx.ui.createIcons({ nodes: [list] });
     }
@@ -225,7 +240,7 @@ PluginRegistry.implement('measure-distance', {
     this._closeColorPopup();
     const popup = document.createElement('div');
     popup.id = 'measure-color-popup-active';
-    popup.style.cssText = 'position:fixed;background:var(--bg-surface,#222);border:1px solid var(--border-color,#444);border-radius:6px;padding:6px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.5);display:flex;flex-direction:column;gap:4px;';
+    popup.style.cssText = 'position:fixed;background:var(--bg-surface,#222);border:1px solid var(--border-default, #444);border-radius:6px;padding:6px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.5);display:flex;flex-direction:column;gap:4px;';
     for (const row of this.PALETTE) {
       const rowDiv = document.createElement('div');
       rowDiv.style.cssText = 'display:flex;gap:4px;';
@@ -260,6 +275,13 @@ PluginRegistry.implement('measure-distance', {
 
   _closeColorPopup() {
     document.getElementById('measure-color-popup-active')?.remove();
+  },
+
+  // HTML escaping does not stop a second CSS declaration inside style="", and an older
+  // core's store keeps a colour from a shared #state= link unchecked: hex only here.
+  _safeColor(color) {
+    const text = String(color || '');
+    return /^#[0-9a-f]{3,8}$/i.test(text) ? text : '#ff4d4f';
   },
 
   _setStatus(html) {

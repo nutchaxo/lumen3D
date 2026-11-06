@@ -32,6 +32,7 @@
   "x_allChannels": "Intensiteit (alle kanalen)",
   "x_summary": "— één waarde per reeks —",
   "computing": "Berekenen…",
+  "reading": "Volume lezen… {pct} %",
   "err_notReady": "De gegevens zijn nog niet klaar. Wacht tot het laden klaar is.",
   "err_noData": "Niets te plotten met deze keuzes.",
   "err_timeout": "Een dataset deed er te lang over.",

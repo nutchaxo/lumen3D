@@ -14,7 +14,7 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
-from run_preprocess import worker_count, atomic_write_json, read_json_file  # noqa: E402
+from run_preprocess import worker_count, atomic_write_json, read_json_file, thumbnail_lod  # noqa: E402
 import planes_writer  # noqa: E402
 import mips_writer  # noqa: E402
 import bricks_v3_writer as v3  # noqa: E402
@@ -458,13 +458,29 @@ def pack_timepoint_v5(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, 
     levels, the format's columns (5: ll b2 b4 q80 q50; 6: ll q30), the xy/xz/yz planes and
     the cut bricks from the level-0 files of step 2 (t{t}_c{c}_lod0.bin), then the native XY
     planes (planes/) and the layer MIPs (mips/) are written as for format 4. Returns
-    {"format": fmt, "tree": write_tree's result}."""
+    {"format": fmt, "tree": write_tree's result}.
+
+    When `lod_levels` is write_tree's own ladder (step 2 of a format-5/6 run writes level 0
+    only), the levels still read after packing — the coarsest (histograms) and, for the
+    first timepoint, the thumbnail's — are kept from write_tree as t{t}_c{c}_lod{k}.bin."""
     window = 2 * (getattr(executor, "_max_workers", 1) or 1)
     tree_dir = bricks_dir / tp_subdir if tp_subdir else bricks_dir
     label = tp_subdir or "t000"
     lod0 = lod_levels[0]
     dims = (lod0["width"], lod0["height"], lod0["depth"])
+    voxel = lod0.get("voxelSize") or {"x": 1, "y": 1, "z": 1}
     files = [temp_dir / f"t{t_idx:03d}_c{c}_lod0.bin" for c in range(n_ch)]
+    ladder = format5.level_ladder(dims, voxel)
+    same_ladder = ([(li["width"], li["height"], li["depth"]) for li in lod_levels]
+                   == [(L["dimensions"]["x"], L["dimensions"]["y"], L["dimensions"]["z"])
+                       for L in ladder])
+    keep = {}
+    if same_ladder:
+        wanted = {lod_levels[-1]["lod"]}
+        if t_idx == 0:
+            wanted.add(thumbnail_lod(lod_levels))
+        keep = {k: [temp_dir / f"t{t_idx:03d}_c{c}_lod{k}.bin" for c in range(n_ch)]
+                for k in wanted if k}
 
     def run(fn, tasks):
         return ordered_results(executor, fn, tasks, window)
@@ -473,8 +489,8 @@ def pack_timepoint_v5(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, 
         print(f"[PACKER] {label} format {fmt} : {step} ({done}/{total})", flush=True)
 
     tree = format5.write_tree([str(p) if p.exists() else None for p in files], dims,
-                              lod0.get("voxelSize") or {"x": 1, "y": 1, "z": 1}, tree_dir,
-                              temp_dir / f"f5work_t{t_idx:03d}", run, progress, fmt=fmt)
+                              voxel, tree_dir, temp_dir / f"f5work_t{t_idx:03d}", run, progress,
+                              fmt=fmt, keep=keep)
     for k, L in enumerate(tree["levels"]):
         d = L["dimensions"]
         sizes = ", ".join(f"{cid} {sum(tree['bytes'][str(k)][cid]) / 1e6:.1f} MB" for cid in format5.columns_of(fmt))

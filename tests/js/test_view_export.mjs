@@ -47,12 +47,14 @@ const DisplayPresets = loadModule('js/core/display-presets.js', 'DisplayPresets'
 
 // ── VolumeViewer pure parts ──────────────────────────────────────────────────
 const VV = new Function('THREE', `
+  const SETTLED_PIXEL_SAMPLE_BUDGET = 6e9;
+  ${liftVV('_exportTileBudgetCap')}
   ${liftVV('_planExportTiles')}
   ${liftVV('_exportTileViewOffset')}
   ${liftVV('_exportTileFragOffset')}
   ${liftVV('_exportTileConfigs')}
   ${liftVV('_micronsPerPixelFor')}
-  return { _planExportTiles, _exportTileViewOffset, _exportTileFragOffset, _exportTileConfigs, _micronsPerPixelFor };
+  return { _planExportTiles, _exportTileViewOffset, _exportTileFragOffset, _exportTileConfigs, _micronsPerPixelFor, _exportTileBudgetCap };
 `)(THREE);
 
 // Tiles cover every pixel exactly once: per-pixel count on small images, and on large
@@ -165,6 +167,20 @@ assert.deepEqual(VV._exportTileConfigs(2048, 4), [
 assert.deepEqual(VV._exportTileConfigs(2048, 0).map((c) => c.samples), [0, 0, 0, 0], 'no MSAA entry without samples');
 assert.deepEqual(VV._exportTileConfigs(200, 4), [{ tile: 200, samples: 4 }, { tile: 200, samples: 0 }], 'a small GPU limit is tried as is');
 assert.deepEqual(VV._exportTileConfigs(1500, 0).map((c) => c.tile), [1500, 750, 375, 256], 'halving stops at 256 px');
+
+// One export draw stays within the screen frame's per-draw watchdog budget.
+{
+  const cap = VV._exportTileBudgetCap(4096, 1);
+  assert.ok(cap <= 1210 && cap * cap * 4096 <= 6e9, `a small canvas (4096 steps) tiles at ${cap} px, within 6e9 pixel·samples a draw`);
+  assert.ok(VV._exportTileBudgetCap(400, 1) >= 2048, 'a large canvas (400 steps) keeps 2048 px tiles');
+  const halved = VV._exportTileBudgetCap(4096, 0.5);
+  assert.ok(halved < cap && halved * halved * 4096 <= 3e9, 'the learned budget scale shrinks the tile too');
+  assert.equal(VV._exportTileBudgetCap(1e9, 0.05), 256, 'never below 256 px');
+  const render = liftVV('renderViewImage');
+  assert.ok(/const maxTile = Math\.min\([\s\S]*?_exportTileBudgetCap\(_targetSteps, _settledBudgetScale\)\s*\)/.test(render),
+    'the export tile is capped by the sample budget of the screen step count');
+  console.log('export tile within the per-draw sample budget: OK');
+}
 
 // ── µm per output pixel = the on-screen bar's rule ───────────────────────────
 // Same scenario as test_scale_bar_3d: 45° fov, camera at 2.5, an 800×600 view,

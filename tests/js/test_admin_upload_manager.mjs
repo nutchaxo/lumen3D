@@ -155,4 +155,112 @@ const meta = (type) => JSON.stringify({ type, name: 'N' });
   assert.equal(M.getState().network, 'online', 'no "connection lost" banner left over a stopped transfer');
 }
 
-console.log('admin upload manager (grouping · secure-context check · per-dataset plan): OK');
+// ── a second drop during a transfer keeps the running transfer's controls ─
+{
+  const realFetch = globalThis.fetch;
+  const r = await M.startImport([f('3d/e/metadata.json', 5, meta('3d')), f('3d/e/bricks/lod0/p0.bin', 100)]);
+  assert.equal(r.ok, true);
+  assert.equal(M.getState().phase, 'uploading');
+
+  // A folder with no dataset in it: refused, the running transfer still owns the phase.
+  const none = await M.startImport([f('x/readme.txt')]);
+  assert.equal(none.ok, false);
+  assert.equal(M.getState().phase, 'uploading');
+  assert.equal(M.isBusy(), true, 'Pause/Stop and the exit guard stay on for the running transfer');
+  assert.equal(M.hasUnfinishedWork(), true);
+
+  // A folder already sent in full: nothing to do, same answer.
+  const allDone = (url, init) => {
+    if (!String(url).includes('action=plan')) return realFetch(url, init);
+    const body = JSON.parse(init.body);
+    return json({ ok: true, chunkSize: 1 << 20, datasets: body.datasets.map((d) => ({
+      key: `${d.type}/${d.folder}`, type: d.type, folder: d.folder, state: 'staged', published: false,
+      totalBytes: 100, receivedBytes: 100,
+      files: d.files.map((x) => ({ path: x.path, size: x.size, done: true, skip: 'complete' })),
+    })) });
+  };
+  globalThis.fetch = async (url, init) => allDone(url, init);
+  const nothing = await M.startImport([f('3d/g/metadata.json', 5, meta('3d')), f('3d/g/bricks/lod0/p0.bin', 100)]);
+  assert.equal(nothing.nothingToDo, true);
+  assert.equal(M.getState().phase, 'uploading', 'a nothing-to-do drop does not end the running transfer');
+
+  // The running transfer finishing while the next drop is being planned: that drop
+  // ends in "done", not in an "uploading" no worker will ever end.
+  const worker = globalThis.__lastWorker;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('action=plan')) await worker.onmessage({ data: { type: 'idle' } });
+    return allDone(url, init);
+  };
+  await M.startImport([f('3d/g/metadata.json', 5, meta('3d')), f('3d/g/bricks/lod0/p0.bin', 100)]);
+  assert.equal(M.getState().phase, 'done');
+  assert.equal(M.isBusy(), false);
+  globalThis.fetch = realFetch;
+}
+
+// ── a refused chunk size sticks, whatever `limits` says next ───
+{
+  const worker = globalThis.__lastWorker;
+  await worker.onmessage({ data: { type: 'chunk-too-large', bytes: 1 << 20, maxChunkSize: null } });
+  await worker.onmessage({ data: { type: 'chunk-too-large', bytes: 1 << 20, maxChunkSize: null } });
+  assert.equal(M.getState().chunkSize, 1 << 19, 'several refusals of one size halve it once');
+  // A host limit at or above the refused size is not believed (a proxy refused it).
+  await worker.onmessage({ data: { type: 'chunk-too-large', bytes: 1 << 19, maxChunkSize: 1 << 20 } });
+  assert.equal(M.getState().chunkSize, 1 << 18);
+  const before = requests.length;
+  const r = await M.startImport([f('3d/h/metadata.json', 5, meta('3d')), f('3d/h/bricks/lod0/p0.bin', 100)]);
+  assert.equal(r.ok, true);
+  const plan = requests.slice(before).find((q) => q.url.includes('action=plan'));
+  assert.equal(plan.body.chunkSize, 1 << 18, 'the plan asks for the reduced size although limits advertises 1 MiB');
+  assert.equal(M.getState().chunkSize, 1 << 18, 'nor does the plan answer raise it again');
+  await worker.onmessage({ data: { type: 'chunk-too-large', bytes: 1 << 18, maxChunkSize: null } });
+  assert.equal(M.getState().chunkSize, 262144, 'never below the server floor');
+}
+
+// ── the worker follows the session's CSRF token ────────────────
+{
+  const S = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/shared.js')).href);
+  const worker = globalThis.__lastWorker;
+  const configs = () => posts.filter((m) => m.type === 'config');
+
+  posts.length = 0;
+  S.setCsrf('tok-a');
+  assert.equal(configs().at(-1).csrf, 'tok-a', 'a sign-in reaches the worker');
+  posts.length = 0;
+  S.setCsrf('tok-a');
+  assert.equal(configs().length, 0, 'an unchanged token is not re-sent');
+
+  // Resume after a pause hands the worker the current token first.
+  assert.equal(M.getState().phase, 'uploading');
+  M.pause();
+  S.setCsrf('tok-b');
+  posts.length = 0;
+  M.resume();
+  const kinds = posts.map((m) => m.type);
+  assert.ok(kinds.indexOf('config') !== -1 && kinds.indexOf('config') < kinds.indexOf('resume'), 'config then resume');
+  assert.equal(posts[kinds.indexOf('config')].csrf, 'tok-b');
+
+  // A refused token: the manager asks the server, then answers the worker.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => (String(url).includes('auth.php?action=status')
+    ? json({ authenticated: true, csrf: 'tok-c' }) : realFetch(url, init));
+  posts.length = 0;
+  await worker.onmessage({ data: { type: 'csrf-stale' } });
+  const answer = posts.find((m) => m.type === 'csrf');
+  assert.equal(answer && answer.csrf, 'tok-c', 'the renewed token is sent back');
+  globalThis.fetch = realFetch;
+}
+
+// ── byte sizes read in the page language ───────────────────────
+{
+  // No page language here: the number follows the host's default locale.
+  assert.match(M.formatBytes(1536), /^1[.,]5 KB$/, 'English units by default (no more "Ko" for everyone)');
+  assert.equal(M.formatBytes(-1), '—');
+  const saved = globalThis.I18n;
+  globalThis.I18n = { t: (k) => (k === 'admin.storageUnits' ? 'o|Ko|Mo|Go|To' : k), getLanguage: () => 'fr' };
+  const S2 = await import(`${pathToFileURL(path.join(ROOT, 'js/pages/admin/shared.js')).href}?fr`);
+  assert.equal(S2.fmtBytes(1536).replace(/\s/g, ' '), '1,5 Ko', 'French units and decimal comma under fr');
+  assert.equal(S2.fmtBytes(500 * 1048576).replace(/\s/g, ' '), '500 Mo');
+  globalThis.I18n = saved;
+}
+
+console.log('admin upload manager (grouping · secure-context check · per-dataset plan · second drop · chunk ceiling · CSRF · units): OK');

@@ -144,6 +144,22 @@ const FAVORITE_ICONS = [
 ];
 
 // ── Small DOM builders ────────────────────────────────────────────
+// api/media.php and dev_server.py:_media_upload answer a fixed French sentence (the
+// same in both twins); it names the cause, so it is mapped to the admin's language
+// here and never shown as received.
+const MEDIA_UPLOAD_ERRORS = [
+  [/^Type de fichier non support/, () => t('pages.media.errType', 'Type de fichier non supporté (png, jpg, webp, gif, avif).')],
+  [/^Fichier vide ou trop volumineux/, () => t('pages.media.errSize', 'Fichier vide ou trop volumineux (8 Mo au plus).')],
+  [/^[ÉE]criture impossible/, () => t('pages.media.errWrite', 'Le serveur ne peut pas enregistrer le fichier (droits d\'écriture ?).')],
+];
+export function mediaUploadError(r) {
+  const msg = r && r.data && typeof r.data.error === 'string' ? r.data.error : '';
+  if (msg || (r && r.status)) console.error('Media upload refused:', r && r.status, msg);
+  for (const [rx, text] of MEDIA_UPLOAD_ERRORS) if (rx.test(msg)) return text();
+  if (r && r.status === 413) return t('pages.media.errSize', 'Fichier vide ou trop volumineux (8 Mo au plus).');
+  return t('pages.media.uploadErr', 'Échec du téléversement.');
+}
+
 function mk(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function mkBtn(cls, title) { const b = mk('button', cls); b.type = 'button'; if (title) b.title = title; return b; }
 function mkIcon(name, size) { const i = document.createElement('i'); i.setAttribute('data-lucide', name); if (size) i.style.cssText = `width:${size}px;height:${size}px`; return i; }
@@ -961,7 +977,7 @@ function ctlMedia(obj, f, ctx) {
     reader.onload = async () => {
       const r = await apiFetchStatus(`${API_MEDIA}?action=upload`, { method: 'POST', body: JSON.stringify({ filename: file0.name, data: String(reader.result || '') }) });
       if (r.ok && r.data && r.data.url) { set(r.data.url); close(); }
-      else { const m = mk('div', 'adm-page-sub', (r.data && r.data.error) || t('pages.media.uploadErr', 'Échec du téléversement.')); m.style.cssText = 'color:var(--color-danger,#e5484d);font-size:11px;margin-top:6px'; pop.appendChild(m); }
+      else { const m = mk('div', 'adm-page-sub', mediaUploadError(r)); m.style.cssText = 'color:var(--color-danger,#e5484d);font-size:11px;margin-top:6px'; pop.appendChild(m); }
     };
     reader.readAsDataURL(file0);
   }

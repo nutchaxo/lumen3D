@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <!-- The server answers this page for ANY missing path, however deep (/a/b/c), so every
+       relative URL below needs a fixed base. The Python and PHP servers replace this
+       exact tag with the install root; on a host that serves the file as it is, it
+       stays correct for a request at the install root. -->
+  <base href="./">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <meta name="theme-color" content="#0D0D1A" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F5F5FA" media="(prefers-color-scheme: light)">
+  <title>404 — {{SITE:brand.name|Lumen3D}}</title>
+  <meta name="robots" content="noindex">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
+
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="config/theme.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <script src="js/core/theme-boot.js"></script>
+</head>
+<body data-page="notfound">
+  <noscript><div class="noscript-notice" role="alert"><p lang="en">This site needs JavaScript to display its content.</p><p lang="fr">Ce site a besoin de JavaScript pour afficher son contenu.</p></div></noscript>
+
+  <nav class="navbar" id="navbar">
+    <a href="index.html" class="navbar-brand">
+      <div class="navbar-brand-icon" data-instance="brand.monogram">L3</div>
+      <span data-instance="brand.organization">Lumen3D</span>
+    </a>
+    <button type="button" class="navbar-menu-btn" data-action="nav-menu" aria-controls="navbar-links" aria-expanded="false" aria-label="Navigation menu" title="Navigation menu" data-i18n-aria="nav.menu" data-i18n-title="nav.menu">
+      <span class="navbar-menu-icon" aria-hidden="true"></span>
+    </button>
+    <div class="navbar-links" id="navbar-links">
+      <a href="index.html" class="navbar-link" data-i18n="nav.home">Home</a>
+      <a href="explorer.html" class="navbar-link" data-i18n="nav.explorer">Data Explorer</a>
+    </div>
+  </nav>
+
+  <main class="container" id="main" tabindex="-1" style="max-width:640px;margin:0 auto;padding:96px 24px 120px;text-align:center">
+    <p style="font-size:4.5rem;font-weight:700;line-height:1;margin:0 0 16px;opacity:.35" aria-hidden="true">404</p>
+    <h1 data-i18n="app.notFoundTitle" style="margin-bottom:12px">Page not found</h1>
+    <p data-i18n="app.notFoundText" style="opacity:.75;line-height:1.6;margin:0 0 32px">The page you are looking for does not exist or has been moved.</p>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+      <a href="index.html" class="btn btn-primary" data-i18n="app.backToHome">Back to home</a>
+      <a href="explorer.html" class="btn btn-ghost" data-i18n="nav.explorer">Data Explorer</a>
+    </div>
+  </main>
+
+  <script src="js/core/font-loader.js"></script>
+  <script src="js/core/utils.js"></script>
+  <script src="js/core/ui-actions.js"></script>
+  <script src="js/core/instance-config.js"></script>
+  <script src="js/core/i18n.js"></script>
+  <script src="js/core/theme.js"></script>
+  <script src="js/pages/not-found.js"></script>
+</body>
+</html>

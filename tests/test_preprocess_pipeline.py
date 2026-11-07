@@ -135,6 +135,36 @@ class TiledLeveling(unittest.TestCase):
         for t, v in enumerate(vols):
             got = np.fromfile(out / f"t{t:03d}_c0_lod0.bin", dtype=np.uint8).reshape(v[0].shape)
             self.assertTrue(np.array_equal(got, reference_level(v[0], bg, sig)), f"t{t}")
+        # Every frame's level is ranked over the channel's one basis.
+        basis = "above-floor" if above.size >= 1000 else "volume"
+        self.assertEqual(proc["normalization"]["signalBasis"], {"c0": basis})
+        for t, v in enumerate(vols):
+            sub = v[0].astype(np.float32)[::4, ::4, ::4].ravel()
+            ranked = sub[sub > bg] if basis == "above-floor" else sub
+            self.assertEqual(proc["normalization"]["signalLevels"][f"t{t:03d}_c0"],
+                             round(float(np.percentile(ranked, 99.9)), 4), f"t{t}")
+
+    def test_sparse_frame_levels_follow_brightness_not_signal_share(self):
+        rng = np.random.default_rng(5)
+        n = 1_000_000
+        noise = rng.normal(200.0, 12.0, size=n).astype(np.float32)
+        bg = float(np.percentile(noise, 99.0))
+        levels, volume_rule = [], []
+        # Same brightness, the specimen's share of the frame falls from 0.4 % to 0.05 %.
+        for share in (0.004, 0.002, 0.0005):
+            frame = noise.copy()
+            k = int(n * share)
+            frame[rng.choice(n, size=k, replace=False)] = rng.uniform(2000.0, 3000.0, size=k)
+            levels.append(step2.signal_level(frame, bg, step2.SIGNAL_BASIS_ABOVE_FLOOR))
+            volume_rule.append(step2.signal_level(frame, bg, step2.SIGNAL_BASIS_VOLUME))
+        for lv in levels:
+            self.assertAlmostEqual(lv / levels[0], 1.0, delta=0.02)
+        # The whole-volume percentile falls into the background once the signal is
+        # below 0.1 % of the voxels: the curve the above-floor basis replaces.
+        self.assertLess(volume_rule[-1], bg * 1.5)
+        # No voxel above the floor: the frame sits at the floor, on the same basis.
+        self.assertEqual(step2.signal_level(np.full(100, 150.0, np.float32), bg,
+                                            step2.SIGNAL_BASIS_ABOVE_FLOOR), bg)
 
     def test_tiles_cover_the_volume_once(self):
         shape = (37, 129, 300)
@@ -280,6 +310,62 @@ class DownloadBundle(unittest.TestCase):
             self.assertIn("timepoint 1 of 0..1 only", (dl / "README.txt").read_text(encoding="utf-8"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_unit_table_matches_step1(self):
+        tool = _load_tool("lumen_test_bundle_units")
+        self.assertEqual(tool.UNIT_TO_UM, step1.UNIT_TO_UM)
+
+    def test_tiff_calibration_follows_the_ims_unit_and_never_invents_one(self):
+        try:
+            import tifffile
+        except ImportError:
+            print("SKIP tiff calibration: tifffile missing")
+            return
+        tool = _load_tool("lumen_test_bundle_calibration")
+        tmp = Path(tempfile.mkdtemp(prefix="lumen_bundle_cal_"))
+        try:
+            vol = synthetic_volume((4, 16, 8), seed=11)          # Z, Y, X
+            cases = {
+                # extent (µm after the unit) / level dims → 2.5, 1.25, 0.75 µm
+                "um": dict(unit="um", extent=((0, 0, 0), (20.0, 20.0, 3.0))),
+                "mm": dict(unit="mm", extent=((0, 0, 0), (0.020, 0.020, 0.003))),
+                "none": dict(with_extent=False),
+            }
+            for name, kw in cases.items():
+                with self.subTest(case=name):
+                    ims = write_ims(tmp / f"{name}.ims", [[vol]], **kw)
+                    tif = tmp / f"{name}.tif"
+                    status = tool.build_tiff_and_mips(
+                        ims, tmp, name, [{"name": "GFP"}], tif, lambda ci, n: tmp / f"{name}_{ci}.png",
+                        want_tiff=True, want_mip=False, force=True, dry=False)
+                    self.assertIn("tiff L0", status)
+                    with tifffile.TiffFile(str(tif)) as t:
+                        ij = t.imagej_metadata
+                        page = t.pages[0]
+                        xres = page.tags["XResolution"].value
+                        yres = page.tags["YResolution"].value
+                    if name == "none":
+                        self.assertEqual(ij["unit"], "pixel")
+                        self.assertAlmostEqual(ij["spacing"], 1.0)
+                        self.assertAlmostEqual(xres[0] / xres[1], 1.0)
+                        self.assertAlmostEqual(yres[0] / yres[1], 1.0)
+                        self.assertIn("Voxel size: uncalibrated", ij["Info"])
+                        self.assertNotIn("Voxel size (um)", ij["Info"])
+                    else:
+                        self.assertEqual(ij["unit"], "um")
+                        self.assertAlmostEqual(ij["spacing"], 0.75, places=6)
+                        self.assertAlmostEqual(xres[1] / xres[0], 2.5, places=5)
+                        self.assertAlmostEqual(yres[1] / yres[0], 1.25, places=5)
+                        self.assertIn("Voxel size (um): X=2.5 Y=1.25 Z=0.75", ij["Info"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _load_tool(name):
+    spec = importlib.util.spec_from_file_location(name, str(ROOT / "tools" / "build_download_bundles.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @unittest.skipUnless(HAVE_DEPS, "preprocessing dependencies missing")

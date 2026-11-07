@@ -1,7 +1,7 @@
 {
   "id": "toggle-axes",
   "name": "Toggle Axes",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": "1.x",
   "contexts": [
     "page",
@@ -11,6 +11,7 @@
   "placement": "tools",
   "group": "visuals",
   "subtype": "toggle",
+  "compareSync": "display",
   "icon": "corner-down-right",
   "order": 20,
   "description": "Show or hide the 3D coordinate axes helper.",

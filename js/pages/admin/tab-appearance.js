@@ -194,7 +194,7 @@ function render() {
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:320px 1fr;gap:20px;align-items:start">
+    <div class="adm-appearance-grid">
       <div class="adm-card" style="padding:18px">
         <div class="adm-card-head"><i data-lucide="palette"></i><span>${escHtml(t('appearance.colors', 'Couleurs de marque'))}</span></div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${colorRows}</div>
@@ -214,7 +214,7 @@ function render() {
 
       <div class="adm-card" style="padding:0;overflow:hidden">
         <div class="adm-card-head" style="padding:12px 16px"><i data-lucide="eye"></i><span>${escHtml(t('appearance.preview', 'Aperçu en direct'))}</span></div>
-        <iframe id="appearance-preview" src="index.html" title="preview" style="width:100%;height:560px;border:none;border-top:1px solid var(--adm-border, #2a2a3a);background:#0d0d1a"></iframe>
+        <iframe id="appearance-preview" src="index.html" title="${escHtml(t('admin.sitePreviewFrame', 'Site preview'))}"style="width:100%;height:560px;border:none;border-top:1px solid var(--adm-border, #2a2a3a);background:#0d0d1a"></iframe>
       </div>
     </div>`;
 

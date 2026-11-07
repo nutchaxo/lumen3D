@@ -38,18 +38,19 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r/g, 
     },
   };
   const renders = [];
+  const readbacks = [];
   const renderer = {
     autoClear: false,
     getRenderTarget: () => null, getViewport() {}, setViewport() {}, setRenderTarget() {}, clear() {}, render() {},
     getPixelRatio: () => 1,
-    readRenderTargetPixels: (t, x, y, w, h, buf) => { renders.push(w); buf.fill(7); },
+    readRenderTargetPixels: (t, x, y, w, h, buf) => { renders.push(w); readbacks.push(buf); buf.fill(7); },
   };
   const document = {
     createElement: () => {
-      const c = { width: 0, height: 0, className: '', puts: [] };
+      const c = { width: 0, height: 0, className: '', puts: [], images: [] };
       c.getContext = () => ({
         createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
-        putImageData: (img) => { c.puts.push(img.width); },
+        putImageData: (img) => { c.puts.push(img.width); c.images.push(img); },
         clearRect() {}, fillRect() {}, fillText() {},
       });
       return c;
@@ -102,6 +103,20 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r/g, 
   assert.equal(renders.at(-1), 1600, 'the settled plane is rendered sharp');
   assert.equal(preview.width, 1600);
   assert.equal(preview.puts.at(-1), 1600, 'the sharp pass reaches the canvas');
+
+  // The readback goes straight into the ImageData put on the canvas: no second
+  // frame-sized buffer, no per-frame copy.
+  {
+    const img = preview.images.at(-1);
+    const buf = readbacks.at(-1);
+    assert.equal(buf.buffer, img.data.buffer, 'the readback writes into the ImageData itself');
+    assert.equal(buf.byteLength, 1600 * 1600 * 4);
+    assert.equal(img.data[0], 7, 'the canvas receives the pixels read back');
+    const before = readbacks.length;
+    fireTimers(); S.setPlaneSpec({ value: 0.41 }); flushRaf(); fireTimers();
+    assert.ok(readbacks.length > before, 'another sharp pass ran');
+    assert.equal(readbacks.at(-1).buffer, img.data.buffer, 'the same ImageData is reused frame after frame');
+  }
 
   S.setPlaneSpec({ value: 0.45 });
   assert.equal(S.flushPreview(), true, 'flushPreview renders now');

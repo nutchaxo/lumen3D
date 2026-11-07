@@ -193,6 +193,47 @@
   gap: var(--space-3);
 }
 
+/* The title is the card's one link; its ::after stretches it over the whole card, and the
+   sibling buttons sit above that layer, so a click anywhere else opens the dataset. */
+.dataset-card,
+.dataset-list-item {
+  position: relative;
+}
+
+.dataset-card-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.dataset-card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.dataset-card-link:focus-visible {
+  outline: none;
+}
+
+.dataset-card-link:focus-visible::after {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.dataset-card .card-actions button.btn,
+.dataset-list-actions button.btn {
+  position: relative;
+  z-index: 1;
+}
+
+.dataset-list-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+}
+
 .dataset-list-item {
   display: flex;
   gap: var(--space-4);

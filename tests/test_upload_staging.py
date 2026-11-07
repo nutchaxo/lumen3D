@@ -627,6 +627,79 @@ class TestBitmap(StagingCase):
         self.assertEqual(us.missing_chunks(entry), [0])
 
 
+class TestRechunkAfterRefusal(StagingCase):
+    """A chunk refused as too large (a proxy body limit the server cannot see) makes
+    the client re-plan smaller. Resuming at the recorded size would be refused
+    forever, so an unfinished file planned larger is re-expressed at the new size
+    — keeping the bytes already stored. Twin: section 6c of test_upload_php.php."""
+
+    REL = "bricks/lod0/c0/pack_00.bin"
+
+    def plan_at(self, chunk, size):
+        r = us.plan([{"type": "3d", "folder": "DS", "files": [{"path": self.REL, "size": size}]}], chunk)
+        return r["datasets"][0]["files"][0]
+
+    def test_a_partial_file_resumes_at_the_smaller_size_without_resending(self):
+        cs = us.MIN_CHUNK_SIZE
+        size = 4 * cs + 100
+        whole = bytes((i * 7) & 0xFF for i in range(size))
+        first = self.plan_at(2 * cs, size)
+        self.assertEqual(first["chunkSize"], 2 * cs)
+        head = whole[:2 * cs]
+        st, pl = us.write_chunk("3d", "DS", self.REL, 0, head, sha(head), first["fileId"])
+        self.assertEqual(st, 200, pl)
+
+        again = self.plan_at(cs, size)
+        self.assertEqual(again["chunkSize"], cs, "the smaller size is used, not the recorded one")
+        self.assertEqual(again["missing"], [2, 3, 4], "the stored half is not sent again")
+        self.assertEqual(again["received"], 2 * cs)
+        self.assertNotEqual(again["fileId"], first["fileId"], "a new incarnation of the file")
+
+        # A chunk of the old geometry still on the wire is refused, never misplaced.
+        st, pl = us.write_chunk("3d", "DS", self.REL, 1, whole[2 * cs:4 * cs],
+                                sha(whole[2 * cs:4 * cs]), first["fileId"])
+        self.assertEqual((st, pl.get("error")), (409, "file_not_planned"))
+
+        for i in again["missing"]:
+            part = whole[i * cs:(i + 1) * cs]
+            st, pl = us.write_chunk("3d", "DS", self.REL, i, part, sha(part), again["fileId"])
+            self.assertEqual(st, 200, pl)
+        st, pl = us.finalize_file("3d", "DS", self.REL, None)
+        self.assertEqual(st, 200, pl)
+        self.assertEqual((us.STAGING_DIR / "3d/DS" / self.REL).read_bytes(), whole)
+
+    def test_a_file_with_nothing_received_starts_over_at_the_smaller_size(self):
+        cs = us.MIN_CHUNK_SIZE
+        size = 3 * cs
+        self.plan_at(2 * cs, size)
+        again = self.plan_at(cs, size)
+        self.assertEqual(again["chunkSize"], cs)
+        self.assertEqual(again["missing"], [0, 1, 2])
+        self.assertEqual(again["received"], 0)
+        record = us.read_table_record("3d", "DS", again["fileId"])
+        self.assertEqual(record[:2], (size, cs), "the file table carries the new geometry")
+
+    def test_same_or_larger_request_keeps_the_recorded_size(self):
+        cs = us.MIN_CHUNK_SIZE
+        first = self.plan_at(cs, 3 * cs)
+        again = self.plan_at(4 * cs, 3 * cs)
+        self.assertEqual((again["chunkSize"], again["fileId"]), (cs, first["fileId"]))
+
+    def test_a_file_no_larger_than_the_new_size_is_left_alone(self):
+        cs = us.MIN_CHUNK_SIZE
+        first = self.plan_at(4 * cs, cs)
+        again = self.plan_at(cs, cs)
+        self.assertEqual((again["chunkSize"], again["fileId"]), (4 * cs, first["fileId"]),
+                         "one chunk either way: a chunk already on the wire stays valid")
+
+    def test_a_non_multiple_size_keeps_only_whole_new_chunks(self):
+        cs = us.MIN_CHUNK_SIZE
+        entry = {"size": 10 * cs, "chunkSize": 3 * cs, "bits": us._bitmap_encode(bytearray([0b0101]))}
+        out = us._rechunked(entry, 2 * cs)
+        self.assertEqual(us.missing_chunks(out), [1, 2, 4])
+        self.assertEqual(us.received_bytes(out), 4 * cs)
+
+
 class TestOperatorEdits(StagingCase):
     def test_an_edit_survives_a_re_drop_of_the_same_folder(self):
         self.stage_complete()
@@ -806,6 +879,89 @@ class Test2D(StagingCase):
             {"path": "metadata.json", "size": len(mb)}, {"path": "bricks/manifest.json", "size": 5}]}])
         self.send("DS", "metadata.json", mb)
         self.assertEqual(us.dataset_state("3d", "DS"), us.STATE_UPLOADING)
+
+
+class TestLargeImportCost(StagingCase):
+    """A timelapse import runs to tens of thousands of files: planning it and
+    closing each file must not cost O(files) per file under the dataset lock."""
+
+    def test_plan_of_20000_files_numbers_ids_contiguously_and_fast(self):
+        import time
+        n = 20000
+        files = [{"path": f"bricks/lod0/c0/pack_{i:05d}.bin", "size": 10} for i in range(n)]
+        t0 = time.perf_counter()
+        res = us.plan([{"type": "3d", "folder": "BIG", "files": files}])
+        elapsed = time.perf_counter() - t0
+        self.assertLess(elapsed, 15.0, f"plan of {n} files took {elapsed:.1f} s")
+        ds = res["datasets"][0] if "datasets" in res else res
+        self.assertNotIn("error", ds)
+        journal = us.load_journal("3d", "BIG")
+        ids = sorted(e["id"] for e in journal["files"].values())
+        self.assertEqual(ids, list(range(n)))
+        self.assertEqual(journal["nextId"], max(ids) + 1)
+        # A second drop adding files keeps numbering after the first.
+        more = files + [{"path": "bricks/lod0/c0/pack_99999.bin", "size": 10}]
+        us.plan([{"type": "3d", "folder": "BIG", "files": more}])
+        journal = us.load_journal("3d", "BIG")
+        self.assertEqual(journal["files"]["bricks/lod0/c0/pack_99999.bin"]["id"], n)
+        self.assertEqual(journal["nextId"], n + 1)
+
+    def _three_packs(self, folder):
+        rels = [f"bricks/lod0/c0/pack_{i:02d}.bin" for i in range(3)]
+        us.plan([{"type": "3d", "folder": folder,
+                  "files": [{"path": r, "size": 10} for r in rels]}])
+        for r in rels:
+            st, pl = us.write_chunk("3d", folder, r, 0, b"X" * 10, sha(b"X" * 10))
+            self.assertEqual(st, 200, pl)
+        return rels
+
+    def test_file_done_leaves_the_journal_alone_when_the_log_says_it_all(self):
+        rels = self._three_packs("FD")
+        jp = us.journal_path("3d", "FD")
+        before = jp.read_bytes()
+        for r in rels:
+            st, pl = us.finalize_file("3d", "FD", r, "ab" * 32)
+            self.assertEqual(st, 200, pl)
+        self.assertEqual(jp.read_bytes(), before, "file_done rewrote the journal")
+        self.assertTrue(us.log_path("3d", "FD").exists())
+        # A fresh load (a restart, or the other backend) still reads every file done.
+        journal = us.load_journal("3d", "FD")
+        self.assertTrue(all(journal["files"][r]["done"] for r in rels))
+        again = us.plan([{"type": "3d", "folder": "FD",
+                          "files": [{"path": r, "size": 10} for r in rels]}])
+        ds = again["datasets"][0] if "datasets" in again else again
+        self.assertTrue(all(f.get("skip") == "complete" for f in ds["files"]))
+
+    def test_file_done_compacts_once_the_log_is_long(self):
+        rels = self._three_packs("FC")
+        st, _ = us.finalize_file("3d", "FC", rels[0], None)
+        self.assertEqual(st, 200)
+        self.assertTrue(us.log_path("3d", "FC").exists())
+        # Records naming no planned id are ignored by the fold; they only lengthen it.
+        missing = len(us.load_journal("3d", "FC")["files"]) + 1000
+        for i in range(us._LOG_COMPACT_RECORDS):
+            us._append_log("3d", "FC", missing, i)
+        st, _ = us.finalize_file("3d", "FC", rels[1], None)
+        self.assertEqual(st, 200)
+        self.assertFalse(us.log_path("3d", "FC").exists(), "the long log was not compacted")
+        on_disk = json.loads(us.journal_path("3d", "FC").read_text(encoding="utf-8"))
+        self.assertTrue(on_disk["files"][rels[0]]["done"])
+        self.assertTrue(on_disk["files"][rels[1]]["done"])
+        self.assertTrue(on_disk["files"][rels[2]]["done"])   # every chunk in: folded done
+
+    def test_file_done_clearing_an_invalid_flag_is_written(self):
+        rels = self._three_packs("FI")
+        st, _ = us.finalize_file("3d", "FI", rels[0], None)
+        self.assertEqual(st, 200)
+        with us._journal_lock(us.dataset_key("3d", "FI")):
+            journal = us.load_journal("3d", "FI")
+            journal["files"][rels[0]]["invalid"] = "pack_bad"
+            us.save_journal(journal)
+        st, _ = us.finalize_file("3d", "FI", rels[0], None)
+        self.assertEqual(st, 200)
+        on_disk = json.loads(us.journal_path("3d", "FI").read_text(encoding="utf-8"))
+        self.assertNotIn("invalid", on_disk["files"][rels[0]])
+        self.assertTrue(on_disk["files"][rels[0]]["done"])
 
 
 class TestServerWiring(unittest.TestCase):

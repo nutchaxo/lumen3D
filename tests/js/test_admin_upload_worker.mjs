@@ -285,4 +285,75 @@ const types = (w) => w.posted.map((m) => m.type);
   assert.ok(!types(w).includes('fatal'), 'a cancelled transfer does not announce an expired session');
 }
 
-console.log('admin upload worker (outage · backoff · timeout · abort · insecure context · read retry): OK');
+// ── 12. A stale CSRF token waits for the current one instead of failing files ─
+{
+  const csrfRefused = { status: 403, ok: false, json: async () => ({ error: 'Invalid or missing CSRF token' }) };
+  const tokens = { chunk: [], done: [] };
+  const w = makeWorker({
+    fetchImpl: async (url, init) => {
+      const tok = init && init.headers ? init.headers['X-CSRF-Token'] : undefined;
+      if (String(url).includes('action=chunk')) { tokens.chunk.push(tok); return tok === 'new' ? ok({}) : csrfRefused; }
+      tokens.done.push(tok);
+      return tok === 'new' ? ok({ state: 'staged' }) : csrfRefused;
+    },
+  });
+  w.send({ type: 'config', endpoint: 'http://h/api/upload.php', csrf: 'old', parallel: 2 });
+  w.send({ type: 'enqueue', jobs: [job(), job({ path: 'b.bin' })] });
+  await w.advance(1000);
+  assert.equal(types(w).filter((x) => x === 'csrf-stale').length, 1, 'one request for a new token, however many chunks were refused');
+  assert.ok(!types(w).includes('file-error'), 'a refused token is not a failed file');
+  assert.ok(!types(w).includes('idle'), 'a transfer waiting for its token is not finished');
+  const sentBefore = tokens.chunk.length;
+  await w.advance(60000);
+  assert.equal(tokens.chunk.length, sentBefore, 'nothing is sent while the token is stale');
+  w.send({ type: 'csrf', csrf: 'new' });
+  await w.advance(1000);
+  assert.equal(types(w).filter((x) => x === 'file-done').length, 2, 'both files go through with the new token');
+  assert.ok(tokens.chunk.slice(sentBefore).every((t) => t === 'new'));
+  assert.ok(types(w).includes('idle'));
+
+  // file_done refused for its token waits the same way, here for a `config` push.
+  const w2 = makeWorker({
+    fetchImpl: async (url, init) => {
+      const tok = init.headers['X-CSRF-Token'];
+      if (String(url).includes('action=chunk')) return ok({});
+      return tok === 'new' ? ok({ state: 'staged' }) : csrfRefused;
+    },
+  });
+  w2.send({ type: 'config', endpoint: 'http://h/api/upload.php', csrf: 'old', parallel: 1 });
+  w2.send({ type: 'enqueue', jobs: [job()] });
+  await w2.advance(1000);
+  assert.ok(types(w2).includes('csrf-stale') && !types(w2).includes('file-error'));
+  w2.send({ type: 'config', endpoint: 'http://h/api/upload.php', csrf: 'new', parallel: 1 });
+  await w2.advance(1000);
+  assert.ok(types(w2).includes('file-done'), 'file_done is sent again with the new token');
+
+  // The same token answered back: the session is gone, once — not a loop.
+  let refusals = 0;
+  const w3 = makeWorker({
+    fetchImpl: async (url) => (String(url).includes('action=chunk') ? (refusals++, csrfRefused) : ok({})),
+  });
+  w3.send({ type: 'config', endpoint: 'http://h/api/upload.php', csrf: 'old', parallel: 1 });
+  w3.send({ type: 'enqueue', jobs: [job()] });
+  await w3.advance(1000);
+  w3.send({ type: 'csrf', csrf: 'old' });
+  await w3.advance(60000);
+  assert.equal(w3.posted.filter((m) => m.type === 'fatal' && m.reason === 'unauthorized').length, 1);
+  assert.equal(refusals, 1, 'no further request after the token was confirmed stale');
+}
+
+// ── 13. A 413 tells the manager the size that was refused ──────
+{
+  const w = makeWorker({
+    fetchImpl: async (url) => (String(url).includes('action=chunk')
+      ? { status: 413, ok: false, json: async () => { throw new Error('html'); } } : ok({})),
+  });
+  w.send({ type: 'config', endpoint: 'http://h/api/upload.php', parallel: 1 });
+  w.send({ type: 'enqueue', jobs: [job({ file: file(4096), size: 4096, chunkSize: 4096 })] });
+  await w.advance(1000);
+  const m = w.posted.find((x) => x.type === 'chunk-too-large');
+  assert.equal(m.bytes, 4096);
+  assert.equal(m.maxChunkSize, null, 'a proxy page carries no limit');
+}
+
+console.log('admin upload worker (outage · backoff · timeout · abort · insecure context · read retry · stale CSRF · 413 size): OK');

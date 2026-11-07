@@ -1,7 +1,7 @@
 {
   "id": "presentation-mode",
   "name": "Presentation Mode",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "platformCompat": ">=1.53.0",
   "dataTypes": [
     "3d",
@@ -17,7 +17,7 @@
   "subtype": "toggle",
   "icon": "presentation",
   "order": 10,
-  "description": "Toggle fullscreen presentation mode, hiding sidebar and header.",
+  "description": "Toggle fullscreen presentation mode, hiding sidebar and header; Escape or the exit button on the canvas leaves it.",
   "buttonId": "btn-presentation",
   "i18nTitle": "title",
   "i18nLanguages": [

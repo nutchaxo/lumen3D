@@ -75,7 +75,17 @@ const Rpc = loadModule('js/pages/compare-policy.js', 'ComparePanelRpc');
   // ok:false rejects with the panel's error.
   const q = rpc.request(3, 'REQUEST_CAPTURE');
   rpc.settle('3', { type: 'CAPTURE', requestId: sent.at(-1).msg.requestId, ok: false, error: 'nothing to capture' });
-  await assert.rejects(q, (e) => e.code === 'COMPARE_PANEL_ERROR' && /nothing to capture/.test(e.message));
+  await assert.rejects(q, (e) => e.code === 'COMPARE_PANEL_ERROR' && /nothing to capture/.test(e.message) && e.panelCode === null);
+  // The panel's own code travels beside the transport's.
+  const q2 = rpc.request(3, 'REQUEST_GRAPH_DATA');
+  rpc.settle('3', { type: 'GRAPH_DATA', requestId: sent.at(-1).msg.requestId, ok: false, error: 'NOT_READY', code: 'NOT_READY' });
+  await assert.rejects(q2, (e) => e.code === 'COMPARE_PANEL_ERROR' && e.panelCode === 'NOT_READY');
+  const q3 = rpc.request(3, 'REQUEST_GRAPH_DATA');
+  rpc.settle('3', { type: 'GRAPH_DATA', requestId: sent.at(-1).msg.requestId, ok: false, error: 'NO_TABLE' });
+  await assert.rejects(q3, (e) => e.panelCode === 'NO_TABLE', 'an error that is a code counts as one');
+  const q4 = rpc.request(3, 'REQUEST_GRAPH_DATA');
+  rpc.settle('3', { type: 'GRAPH_DATA', requestId: sent.at(-1).msg.requestId, ok: false, error: 'x', code: { toString: () => 'NOT_READY' } });
+  await assert.rejects(q4, (e) => e.panelCode === null, 'only a code-shaped string');
   // Timeout.
   const r = rpc.request('0', 'REQUEST_STUDIO_SLICE', {}, { timeoutMs: 5000 });
   const timer = timers.filter(t => t.live).at(-1);
@@ -97,9 +107,18 @@ const Rpc = loadModule('js/pages/compare-policy.js', 'ComparePanelRpc');
   await assert.rejects(rpc.request('0', 'REQUEST_EVERYTHING'), (e) => e.code === 'COMPARE_BAD_REQUEST');
   assert.equal(rpc.pending(), 0);
   // Every request type has its answer type, handled by compare.js.
+  // A plugin's own request: the plugin (in the host and in the panel) sends and answers it,
+  // compare.js only routes the answer through the shared RPC.
+  const PLUGIN_REQUESTS = { REQUEST_GRAPH_DATA: 'js/modules/tools/graphs/index.js' };
   for (const [req, ans] of Object.entries(Rpc.ANSWER_OF)) {
-    assert.ok(compareSrc.includes(`'${req}'`), `compare.js sends ${req}`);
     assert.ok(compareSrc.includes(`case '${ans}':`), `compare.js routes ${ans}`);
+    if (PLUGIN_REQUESTS[req]) {
+      const plugin = readFileSync(path.join(ROOT, PLUGIN_REQUESTS[req]), 'utf8');
+      assert.ok(plugin.includes(`'${req}'`), `${PLUGIN_REQUESTS[req]} sends and answers ${req}`);
+      assert.ok(plugin.includes(`type: '${ans}', requestId`), `${PLUGIN_REQUESTS[req]} sends ${ans} with the requestId`);
+      continue;
+    }
+    assert.ok(compareSrc.includes(`'${req}'`), `compare.js sends ${req}`);
     for (const [name, src] of [['viewer.js', viewerSrc], ['2d.js', page2dSrc]]) {
       assert.ok(src.includes(`'${req}'`), `${name} answers ${req}`);
       assert.ok(src.includes(`type: '${ans}', requestId`), `${name} sends ${ans} with the requestId`);
@@ -322,6 +341,7 @@ function assertCloneable(entry, label) {
   };
   const ctx = vm.createContext(sandbox);
   vm.runInContext(read('js/core/utils.js') + '\n;globalThis.Utils = Utils;', ctx);
+  vm.runInContext(read('js/core/panel-resources.js') + '\n;globalThis.PanelResources = PanelResources;', ctx);
   vm.runInContext(read('js/pages/compare-policy.js'), ctx);
   vm.runInContext(compareSrc + '\n;globalThis.CompareApp = CompareApp;', ctx, { filename: 'compare.js' });
   const App = ctx.CompareApp;

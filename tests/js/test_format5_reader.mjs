@@ -226,7 +226,8 @@ function makeLoader(files) {
   };
   const { BL } = makeLoader({});
   const CS = loadModule('js/core/cut-store.js', 'CutStore', {
-    fetch: fetchImpl, PlaneCodec, BrickLoader: BL, URL, Blob: globalThis.Blob, OffscreenCanvas: undefined, createImageBitmap: undefined
+    fetch: fetchImpl, PlaneCodec, BrickLoader: BL, URL, Blob: globalThis.Blob, OffscreenCanvas: undefined, createImageBitmap: undefined,
+    AbortController: globalThis.AbortController
   });
   const tree = CS.open('DATA_WEB/3d/F/bricks', {
     schema: 'iribhm-bricks-v5',
@@ -245,6 +246,30 @@ function makeLoader(files) {
   assert.deepEqual(Array.from(runs.get(100)), Array.from(pack.subarray(100, 120)), 'a multipart answer sliced per run');
   assert.equal(requests[requests.length - 1].split(',').length, 3, 'three runs, one request');
   console.log('CutStore xz row and multi-range runs: OK');
+
+  // A pack whose tile grid or tile sizes disagree with the level is refused, never placed.
+  const mkPack = (first, ta, tz, tiles) => {
+    const h = 20 + 12 * tiles.length;
+    const out = new Uint8Array(h + tiles.reduce((s, t) => s + t.length, 0));
+    const d = new DataView(out.buffer);
+    out.set([76, 80, 88, 90]);
+    d.setUint16(4, 1, true); d.setUint16(6, ta, true); d.setUint16(8, tz, true); d.setUint32(12, first, true); d.setUint32(16, 1, true);
+    let o = h;
+    tiles.forEach((t, i) => {
+      d.setBigUint64(20 + 12 * i, BigInt(t.length ? o : 0), true); d.setUint32(20 + 12 * i + 8, t.length, true);
+      out.set(t, o); o += t.length;
+    });
+    return out;
+  };
+  const grey = (w, h) => PlaneCodec.encodePngGray(w, h, Uint8Array.from({ length: w * h }, (_, i) => 1 + (i % 200)));
+  files['xz/l0/c0/b00002.bin'] = mkPack(128, 3, 1, [await grey(512, Z), await grey(88, Z), new Uint8Array(0)]);
+  await assert.rejects(tree.orthRow('xz', 0, 0, 128), /3×1 tiles, level 0 needs 2×1/, 'a header tile grid of another level is refused');
+  files['xz/l0/c0/b00003.bin'] = mkPack(192, 2, 1, [new Uint8Array(0), await grey(200, Z)]);
+  await assert.rejects(tree.orthRow('xz', 0, 0, 192), /tile 1,0 is 200×5, expected 88×5/, 'a tile wider than its place in the row is refused');
+  files['xz/l0/c0/b00004.bin'] = mkPack(256, 2, 1, [await grey(512, Z + 1), new Uint8Array(0)]);
+  await assert.rejects(tree.orthRow('xz', 0, 0, 256), /tile 0,0 is 512×6, expected 512×5/, 'a taller tile is refused');
+  await assert.rejects(tree.orthRow('xz', 3, 0, 64), /level 3 is not in the manifest/, 'a level the manifest lacks is refused');
+  console.log('CutStore refuses a mismatched xz pack: OK');
 
   // The same rows decoded through the worker pool (js/workers/cut-decode-worker.js, which
   // loads plane-codec.js and cut-store.js itself), run here in a vm behind a Worker stand-in.
@@ -268,7 +293,8 @@ function makeLoader(files) {
   }
   const CSW = loadModule('js/core/cut-store.js', 'CutStore', {
     fetch: fetchImpl, PlaneCodec, BrickLoader: BL, URL, Blob: globalThis.Blob, OffscreenCanvas: undefined, createImageBitmap: undefined,
-    Worker: FakeWorker, document: { querySelector: () => null }, navigator: { hardwareConcurrency: 4 }
+    Worker: FakeWorker, document: { querySelector: () => null }, navigator: { hardwareConcurrency: 4 },
+    AbortController: globalThis.AbortController
   });
   const treeW = CSW.open('DATA_WEB/3d/F/bricks', {
     schema: 'iribhm-bricks-v5',
@@ -310,4 +336,53 @@ function makeLoader(files) {
   assert.throws(() => DA.locate({ x: 200, y: 0, z: 0 }), /outside/);
   assert.equal(DA.locate({ x: 5, y: 5, z: 0 }).pack, null, 'a brick of zeros has no bytes');
   console.log('DataAccess frames and locate: OK');
+}
+
+// ── T6: DataAccess.readRegion reports the fraction of the read ────────────────
+{
+  const levels = { 0: { level: 0, dims: { x: 130, y: 70, z: 10 }, voxelSize: { x: 0.5, y: 0.5, z: 2 } } };
+  let stored = new Set(['0_0_0', '1_0_0', '2_0_0', '0_1_0', '1_1_0', '2_1_0']);
+  const batches = [];
+  const BrickLoader = {
+    isReady: () => true,
+    getLevelInfo: (k) => levels[k] || null,
+    getFormat: () => ({ version: 5, channels: 2, apron: 1, columns: [{ id: 'll' }] }),
+    hasBrick: (bx, by, bz) => stored.has(`${bx}_${by}_${bz}`),
+    loadBrickTasks: async (tasks, opts) => {
+      batches.push(tasks.length);
+      // As the loader does: the settled fraction after each task, whatever the callback does.
+      tasks.forEach((tk, i) => {
+        const r = tk.region;
+        const n = (r.x1 - r.x0) * (r.y1 - r.y0) * (r.z1 - r.z0);
+        opts.onBrickLoaded({ bx: tk.bx, by: tk.by, bz: tk.bz, channel: tk.channel, data: new Uint8Array(n).fill(tk.channel + 1) });
+        opts.onProgress?.((i + 1) / tasks.length);
+      });
+      return { summary: { failed: [], cancelled: false } };
+    }
+  };
+  const DA = loadModule('js/core/data-access.js', 'DataAccess', { BrickLoader, VolumeViewer: {} });
+  const seen = [];
+  const reg = await DA.readRegion({ x0: 0, x1: 130, y0: 0, y1: 70, z0: 0, z1: 10 }, [0, 1], { onProgress: f => seen.push(f) });
+  assert.equal(batches[0], 12, 'six bricks × two channels');
+  assert.equal(seen.length, 12);
+  assert.ok(seen.every((f, i) => f >= 0 && f <= 1 && (i === 0 || f >= seen[i - 1])), `fractions in [0, 1], non-decreasing: ${seen}`);
+  assert.equal(seen[seen.length - 1], 1, 'the read ends at 1');
+  assert.equal(reg.data[1][130 * 70 * 10 - 1], 2, 'the voxels still arrive');
+
+  const errors = [];
+  const origError = console.error;
+  console.error = (...a) => errors.push(a);
+  try {
+    const again = await DA.readRegion({ x0: 0, x1: 64, y0: 0, y1: 64, z0: 0, z1: 10 }, [0], { onProgress: () => { throw new Error('caller bug'); } });
+    assert.equal(again.data[0][0], 1, 'a failing progress callback does not abort the read');
+  } finally { console.error = origError; }
+  assert.ok(errors.length >= 1, 'the failing callback is logged');
+
+  stored = new Set();
+  const empty = [];
+  const zeros = await DA.readRegion({ x0: 0, x1: 10, y0: 0, y1: 10, z0: 0, z1: 2 }, [0], { onProgress: f => empty.push(f) });
+  assert.deepEqual(empty, [1], 'a region of zero bricks is read at once');
+  assert.equal(zeros.data[0].every(v => v === 0), true);
+  assert.equal(batches.length, 2, 'no batch for a region without stored bricks');
+  console.log('DataAccess readRegion progress: OK');
 }

@@ -293,6 +293,14 @@ PluginRegistry.implement('orientation-axes', {
         const q = cube.quaternion;
         e.source.postMessage({ type: 'ORIENTATION_RESULT', quaternion: { x: q.x, y: q.y, z: q.z, w: q.w } }, e.origin);
       }
+    } else if (e.data?.type === 'SET_ORIENTATION_BASE') {
+      // The admin's calibration changed under the open preview (saved, or a draft
+      // thrown away): the arms, a captured default view and the sample-side switch
+      // must read the new Q_base from now on. The volume stays where it is.
+      const saved = _oriQuat(e.data.quaternion);
+      this._calibrated = !!saved;
+      this._baseQuaternion = saved || this._rawPose(this._upsideDown);
+      if (typeof VolumeViewer !== 'undefined') VolumeViewer.triggerRender();
     } else if (e.data?.type === 'SET_SAMPLE_UPSIDE_DOWN') {
       // The admin's sample-side switch. The core previews the face it names as the
       // top; here only the raw pose an uncalibrated dataset's arms start on follows.
@@ -326,7 +334,13 @@ PluginRegistry.implement('orientation-axes', {
         quaternion: q ? q.toArray() : null
       }, e.origin);
     } else if (e.data?.type === 'GET_ORIENTATION_VIEW') {
-      // Capture the CURRENT pose as a default view, in the anatomical frame.
+      // Capture the CURRENT pose as a default view, in the anatomical frame. While
+      // the operator is aligning the specimen on the axes the pose is a calibration
+      // in progress, not a view of the anatomy: refused.
+      if (this._calibrationMode) {
+        e.source?.postMessage({ type: 'ORIENTATION_VIEW_RESULT', preset: 'custom', quaternion: null, reason: 'calibrating' }, e.origin);
+        return;
+      }
       const cube = this._getCube();
       const base = this._baseQuaternion || new THREE.Quaternion();
       const qAnat = cube ? cube.quaternion.clone().multiply(base.clone().invert()) : null;

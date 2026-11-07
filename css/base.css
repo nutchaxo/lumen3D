@@ -318,6 +318,21 @@ th {
 }
 .skip-link:focus { top: 8px; }
 
+/* Shown only when scripting is off (it sits in a <noscript>), where i18n cannot run. */
+.noscript-notice {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100000;
+  padding: 14px 20px;
+  text-align: center;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-strong);
+}
+.noscript-notice p { margin: 2px 0; }
+
 /* Honour the OS "reduce motion" setting for CSS animations and transitions. WebGL
    camera moves and canvas drawing are not CSS and are unaffected. */
 @media (prefers-reduced-motion: reduce) {

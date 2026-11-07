@@ -8,7 +8,8 @@
  *  - the credential hash uses the SAME PBKDF2 format as Python
  *    (`pbkdf2_sha256$iters$salthex$hashhex`), so api/admin_credential.json is
  *    interoperable between the two servers.
- *  - setup is create-exclusive (fopen 'x'); it can never overwrite a live credential.
+ *  - setup is create-exclusive (a complete temp file hard-linked into place); it
+ *    can never overwrite a live credential nor leave a partial one.
  *
  * NOTE: the PHP fallback is for legacy hosts only — the recommended server is
  * dev_server.py. This file is authored without a PHP runtime to test against; it
@@ -416,6 +417,17 @@ function lumen_request_json(): ?array {
     return $d;
 }
 
+/** A value decoded by lumen_json_decode_doc that was a JSON OBJECT (Python dict). */
+function lumen_json_is_object($v): bool {
+    return $v instanceof stdClass
+        || (is_array($v) && $v && array_keys($v) !== range(0, count($v) - 1));
+}
+
+/** A value decoded by lumen_json_decode_doc that was a JSON ARRAY (Python list). */
+function lumen_json_is_list($v): bool {
+    return is_array($v) && (!$v || array_keys($v) === range(0, count($v) - 1));
+}
+
 /** A scalar request field as a string, or null when it is absent or not a string. */
 function lumen_str($v): ?string {
     return is_string($v) ? $v : null;
@@ -482,20 +494,68 @@ function admin_credential_stamp(?array $rec = null): string {
     return substr(hash('sha256', (string)($rec['password_pbkdf2'] ?? '') . '|' . (string)($rec['rotated'] ?? '')), 0, 32);
 }
 
+/** Write $body to a new file at $path (create-exclusive) and check every byte landed.
+ *  Returns 'ok', 'exists' (the name was taken) or 'failed' (nothing left behind). */
+function admin_write_new_file(string $path, string $body): string {
+    $fp = @fopen($path, 'xb');
+    if ($fp === false) return file_exists($path) ? 'exists' : 'failed';
+    $ok = @fwrite($fp, $body) === strlen($body);
+    $ok = @fflush($fp) && $ok;
+    $ok = @fclose($fp) && $ok;
+    if (!$ok) { @unlink($path); return 'failed'; }
+    return 'ok';
+}
+
 /** Create the credential ONLY if absent. Returns [ok, status, payload].
- *  fopen('x') is the anti-overwrite guarantee (create-exclusive). */
+ *  The name only ever appears complete: the record is written in full to a temp
+ *  sibling and hard-linked into place — link() fails when the target exists, which
+ *  is the anti-overwrite guarantee. A credential created empty first and filled
+ *  afterwards (a full disk, a request killed during the hash or the write) would
+ *  exist but never parse: setup refuses an existing file and login never matches,
+ *  locking the operator out until the file is deleted by hand. */
 function admin_setup_credential(string $username, string $password): array {
     if (strlen($password) < 8) return [false, 400, ['error' => 'weak_password']];
-    $fp = @fopen(cred_file(), 'x');               // create-exclusive
-    if ($fp === false) {
-        return file_exists(cred_file())
-            ? [false, 409, ['error' => 'already_configured']]
-            : [false, 500, ['error' => 'setup_failed']];
-    }
+    $cred = cred_file();
+    if (file_exists($cred)) return [false, 409, ['error' => 'already_configured']];
     $rec = admin_credential_record($username, $password);
-    fwrite($fp, json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    fclose($fp);
-    @chmod(cred_file(), 0600);
+    $json = json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    if (!is_string($json)) return [false, 500, ['error' => 'setup_failed']];
+    $dir = dirname($cred);
+    if (!is_dir($dir) && !admin_make_dir($dir)) return [false, 500, ['error' => 'setup_failed']];
+
+    // A host may list link in disable_functions: since PHP 8 the function is then not
+    // defined at all and calling it throws an Error that @ does not silence.
+    $linked = false;
+    if (function_exists('link')) {
+        $tmp = $dir . '/.tmp-cred-' . bin2hex(random_bytes(6));
+        if (admin_write_new_file($tmp, $json) !== 'ok') return [false, 500, ['error' => 'setup_failed']];
+        @chmod($tmp, 0600);
+        try {
+            $linked = @link($tmp, $cred);
+        } catch (\Throwable $e) {
+            $linked = false;
+        } finally {
+            @unlink($tmp);
+        }
+    }
+    if (!$linked) {
+        if (file_exists($cred)) return [false, 409, ['error' => 'already_configured']];
+        // No hard links on this filesystem: the create-exclusive write, checked in full.
+        $state = admin_write_new_file($cred, $json);
+        if ($state === 'exists') return [false, 409, ['error' => 'already_configured']];
+        if ($state !== 'ok') return [false, 500, ['error' => 'setup_failed']];
+    }
+    @chmod($cred, 0600);
+
+    $back = admin_credential();
+    if (!is_array($back)
+        || ($back['username'] ?? null) !== $rec['username']
+        || ($back['password_pbkdf2'] ?? null) !== $rec['password_pbkdf2']) {
+        // Only this request created the file (create-exclusive above), so removing a
+        // copy that does not read back is safe and leaves setup available.
+        @unlink($cred);
+        return [false, 500, ['error' => 'setup_failed']];
+    }
     return [true, 200, ['ok' => true, 'username' => $rec['username']]];
 }
 
@@ -1109,6 +1169,15 @@ function lumen_canonical_volume_sources($sources, string $type, string $folder):
  * staging proxy (an edit made during the import).
  */
 function lumen_migration_metadata(): void {
+    // The pass runs on nearly every admin request (each file of an import posts one),
+    // and a file that has not changed since a clean pass cannot need repairing: skip
+    // the walk while the published tree's stat signature — and this library, whose
+    // rules may change with an update — are what the last clean pass saw.
+    $stamp = lumen_migration_metadata_stamp_file();
+    $sig = hash('sha256', lumen_catalog_signature() . '|' . (int)@filemtime(__FILE__) . '.' . (int)@filesize(__FILE__));
+    if (@file_get_contents($stamp) === $sig) return;
+    $repaired = false;
+    $failed = false;
     foreach (LUMEN_DATASET_TYPES as $type) {
         $base = data_web() . '/' . $type;
         $names = @scandir($base);
@@ -1123,7 +1192,8 @@ function lumen_migration_metadata(): void {
             if (($peek['type'] ?? null) === $type && ($peek['id'] ?? null) === "$type/$folder"
                 && !lumen_migration_has_legacy_ids($peek['relatedIds'] ?? null)
                 && !lumen_canonical_volume_sources($peek['volumeSources'] ?? null, $type, $folder)[1]) continue;
-            lumen_with_lock($path, function () use ($path, $type, $folder) {
+            $repaired = true;
+            lumen_with_lock($path, function () use ($path, $type, $folder, &$failed) {
                 $meta = lumen_read_json_doc($path);       // keeps `{}` maps as maps
                 if ($meta === null) return;
                 $meta['type'] = $type;                     // the folder is the authority
@@ -1134,11 +1204,20 @@ function lumen_migration_metadata(): void {
                 if (isset($meta['volumeSources'])) {
                     $meta['volumeSources'] = lumen_canonical_volume_sources($meta['volumeSources'], $type, $folder)[0];
                 }
-                if (!lumen_migration_write_json($path, $meta)) error_log("dataset-type migration: FAILED metadata $type/$folder");
+                if (!lumen_migration_write_json($path, $meta)) {
+                    $failed = true;
+                    error_log("dataset-type migration: FAILED metadata $type/$folder");
+                }
             });
         }
     }
+    // Stamped only after a pass that found nothing to do: a failed write must be
+    // retried, and after a repair the next request re-checks (the signature taken
+    // here would also cover a file another writer damaged while this loop ran).
+    if (!$repaired && !$failed) @lumen_write_file_atomic($stamp, $sig, 0600);
 }
+
+function lumen_migration_metadata_stamp_file(): string { return admin_private_dir() . '/.metadata-identity.sig'; }
 
 /** Two stats rows for one dataset (a legacy-keyed one and an already-canonical one):
  *  numeric counters add up, the most recent ISO timestamp wins. */
@@ -1619,6 +1698,16 @@ function lumen_telemetry_store(): ?string {
     return $dir . '/throttle.bin';
 }
 
+/** The download counter's own bucket table (same constants and format as the
+ *  beacon's): a download flood can neither forge the Downloads figures without
+ *  bound nor drain the visit/view beacon's buckets. Twin: dev_server.py
+ *  _DOWNLOAD_THROTTLE_STATE. */
+function lumen_download_throttle_store(): ?string {
+    $dir = admin_private_dir() . '/.telemetry';
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) return null;
+    return $dir . '/downloads.bin';
+}
+
 function lumen_telemetry_refill(int $tokens, int $last, int $now, int $burst, int $rate): array {
     if ($now > $last) $tokens = min($burst * 1000, $tokens + ($now - $last) * $rate);
     return [$tokens, $now];
@@ -1709,6 +1798,9 @@ function lumen_count_download(string $rel, string $method, bool $hasRange): ?str
     $file = $root !== false ? realpath($root . '/' . $m[3]) : false;
     if ($root === false || $file === false || strpos($file, $root . DIRECTORY_SEPARATOR) !== 0 || !is_file($file)) return null;
     $id = $safe[0] . '/' . $safe[1];
+    // Only the count is throttled: download.php still redirects, router.php still serves.
+    $store = lumen_download_throttle_store();
+    if ($store !== null && !lumen_telemetry_allow(admin_client_ip(), null, $store)) return null;
     try { admin_record_event('download', $id); } catch (\Throwable $e) { return null; }
     return $id;
 }
@@ -3164,6 +3256,15 @@ function admin_update_check_assets(array $rel, string $latest): array {
             'signingConfigured' => LUMEN_RELEASE_PUBKEY !== ''];
 }
 
+/** A failed apply: the code (and the release-relative path of the file it stopped on, which
+ *  names nothing of this host) go to the browser, what the host said goes to the log. */
+function admin_update_fail(string $code, string $relPath, int $updated): array {
+    $last = error_get_last();
+    @error_log('[lumen] update_apply ' . $code . ' on ' . $relPath . ' after ' . $updated . ' file(s)'
+        . ($last ? ': ' . str_replace(["\r", "\n"], ' ', (string)$last['message']) : ''));
+    return [500, ['error' => $code, 'path' => $relPath, 'filesUpdated' => $updated]];
+}
+
 function admin_update_apply_locked(): array {
     if (!class_exists('ZipArchive')) return [500, ['error' => 'zip_unavailable']];
     @set_time_limit(600);
@@ -3269,7 +3370,7 @@ function admin_update_apply_locked(): array {
         if (!is_file($srcF)) continue;
         $dstF = $root . '/' . $relPath;
         $dir = dirname($dstF);
-        if (!admin_make_dir($dir)) { mkt_rmrf($staging); return [500, ['error' => 'mkdir_failed', 'path' => $relPath, 'filesUpdated' => $updated]]; }
+        if (!admin_make_dir($dir)) { mkt_rmrf($staging); return admin_update_fail('mkdir_failed', $relPath, $updated); }
         // Rename-aside FIRST: it frees the name atomically and works even on an
         // OPEN file (Windows allows rename, not delete-in-place; a plain unlink
         // there only marks delete-pending and the name stays blocked until the
@@ -3282,7 +3383,7 @@ function admin_update_apply_locked(): array {
             @file_put_contents($dstF . '.lumen-backup', $prev);
             if (!lumen_write_file_atomic($dstF, $merged, admin_code_file_mode())) {
                 mkt_rmrf($staging);
-                return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
+                return admin_update_fail('write_failed', $relPath, $updated);
             }
             $updated++;
             continue;
@@ -3296,7 +3397,7 @@ function admin_update_apply_locked(): array {
             // beside it; a later request finalizes (admin_update_finish_pending).
             if (@rename($srcF, $dstF . '.lumen-new') || @copy($srcF, $dstF . '.lumen-new')) { $pending[] = $relPath; $updated++; continue; }
             mkt_rmrf($staging);
-            return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
+            return admin_update_fail('write_failed', $relPath, $updated);
         }
         admin_fix_file_mode($dstF);
         if (substr($relPath, -4) === '.php') $phpWritten[] = $dstF;

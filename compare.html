@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <meta name="theme-color" content="#0D0D1A" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F5F5FA" media="(prefers-color-scheme: light)">
   <title>{{SITE:pageTitles.compare|Compare - Lumen3D}}</title>
 
   <!-- Fonts -->
@@ -10,9 +13,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" data-async-font>
   <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
-
-  <!-- Lucide Icons -->
-  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
@@ -43,7 +43,7 @@
       justify-content: space-between;
       padding: var(--space-3) var(--space-6);
       background: var(--bg-surface);
-      border-bottom: 1px solid var(--border-light);
+      border-bottom: 1px solid var(--border-default);
       z-index: 10;
     }
 
@@ -55,7 +55,7 @@
       gap: var(--space-2) var(--space-4);
       padding: var(--space-2) var(--space-6);
       background: var(--bg-surface-2);
-      border-bottom: 1px solid var(--border-light);
+      border-bottom: 1px solid var(--border-default);
       z-index: 9;
     }
 
@@ -71,7 +71,7 @@
       display: flex;
       gap: 4px;
       padding-left: 12px;
-      border-left: 1px solid var(--border-light);
+      border-left: 1px solid var(--border-default);
     }
 
     .compare-toolbar .btn-sm i { width: 16px; height: 16px; }
@@ -90,11 +90,26 @@
       font-size: var(--text-sm);
     }
 
+    .compare-drawers { display: flex; flex-direction: column; flex: 0 0 auto; }
+    .compare-drawer {
+      position: relative;
+      display: none;
+      height: min(52vh, 560px);
+      overflow: auto;
+      border-top: 1px solid var(--border-default);
+      background: var(--bg-surface);
+    }
+    .compare-drawer.open { display: flex; flex-direction: column; }
+    .compare-drawer > .compare-drawer-close { position: absolute; top: 6px; right: 8px; z-index: 2; }
+    .compare-drawer .graphs-body { flex: 1 1 auto; }
+    .compare-drawer .scientific-panel-header { padding-right: 48px; }
+    .compare-drawer .graphs-body .btn.active { background: var(--color-primary-strong); border-color: var(--color-primary-strong); color: #fff; }
+
     .compare-grid {
       flex: 1;
       display: grid;
       gap: 2px;
-      background: var(--border-light);
+      background: var(--border-default);
       position: relative;
       min-height: 0;
       overflow: hidden;
@@ -111,6 +126,23 @@
        is the grid's first child, so the first PANEL is marked, not :first-child). */
     .compare-grid.layout-3 > .compare-panel[data-first] { grid-column: span 2; }
     .compare-grid.layout-custom > .compare-panel[data-first] { grid-column: auto; }
+
+    /* A phone cannot hold two WebGL panels side by side: the automatic layout
+       stacks them, each tall enough to work in, and the grid scrolls. The chosen
+       Columns / Rows / Grid layouts (layout-custom) keep their own templates.
+       Same breakpoint as NARROW_LAYOUT_QUERY in the page script. */
+    @media (max-width: 720px) {
+      .compare-toolbar { padding: var(--space-2) var(--space-3); }
+      .compare-grid:not(.layout-custom).layout-2,
+      .compare-grid:not(.layout-custom).layout-3,
+      .compare-grid:not(.layout-custom).layout-4 {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: none;
+        grid-auto-rows: minmax(60vh, 1fr);
+        overflow-y: auto;
+      }
+      .compare-grid:not(.layout-custom).layout-3 > .compare-panel[data-first] { grid-column: auto; }
+    }
 
     .compare-header h1 { font-size: var(--text-xl); margin: 0; }
     .modal-header h2 { font-size: var(--text-lg); margin: 0; }
@@ -145,7 +177,7 @@
 
     .panel-title-badge {
       background: var(--bg-surface-3);
-      border: 1px solid var(--border-light);
+      border: 1px solid var(--border-default);
       color: var(--text-primary);
       padding: 4px 12px;
       border-radius: var(--radius-full);
@@ -166,8 +198,8 @@
     }
 
     .panel-actions .btn-settings.active {
-      background: var(--color-primary);
-      border-color: var(--color-primary);
+      background: var(--color-primary-strong);
+      border-color: var(--color-primary-strong);
       color: #fff;
     }
 
@@ -194,7 +226,7 @@
       border-radius: var(--radius-md);
       background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
       backdrop-filter: blur(6px);
-      border: 1px solid var(--border-light);
+      border: 1px solid var(--border-default);
       color: var(--text-secondary);
       cursor: pointer;
       transition: all 0.15s ease;
@@ -210,13 +242,14 @@
     }
 
     .panel-tool-btn.btn-solid {
-      background: var(--color-primary);
+      background: var(--color-primary-strong);
       color: #fff;
-      border-color: var(--color-primary);
+      border-color: var(--color-primary-strong);
     }
 
     .panel-tool-btn.btn-solid:hover {
-      background: var(--color-primary-hover, var(--color-primary));
+      background: var(--color-primary-strong-hover);
+      border-color: var(--color-primary-strong-hover);
       color: #fff;
     }
 
@@ -230,7 +263,7 @@
       gap: 12px;
       padding: var(--space-3) var(--space-4);
       border-radius: var(--radius-md);
-      border: 1px solid var(--border-light);
+      border: 1px solid var(--border-default);
       background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
       backdrop-filter: blur(6px);
       font-size: var(--text-xs);
@@ -322,7 +355,7 @@
 
     .modal-content {
       background: var(--bg-surface);
-      border: 1px solid var(--border-light);
+      border: 1px solid var(--border-default);
       border-radius: var(--radius-lg);
       width: 860px; max-width: 92vw;
       height: 640px; max-height: 90vh;
@@ -331,7 +364,7 @@
     }
     .modal-header {
       padding: var(--space-4);
-      border-bottom: 1px solid var(--border-light);
+      border-bottom: 1px solid var(--border-default);
       display: flex; justify-content: space-between; align-items: center;
     }
     .modal-filters {
@@ -340,12 +373,12 @@
       flex-wrap: wrap;
       gap: var(--space-2);
       padding: var(--space-3) var(--space-4);
-      border-bottom: 1px solid var(--border-light);
+      border-bottom: 1px solid var(--border-default);
     }
     .modal-filters .form-input { flex: 1; min-width: 160px; }
     .modal-type-chips { display: flex; gap: 4px; flex-wrap: wrap; }
     .modal-type-chip {
-      border: 1px solid var(--border-light);
+      border: 1px solid var(--border-default);
       background: transparent;
       color: var(--text-secondary);
       border-radius: var(--radius-full);
@@ -354,8 +387,8 @@
       cursor: pointer;
     }
     .modal-type-chip.is-active {
-      background: var(--color-primary);
-      border-color: var(--color-primary);
+      background: var(--color-primary-strong);
+      border-color: var(--color-primary-strong);
       color: #fff;
     }
     .modal-body {
@@ -376,7 +409,7 @@
 
     .dataset-mini-card {
       background: var(--bg-surface-2);
-      border: 1px solid var(--border-light);
+      border: 1px solid var(--border-default);
       border-radius: var(--radius-md);
       padding: var(--space-3);
       cursor: pointer;
@@ -403,6 +436,7 @@
 </head>
 <body data-page="compare">
   <a class="skip-link" href="#compare-grid" data-i18n="nav.skipToContent">Skip to content</a>
+  <noscript><div class="noscript-notice" role="alert"><p lang="en">This site needs JavaScript to display its content.</p><p lang="fr">Ce site a besoin de JavaScript pour afficher son contenu.</p></div></noscript>
 
   <div class="compare-layout">
 
@@ -454,6 +488,8 @@
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-compare-studio" data-i18n-title="compare.studioHint" disabled>
           <i data-lucide="pen-tool"></i> <span data-i18n="compare.studio">Studio</span>
         </button>
+        <!-- Buttons of the plugins that declared the "compare" context (Graphs…), added by JS. -->
+        <span id="compare-plugin-actions" style="display:contents"></span>
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-export-compare">
           <i data-lucide="download"></i> <span data-i18n="compare.export">Export</span>
         </button>
@@ -483,6 +519,7 @@
         <label><input type="checkbox" id="sync-time" checked> <span data-i18n="compare.syncTime">Time</span></label>
         <label><input type="checkbox" id="sync-camera" checked> <span data-i18n="compare.syncCamera">Camera / view</span></label>
         <label><input type="checkbox" id="sync-channels" checked> <span data-i18n="compare.syncChannels">Channels</span></label>
+        <label data-i18n-title="compare.syncDisplayHint" title="Grid, axes, hidden volume and render mode follow from one panel to the others"><input type="checkbox" id="sync-display" checked> <span data-i18n="compare.syncDisplay">Display</span></label>
       </div>
     </div>
 
@@ -495,6 +532,10 @@
       </div>
       <!-- Panels are appended here by JS -->
     </main>
+
+    <!-- Drawers of the plugins that declared the "compare" context: they sit under the
+         panels and take a share of the height while open. -->
+    <div class="compare-drawers" id="compare-drawers"></div>
 
   </div>
 
@@ -552,8 +593,8 @@
           </div>
         </div>
         <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
-          <div class="panel-title" data-i18n="compare.layers">Layers</div>
-          <div class="studio-layers-list" id="studio-layers-list">
+          <div class="panel-title" id="studio-layers-title" data-i18n="compare.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list" role="list" aria-labelledby="studio-layers-title">
             <!-- Populated via JS -->
           </div>
         </div>
@@ -583,6 +624,7 @@
     </div>
   </div>
 
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
   <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>
@@ -597,6 +639,10 @@
   <script src="js/components/channel-panel.js"></script>
   <script src="js/core/slice-compositor.js"></script>
   <script src="js/components/studio-editor.js"></script>
+  <script src="js/core/panel-resources.js"></script>
+  <script src="js/core/compat.js"></script>
+  <script src="js/core/plugin-trust.js"></script>
+  <script src="js/core/plugin-registry.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/pages/compare-policy.js"></script>
   <script src="js/pages/compare.js"></script>
 </body>

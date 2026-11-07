@@ -7,13 +7,14 @@
   "notchTitle": "3D view of every kept slice. Drag the cursor down into the track to browse slice by slice.",
   "trackTitle": "Drag to browse the slices. Drag the cursor up into the 3D notch to show them all.",
   "cursorTitle": "Drag to move. Drag an edge to change how many slices are shown.",
-  "trimAboveTitle": "Trim the slices above",
-  "trimBelowTitle": "Trim the slices below",
+  "trimAboveTitle": "Trim the slices above (Shift+↑/↓)",
+  "trimBelowTitle": "Trim the slices below (Alt+↑/↓)",
   "thickness": "Thickness",
   "thicknessTitle": "Slices shown at once",
   "kept": "Kept {lo}–{hi} · {n} of {total} slices",
   "keptAll": "All {total} slices kept",
   "resetTrim": "Restore every slice",
   "spin": "Rotation",
-  "spinTitle": "Turn the slices on screen"
+  "spinTitle": "Turn the slices on screen",
+  "keysHelp": "↑/↓ move the cursor, Home shows every kept slice in 3D, End goes to the last slice, + and − change the thickness, Shift+↑/↓ moves the upper trim and Alt+↑/↓ the lower trim."
 }

@@ -12,5 +12,9 @@
   "clickSecond": "Click a second point to measure distance.",
   "distance": "Distance",
   "deltaZ": "Delta Z",
-  "measuredBetween": "Measured between two picked surface points in calibrated physical coordinates."
+  "measuredBetween": "Measured between two picked surface points in calibrated physical coordinates.",
+  "changeColor": "Change colour",
+  "hideMeasure": "Hide measurement",
+  "showMeasure": "Show measurement",
+  "deleteMeasure": "Delete measurement"
 }

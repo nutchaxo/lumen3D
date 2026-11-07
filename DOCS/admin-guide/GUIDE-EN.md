@@ -2183,7 +2183,7 @@ Reserved for the person who manages the repository, but good to know so you can 
 - The password from step 1 also authorises the plugin installations of step 5.
 :::
 
-When no administrator account exists, opening `admpan.html` triggers the **Guided setup**. A 5-segment bar shows progress; at the bottom: [Back]{.ui}, [Skip]{.ui}, [Next]{.ui} (then [Finish]{.ui}). If you click [Skip]{.ui}, the wizard ends immediately: values already entered are kept, **the following steps are not done** (so **no plugin is installed** if you skip before step 5: do it in Catalog).
+When no administrator account exists, opening `admpan.html` triggers the **Guided setup**. A 5-segment bar shows progress; at the bottom: [Back]{.ui} (from step 3), [Skip]{.ui}, [Next]{.ui} (then [Finish]{.ui}). If you click [Skip]{.ui}, the wizard ends immediately: values already entered are kept, **the following steps are not done** (so **no plugin is installed** if you skip before step 5: do it in Catalog).
 
 ## Step 1 — Admin account
 
@@ -2220,7 +2220,7 @@ Editable afterwards in **Identity** (chapter 8).
 
 ![Wizard, step 3.](img-en/wizard-3-theme.png){.shot width=75%}
 
-One **brand colour** out of six (green preselected). Can be refined afterwards in **Appearance** (chapter 9).
+One **brand colour** out of six. The colour the site uses now is outlined (green on a new installation, none when the site has a colour of its own). **Nothing is written unless you click a colour**; a clicked colour changes only the brand colours and keeps the font, the corners and every other setting of **Appearance**. Can be refined afterwards in **Appearance** (chapter 9).
 
 ## Step 4 — Texts
 
@@ -2237,7 +2237,7 @@ The list, grouped **Rendering / Channels / Tools**, comes from the signed catalo
 [Finish]{.ui} installs the selection ("Installing plugins… (i/n)", "{n} plugin(s) installed.") and opens the panel. **The step 1 password authorises these installations**: nothing is asked twice.
 
 ::: note
-The wizard writes only the brand, the object, the organization, the footer and the chosen theme.
+The wizard writes only the brand, the object, the organization, the footer and the colour you clicked. A field left empty, or a colour not clicked, keeps what the site already has.
 :::
 
 # Appendix B — When something goes wrong
@@ -2258,7 +2258,7 @@ It is **impossible** to recover it: the server keeps only an irreversible finger
 3. Create a new password.
 :::
 
-**Nothing else is lost**: no datasets, no pages, no settings. During this short window, anyone opening the page could create the account in your place: do it in one go.
+**Nothing else is lost**: no datasets, no pages, no settings. Once the account is created, click [Skip]{.ui}: the identity, the texts and the theme stay as they were (they change only if you fill in a field or click a colour). During this short window, anyone opening the page could create the account in your place: do it in one go.
 
 ### "Too many attempts. Try again in N min."
 

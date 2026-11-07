@@ -205,6 +205,7 @@ function makeEnv({ channels = 4, projection = 'mip', slabThickness = 9, zstackAc
   const StudioPlaneOps = { cropRect: () => ({ ...FOOTPRINT_RECT, renderRes: RES }) };
   const body = `
     let _currentTimepoint = 0;
+    const isLive = false;
     let _zstackActive = env.zstackActive;
     const datasetMeta = { dimensions: { x: 80, y: 80, z: 40, c: env.channels } };
     function _currentChannelState() { return env.state; }
@@ -220,6 +221,7 @@ function makeEnv({ channels = 4, projection = 'mip', slabThickness = 9, zstackAc
     ${lift('_withCoverageMask')}
     ${lift('_sliceCoverageMask')}
     ${lift('_captureRenderRes')}
+    ${lift('_displayedTimepoint')}
     ${lift('getCurrentSliceResult')}
     return { getCurrentSliceResult };
   `;

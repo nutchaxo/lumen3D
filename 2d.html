@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <meta name="theme-color" content="#0D0D1A" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F5F5FA" media="(prefers-color-scheme: light)">
   <title>{{SITE:pageTitles.2d|2D — Lumen3D}}</title>
 
   <!-- Fonts -->
@@ -10,9 +13,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
   <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
-
-  <!-- Lucide Icons -->
-  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
@@ -27,6 +27,7 @@
 </head>
 <body data-page="2d">
   <a class="skip-link" href="#main" data-i18n="nav.skipToContent">Skip to content</a>
+  <noscript><div class="noscript-notice" role="alert"><p lang="en">This site needs JavaScript to display its content.</p><p lang="fr">Ce site a besoin de JavaScript pour afficher son contenu.</p></div></noscript>
 
   <div class="viewer-layout">
 
@@ -37,7 +38,7 @@
           <i data-lucide="arrow-left"></i>
         </a>
         <div>
-          <div class="viewer-title" id="dataset-title">Loading photograph...</div>
+          <div class="viewer-title" id="dataset-title">…</div>
           <div class="viewer-subtitle" id="dataset-subtitle">--</div>
         </div>
       </div>
@@ -153,10 +154,10 @@
         <div id="p2d-zoom" class="p2d-zoom" title="Displayed resolution" data-i18n-title="2d.zoomInfo"></div>
         <!-- Shown only when this page is one pane of a split view or of the Compare page -->
         <div id="p2d-pane-nav" class="p2d-pane-nav" hidden>
-          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-prev" data-i18n-title="2d.prev" aria-label="Previous"><i data-lucide="chevron-left"></i></button>
-          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-browse" data-i18n-title="2d.browse" aria-label="Browse"><i data-lucide="layout-grid"></i></button>
-          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-next" data-i18n-title="2d.next" aria-label="Next"><i data-lucide="chevron-right"></i></button>
-          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-fit" data-i18n-title="2d.fit" aria-label="Fit"><i data-lucide="maximize"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-prev" data-i18n-title="2d.prev" aria-label="Previous" data-i18n-aria="2d.prev"><i data-lucide="chevron-left"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-browse" data-i18n-title="2d.browse" aria-label="Browse" data-i18n-aria="2d.browse"><i data-lucide="layout-grid"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-next" data-i18n-title="2d.next" aria-label="Next" data-i18n-aria="2d.next"><i data-lucide="chevron-right"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-fit" data-i18n-title="2d.fit" aria-label="Fit" data-i18n-aria="2d.fit"><i data-lucide="maximize"></i></button>
         </div>
 
         <!-- Contact-sheet browser over every 2D dataset of the catalog -->
@@ -226,8 +227,8 @@
           </div>
         </div>
         <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
-          <div class="panel-title" data-i18n="viewer.layers">Layers</div>
-          <div class="studio-layers-list" id="studio-layers-list"></div>
+          <div class="panel-title" id="studio-layers-title" data-i18n="viewer.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list" role="list" aria-labelledby="studio-layers-title"></div>
         </div>
       </div>
       <div class="studio-workspace" id="studio-workspace">
@@ -252,6 +253,7 @@
     </div>
   </div>
 
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
   <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>

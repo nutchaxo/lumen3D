@@ -7,7 +7,11 @@
 //   • an item error of unit_inputs_many (unit_blocked) and a unit refused by unit_put_many are
 //     unit_failed for that unit only; the others are unit_done;
 //   • a server without unit_inputs_many answers batch_unsupported (the pool goes back to one
-//     unit per request).
+//     unit per request);
+//   • a single-unit migration (m004) obeys the same limit: a larger result goes in pieces, and
+//     a piece answered complete ends the unit;
+//   • the batch's run cache is bounded: a run leaves it after the last unit that lists it, a run
+//     missed by the prefetch is kept for a later unit only within BATCH_PREFETCH_BYTES.
 //
 // Run: node tests/js/test_mig_worker_batches.mjs
 import assert from 'node:assert/strict';
@@ -23,11 +27,20 @@ const FAKE_HANDLER = `
     batchUnits: 8,
     prepare: async () => ({ trees: [{}] }),
     runUnit: async (inp, state, io) => {
-      const got = await io.readRels(inp.tiles);
+      const got = await io.readRels([...inp.tiles, ...(inp.extra || [])]);
       let sum = 0; for (const g of got) sum += g[0];
       const body = new Uint8Array(inp.size); body.fill(sum & 0xFF);
       return { body, tiles: got.length };
     },
+  };`;
+
+// A single-unit migration (no batches): its result size comes with the unit key.
+const FAKE_M004 = `
+  self.LumenMigrationHandlers = self.LumenMigrationHandlers || {};
+  self.LumenMigrationHandlers['m004-bricks-v3'] = {
+    prepare: async () => ({ trees: [{}] }),
+    planUnitWork: (key) => ({ size: Number(key.split('.').pop().slice(1)) }),
+    runUnit: async (work) => ({ body: new Uint8Array(work.size).fill(7), tiles: 1, bytesIn: 0 }),
   };`;
 
 function makeWorker(behaviour) {
@@ -52,6 +65,7 @@ function makeWorker(behaviour) {
   ctx.importScripts = (rel) => {
     const clean = rel.split('?')[0].replace(/^\.\.\//, 'js/');
     if (clean === 'js/migrations/m005-matrix.js') { vm.runInContext(FAKE_HANDLER, ctx); return; }
+    if (clean === 'js/migrations/m004-bricks-v3.js') { vm.runInContext(FAKE_M004, ctx); return; }
     vm.runInContext(readFileSync(path.join(ROOT, clean), 'utf8'), ctx, { filename: clean });
   };
   vm.runInContext(readFileSync(path.join(ROOT, 'js/workers/migration-worker.js'), 'utf8'), ctx);
@@ -182,6 +196,106 @@ async function runBatch(opts) {
   const { st, res } = await runBatch({ maxBody: 8 * MB, old: true });
   assert.equal(res.type, 'batch_unsupported');
   assert.equal(st.puts.length + st.parts.length, 0);
+}
+
+// 4. Every migration's result honours the host's limit: a 3 MB m004 unit on a 1 MiB host goes
+//    up in pieces, a small one in one unit_put; a piece answered complete (the retry of a last
+//    piece whose first answer was lost) ends the unit.
+async function runSingle(key, maxBody, answer) {
+  const st = { parts: [], puts: [] };
+  const w = makeWorker((req) => {
+    const len = req.body == null ? 0 : asBytes(req.body).length;
+    assert.ok(len <= maxBody, `${req.url} carries ${len} > ${maxBody}`);
+    const q = new URL(req.url).searchParams;
+    if (q.get('action') === 'unit_put_part') {
+      const p = { migration: q.get('migration'), unit: q.get('unit'), offset: +q.get('offset'), total: +q.get('total'), length: len };
+      st.parts.push(p);
+      return json(answer(p));
+    }
+    if (q.get('action') === 'unit_put') { st.puts.push({ unit: q.get('unit'), length: len }); return json({ ok: true, done: 1, total: 2 }); }
+    return json({}, 404);
+  });
+  w.send({ type: 'config', endpoint: 'http://h/api/migrations.php', csrf: 'tok', maxBody });
+  w.send({ type: 'prepare', reqId: 1, migration: 'm004-bricks-v3', dataset: '3d/ds', datasetBase: 'http://h/DATA_WEB/3d/ds/' });
+  assert.ok((await w.wait((m) => m.type === 'prepared')).ok);
+  w.send({ type: 'run', reqId: 2, migration: 'm004-bricks-v3', dataset: '3d/ds', unit: key, dry: false });
+  return { st, res: await w.wait((m) => m.type === 'unit_done' || m.type === 'unit_failed') };
+}
+const pieceAnswer = (p) => (p.offset + p.length === p.total
+  ? { ok: true, complete: true, done: 1, total: 2 } : { ok: true, complete: false, received: p.offset + p.length });
+{
+  const { st, res } = await runSingle('t0.k0.c0.z0.y0.s3000000', 1 * MB, pieceAnswer);
+  assert.equal(res.type, 'unit_done', JSON.stringify(res));
+  assert.equal(st.puts.length, 0);
+  assert.ok(st.parts.length >= 3 && st.parts.every((p) => p.migration === 'm004-bricks-v3' && p.total === 3_000_000));
+  let off = 0;
+  for (const p of st.parts) { assert.equal(p.offset, off); off += p.length; }
+  assert.equal(off, 3_000_000);
+}
+{
+  const { st, res } = await runSingle('t0.k0.c0.z0.y0.s500000', 1 * MB, pieceAnswer);
+  assert.equal(res.type, 'unit_done');
+  assert.deepEqual([st.parts.length, st.puts.length], [0, 1]);
+}
+{
+  const { st, res } = await runSingle('t0.k0.c0.z0.y0.s3000000', 1 * MB,
+    (p) => (p.offset ? { ok: true, complete: true, done: 2, total: 2 } : { ok: true, complete: false, received: p.length }));
+  assert.equal(res.type, 'unit_done');
+  assert.equal(res.done, 2);
+  assert.equal(st.parts.length, 2, 'no piece sent after a complete answer');
+}
+
+// 5. The run cache of a batch. P (40 MiB) fills the prefetch, so M (10 MiB, units b and c) and
+//    Q (40 MiB, units b and c) are misses read by unit b: M is kept for c, Q is not (10 + 40 MiB
+//    would pass the 48 MiB budget) and c reads it again. Unit d reads M without listing it: M
+//    left the cache after c, its last unit, so it is read a third time. P, listed by a alone, is
+//    read once.
+{
+  const P = { rel: 'planes/p.bin', start: 0, end: 40 * MB };
+  const M = { rel: 'planes/m.bin', start: 0, end: 10 * MB };
+  const Q = { rel: 'planes/q.bin', start: 0, end: 40 * MB };
+  const UNITS = {
+    'C.t0.k0.c0.a': { tiles: [P] },
+    'C.t0.k0.c0.b': { tiles: [M, Q] },
+    'C.t0.k0.c0.c': { tiles: [Q, M] },
+    'C.t0.k0.c0.d': { tiles: [], extra: [M] },
+  };
+  const readsOf = new Map();
+  const w = makeWorker((req) => {
+    if (req.url.includes('action=unit_inputs_many')) {
+      const b = JSON.parse(req.body);
+      return json({ ok: true, items: b.units.map((u) => ({ unit: u, empty: false, size: 100, ...UNITS[u] })) });
+    }
+    if (req.url.includes('action=read_ranges')) {
+      const runs = JSON.parse(req.body).ranges;
+      for (const [rel] of runs) readsOf.set(rel, (readsOf.get(rel) || 0) + 1);
+      const total = runs.reduce((n, [, s, e]) => n + e - s, 0);
+      const outb = new Uint8Array(4 + 4 * runs.length + total);
+      const dv = new DataView(outb.buffer);
+      dv.setUint32(0, runs.length, true);
+      runs.forEach(([, s, e], i) => dv.setUint32(4 + 4 * i, e - s, true));
+      outb.fill(1, 4 + 4 * runs.length);
+      return { ok: true, status: 200, arrayBuffer: async () => outb.buffer, json: async () => ({}) };
+    }
+    if (req.url.includes('action=unit_put_many')) {
+      const entries = parsePutMany(req.body);
+      return json({ ok: true, done: 1, total: 4, results: entries.map((e) => ({ ok: true, unit: e.key })) });
+    }
+    return json({}, 404);
+  });
+  w.send({ type: 'config', endpoint: 'http://h/api/migrations.php', csrf: 'tok', maxBody: 32 * MB });
+  w.send({ type: 'prepare', reqId: 1, migration: 'm005-matrix', dataset: '3d/ds', datasetBase: 'http://h/DATA_WEB/3d/ds/' });
+  assert.ok((await w.wait((m) => m.type === 'prepared')).ok);
+  w.send({ type: 'run_batch', reqId: 2, migration: 'm005-matrix', dataset: '3d/ds', units: Object.keys(UNITS), dry: false });
+  const res = await w.wait((m) => m.type === 'batch_done');
+  assert.ok(res.results.every((r) => r.type === 'unit_done'), JSON.stringify(res.results));
+  assert.equal(readsOf.get('planes/p.bin'), 1, 'P prefetched once');
+  assert.equal(readsOf.get('planes/m.bin'), 2, 'M kept from b for c, read again by d after its last unit');
+  assert.equal(readsOf.get('planes/q.bin'), 2, 'Q not kept: it would pass the prefetch budget');
+  const by = new Map(res.results.map((r) => [r.key, r]));
+  assert.equal(by.get('C.t0.k0.c0.b').bytesIn, 50 * MB);
+  assert.equal(by.get('C.t0.k0.c0.c').bytesIn, 40 * MB, 'c reads Q alone');
+  assert.equal(by.get('C.t0.k0.c0.d').bytesIn, 10 * MB);
 }
 
 console.log('migration worker batches: OK');

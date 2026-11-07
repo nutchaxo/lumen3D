@@ -4,7 +4,7 @@
 
 **De l'image brute du microscope `.ims` à un volume 3D fluide dans le navigateur.**
 
-`version 0.22.0` · `Imaris HDF5 → pyramide de briques 64³ WebP` (format 4, format 5 en option) · Python (h5py · numpy · scipy · Pillow)
+`version 0.23.1` · `Imaris HDF5 → pyramide de briques 64³ WebP` (format 6 par défaut, formats 4 et 5 en option) · Python (h5py · numpy · scipy · Pillow)
 
 </div>
 
@@ -154,13 +154,13 @@ Deux façons de lancer le pipeline : le **lanceur autonome `.bat`** (zéro insta
 
 ### 2.1. Lanceur autonome `run_preprocess.bat` *(recommandé)*
 
-> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **scripts du pipeline** y sont **embarqués** (encodés en base64) : `run_preprocess.py`, `1-`→`4-`, les modules d'écriture `planes_writer.py`, `mips_writer.py` et `bricks_v3_writer.py`, l'importeur de photographies `2d_importer.py`, le suivi cellulaire (`5-tracking_importer.py`, `tracking_sources.py`) et l'outil optionnel de bundles `download/` (`build_download_bundles.py`). S'il n'y a pas de Python, il en **télécharge et installe un, en local**.
+> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **scripts du pipeline** y sont **embarqués** (encodés en base64) : `run_preprocess.py`, `1-`→`4-`, les modules d'écriture `planes_writer.py`, `mips_writer.py` et `bricks_v3_writer.py`, l'importeur de photographies `2d_importer.py`, le suivi cellulaire (`5-tracking_importer.py`, `tracking_sources.py`), l'outil optionnel de bundles `download/` (`build_download_bundles.py`) et le module des formats 5 et 6 `format5.py` (racine du dépôt, importé par les étapes 2 à 4). S'il n'y a pas de Python, il en **télécharge et installe un, en local**.
 
 **Utilisation : double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat).** Il déroule **5 étapes** automatiques :
 
 | Étape | Ce qu'il fait |
 |---|---|
-| **[1/5]** Scripts | Extrait les scripts embarqués (décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
+| **[1/5]** Scripts | Extrait les scripts embarqués (décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). `format5.py` n'est pas extrait quand le dossier parent du `.bat` en contient un (le dépôt) : les étapes le trouvent là. |
 | **[2/5]** Python | Détection en cascade : runtime local `.runtime\python` → Python **système** (`py -3`/`python`/`python3`) → sinon **propose d'installer** un **Python 3.12.8** embarquable (téléchargé depuis python.org dans `.runtime\python`, avec `pip`). Isolé, **sans droits admin**, supprimable. |
 | **[3/5]** Dépendances | Vérifie `numpy`/`Pillow`/`h5py`/`scipy`/`tqdm` (par import, aux versions épinglées) et **propose de les installer** via `pip`. |
 | **[4/5]** Paramètres | Demande d'abord le **type de données** — `[1]` volumes Imaris `.ims`, `[2]` photographies 2D `.tif` — puis les questions de la chaîne choisie (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
@@ -175,7 +175,7 @@ Les **4 questions** de l'étape [4/5], chaîne `[1]` **volumes Imaris** :
 | Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
 | Générer aussi `download/` ? | `o` / **N** (défaut : non). Si `o`, `tifffile` est installé au besoin et `--with-downloads` est passé au pipeline (archive `_web.zip`, `.ims` original, OME‑TIFF, MIP par canal, `README.txt`). **Lourd** : relit le `.ims`. |
 
-> **Note** : le lanceur ne propose pas le **format 5** : il produit le format 4, défaut de `run_preprocess.py`. Le format 5 se lance en ligne de commande ([§2.2](#22-en-ligne-de-commande-cli)). Le suivi cellulaire est tenté à chaque timelapse, comme en ligne de commande ; l'extraction depuis un `.ims` ou un classeur demande les paquets optionnels de [§1](#1-prérequis--environnement), que le lanceur n'installe pas : sans eux le volume est publié sans trajectoires.
+> **Note** : le lanceur produit le **format 6**, défaut de `run_preprocess.py`. Les formats 4 et 5 se lancent en ligne de commande ([§2.2](#22-en-ligne-de-commande-cli)). Le suivi cellulaire est tenté à chaque timelapse, comme en ligne de commande ; l'extraction depuis un `.ims` ou un classeur demande les paquets optionnels de [§1](#1-prérequis--environnement), que le lanceur n'installe pas : sans eux le volume est publié sans trajectoires.
 
 Chaîne `[2]` **photographies 2D** (appelle `2d_importer.py`, une image = un dataset, aucune brique) :
 
@@ -206,7 +206,8 @@ run_preprocess.bat --help
 Pour scripter, automatiser, ou tourner sous Linux/macOS. C'est exactement ce que le `.bat` appelle en interne :
 
 ```bash
-python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"] [--with-downloads] [--format 4|5] [--tracking auto|off|FICHIER]
+python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"] [--with-downloads] [--format 4|5|6] [--tracking auto|off|FICHIER]
+python run_preprocess.py --publish-staged <DATA_WEB>/.unpublished_<type>__<nom>
 ```
 
 | Argument | Obligatoire | Rôle |
@@ -214,8 +215,9 @@ python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "
 | `--input`  | oui | Dossier contenant un ou plusieurs `.ims` (recherche **non récursive** : `input_dir.glob("*.ims")`). |
 | `--output` | oui | Racine `DATA_WEB` de la plateforme. La sortie ira dans `<output>/3d/<nom_du_ims_sans_extension>/`, ou dans `<output>/live/<nom>/` si le fichier a plusieurs timepoints. |
 | `--only`   | non | Filtre `fnmatch` sur le **nom de fichier** (ex. `"*Em7*"` ou le nom exact). Sans lui : tous les `.ims`. |
-| `--with-downloads` | non | Après chaque dataset publié, construit aussi son dossier `download/` via `tools/build_download_bundles.py` (archive `_web.zip`, `.ims` original en hardlink, OME‑TIFF calibré, MIP PNG par canal, `README.txt`). Étape lourde : relit le `.ims`. Nécessite `tifffile`. |
-| `--format` | non | `4` (défaut) : pyramide de briques v3, plans XY et maximums par couche. `5` : matrice résolution × compression (SPEC Part III, [§10.7](#107-format-5)). Le viewer lit le format 5 depuis la version 1.64 de la plateforme. |
+| `--with-downloads` | non | Après chaque dataset publié, construit aussi son dossier `download/` via `tools/build_download_bundles.py --refresh-web` (archive `_web.zip`, `.ims` original en hardlink, OME‑TIFF calibré, MIP PNG par canal, `README.txt`). Étape lourde : relit le `.ims`. Nécessite `tifffile`. Sur un dataset retraité, l'archive et le `README.txt` sont **reconstruits** (ils décrivent les briques et le `metadata.json` qui viennent d'être publiés) ; le `.ims`, le TIFF et les MIP ne le sont que si le `.ims` source n'est plus le fichier dont ils ont été tirés. |
+| `--format` | non | `6` (défaut) : chaque niveau sans perte et en WebP Q30 (SPEC Part IV), lu par le viewer depuis la version 1.70 de la plateforme. `5` : matrice résolution × compression (SPEC Part III, [§10.7](#107-format-5)), lue depuis la version 1.64. `4` : pyramide de briques v3, plans XY et maximums par couche. |
+| `--publish-staged` | non | Publie une préparation complète qu'un run a conservée parce que sa publication a échoué ([§2.5](#25-publication-dun-dataset-tout-ou-rien)), sans rien retraiter. Remplace `--input`/`--output`. |
 | `--tracking` | non | `auto` (défaut) cherche l'analyse de suivi cellulaire des timelapses, `off` la saute, un **chemin** impose ce fichier. Voir [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique). |
 
 Exemple réel (1 dataset) :
@@ -233,9 +235,9 @@ python run_preprocess.py \
 * **Un dataset à la fois**, en boucle séquentielle dans `main` (pour économiser la RAM ; le parallélisme est *intra*‑dataset, en pools de processus — voir [§11](#11-pourquoi-ces-choix-de-conception-)). Un dataset en échec est signalé, le lot continue, et le récapitulatif final liste les échecs.
 * Le **nom du dataset** = nom du fichier sans `.ims`. S'il n'est pas utilisable tel quel dans une URL, il est **slugifié** — sauf si un dataset publié porte déjà le nom brut, qui reste alors son dossier. Deux fichiers qui donneraient le même dossier : le second est refusé et nommé.
 * Le **type** suit l'acquisition : `live` si le fichier a plus d'un timepoint, `3d` sinon. Le dossier parent *est* le type.
-* `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé en fin de traitement** (même en cas d'erreur). Le dataset est préparé dans `temp_dir/stage/<type>/<nom>/`, puis publié ([§2.5](#25-publication-dun-dataset-tout-ou-rien)).
+* `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé en fin de traitement** (même en cas d'erreur ; seule une préparation complète dont la publication a échoué en est retirée avant, [§2.5](#25-publication-dun-dataset-tout-ou-rien)). Le dataset est préparé dans `temp_dir/stage/<type>/<nom>/`, puis publié ([§2.5](#25-publication-dun-dataset-tout-ou-rien)).
 * Ordre des étapes : **1 → 2 → vignette → 3 → 4**, puis le **tracking** (uniquement si `n_timepoints > 1`, [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)), puis la **publication**, et enfin — **uniquement si `--with-downloads`** — `build_download_bundles.py`, qui vient après la publication (le dataset existe déjà). Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
-* **Arrêt propre sur `Ctrl+C`** : l'orchestrateur intercepte `SIGINT` et **demande confirmation**. *Refus* → le traitement **reprend** sans perte (l'étape en cours n'a pas reçu le signal) ; *confirmation* → l'étape **et tout son pool de workers** sont arrêtés (`taskkill /F /T` / `killpg`), les `.temp_preprocess_*` nettoyés, sortie en code **130**.
+* **Arrêt propre sur `Ctrl+C`** : l'orchestrateur intercepte `SIGINT` et **demande confirmation**. *Refus* → le traitement **reprend** sans perte (l'étape en cours n'a pas reçu le signal) ; *confirmation* → l'étape **et tout son pool de workers** sont arrêtés (`taskkill /F /T` / `killpg`), le `.temp_preprocess_<nom>` du dataset interrompu supprimé (et lui seul : un autre run qui écrit dans le même `DATA_WEB` garde le sien), sortie en code **130**.
 
 ### 2.3. Régénérer le lanceur (`build_launcher.py`)
 
@@ -245,10 +247,10 @@ Le `.bat` est **généré**, jamais écrit à la main. Après toute modification
 python build_launcher.py
 ```
 
-* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste `SCRIPTS`, les dépendances épinglées) et **ré‑embarque** les scripts en base64 (blocs `#<index>#…`, 76 caractères/ligne).
-* L'**ordre d'embarquement est figé** : `run_preprocess.py` est l'index 0 et la liste `SCRIPTS` suit dans son ordre ; le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de cette liste. L'outil `build_download_bundles.py` (tiré de `../tools/`) est embarqué à l'index qui suit la liste.
+* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, les listes `SCRIPTS` et `SHARED_MODULES`, les dépendances épinglées) et **ré‑embarque** les scripts en base64 (blocs `#<index>#…`, 76 caractères/ligne).
+* L'**ordre d'embarquement est figé** : `run_preprocess.py` est l'index 0 et la liste `SCRIPTS` suit dans son ordre ; le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de cette liste. L'outil `build_download_bundles.py` (tiré de `../tools/`) est embarqué à l'index qui suit la liste, puis les modules de la racine du dépôt listés dans `SHARED_MODULES` (`format5.py`).
 * Sortie en **ASCII + CRLF** (ce que `cmd.exe` préfère).
-* **Attention** : `format5.py` (racine du dépôt) est importé par `3-chunk_packer.py` et `4-catalog_generator.py`. Il doit donc figurer dans `SCRIPTS` pour que le lanceur autonome fonctionne ; avant de régénérer, vérifiez cette liste.
+* Un module de la racine du dépôt importé par une étape (aujourd'hui `format5.py`, importé par les étapes 2 à 4) doit figurer dans `SHARED_MODULES`. `tests/test_build_launcher.py` le vérifie, et vérifie que le `.bat` committé embarque les sources actuelles : après une modification du pipeline, régénérez‑le.
 
 ### 2.4. Le suivi cellulaire (tracking) — rattachement automatique
 
@@ -293,7 +295,8 @@ Le dossier de préparation est publié d'un seul bloc (`run_preprocess.publish_d
 
 * **Dataset nouveau** : un seul renommage du dossier de préparation vers `DATA_WEB`.
 * **Dataset existant** : les entrées produites par le pipeline (`bricks/`, `planes/`, `mips/`, `thumbnail.webp` et, si un nouveau tracking est attaché, `tracks.json`, `tracks.json.gz`, `model.glb`) sont renommées en `.pre-swap`, les nouvelles sont installées, puis **`metadata.json` est remplacé en dernier** : c'est le point de validation.
-* Un échec avant ce point remet tout en place. Un arrêt brutal est **terminé ou annulé** au run suivant grâce au marqueur `.swap-in-progress` (empreinte du `metadata.json` à installer) : un dataset publié ne mélange jamais deux runs.
+* Un dossier dont un fichier est ouvert (le serveur web lit un pack pour un visiteur) ne peut pas être renommé sous Windows : la publication **attend** que la lecture se termine, jusqu'à 2 minutes (`PUBLISH_PATIENCE_S`), au lieu d'échouer. Elle attend avec le dataset publié **complet** : si une entrée est occupée, celles déjà mises de côté reprennent leur place avant le nouvel essai (un visiteur ne trouve jamais `bricks/` absent pendant l'attente).
+* Un échec avant ce point remet tout en place. La préparation complète n'est alors **pas perdue** : elle est déplacée dans `<DATA_WEB>/.unpublished_<type>__<nom>` (dossier caché, jamais servi) et le journal donne la commande qui la publie sans rien retraiter : `python run_preprocess.py --publish-staged <ce dossier>`. Si ce déplacement échoue aussi, elle reste dans `<DATA_WEB>/.temp_preprocess_<nom>/stage/<type>/<nom>`, que `--publish-staged` accepte également (à faire avant de relancer ce fichier : un nouveau run efface ce dossier). Un run réussi suivant du même dataset la supprime. Un arrêt brutal est **terminé ou annulé** au run suivant grâce au marqueur `.swap-in-progress` (empreinte du `metadata.json` à installer) : un dataset publié ne mélange jamais deux runs.
 * `download/`, `gallery/` et tout fichier posé par l'opérateur ne sont **jamais touchés**.
 * La curation de la version publiée est **réappliquée au dernier moment** : l'opérateur a pu la modifier pendant le run.
 * Un `planes/` ou `mips/` que le nouveau run ne produit pas est **supprimé** avec le swap, pour ne pas citer un ancien manifeste.
@@ -452,7 +455,7 @@ block_u8  = (norm * 255.0).astype(uint8)                # troncature (pas d'arro
 > **Pourquoi un filtre médian (et pas gaussien) ?** Le médian supprime le *shot‑noise* (grains isolés) tout en préservant les contours — un gaussien, lui, étalerait tout. C'est un choix assumé depuis la v0.12.1.
 > **Pourquoi écraser le fond à exactement 0 ?** Le visualiseur additionne les intensités sur des centaines de tranches Z (*additive blending*). Un fond résiduel à 1 ou 2 s'accumulerait en un **voile gris**. Un 0 absolu = vide parfaitement noir, **et** ça permet à l'étape 3 de jeter les briques vides (ESS).
 
-**Step 4 — Niveaux de la pyramide** : chaque niveau est calculé à partir du précédent, selon le format (§6.1) — moyenne entière arrondie (format 4), moyenne d'aire exacte (format 5), ou sous‑échantillonnage bilinéaire X/Y (format 2).
+**Step 4 — Niveaux de la pyramide** : selon le format (§6.1) — moyenne entière arrondie de chaque niveau à partir du précédent (format 4) ou sous‑échantillonnage bilinéaire X/Y (format 2). Aux formats 5 et 6, l'étape 2 n'écrit que le niveau 0 : `format5.write_tree` calcule lui‑même ses niveaux (moyenne d'aire exacte du niveau 0) à l'encodage, et lui rend les deux qui restent lus ensuite — le plus grossier (histogrammes) et, pour `t000`, celui de la vignette. Aucune pyramide intermédiaire n'est donc écrite pour rien.
 
 **Step 5 — Encodage du timepoint** (formats 4 et 5) : les briques, les plans XY et les maximums par couche de ce timepoint sont écrits dans le dossier de préparation ; `pack_t{t}.json` en garde le bilan. Seuls restent ensuite le niveau le plus grossier (histogrammes) et, pour le premier timepoint, le niveau de la vignette.
 
@@ -470,10 +473,10 @@ block_u8  = (norm * 255.0).astype(uint8)                # troncature (pas d'arro
     "width": 3789, "height": 3789, "depth": 178,
     "n_channels": 4, "n_timepoints": 1, "datasetFormat": 4,
     "extent": {...}, "timestamps": null, "time_interval_minutes": null,
-    "normalization": { "mode": "per-volume", "bounds": {"c0": {"bgFloor": …, "sigMax": …}}, "signalLevels": {…} }
+    "normalization": { "mode": "per-volume", "bounds": {"c0": {"bgFloor": …, "sigMax": …}}, "signalLevels": {…}, "signalBasis": {"c0": "volume"} }
   }
   ```
-  `normalization` décrit la fenêtre (`global` pour un timelapse, `per-volume` sinon) et le niveau de signal propre à chaque frame, rapporté dans `metadata.json` ([§9](#9-étape-4--histogrammes--metadatajson-4-catalog_generatorpy)).
+  `normalization` décrit la fenêtre (`global` pour un timelapse, `per-volume` sinon) et le niveau de signal propre à chaque frame, rapporté dans `metadata.json` ([§9](#9-étape-4--histogrammes--metadatajson-4-catalog_generatorpy)). Ce niveau est le 99,9e centile du sous-échantillon brut de la frame, classé sur la **base** du canal (`signalBasis`) : `above-floor` (les seuls voxels au-dessus du plancher de bruit, la règle du point blanc d'un timelapse) dès que la série regroupée en compte au moins 1000, `volume` (tous les voxels) sinon et pour un volume unique. La base est choisie une fois par canal : toutes les frames d'une série sont mesurées de la même façon, et un niveau `above-floor` suit la luminosité du signal et non la part de l'image qu'occupe le spécimen (une frame sans aucun voxel au-dessus du plancher vaut le plancher). Une série traitée avant la 0.23.1 n'a pas de `signalBasis` : ses niveaux sont des centiles du volume entier.
 
 ---
 
@@ -739,5 +742,5 @@ Pour réimplémenter et obtenir le **même résultat** (format 4) :
 ---
 
 <div align="center">
-<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.22.0</sub>
+<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.23.0</sub>
 </div>

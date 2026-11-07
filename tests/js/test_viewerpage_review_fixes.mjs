@@ -10,7 +10,9 @@
 //   • QUALITY_STATUS says when the viewer settled on a coarser level than asked;
 //   • an uncalibrated Studio picture measures in image pixels;
 //   • the Studio channel panel follows a raw refilled in place (raw.version);
-//   • the slicer clears its target to transparent black whatever the page's clear colour.
+//   • the slicer clears its target to transparent black whatever the page's clear colour;
+//   • a quality switch made while a frame request runs (or waits) reloads THAT frame,
+//     not the one still on screen, and a same-frame reload posts no SYNC_TIME.
 //
 // Run: node tests/js/test_viewerpage_review_fixes.mjs
 import assert from 'node:assert/strict';
@@ -41,7 +43,7 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const log = { loads: [], errors: [], frames: [] };
     ctx.env = { failFrames, mountedAfterFailure, log };
     vm.runInContext(`
-      let _tpInFlight = false, _tpPending = null, _currentTimepoint = 3, isLive = true, mounted = true;
+      let _tpInFlight = false, _tpPending = null, _tpTarget = null, _currentTimepoint = 3, isLive = true, mounted = true;
       const Timeline = { setFrame: (f, i, n) => env.log.frames.push([f, n]) };
       function _hasMountedVolume() { return mounted; }
       function _showLoadingError(err) { env.log.errors.push(err.message); }
@@ -228,6 +230,84 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
   assert.deepEqual(plain(cleared.slice(1)), [0, 0], 'the target is cleared to transparent black');
   assert.deepEqual(renderer._clear, { c: 0x223344, a: 1 }, 'the page clear colour is restored');
   console.log('slicer target cleared transparent: OK');
+}
+
+// ── 8. A quality switch during a frame request ──────────────────────────────────
+{
+  const run = async (script, { failFrames = [] } = {}) => {
+    const ctx = vm.createContext({ console, setImmediate });
+    const log = { loads: [], posted: [], frames: [], status: [] };
+    ctx.env = { log, failFrames };
+    vm.runInContext(`
+      let _tpInFlight = false, _tpPending = null, _tpTarget = null, _currentTimepoint = 5, isLive = true;
+      let _qualityMode = '512x512', _basePath = 'base', token = 0;
+      const Timeline = { setFrame: (f, i, n) => env.log.frames.push([f, n]) };
+      const VolumeViewer = { setQualityTarget() {} };
+      const Utils = { friendlyErrorText: () => '' };
+      const document = { getElementById: () => null };
+      function _hasMountedVolume() { return true; }
+      function _showLoadingError() {}
+      function _applyQualityMode(v) { _qualityMode = v; }
+      function _kickPrefetch() {}
+      function _showQualityInSelect() {}
+      function _setQualityStatus(s) { env.log.status.push(s); }
+      function _qualityLabel(q) { return q; }
+      // A load supersedes every earlier one (the page's _activeLoadToken): the earlier
+      // resolves undefined and changes nothing; the winner shows its frame and tells the
+      // siblings unless the frame came from one of them.
+      function _loadTimepoint(basePath, t, opts = {}) {
+        const mine = ++token;
+        env.log.loads.push([t, opts.origin || null, Boolean(opts.force), _qualityMode]);
+        return new Promise((resolve, reject) => setImmediate(() => {
+          if (mine !== token) { resolve(undefined); return; }
+          if (env.failFrames.includes(t) && opts.force) { reject(new Error('frame ' + t)); return; }
+          _currentTimepoint = t;
+          if (opts.origin !== 'sync') env.log.posted.push(['SYNC_TIME', t]);
+          resolve({ ok: true });
+        }));
+      }
+      ${lift(viewerSrc, '_requestTimepoint')}
+      ${lift(viewerSrc, '_setQualityMode')}
+      globalThis.api = { req: _requestTimepoint, quality: _setQualityMode, cur: () => _currentTimepoint,
+        inFlight: () => _tpInFlight, pending: () => _tpPending, target: () => _tpTarget };
+    `, ctx);
+    await script(ctx.api);
+    for (let i = 0; i < 10; i++) await tick();
+    return { log, api: ctx.api };
+  };
+
+  // Scrub to 20, then switch quality while 20 is still loading.
+  let { log, api } = await run(async (a) => { a.req('base', 20, 'user'); a.quality('1024x1024').catch(() => {}); });
+  assert.deepEqual(plain(log.loads), [[20, 'user', false, '512x512'], [20, 'user', true, '1024x1024']],
+    'the switch reloads the frame the scrubber asked for, at the new quality');
+  assert.equal(api.cur(), 20, 'frame 20 ends on screen');
+  assert.deepEqual(plain(log.posted), [['SYNC_TIME', 20]], 'announced once, never the old frame');
+  assert.equal(api.target(), null, 'no request left recorded');
+  assert.equal(api.inFlight(), false);
+
+  // A frame queued behind the running one is the one to load; nothing is re-asked after.
+  ({ log, api } = await run(async (a) => { a.req('base', 20, 'user'); a.req('base', 30, 'user'); a.quality('native').catch(() => {}); }));
+  assert.deepEqual(plain(log.loads), [[20, 'user', false, '512x512'], [30, 'user', true, 'native']],
+    'the queued frame is taken over by the switch, not loaded a second time');
+  assert.equal(api.cur(), 30);
+  assert.equal(api.pending(), null);
+
+  // A frame a sibling asked for stays silent at the new quality.
+  ({ log, api } = await run(async (a) => { a.req('base', 12, 'sync'); a.quality('1024x1024').catch(() => {}); }));
+  assert.deepEqual(plain(log.loads.map(l => l.slice(0, 3))), [[12, 'sync', false], [12, 'sync', true]]);
+  assert.equal(api.cur(), 12);
+  assert.deepEqual(plain(log.posted), [], 'no SYNC_TIME echo of a sibling frame');
+
+  // No request running: the frame on screen is reloaded, and a quality change is no time change.
+  ({ log, api } = await run(async (a) => { a.quality('1024x1024').catch(() => {}); }));
+  assert.deepEqual(plain(log.loads), [[5, 'sync', true, '1024x1024']]);
+  assert.deepEqual(plain(log.posted), [], 'a same-frame quality reload posts no SYNC_TIME');
+
+  // The switch fails on the frame it carried: the scrubber goes back to the frame on screen.
+  ({ log, api } = await run(async (a) => { a.req('base', 20, 'user'); a.quality('native').catch(() => {}); }, { failFrames: [20] }));
+  assert.equal(api.cur(), 5, 'frame 5 is still the one on screen');
+  assert.deepEqual(plain(log.frames), [[5, false]], 'the scrubber is put back on it');
+  console.log('quality switch during a frame request reloads the requested frame: OK');
 }
 
 console.log('viewer page review fixes: OK');

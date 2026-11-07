@@ -88,9 +88,8 @@ SHARED_MODULES = (
 DOWNLOAD_TOOL = "build_download_bundles.py"
 
 # The tracking pipeline, curated. SCRIPTS/ also holds one-off dev utilities with
-# hardcoded lab paths (check.py, check_output.py, verify_*.py) and two stale
-# copy-paste fragments (patch1.py — which does not even compile, patch2.py); none
-# of them belong in a technician's hands.
+# hardcoded lab paths (check_output.py, verify_*.py); none of them belong in a
+# technician's hands.
 TRACKING_SCRIPTS = (
     "Analysis.py",
     "export_html.py",

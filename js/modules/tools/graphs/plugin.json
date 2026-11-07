@@ -1,0 +1,31 @@
+{
+  "id": "graphs",
+  "name": "Graphs",
+  "version": "1.0.3",
+  "platformCompat": ">=1.80.0",
+  "dataTypes": [
+    "3d",
+    "2d",
+    "live"
+  ],
+  "contexts": [
+    "page",
+    "panel",
+    "compare"
+  ],
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "action",
+  "icon": "line-chart",
+  "order": 58,
+  "description": "Live graphs of the dataset on screen: pick what goes on X and on Y from the variables of its type (intensity profiles, histograms, co-localisation, cell speed over time, mean squared displacement, colour channels of a photograph…), aggregate and group them, and export the plot or its data. In Compare every open dataset is plotted in its own colour on the same axes.",
+  "buttonId": "btn-graphs",
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

@@ -43,6 +43,20 @@
     # dataset) — those are never served raw, with no CSP. Real files that are not
     # .html (assets, api/*.php) never match, so Apache serves them directly.
     RewriteRule ^(.+)\.html$ _serve.php [L,QSA]
+    # The implicit /favicon.ico probe of a bare document: pages declare
+    # assets/favicon.svg, so with no such file it is answered 204, not a 404 in the
+    # logs (a real favicon.ico dropped in by the operator is served as it is).
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^favicon\.ico$ _serve.php?lumen_favicon=1 [L]
+    # A page that does not exist gets the branded 404.html (status 404, served by
+    # _serve.php with the CSP). Only an extension-less path that is neither a file nor
+    # a directory and whose client accepts HTML; the API and DATA_WEB keep their plain
+    # answers. A rewrite rather than ErrorDocument: that needs a path from the DOMAIN
+    # root, which a subdirectory install does not have.
+    RewriteCond %{HTTP_ACCEPT} (^$|text/html)
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(?!(?:api|DATA_WEB)(?:/|$))[^.]+$ _serve.php?lumen_404=1 [NC,L]
     # The dataset catalog is DERIVED from every DATA_WEB/<type>/<name>/metadata.json
     # (api/catalog.php, cached by signature). Without mod_rewrite this rule is absent
     # and the request 404s — this deployment REQUIRES mod_rewrite (as it already does

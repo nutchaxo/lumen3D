@@ -76,6 +76,33 @@ function rendererNamed(name, max3D = 2048) {
   assert.equal(big.vramBudget(r).source, 'override');
 }
 
+// ── A cap (a Compare panel's share) bounds the budget without exempting it from losses ──
+{
+  const storage = new Map();
+  const S = load({ deviceMemory: 8, storage });
+  const r = rendererNamed('NVIDIA Quadro P620');           // 4 GiB alone
+  S.setVramCap(3 * GiB);
+  assert.equal(S.vramBudget(r).bytes, 3 * GiB, 'the share bounds the budget');
+  assert.equal(S.vramBudget(r).capped, true);
+  assert.equal(S.vramBudget(r).source, 'heuristic', 'a cap is not an override');
+  assert.equal(S.vramBudget(r, { uncapped: true }).bytes, 4 * GiB, 'uncapped: what the page would give itself alone');
+  S.noteContextLost();
+  assert.equal(S.vramBudget(r).bytes, 2 * GiB, "a loss halves the page's own budget, which now sits under the share");
+  assert.equal(S.vramBudget(r).capped, false);
+  S.noteContextLost();
+  assert.equal(S.vramBudget(r).bytes, 1 * GiB, 'and keeps lowering it, so the replay asks for less each time');
+  S.setVramCap(600 * MiB);
+  assert.equal(S.vramBudget(r).bytes, 600 * MiB, 'a share smaller than the halved budget still wins');
+  S.setVramCap(null);
+  assert.equal(S.vramBudget(r).bytes, 1 * GiB, 'null gives the page its own budget back');
+  S.setVramCap(-5); S.setVramCap(NaN);
+  assert.equal(S.vramBudget(r).bytes, 1 * GiB, 'nonsense clears the cap');
+  const o = load({ deviceMemory: 8, storage: new Map() });
+  o.setVramBudget(6 * GiB);
+  o.setVramCap(2 * GiB);
+  assert.equal(o.vramBudget(r).bytes, 2 * GiB, 'a cap bounds an override too');
+}
+
 // ── Layout waste and ceilings ────────────────────────────────────────────────────
 {
   const S = load({ deviceMemory: 8 });

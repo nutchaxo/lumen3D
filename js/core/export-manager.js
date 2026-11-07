@@ -5,6 +5,7 @@
 const ExportManager = (() => {
   let _ctx = {};
   let _modal = null;
+  let _releaseFocus = null;  // releases the modal's focus trap and restores the opener's focus
   let _customExports = [];   // page/plugin-supplied exports (viewer measurements, tracking tables, compare figures)
   // File-explorer state for the per-dataset download folder. `token` guards
   // against out-of-order responses when the user clicks through folders quickly.
@@ -34,6 +35,7 @@ const ExportManager = (() => {
   function init(context = {}) {
     _ctx = context;
     _ensureModal();
+    _toastNode();
   }
 
   function openDownloadCenter(context = null) {
@@ -45,6 +47,12 @@ const ExportManager = (() => {
     _modal.classList.add('active');
     document.body.classList.add('modal-open');
     document.addEventListener('keydown', _onModalKeydown, true);
+    // Reopening while open re-renders the body only: the trap (and the focus to give back) stays.
+    if (!_releaseFocus && typeof Utils !== 'undefined' && Utils.trapFocus) {
+      _releaseFocus = Utils.trapFocus(_modal.querySelector('.export-modal'), {
+        initialFocus: _modal.querySelector('[data-export-close]')
+      });
+    }
   }
 
   function close() {
@@ -52,6 +60,7 @@ const ExportManager = (() => {
     _modal.classList.remove('active');
     document.body.classList.remove('modal-open');
     document.removeEventListener('keydown', _onModalKeydown, true);
+    if (_releaseFocus) { const release = _releaseFocus; _releaseFocus = null; release(); }
   }
 
   function _onModalKeydown(e) {
@@ -128,7 +137,7 @@ const ExportManager = (() => {
     } catch (err) {
       // Quota exceeded or site data blocked: say so instead of leaving the click silent.
       console.warn('[ExportManager] Workspace could not be saved:', err);
-      _toast(_t('toast.workspaceSaveFailed', 'Workspace could not be saved (browser storage is full or blocked). Use "Export workspace" instead.'));
+      _toast(_t('toast.workspaceSaveFailed', 'Workspace could not be saved (browser storage is full or blocked). Use "Export workspace" instead.'), { error: true });
       return null;
     }
     _toast(_t('toast.workspaceSaved', 'Workspace saved'));
@@ -141,7 +150,16 @@ const ExportManager = (() => {
       _toast(_t('toast.noWorkspace', 'No saved workspace found'));
       return null;
     }
-    _ctx.applyWorkspaceState?.(payload.state || {});
+    let applied;
+    try {
+      applied = _ctx.applyWorkspaceState?.(payload.state || {});
+    } catch (err) {
+      console.warn('[ExportManager] Workspace could not be applied:', err);
+      _toast(_t('toast.workspaceRestoreFailed', 'This saved workspace could not be applied.'), { error: true });
+      return null;
+    }
+    // The viewer reports a state it cannot apply itself (false) and has already said so.
+    if (applied === false) return null;
     _toast(_t('toast.workspaceRestored', 'Workspace restored'));
     return payload;
   }
@@ -189,8 +207,28 @@ const ExportManager = (() => {
       else if (action === 'workspace-json') exportWorkspace();
       else if (action === 'save-workspace') saveWorkspace();
       else if (action === 'restore-workspace') restoreWorkspace();
-      else { const custom = _customExports.find(item => item.action === action); if (custom?.handler) custom.handler(); }
+      else { const custom = _customExports.find(item => item.action === action); if (custom?.handler) _runCustomExport(custom); }
     });
+  }
+
+  // A page or plugin export may throw or reject (file picker refused, worker failed):
+  // the reader gets a translated toast, the console the cause; a user cancel is silent.
+  function _runCustomExport(item) {
+    const fail = (err) => {
+      if (err && err.name === 'AbortError') return;
+      console.error(`[ExportManager] Export "${item.action}" failed:`, err);
+      let why = '';
+      try { why = (typeof Utils !== 'undefined' && Utils.friendlyErrorText) ? Utils.friendlyErrorText(err, { context: 'save' }) : ''; } catch (e) { why = ''; }
+      _toast(_t('download.omezarr.failed', 'Export failed: {error}', {
+        error: why || _t('app.errUnknown', 'Something went wrong. Try again; if it keeps happening, reload the page.')
+      }), { error: true });
+    };
+    try {
+      const result = item.handler();
+      if (result && typeof result.then === 'function') result.then(null, fail);
+    } catch (err) {
+      fail(err);
+    }
   }
 
   function _renderDownloads() {
@@ -473,22 +511,6 @@ const ExportManager = (() => {
     }
   }
 
-  function exportMetadata() {
-    const dataset = _ctx.dataset;
-    if (!dataset) {
-      _toast(_t('download.noMetadata', 'No metadata available'));
-      return;
-    }
-    const payload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      dataset,
-      citation: _citationBlock()
-    };
-    const name = _safeName(dataset.name || dataset.id || 'metadata');
-    _downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `${name}_metadata.json`);
-  }
-
   function _plotlyCsv(graph) {
     const traces = graph.data || graph._fullData || [];
     const rows = [['trace', 'x', 'y']];
@@ -599,18 +621,35 @@ const ExportManager = (() => {
   }
 
   let _toastTimer = null;
-  function _toast(text) {
+
+  // The live region has to exist before its text changes or a screen reader may not
+  // announce the first message, so init() creates it empty.
+  function _toastNode() {
     let node = document.querySelector('.app-toast');
     if (!node) {
       node = document.createElement('div');
       node.className = 'app-toast';
+      node.setAttribute('role', 'status');
+      node.setAttribute('aria-live', 'polite');
+      node.setAttribute('aria-atomic', 'true');
       document.body.appendChild(node);
     }
+    return node;
+  }
+
+  // `options.error` marks a failure: announced at once (role alert) rather than politely.
+  function _toast(text, options = {}) {
+    const node = _toastNode();
+    const failure = Boolean(options && options.error);
+    node.setAttribute('role', failure ? 'alert' : 'status');
+    node.setAttribute('aria-live', failure ? 'assertive' : 'polite');
     node.textContent = text;
     node.classList.add('visible');
     // One node serves every message: an earlier call's timer must not hide the newest text.
+    // A longer message stays long enough to be read (≈ 60 ms a character, 1.8–8 s).
     if (_toastTimer) clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => { _toastTimer = null; node.classList.remove('visible'); }, 1800);
+    const duration = Math.min(8000, Math.max(1800, 60 * String(text == null ? '' : text).length));
+    _toastTimer = setTimeout(() => { _toastTimer = null; node.classList.remove('visible'); }, duration);
   }
 
   return {
@@ -621,7 +660,6 @@ const ExportManager = (() => {
     exportGraph,
     exportWorkspace,
     exportMeasures,
-    exportMetadata,
     downloadBlob: _downloadBlob,
     toast: _toast,
     saveWorkspace,

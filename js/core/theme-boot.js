@@ -12,4 +12,13 @@
       document.documentElement.setAttribute('data-theme', 'light');
     }
   } catch (_) { /* blocked storage: keep the default */ }
+  // A Compare panel opens with its sidebar folded (the host's settings button opens it).
+  // Said before the first paint, so the sidebar never shows open and slides shut while the
+  // page loads; viewer.js drops the class once the sidebar carries its own.
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('hideHeader') === 'true' && q.get('panelIndex') !== null && q.get('mode') !== 'admin') {
+      document.documentElement.classList.add('panel-boot');
+    }
+  } catch (_) { /* no location: not a panel */ }
 })();

@@ -11,5 +11,8 @@
   "cellA": "Célula A",
   "clickSecond": "Haga clic en una segunda célula.",
   "exportCsv": "CSV de distancias",
-  "exportJson": "JSON de distancias"
+  "exportJson": "JSON de distancias",
+  "hideMeasure": "Ocultar la medida",
+  "showMeasure": "Mostrar la medida",
+  "deleteMeasure": "Eliminar la medida"
 }

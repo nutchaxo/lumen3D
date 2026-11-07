@@ -4,6 +4,7 @@
 
 const MeasurementStore = (() => {
   const _state = new Map();
+  const DEFAULT_COLOR = '#ff4d4f';
 
   function key(datasetId, scope = 'viewer') {
     return `${scope}:${datasetId || 'unknown'}`;
@@ -14,7 +15,7 @@ const MeasurementStore = (() => {
   }
 
   function setAll(datasetId, scope = 'viewer', items = []) {
-    const normalized = Array.isArray(items) ? items.map(_normalize) : [];
+    const normalized = Array.isArray(items) ? items.filter(it => it && typeof it === 'object').map(_normalize) : [];
     _state.set(key(datasetId, scope), normalized);
     return list(datasetId, scope);
   }
@@ -123,7 +124,7 @@ const MeasurementStore = (() => {
       type,
       mode: item.mode || (scope === 'tracking' ? 'snapshot' : 'snapshot'),
       label,
-      color: item.color || '#ff4d4f',
+      color: _safeColor(item.color),
       visible: item.visible !== false,
       timepoint: Number.isFinite(item.timepoint) ? item.timepoint : null,
       distance: Number.isFinite(item.distance) ? item.distance : null,
@@ -135,6 +136,14 @@ const MeasurementStore = (() => {
       labelOffset: item.labelOffset || null,
       metadata: item.metadata && typeof item.metadata === 'object' ? _clone(item.metadata) : {}
     };
+  }
+
+  // Readers put the colour into an inline style, and a stored measurement can come from a
+  // workspace file or a shared #state= link: only a hex colour (#rgb … #rrggbbaa) is kept,
+  // so no extra CSS declaration can ride along with it.
+  function _safeColor(color) {
+    const text = String(color || '');
+    return /^#[0-9a-f]{3,8}$/i.test(text) ? text : DEFAULT_COLOR;
   }
 
   function _id() {

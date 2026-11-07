@@ -25,6 +25,8 @@
  */
 
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
 
 // Library mode (tests): the helpers below are defined, nothing is routed and no
@@ -62,6 +64,29 @@ function site_draft_path(string $doc): ?string {
     return site_drafts_dir() . '/' . $slug . '.json';
 }
 
+/** A JSON object or an empty list standing for one (what this backend wrote for `{}`
+ *  before it decoded with lumen_json_decode_doc). */
+function site_objlike($v): bool {
+    return lumen_json_is_object($v) || $v === [];
+}
+
+/** A value site_objlike() accepts, as an array for member access (`{}` → []). */
+function site_as_array($v): array {
+    if ($v instanceof stdClass) return get_object_vars($v);
+    return is_array($v) ? $v : [];
+}
+
+/** The JSON object stored at $p, decoded by lumen_json_decode_doc so an empty object
+ *  nested anywhere stays `{}` when the doc is written back; null when the file is
+ *  absent or holds no object. */
+function site_read_obj(string $p) {
+    if (!is_file($p)) return null;
+    $raw = @file_get_contents($p);
+    if (!is_string($raw)) return null;
+    $d = lumen_json_decode_doc($raw);
+    return site_objlike($d) ? $d : null;
+}
+
 /** Read a doc: active → default → empty. false on invalid doc name.
  *  The result may still carry a legacy inline `draft` (pre-split documents); use
  *  site_load_public() or site_load_admin() rather than calling this directly. */
@@ -69,10 +94,8 @@ function site_load_doc(string $doc) {
     $res = site_doc_path($doc);
     if ($res === null) return false;
     foreach ($res as $p) {
-        if (is_file($p)) {
-            $d = json_decode((string)@file_get_contents($p), true);
-            if (is_array($d)) return $d;
-        }
+        $d = site_read_obj($p);
+        if ($d !== null) return site_as_array($d);
     }
     return [];
 }
@@ -91,28 +114,32 @@ function site_load_admin(string $doc) {
     if ($data === false) return false;
     $draft = null;
     $p = site_draft_path($doc);
-    if ($p !== null && is_file($p)) {
-        $d = json_decode((string)@file_get_contents($p), true);
-        if (is_array($d)) $draft = $d;
-    }
+    if ($p !== null) $draft = site_read_obj($p);
     // Back-compat: documents written before the split kept the draft inline. Keep
     // serving it so no work is lost — the next save relocates it — but it must never
     // stay in a payload that could reach a non-admin.
-    if ($draft === null && isset($data['draft']) && is_array($data['draft'])) $draft = $data['draft'];
+    if ($draft === null && isset($data['draft']) && site_objlike($data['draft'])) $draft = $data['draft'];
     unset($data['draft']);
-    if ($draft !== null) $data['draft'] = $draft;
+    if ($draft !== null) $data['draft'] = $draft === [] ? new stdClass() : $draft;
     return $data;
 }
 
+/** JSON text of a site doc or draft: every one of them is an object, so an empty one
+ *  is written `{}`, never `[]`. */
+function site_doc_json($data) {
+    if ($data === []) $data = new stdClass();
+    return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+}
+
 /** Atomic write of a PRIVATE doc under api/ (0600, never web-readable). */
-function site_write_private(string $path, array $data): bool {
-    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+function site_write_private(string $path, $data): bool {
+    $json = site_doc_json($data);
     return $json !== false && lumen_write_file_atomic($path, $json, 0600);
 }
 
 /** Atomic write of a PUBLIC config doc (readable by the web server, not 0600). */
-function site_write_public(string $path, array $data): bool {
-    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+function site_write_public(string $path, $data): bool {
+    $json = site_doc_json($data);
     return $json !== false && lumen_write_file_atomic($path, $json);
 }
 
@@ -202,7 +229,10 @@ function site_generate_theme_css($theme): string {
 
 /** Structural gate for a page doc (twin of dev_server.py:_validate_page_doc).
  * Returns null on success, or an error string. Mutates $data (schemaVersion +
- * width clamp). Forward-compatible: unknown widget types are allowed. */
+ * width clamp). Forward-compatible: unknown widget types are allowed.
+ * $data comes from lumen_json_decode_doc: an object node may be stdClass (`{}`, or
+ * keys that read 0..n-1), which holds none of the members checked here, so it is
+ * accepted as is and stays `{}` when written. */
 function site_validate_page(array &$data): ?string {
     $raw = json_encode($data);
     if ($raw === false) return 'Malformed page document';
@@ -210,19 +240,20 @@ function site_validate_page(array &$data): ?string {
     $data['schemaVersion'] = 2;
     foreach (['published', 'draft'] as $key) {
         if (!isset($data[$key])) continue;
-        if (!is_array($data[$key])) return "Invalid '$key' block";
-        if (!isset($data[$key]['sections'])) continue;
+        if (!site_objlike($data[$key])) return "Invalid '$key' block";
+        if (!is_array($data[$key]) || !isset($data[$key]['sections'])) continue;
         $secs = $data[$key]['sections'];
-        if (!is_array($secs) || count($secs) > 300) return 'Invalid sections';
+        if (!lumen_json_is_list($secs) || count($secs) > 300) return 'Invalid sections';
         foreach ($data[$key]['sections'] as &$s) {
-            if (!is_array($s)) return 'Invalid section';
-            if (!isset($s['columns'])) continue;
-            if (!is_array($s['columns']) || count($s['columns']) > 12) return 'Invalid columns';
+            if (!site_objlike($s)) return 'Invalid section';
+            if (!is_array($s) || !isset($s['columns'])) continue;
+            if (!lumen_json_is_list($s['columns']) || count($s['columns']) > 12) return 'Invalid columns';
             foreach ($s['columns'] as &$c) {
-                if (!is_array($c)) return 'Invalid column';
+                if (!site_objlike($c)) return 'Invalid column';
+                if (!is_array($c)) continue;
                 if (isset($c['width']) && is_numeric($c['width'])) $c['width'] = max(1, min(12, (int)$c['width']));
                 if (!isset($c['widgets'])) continue;
-                if (!is_array($c['widgets']) || count($c['widgets']) > 500) return 'Invalid widgets';
+                if (!lumen_json_is_list($c['widgets']) || count($c['widgets']) > 500) return 'Invalid widgets';
                 foreach ($c['widgets'] as $wd) {
                     if (!is_array($wd) || !isset($wd['type']) || !is_string($wd['type'])) return 'Invalid widget';
                 }
@@ -240,7 +271,7 @@ function site_save_doc(string $doc, $data): bool {
     // Split the draft out before ANYTHING reaches the public config/ tree.
     $draftPath = site_draft_path($doc);
     if ($draftPath !== null) {
-        $draft = (isset($data['draft']) && is_array($data['draft'])) ? $data['draft'] : null;
+        $draft = (isset($data['draft']) && site_objlike($data['draft'])) ? $data['draft'] : null;
         unset($data['draft']);
         if ($draft === null) {
             if (is_file($draftPath)) @unlink($draftPath);
@@ -259,8 +290,7 @@ function site_reset_doc(string $doc): bool {
     $res = site_doc_path($doc);
     if ($res === null) return false;
     [$active, $default] = $res;
-    $content = is_file($default) ? json_decode((string)@file_get_contents($default), true) : [];
-    if (!is_array($content)) $content = [];
+    $content = site_as_array(site_read_obj($default));
     // Route through save so theme.css regeneration fires on reset too.
     return site_save_doc($doc, $content);
 }
@@ -278,6 +308,18 @@ function site_delete_doc(string $doc): bool {
     $draftPath = site_draft_path($doc);
     if ($draftPath !== null && is_file($draftPath)) @unlink($draftPath);
     return true;
+}
+
+/** True when something backs this doc name: the stored file, its shipped default or a
+ *  page's private draft. A valid name with none of them is a page that was never written. */
+function site_doc_exists(string $doc): bool {
+    $res = site_doc_path($doc);
+    if ($res === null) return false;
+    $paths = $res;
+    $draft = site_draft_path($doc);
+    if ($draft !== null) $paths[] = $draft;
+    foreach ($paths as $p) if (is_file($p)) return true;
+    return false;
 }
 
 function site_publish_doc(string $doc): bool {
@@ -367,16 +409,15 @@ function site_save_checked(string $doc, $data, ?string $rev, ?array $merge): arr
 }
 
 /** Write ONLY a page's private draft — and its title when the body carries one. The
- *  published block is never touched. Body {draft, title?}. Twin of _site_save_draft. */
+ *  published block is never touched. Body {draft, title?}, decoded by
+ *  lumen_json_decode_doc. Twin of _site_save_draft. */
 function site_save_draft(string $doc, $body, ?string $rev): array {
     $doc = trim($doc);
     $draftPath = site_draft_path($doc);
     if ($draftPath === null) return [400, ['error' => 'Invalid doc']];
-    $body = is_array($body) ? $body : [];
+    $body = lumen_json_is_object($body) ? site_as_array($body) : [];
     $draft = $body['draft'] ?? null;
-    if (!is_array($draft) || ($draft && array_keys($draft) === range(0, count($draft) - 1))) {
-        return [400, ['error' => "Invalid 'draft' block"]];
-    }
+    if (!lumen_json_is_object($draft)) return [400, ['error' => "Invalid 'draft' block"]];
     $probe = ['draft' => $draft];
     $err = site_validate_page($probe);
     if ($err !== null) return [400, ['error' => $err]];
@@ -388,7 +429,7 @@ function site_save_draft(string $doc, $body, ?string $rev): array {
             $public = is_array($public) ? $public : [];
             if (($public['title'] ?? null) !== $body['title']) {
                 $public['title'] = $body['title'];
-                if (!isset($public['published']) || !is_array($public['published'])) $public['published'] = ['sections' => []];
+                if (!lumen_json_is_object($public['published'] ?? null)) $public['published'] = ['sections' => []];
                 $public['schemaVersion'] = 2;
                 if (!site_write_public(site_doc_path($doc)[0], $public)) return [500, ['error' => 'write_failed']];
             }
@@ -397,6 +438,38 @@ function site_save_draft(string $doc, $body, ?string $rev): array {
         if (!site_write_private($draftPath, $probe['draft'])) return [500, ['error' => 'write_failed']];
         return [200, ['ok' => true, 'rev' => site_rev($doc)]];
     });
+}
+
+/**
+ * null when $data (decoded by lumen_json_decode_doc, so objects and lists stay apart)
+ * may be written as global site doc $doc (instance, theme, legal), else the error.
+ * A wrong type on a structural key breaks every page that reads the doc; an empty
+ * list stands for an empty object (what this backend wrote before
+ * lumen_json_decode_doc). Pages have their own gate. Twin of _site_doc_shape_error.
+ */
+function site_doc_shape_error(string $doc, $data, ?array $merge): ?string {
+    static $objectKeys = [
+        'instance' => ['brand', 'specimen', 'datasetTypes', 'org', 'seo', 'pageTitles', 'footer', 'nav'],
+        'theme'    => ['tokens', 'dark', 'light'],
+        'legal'    => [],
+    ];
+    static $listKeys = [
+        'instance' => ['channelColorPresets'],
+        'theme'    => [],
+        'legal'    => ['sections'],
+    ];
+    $doc = trim($doc);
+    if (!isset($objectKeys[$doc])) return null;
+    if (!lumen_json_is_object($data)) return 'Invalid JSON body';
+    $fields = $data instanceof stdClass ? get_object_vars($data) : $data;
+    if (!$fields && $merge === null) return 'empty_doc';   // a whole-doc save of {} would wipe it
+    foreach ($objectKeys[$doc] as $k) {
+        if (array_key_exists($k, $fields) && !(lumen_json_is_object($fields[$k]) || $fields[$k] === [])) return "Invalid '$k'";
+    }
+    foreach ($listKeys[$doc] as $k) {
+        if (array_key_exists($k, $fields) && !lumen_json_is_list($fields[$k])) return "Invalid '$k'";
+    }
+    return null;
 }
 
 if (defined('LUMEN_SITE_LIB')) return;
@@ -411,9 +484,10 @@ if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 $action = lumen_str($_GET['action'] ?? null) ?? '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$body   = $method === 'POST'
-    ? (json_decode((string)file_get_contents('php://input'), true) ?: [])
-    : [];
+$rawBody = $method === 'POST' ? (string)file_get_contents('php://input') : '';
+// JSON objects kept apart from lists, so an empty object is written back `{}`;
+// null when the request carried no JSON at all.
+$bodyDoc = $rawBody !== '' ? lumen_json_decode_doc($rawBody) : null;
 
 // ── Public read ───────────────────────────────────────────────────────────────
 // Only the operator gets the draft back; everyone else sees published content.
@@ -441,21 +515,24 @@ if (in_array($action, ['save', 'save_draft', 'reset', 'publish', 'delete'], true
     $doc = lumen_str($_GET['doc'] ?? null) ?? '';
     $rev = lumen_str($_GET['rev'] ?? null);
     if ($action === 'save') {
-        $payload = is_array($body) ? $body : [];
         $merge = null;
         if (isset($_GET['merge'])) {
             $merge = site_parse_merge(lumen_str($_GET['merge']) ?? '');
             if ($merge === null) admin_json_out(['error' => 'bad_merge'], 400);
         }
+        if (!lumen_json_is_object($bodyDoc)) admin_json_out(['error' => 'Invalid JSON body'], 400);
+        $payload = site_as_array($bodyDoc);
         if (strncmp($doc, 'pages/', 6) === 0) {
             $verr = site_validate_page($payload);
             if ($verr !== null) admin_json_out(['error' => $verr], 400);
         }
+        $shapeErr = site_doc_shape_error($doc, $bodyDoc, $merge);
+        if ($shapeErr !== null) admin_json_out(['error' => $shapeErr], 400);
         [$code, $out] = site_save_checked($doc, $payload, $rev, $merge);
         admin_json_out($out, $code);
     }
     if ($action === 'save_draft') {
-        [$code, $out] = site_save_draft($doc, $body, $rev);
+        [$code, $out] = site_save_draft($doc, $bodyDoc, $rev);
         admin_json_out($out, $code);
     }
     if (site_doc_path($doc) === null) admin_json_out(['error' => 'Invalid doc'], 400);
@@ -464,7 +541,12 @@ if (in_array($action, ['save', 'save_draft', 'reset', 'publish', 'delete'], true
         admin_json_out($ok ? ['ok' => true, 'rev' => site_rev($doc)] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
     }
     if ($action === 'publish') {
-        $ok = site_locked($doc, fn() => site_publish_doc($doc));
+        $known = true;
+        $ok = site_locked($doc, function () use ($doc, &$known) {
+            $known = site_doc_exists($doc);
+            return $known && site_publish_doc($doc);
+        });
+        if (!$known) admin_json_out(['error' => 'Not found'], 404);
         admin_json_out($ok ? ['ok' => true, 'rev' => site_rev($doc)] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
     }
     if ($action === 'delete') {

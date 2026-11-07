@@ -28,6 +28,37 @@
     return (_preview && _doc && _doc.draft) ? _doc.draft : ((_doc && _doc.published) || {});
   }
 
+  function _tr(key, fallback) {
+    try {
+      const v = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key) : key;
+      return (v && v !== key) ? v : fallback;
+    } catch (_) { return fallback; }
+  }
+
+  // A mistyped or deleted slug says so, with a way out, instead of bouncing to the home page.
+  function showMissing() {
+    const host = document.getElementById('page-blocks');
+    const empty = document.getElementById('page-empty');
+    if (empty) empty.style.display = 'none';
+    if (!host) return;
+    const message = _tr('pages.missing', 'This page does not exist.');
+    host.textContent = '';
+    const box = document.createElement('div');
+    box.className = 'container';
+    box.style.cssText = 'text-align:center;padding:80px 24px';
+    const title = document.createElement('h1');
+    title.style.cssText = 'font-size:var(--text-xl);margin-bottom:var(--space-4)';
+    title.textContent = message;
+    const back = document.createElement('a');
+    back.className = 'btn btn-outline';
+    back.href = 'index.html';
+    back.textContent = _tr('pages.backHome', 'Back to the home page');
+    box.append(title, back);
+    host.appendChild(box);
+    const brand = (typeof InstanceConfig !== 'undefined') ? InstanceConfig.get('brand.name', 'Lumen3D') : 'Lumen3D';
+    document.title = message + ' — ' + brand;
+  }
+
   function renderPage() {
     const host = document.getElementById('page-blocks');
     const empty = document.getElementById('page-empty');
@@ -45,7 +76,9 @@
     _slug = (params.get('slug') || '').trim();
     _preview = params.get('preview') === 'draft';
     _edit = params.get('edit') === '1';
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(_slug)) { window.location.replace('index.html'); return; }
+    // No slug at all is not a page address: go home. A slug that names nothing gets a message.
+    if (!_slug) { window.location.replace('index.html'); return; }
+    const validSlug = /^[a-z0-9][a-z0-9_-]{0,63}$/.test(_slug);
 
     if (typeof InstanceConfig !== 'undefined') { try { await InstanceConfig.load(); } catch (_) {} }
     if (typeof Theme !== 'undefined') Theme.init();
@@ -56,13 +89,13 @@
     // Edit mode: the admin Pages tab embeds this page as a live editing surface.
     // Hand the whole content area over to the in-iframe editor runtime; it owns
     // rendering + affordances and talks to the parent over postMessage.
-    if (_edit && typeof PageEditFrame !== 'undefined') { PageEditFrame.init(); return; }
+    if (validSlug && _edit && typeof PageEditFrame !== 'undefined') { PageEditFrame.init(); return; }
 
     let _found = false;
     // Draft preview: drafts live under api/, behind the admin session — the public
     // config/ copy holds published content only. An anonymous visitor hitting
     // ?preview=draft gets a doc with no draft back and falls through to published.
-    if (_preview) {
+    if (validSlug && _preview) {
       try {
         const resp = await fetch(`api/site.php?action=get&doc=pages/${encodeURIComponent(_slug)}`,
                                  { cache: 'no-store', credentials: 'same-origin' });
@@ -75,7 +108,7 @@
         }
       } catch (_) { /* fall through to the static published doc */ }
     }
-    if (!_found) {
+    if (validSlug && !_found) {
       try {
         const resp = await fetch(`./config/pages/${encodeURIComponent(_slug)}.json`, { cache: 'no-store' });
         if (resp.ok) {
@@ -89,8 +122,13 @@
 
     // A missing/deleted page must not render a blank shell at a public URL.
     // Preview mode (admin live-preview iframe) receives its doc via postMessage,
-    // so never redirect there; edit mode already handed off above.
-    if (!_found && !_preview) { window.location.replace('index.html'); return; }
+    // so never replace it; edit mode already handed off above.
+    if (!validSlug || (!_found && !_preview)) {
+      showMissing();
+      if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => showMissing());
+      if (typeof Utils !== 'undefined' && Utils.populateLanguageMenu) { try { Utils.populateLanguageMenu((l) => I18n.setLanguage(l)); } catch (_) {} }
+      return;
+    }
 
     renderPage();
 

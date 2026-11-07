@@ -11,16 +11,48 @@ const Utils = (() => {
    * @param {number} bytes
    * @returns {string}
    */
+  function _uiLanguage() {
+    try {
+      return (typeof I18n !== 'undefined' && I18n.getLanguage && I18n.getLanguage()) || 'en';
+    } catch (e) {
+      return 'en';
+    }
+  }
+
+  /**
+   * A number with a fixed count of decimals in the reader's language ("0,50" in French,
+   * "0.50" in English), no digit grouping so the English output matches `toFixed`.
+   * '—' for a value that is not finite.
+   */
+  function formatNumber(value, digits = 1) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    try {
+      return new Intl.NumberFormat(_uiLanguage(), {
+        minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false
+      }).format(n);
+    } catch (e) {
+      return n.toFixed(digits);
+    }
+  }
+
+  /** Unit symbols B / KB / MB / GB / TB in the reader's language: French says o / Ko / Mo / Go / To. */
+  function byteUnits() {
+    return _uiLanguage().slice(0, 2).toLowerCase() === 'fr'
+      ? ['o', 'Ko', 'Mo', 'Go', 'To']
+      : ['B', 'KB', 'MB', 'GB', 'TB'];
+  }
+
   function formatFileSize(bytes) {
-    if (bytes === 0) return '0 B';
+    if (bytes === 0) return `0 ${byteUnits()[0]}`;
     // EDGE-043: Math.log of a negative/NaN size is NaN and Math.log(Infinity) is
     // Infinity, so the unit index goes out of range and the output degrades to
     // 'NaN undefined'. Reject non-finite/negative sizes, and clamp the index so a
     // value larger than 1 PB still reports in TB rather than indexing past the array.
     if (!Number.isFinite(bytes) || bytes < 0) return '—';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const units = byteUnits();
     const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+    return formatNumber(bytes / Math.pow(1024, i), i > 0 ? 1 : 0) + ' ' + units[i];
   }
 
   /**
@@ -54,52 +86,6 @@ const Utils = (() => {
   }
 
   /**
-   * Parse a dataset name into structured metadata
-   * @param {string} name - e.g. "Egfl7eGFP-E75-Em1-18112025-GFP555-Pecam1-10x-2xzoom-4avg"
-   * @returns {object}
-   */
-  function parseDatasetName(name) {
-    const result = {
-      line: null,
-      stage: null,
-      stageNumeric: null,
-      embryo: null,
-      date: null,
-      markers: [],
-      objective: null,
-      interval: null,
-      raw: name
-    };
-
-    // Try to extract components
-    const parts = name.split('-');
-
-    for (const part of parts) {
-      // Line (e.g., Egfl7eGFP)
-      if (/^Egfl7/i.test(part)) result.line = part;
-      // Stage (e.g., E75, E7, E8, E775)
-      else if (/^E\d+$/i.test(part)) {
-        result.stage = part;
-        result.stageNumeric = parseFloat(_stageDigitsToDecimal(part.slice(1)));
-      }
-      // Embryo (e.g., Em1, Em10)
-      else if (/^Em\d+$/i.test(part)) result.embryo = part;
-      // Date (e.g., 18112025)
-      else if (/^\d{8}$/.test(part)) result.date = part;
-      // Interval (e.g., 10min, 30min)
-      else if (/^\d+min$/i.test(part)) result.interval = part;
-      // Objective (e.g., 10x)
-      else if (/^\d+x$/i.test(part)) result.objective = part;
-      // Markers
-      else if (/^(GFP|DAPI|Pecam|Flk1|Alexa|RFP|mCherry)/i.test(part)) {
-        result.markers.push(part);
-      }
-    }
-
-    return result;
-  }
-
-  /**
    * Format embryonic stage for display
    * @param {string} stage - e.g. "E75"
    * @returns {string} e.g. "E7.5"
@@ -116,7 +102,8 @@ const Utils = (() => {
    * "75" → "7.5", "775" → "7.75", "105" → "10.5", "10" → "10". Stages run from E7 to E18, so
    * the integer part is one digit or two: three or more digits starting with 10-20 carry a
    * two-digit integer part, two digits are a decimal only from 50 up (E75 = 7.5; E10 = 10).
-   * Same rule as Catalog._stageNumber.
+   * The one client-side copy of the rule (formatStage, stageNumber and through it the
+   * catalog's stage sort); the pipeline's reference is 4-catalog_generator._parse_stage.
    */
   function _stageDigitsToDecimal(digits) {
     if (digits.length <= 1) return digits;
@@ -124,6 +111,21 @@ const Utils = (() => {
     const firstTwo = parseInt(digits.slice(0, 2), 10);
     if (firstTwo >= 10 && firstTwo <= 20) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
     return `${digits[0]}.${digits.slice(1)}`;
+  }
+
+  /**
+   * Numeric embryonic day of a stage, for ordering: a number is returned as is, "E8.5" is
+   * read as written, compact digits ("E75", "E105") follow _stageDigitsToDecimal, so the
+   * value is always the one formatStage displays. Anything else is 0.
+   * @param {string|number} stage
+   * @returns {number}
+   */
+  function stageNumber(stage) {
+    if (typeof stage === 'number') return Number.isFinite(stage) ? stage : 0;
+    const match = stage && String(stage).match(/^E(\d+)(?:\.(\d+))?$/i);
+    if (!match) return 0;
+    if (match[2]) return parseFloat(`${match[1]}.${match[2]}`);
+    return parseFloat(_stageDigitsToDecimal(match[1]));
   }
 
   /**
@@ -178,18 +180,55 @@ const Utils = (() => {
    * closes the menu — so no listener leaks across repeated toggles.
    * @param {string} id - element id of the dropdown container
    */
+  // The open dropdowns and what to unhook when each one closes: one outside-click and one
+  // Escape listener per open menu, removed on every way of closing it.
+  const _openDropdowns = new Map();
+
+  function _dropdownTrigger(dropdown) {
+    return Array.from(dropdown.children || []).find(c => c.tagName === 'BUTTON') || null;
+  }
+
+  function _setDropdownOpen(dropdown, open, { restoreFocus = false } = {}) {
+    if (open) dropdown.classList.add('open');
+    else dropdown.classList.remove('open');
+    const trigger = _dropdownTrigger(dropdown);
+    // Only the navbar language switcher (data-action trigger) is kept in sync here: other
+    // dropdowns (admin) toggle their own class and own their ARIA.
+    if (trigger && trigger.getAttribute('data-action') === 'lang-dropdown') {
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (open) return;
+    const teardown = _openDropdowns.get(dropdown);
+    if (teardown) {
+      _openDropdowns.delete(dropdown);
+      teardown();
+    }
+    if (restoreFocus && trigger && typeof trigger.focus === 'function') trigger.focus();
+  }
+
   function toggleDropdown(id) {
     const dropdown = document.getElementById(id);
     if (!dropdown) return;
-    dropdown.classList.toggle('open');
+    if (dropdown.classList.contains('open')) {
+      _setDropdownOpen(dropdown, false);
+      return;
+    }
+    _setDropdownOpen(dropdown, true);
 
-    const close = (e) => {
-      if (!dropdown.contains(e.target)) {
-        dropdown.classList.remove('open');
-        document.removeEventListener('click', close);
-      }
+    const onClick = (e) => { if (!dropdown.contains(e.target)) _setDropdownOpen(dropdown, false); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      _setDropdownOpen(dropdown, false, { restoreFocus: true });
     };
-    setTimeout(() => document.addEventListener('click', close), 0);
+    // The opening click is still bubbling: attach on the next turn so it does not close it.
+    const timer = setTimeout(() => document.addEventListener('click', onClick), 0);
+    document.addEventListener('keydown', onKey);
+    _openDropdowns.set(dropdown, () => {
+      clearTimeout(timer);
+      document.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKey);
+    });
   }
 
   /**
@@ -198,7 +237,58 @@ const Utils = (() => {
    * each page repopulates its own dynamic content.
    */
   function closeDropdowns() {
-    document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+    document.querySelectorAll('.dropdown').forEach(d => _setDropdownOpen(d, false));
+  }
+
+  const _FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), '
+    + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  /**
+   * Keep keyboard focus inside a modal container while it is open: focus moves in now
+   * (`initialFocus`, else the first control, else the container itself), Tab / Shift+Tab
+   * wrap around the visible controls, and the returned function releases the trap and puts
+   * focus back where it was (when that node is still on the page). Escape stays the
+   * caller's: each modal already closes in its own way.
+   * @param {HTMLElement} container
+   * @param {{ initialFocus?: HTMLElement|null }} [options]
+   * @returns {function({restore?: boolean}=):void} release
+   */
+  function trapFocus(container, { initialFocus = null } = {}) {
+    const previous = document.activeElement;
+    const focusables = () => Array.from(container.querySelectorAll(_FOCUSABLE))
+      .filter(n => n.getClientRects().length > 0);
+    const onKeydown = (e) => {
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (!items.length) { e.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!container.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeydown, true);
+    const start = initialFocus || focusables()[0] || container;
+    if (start === container && !container.hasAttribute('tabindex')) container.setAttribute('tabindex', '-1');
+    if (typeof start.focus === 'function') start.focus();
+    let released = false;
+    return function release({ restore = true } = {}) {
+      if (released) return;
+      released = true;
+      document.removeEventListener('keydown', onKeydown, true);
+      if (restore && previous && previous !== document.body && previous.isConnected
+          && typeof previous.focus === 'function') {
+        try { previous.focus(); } catch (_) { /* focus refused: leave it where it is */ }
+      }
+    };
   }
 
   /**
@@ -221,11 +311,27 @@ const Utils = (() => {
     const menu = dropdown && dropdown.querySelector('.dropdown-menu');
     if (!menu) return;
 
-    const current = I18n.getLanguage();
+    const trigger = _dropdownTrigger(dropdown);
+    if (trigger && trigger.getAttribute('data-action') === 'lang-dropdown') {
+      trigger.setAttribute('aria-haspopup', 'true');
+      trigger.setAttribute('aria-expanded', dropdown.classList.contains('open') ? 'true' : 'false');
+    }
+
+    // Marks the entry of the language now in force (also after an async switch settles).
+    const markActive = () => {
+      const now = I18n.getLanguage();
+      menu.querySelectorAll('.dropdown-item').forEach((item) => {
+        const on = item.dataset.lang === now;
+        item.classList.toggle('active', on);
+        if (on) item.setAttribute('aria-current', 'true');
+        else item.removeAttribute('aria-current');
+      });
+    };
+
     menu.textContent = '';
     for (const lang of I18n.getAvailableLanguages()) {
       const btn = document.createElement('button');
-      btn.className = 'dropdown-item' + (lang.code === current ? ' active' : '');
+      btn.className = 'dropdown-item';
       btn.type = 'button';
       btn.dataset.lang = lang.code;
       btn.setAttribute('lang', lang.code);
@@ -234,10 +340,18 @@ const Utils = (() => {
       btn.appendChild(flag);
       btn.appendChild(document.createTextNode(' ' + lang.native));
       btn.addEventListener('click', () => {
-        if (typeof onSwitch === 'function') onSwitch(lang.code);
+        _setDropdownOpen(dropdown, false, { restoreFocus: true });
+        if (typeof onSwitch !== 'function') return;
+        const result = onSwitch(lang.code);
+        // A failed switch still refreshes the highlight, and stays an error for the page.
+        if (result && typeof result.then === 'function') {
+          result.then(markActive, (err) => { markActive(); throw err; });
+        }
+        else markActive();
       });
       menu.appendChild(btn);
     }
+    markActive();
   }
 
   /**
@@ -492,21 +606,252 @@ const Utils = (() => {
     return `${datasetPage(dataset)}?id=${encodeURIComponent(dataset.id)}`;
   }
 
+  // A staged import is read through the admin blob proxy, whose `path` query parameter
+  // absorbs the tail: both forms answer `<base>/<relative path>` (or `<base><name>` for
+  // the proxy), so every URL built on them works unchanged.
+  const STAGING_PREFIX = 'staging:';
+
+  /** Where a dataset's bytes are served from: DATA_WEB/<type>/<folder>, or the blob proxy. */
+  function datasetBaseUrl(datasetPath) {
+    const p = String(datasetPath || '');
+    if (!p.startsWith(STAGING_PREFIX)) return `DATA_WEB/${p}`;
+    return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(STAGING_PREFIX.length))}&path=`;
+  }
+
+  // ─── Plugin-mounted UI ──────────────────────────────────────────────────────
+  // A marketplace plugin is not shipped with the page's markup, so it asks the page
+  // for a surface: a sidebar section or a floating panel over the canvas. Each page
+  // picks the container; these build the node and the handle that owns it, so a
+  // plugin written for several pages gets one contract.
+
+  function _pluginDomId(prefix, id) {
+    const safe = String(id ?? '').replace(/[^A-Za-z0-9_-]/g, '');
+    return safe ? `${prefix}${safe}` : '';
+  }
+
+  function _refreshIcons(node) {
+    if (typeof window !== 'undefined' && window.lucide) window.lucide.createIcons({ nodes: [node] });
+  }
+
+  /**
+   * A plugin section in a sidebar. def = {id, title, html, hidden, bind(body, handle)};
+   * returns {root, section (alias of root), body, setTitle, setHtml, show, hide, remove},
+   * null without a container (or without an id when `requireId`). The id is sanitised
+   * and prefixed (`idPrefix`); a section the plugin added earlier under the same id is
+   * replaced, and an id already held by a node that is not a plugin section is left off.
+   */
+  function mountPluginSection(container, def = {}, options = {}) {
+    const { idPrefix = 'plugin-section-', requireId = true, bodyClass = 'plugin-section-body' } = options;
+    if (!container || (requireId && !def.id)) return null;
+    const domId = _pluginDomId(idPrefix, def.id);
+    if (requireId && !domId) return null;
+    const doc = container.ownerDocument || document;
+    const previous = domId ? doc.getElementById(domId) : null;
+    if (previous && previous.classList.contains('plugin-section')) previous.remove();
+    const root = doc.createElement('div');
+    root.className = 'panel-section plugin-section';
+    if (domId && !doc.getElementById(domId)) root.id = domId;
+    const title = doc.createElement('div');
+    title.className = 'panel-title';
+    const label = doc.createElement('span');
+    label.textContent = def.title == null ? '' : String(def.title);
+    title.appendChild(label);
+    const body = doc.createElement('div');
+    body.className = bodyClass;
+    body.innerHTML = def.html || '';
+    root.appendChild(title);
+    root.appendChild(body);
+    if (def.hidden) root.hidden = true;
+    container.appendChild(root);
+    _refreshIcons(root);
+    const handle = {
+      root, section: root, body,
+      setTitle(text) { label.textContent = text == null ? '' : String(text); },
+      setHtml(html) { body.innerHTML = html || ''; _refreshIcons(body); },
+      show() { root.hidden = false; },
+      hide() { root.hidden = true; },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(body, handle);
+    return handle;
+  }
+
+  /**
+   * A floating panel over a canvas. def = {id, className, style, html, bind(root, handle)};
+   * returns {root, setHtml, show, hide, toggle, isVisible, remove}, null without a
+   * container or an id. A panel added earlier under the same id is replaced.
+   */
+  function mountPluginPanel(container, def = {}) {
+    const domId = _pluginDomId('plugin-panel-', def.id);
+    if (!container || !domId) return null;
+    const doc = container.ownerDocument || document;
+    doc.getElementById(domId)?.remove();
+    const root = doc.createElement('div');
+    root.className = `scientific-panel ${def.className || ''}`.trim();
+    root.id = domId;
+    if (def.style) root.style.cssText = def.style;
+    root.innerHTML = def.html || '';
+    container.appendChild(root);
+    _refreshIcons(root);
+    const handle = {
+      root,
+      setHtml(html) { root.innerHTML = html || ''; _refreshIcons(root); },
+      show() { root.classList.add('visible'); },
+      hide() { root.classList.remove('visible'); },
+      toggle(force) { return root.classList.toggle('visible', force); },
+      isVisible() { return root.classList.contains('visible'); },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(root, handle);
+    return handle;
+  }
+
   function trustedTargetOrigin() {
     return (typeof window !== 'undefined' && window.location && window.location.origin)
       ? window.location.origin
       : '*';
   }
 
+  // ─── Errors shown to a reader ───────────────────────────────────────────────
+  // What reaches the screen is one translated sentence per category; the raw text
+  // (URLs, HTTP statuses, parser messages) stays in the console. `null` = silent.
+  const _ERROR_TEXT = {
+    cancelled: null,
+    network: ['app.errNetwork', 'The server could not be reached. Check the connection and try again.'],
+    notFound: ['app.errNotFound', 'Some of this dataset\'s files are missing on the server.'],
+    access: ['app.errAccess', 'The server refused access to this dataset.'],
+    server: ['app.errServer', 'The server ran into a problem. Try again in a moment.'],
+    damaged: ['app.errDamaged', 'This dataset\'s files are damaged or incomplete. Its administrator needs to check it.'],
+    metadata: ['app.errMetadata', 'This dataset\'s description is invalid.'],
+    gpuMemory: ['app.errGpuMemory', 'Not enough GPU memory for this quality. Choose a lower quality or close other tabs.'],
+    gpuLost: ['app.errGpuLost', 'The graphics card stopped responding. Reload the page.'],
+    webgl: ['viewer.errNoWebgl', 'This browser refused to give the page a 3D (WebGL) context. Restart the browser completely and open the page again; if it persists, check that hardware acceleration is on.'],
+    noBricks: ['app.errNoBricks', 'No part of the volume could be loaded at this quality.'],
+    readFailed: ['app.errReadFailed', 'Part of the dataset could not be read. Check the connection and try again.'],
+    timepoint: ['app.errTimepoint', 'This time point could not be loaded.'],
+    busy: ['app.errBusy', 'Another operation is still running. Try again when it has finished.'],
+    saveRefused: ['app.errSaveRefused', 'The browser refused to save the file. Choose another location or allow downloads for this site.'],
+    diskFull: ['app.errDiskFull', 'There is not enough free disk space to save the file.'],
+    unknown: ['app.errUnknown', 'Something went wrong. Try again; if it keeps happening, reload the page.'],
+  };
+
+  const _ERROR_CODES = {
+    cancelled: 'cancelled', aborted: 'cancelled', ABORTED: 'cancelled', BRICKS_MOUNT_CHANGED: 'cancelled',
+    BRICKS_MANIFEST_INVALID: 'damaged', BRICKS_INDEX_INVALID: 'damaged', BRICKS_COLUMN_UNKNOWN: 'damaged',
+    BRICKS_HASH_MISMATCH: 'damaged', BRICKS_READ_FAILED: 'damaged', BRICKS_DECODE_FAILED: 'damaged',
+    READ_FAILED: 'readFailed',
+    BRICKS_RANGE_INVALID: 'server',
+    METADATA_INVALID: 'metadata', METADATA_MISSING: 'metadata', DATASET_INVALID: 'metadata',
+    SVR_OVER_BUDGET: 'gpuMemory', SVR_ALLOC_FAILED: 'gpuMemory', GPU_MEMORY: 'gpuMemory',
+    'gpu-memory': 'gpuMemory', 'vram-budget': 'gpuMemory', 'alloc-failed': 'gpuMemory', budget: 'gpuMemory',
+    'context-lost': 'gpuLost', CONTEXT_LOST: 'gpuLost',
+    BRICKS_NONE_LOADED: 'noBricks', TIMEPOINT_MISSING: 'timepoint',
+    busy: 'busy',
+  };
+
+  // Ordered: the first pattern that matches wins. Conservative on purpose — an
+  // unrecognised message falls to `unknown`, never to a guessed category.
+  const _ERROR_PATTERNS = [
+    [/creating WebGL context|WebGL.*(not supported|unavailable|disabled)/i, 'webgl'],
+    [/context (was )?lost|CONTEXT_LOST_WEBGL/i, 'gpuLost'],
+    [/Insufficient GPU memory|out of GPU memory|SVR_OVER_BUDGET|SVR_ALLOC_FAILED|GL_OUT_OF_MEMORY/i, 'gpuMemory'],
+    [/No brick payload/i, 'noBricks'],
+    [/No bricks for requested timepoint/i, 'timepoint'],
+    [/Failed to fetch|NetworkError|Load failed|network error|ERR_[A-Z_]+|timed out|fetch stalled/i, 'network'],
+    [/Unexpected token|Unexpected end of (JSON|input)|is not valid JSON|JSON\.parse/i, 'damaged'],
+    [/hash mismatch|Manifest rejected|Invalid brick manifest|index(\.bin)? rejected|bad magic|corrupt|BRICKS_INDEX_/i, 'damaged'],
+  ];
+
+  function _categoryForStatus(status) {
+    const s = Number(status);
+    if (!Number.isFinite(s)) return null;
+    if (s === 0) return 'network';
+    if (s === 404 || s === 410) return 'notFound';
+    if (s === 401 || s === 403) return 'access';
+    if (s === 408 || s === 429 || s >= 500) return 'server';
+    if (s >= 400) return 'damaged';
+    return null;
+  }
+
+  /**
+   * An error meant for a reader, built where the failure is understood. The message
+   * stays technical (logs); the UI reads `i18nKey` through friendlyError.
+   */
+  function userError(code, key, fallback, detail, params) {
+    return Object.assign(new Error(detail || fallback || code), {
+      code, i18nKey: key, i18nFallback: fallback, i18nParams: params || null,
+    });
+  }
+
+  /**
+   * err (Error, DOMException, loader result `{ reason, code, status }` or a bare
+   * reason string) → `{ category, key, fallback, params, silent, detail }`. `key` /
+   * `fallback` are null for a silent category. `options.context === 'save'` reads a
+   * SecurityError / NotAllowedError as the browser refusing the file picker.
+   */
+  function friendlyError(err, options = {}) {
+    const isObj = err && typeof err === 'object';
+    const name = isObj ? String(err.name || '') : '';
+    const code = isObj ? (err.code != null ? String(err.code) : '') : String(err || '');
+    const message = isObj ? String(err.message || err.reason || '') : String(err || '');
+    const detail = [name && name !== 'Error' ? name : '', code && code !== message ? code : '', message]
+      .filter(Boolean).join(': ');
+    const build = (category, key, fallback, params) => {
+      const known = key ? null : _ERROR_TEXT[category];
+      return {
+        category,
+        key: key || (known ? known[0] : null),
+        fallback: fallback || (known ? known[1] : null),
+        params: params || {},
+        silent: !key && known === null,
+        detail,
+      };
+    };
+    if (isObj && typeof err.i18nKey === 'string' && err.i18nKey) {
+      return build(err.category || _ERROR_CODES[code] || 'known', err.i18nKey, err.i18nFallback || null, err.i18nParams || null);
+    }
+    if (name === 'AbortError' || (isObj && (err.cancelled === true || err.stale === true))) return build('cancelled');
+    if (code && _ERROR_CODES[code]) return build(_ERROR_CODES[code]);
+    if (name === 'QuotaExceededError') return build('diskFull');
+    if ((name === 'SecurityError' || name === 'NotAllowedError') && options.context === 'save') return build('saveRefused');
+    const byStatus = _categoryForStatus(isObj ? err.status : undefined);
+    if (byStatus) return build(byStatus);
+    const http = /\bHTTP[\s/]*(\d{3})\b/i.exec(message) || /\bmanifest \((\d{3})\)/i.exec(message);
+    if (http) {
+      const c = _categoryForStatus(http[1]);
+      if (c) return build(c);
+    }
+    for (const [rx, category] of _ERROR_PATTERNS) {
+      if (rx.test(message) || rx.test(code)) return build(category);
+    }
+    if (name === 'TypeError' && /fetch/i.test(message)) return build('network');
+    return build('unknown');
+  }
+
+  /** The translated sentence for err ('' when its category is silent). */
+  function friendlyErrorText(err, options = {}) {
+    const f = friendlyError(err, options);
+    if (f.silent || !f.key) return '';
+    if (typeof I18n !== 'undefined' && typeof I18n.t === 'function') {
+      const text = I18n.t(f.key, f.params);
+      if (text && text !== f.key) return text;
+    }
+    const fallback = f.fallback || _ERROR_TEXT.unknown[1];
+    return fallback.replace(/\{([A-Za-z0-9_]+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(f.params, k) ? String(f.params[k]) : m));
+  }
+
   return {
     formatFileSize,
+    formatNumber,
+    byteUnits,
     formatDate,
-    parseDatasetName,
     formatStage,
+    stageNumber,
     debounce,
     throttle,
     toggleDropdown,
     closeDropdowns,
+    trapFocus,
     populateLanguageMenu,
     el,
     animateCounter,
@@ -521,6 +866,9 @@ const Utils = (() => {
     escapeHtml,
     isTrustedMessageOrigin,
     trustedTargetOrigin,
+    userError,
+    friendlyError,
+    friendlyErrorText,
     DATASET_TYPES,
     VOLUME_DATASET_TYPES,
     isDatasetType,
@@ -532,6 +880,9 @@ const Utils = (() => {
     datasetTypeBadgeClass,
     datasetTypeGradient,
     datasetPage,
-    datasetUrl
+    datasetUrl,
+    datasetBaseUrl,
+    mountPluginSection,
+    mountPluginPanel
   };
 })();

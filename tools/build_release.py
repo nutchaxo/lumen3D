@@ -35,6 +35,7 @@ ROOT_FILES = (
     "about.html",
     "legal.html",   # legal notices page (footer link) — was missing → 404
     "page.html",    # custom-page host (page.html?slug=…) for the page builder — was missing → 404
+    "404.html",     # branded not-found page, answered with status 404 by every backend
     "dev_server.py",
     "fast_server.py",
     "ed25519_pure.py",  # vendored release-signature verifier (updater authenticity)
@@ -276,7 +277,7 @@ def write_zip(zip_path, entries):
 # admpan.html is EXCLUDED (its ESM module graph cannot be concatenated).
 BUNDLE_PAGES = (
     "index.html", "explorer.html", "viewer.html", "compare.html",
-    "2d.html", "about.html", "legal.html", "page.html",
+    "2d.html", "about.html", "legal.html", "page.html", "404.html",
 )
 # Scripts whose whole point is to run early in <head>: concatenating them into the
 # end-of-body bundle would defeat them.

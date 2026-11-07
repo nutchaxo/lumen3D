@@ -7,11 +7,15 @@
  *   POST ?action=upload  { filename, data }   → { ok, url }                  (admin + CSRF)
  *   POST ?action=delete  { name }             → { ok }                       (admin + CSRF)
  *
+ * delete answers 400 for a name that is not an image name, 404 when no such file exists.
+ *
  * `data` is the base64 image bytes (a data: URL prefix is stripped). Files land
  * under the PUBLIC config/uploads/ dir (world-readable 0644) so the public pages
  * can serve them. Raster only — SVG is excluded (it could carry inline script).
  */
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
 admin_session_start();
 // Read-only use of the session from here on (auth, CSRF): release its lock so this
@@ -94,12 +98,13 @@ function media_upload(array $body): array {
     return ['ok' => true, 'url' => 'config/uploads/' . $name, 'name' => $name];
 }
 
-function media_delete(string $name): bool {
+/** 'ok' | 'invalid' (not an image name) | 'missing' (nothing by that name) | 'failed'. */
+function media_delete(string $name): string {
     $name = media_safe_name($name);
-    if ($name === null) return false;
+    if ($name === null) return 'invalid';
     $p = media_dir() . '/' . $name;
-    if (is_file($p) && !@unlink($p)) return false;
-    return true;
+    if (!is_file($p)) return 'missing';
+    return @unlink($p) ? 'ok' : 'failed';
 }
 
 if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
@@ -109,7 +114,13 @@ if ($action === 'list') admin_json_out(['files' => media_list()]);
 if (in_array($action, ['upload', 'delete'], true)) {
     admin_require_write();  // POST + CSRF; exits on failure
     if ($action === 'upload') { $r = media_upload(is_array($body) ? $body : []); admin_json_out($r, $r['ok'] ? 200 : 400); }
-    if ($action === 'delete') admin_json_out(media_delete(lumen_str($body['name'] ?? null) ?? '') ? ['ok' => true] : ['error' => 'Invalid file'], 200);
+    if ($action === 'delete') {
+        $res = media_delete(lumen_str($body['name'] ?? null) ?? '');
+        if ($res === 'ok') admin_json_out(['ok' => true]);
+        if ($res === 'missing') admin_json_out(['error' => 'Not found'], 404);
+        if ($res === 'failed') admin_json_out(['error' => 'delete_failed'], 500);
+        admin_json_out(['error' => 'Invalid file'], 400);
+    }
 }
 
 admin_json_out(['error' => 'Unknown action'], 400);

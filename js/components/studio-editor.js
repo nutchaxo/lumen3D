@@ -543,7 +543,7 @@ const StudioEditor = (() => {
             <i data-lucide="rotate-ccw"></i>
           </button>
           <input type="range" id="studio-rotation-slider" min="-180" max="180" step="1" value="0" style="flex: 0 0 148px; min-width: 148px;">
-          <span class="text-xs font-mono" id="studio-rotation-val" style="width: 68px; min-width: 68px; text-align: right; display: inline-block; flex-shrink: 0;">0 deg</span>
+          <span class="text-xs font-mono" id="studio-rotation-val" style="width: 68px; min-width: 68px; text-align: right; display: inline-block; flex-shrink: 0;">0°</span>
         </div>
       `);
       document.getElementById('studio-undo')?.addEventListener('click', _undo);
@@ -554,13 +554,13 @@ const StudioEditor = (() => {
         _doc.viewport.rotation = 0;
         const slider = document.getElementById('studio-rotation-slider');
         if (slider) slider.value = 0;
-        document.getElementById('studio-rotation-val').textContent = '0 deg';
+        document.getElementById('studio-rotation-val').textContent = '0°';
         _viewportChanged();
       });
       document.getElementById('studio-rotation-slider')?.addEventListener('input', (event) => {
         if (!_doc) return;
         _doc.viewport.rotation = (Number(event.target.value) || 0) * Math.PI / 180;
-        document.getElementById('studio-rotation-val').textContent = `${event.target.value} deg`;
+        document.getElementById('studio-rotation-val').textContent = `${event.target.value}°`;
         _viewportChanged(true);
       });
     }
@@ -577,7 +577,7 @@ const StudioEditor = (() => {
     _palette.className = 'studio-command-palette hidden';
     _palette.innerHTML = `
       <div class="studio-command-dialog">
-        <input id="studio-command-input" class="form-input" placeholder="Type a command">
+        <input id="studio-command-input" class="form-input" type="text" autocomplete="off" placeholder="Type a command" aria-label="Type a command">
         <div id="studio-command-list" class="studio-command-list"></div>
       </div>
     `;
@@ -622,7 +622,7 @@ const StudioEditor = (() => {
     const slider = document.getElementById('studio-rotation-slider');
     const label = document.getElementById('studio-rotation-val');
     if (slider) slider.value = 0;
-    if (label) label.textContent = '0 deg';
+    if (label) label.textContent = '0°';
   }
 
   function _renderAll() {
@@ -1349,7 +1349,7 @@ const StudioEditor = (() => {
       const deg = Math.round((_doc.viewport.rotation * 180 / Math.PI));
       if (slider) slider.value = String(((deg + 540) % 360) - 180);
       const label = document.getElementById('studio-rotation-val');
-      if (label) label.textContent = `${Math.round(_doc.viewport.rotation * 180 / Math.PI)} deg`;
+      if (label) label.textContent = `${Math.round(_doc.viewport.rotation * 180 / Math.PI)}°`;
       _viewportChanged(true);
       return;
     }
@@ -1659,15 +1659,49 @@ const StudioEditor = (() => {
     }
   }
 
+  // The list is rebuilt from markup on every change, which drops the focus: a row (or
+  // one of its buttons) reached from the keyboard gets it back after the rebuild, the
+  // next row when its own layer is gone. A row focused by a mouse press is left alone,
+  // so a Space held next to pan the canvas still pans.
+  function _layerListFocus() {
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!active || !_layersContainer?.contains?.(active)) return null;
+    const row = active.closest?.('.studio-layer-item');
+    if (!row || !_focusIsVisible(active)) return null;
+    const rows = Array.from(_layersContainer.querySelectorAll('.studio-layer-item'));
+    return {
+      layerId: row.dataset.layerId,
+      action: active === row ? null : (active.dataset?.layerAction || null),
+      index: rows.indexOf(row)
+    };
+  }
+
+  function _focusIsVisible(element) {
+    try { return element.matches(':focus-visible'); } catch (_) { return true; }
+  }
+
+  function _restoreLayerListFocus(focus) {
+    if (!focus) return;
+    const rows = Array.from(_layersContainer.querySelectorAll('.studio-layer-item'));
+    let row = rows.find(item => item.dataset.layerId === focus.layerId);
+    if (!row) row = rows[Math.min(Math.max(focus.index, 0), rows.length - 1)];
+    if (!row) return;
+    const target = (row.dataset.layerId === focus.layerId && focus.action)
+      ? row.querySelector(`[data-layer-action="${focus.action}"]`) || row
+      : row;
+    target.focus();
+  }
+
   function _renderLayers() {
     if (!_layersContainer || !_doc) return;
+    const focus = _layerListFocus();
     if (!_doc.layers.length) {
-      _layersContainer.innerHTML = '<div class="studio-empty" data-i18n="studio.noLayers">No layers yet.</div>';
+      _layersContainer.innerHTML = '<div class="studio-empty" role="listitem" data-i18n="studio.noLayers">No layers yet.</div>';
       if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM(_layersContainer);
       return;
     }
     _layersContainer.innerHTML = [..._doc.layers].reverse().map(layer => `
-      <div class="studio-layer-item ${layer.id === _selectedId ? 'active' : ''} ${layer.locked ? 'is-locked' : ''}" draggable="true" data-layer-id="${layer.id}">
+      <div class="studio-layer-item ${layer.id === _selectedId ? 'active' : ''} ${layer.locked ? 'is-locked' : ''}" role="listitem" tabindex="0"${layer.id === _selectedId ? ' aria-current="true"' : ''} aria-label="${_escape(layer.name || _layerName(layer))}" draggable="true" data-layer-id="${_escape(layer.id)}">
         <i data-lucide="grip-vertical" class="icon"></i>
         <i data-lucide="${TOOL_ICONS[layer.type] || 'box'}" class="icon"></i>
         <span class="studio-layer-name">${_escape(layer.name || _layerName(layer))}</span>
@@ -1678,10 +1712,35 @@ const StudioEditor = (() => {
     _layersContainer.querySelectorAll('.studio-layer-item').forEach(item => _bindLayerItem(item));
     if (window.lucide) lucide.createIcons({ nodes: [_layersContainer] });
     if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM(_layersContainer);
+    _restoreLayerListFocus(focus);
   }
 
   function _bindLayerItem(item) {
     const layerId = item.dataset.layerId;
+    item.addEventListener('keydown', (event) => {
+      // Keys on the eye / lock buttons are theirs (Enter clicks them).
+      if (event.target !== item) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === 'Enter' || (event.key === ' ' && _focusIsVisible(item))) {
+        // Kept from the page's own key handler, which would take Space for a pan.
+        event.preventDefault();
+        event.stopPropagation();
+        if (!_doc?.layers.some(row => row.id === layerId)) return;
+        _selectedId = layerId;
+        _renderAll();
+        return;
+      }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'End') {
+        const rows = Array.from(_layersContainer.querySelectorAll('.studio-layer-item'));
+        const index = rows.indexOf(item);
+        const next = event.key === 'Home' ? 0
+          : event.key === 'End' ? rows.length - 1
+            : index + (event.key === 'ArrowUp' ? -1 : 1);
+        event.preventDefault();
+        event.stopPropagation();
+        rows[Math.min(Math.max(next, 0), rows.length - 1)]?.focus();
+      }
+    });
     item.addEventListener('click', (event) => {
       const action = event.target.closest('[data-layer-action]')?.dataset.layerAction;
       const layer = _doc.layers.find(row => row.id === layerId);
@@ -1747,13 +1806,13 @@ const StudioEditor = (() => {
       ${['line', 'arrow', 'distance', 'scalebar'].includes(layer.type) ? _capControls(style) : ''}
       ${layer.type === 'scalebar' ? _scaleBarControls(layer) : ''}
       <div class="studio-property-row">
-        <button class="btn btn-outline btn-sm" id="prop-align-left">Align L</button>
-        <button class="btn btn-outline btn-sm" id="prop-align-center">Center</button>
-        <button class="btn btn-outline btn-sm" id="prop-align-right">Align R</button>
+        <button class="btn btn-outline btn-sm" id="prop-align-left" data-i18n="studio.alignLeft">Left</button>
+        <button class="btn btn-outline btn-sm" id="prop-align-center" data-i18n="studio.alignCenter">Center</button>
+        <button class="btn btn-outline btn-sm" id="prop-align-right" data-i18n="studio.alignRight">Right</button>
       </div>
       <div class="studio-property-row">
-        <button class="btn btn-outline btn-sm" id="prop-group">Group</button>
-        <button class="btn btn-outline btn-sm" id="prop-delete"><i data-lucide="trash-2"></i></button>
+        <button class="btn btn-outline btn-sm" id="prop-group" data-i18n="studio.group">Group</button>
+        <button class="btn btn-outline btn-sm" id="prop-delete" title="Delete" aria-label="Delete" data-i18n-title="studio.deleteLayer" data-i18n-aria="studio.deleteLayer"><i data-lucide="trash-2"></i></button>
       </div>
       <div class="studio-measurement-readout">${_escape(_measurementLabel(layer) || '')}</div>
     `;
@@ -3141,8 +3200,15 @@ const StudioEditor = (() => {
 
   function _openPalette() {
     _palette?.classList.remove('hidden');
+    // Labelled on every opening: the language can change while the Studio stays mounted.
+    const input = document.getElementById('studio-command-input');
+    if (input) {
+      const prompt = _t('studio.cmdPlaceholder', 'Type a command');
+      input.placeholder = prompt;
+      input.setAttribute('aria-label', prompt);
+    }
     _renderPaletteCommands();
-    document.getElementById('studio-command-input')?.focus();
+    input?.focus();
   }
 
   function _closePalette() {
@@ -3153,21 +3219,28 @@ const StudioEditor = (() => {
     const list = document.getElementById('studio-command-list');
     const input = document.getElementById('studio-command-input');
     if (!list) return;
-    const query = String(input?.value || '').toLowerCase();
+    const query = String(input?.value || '').trim().toLocaleLowerCase();
+    // The English name still matches, so a command learnt from the documentation is found
+    // in any language.
     const commands = [
-      ['tool-select', 'Select tool'],
-      ['tool-distance', 'Distance tool'],
-      ['tool-angle', 'Angle tool'],
-      ['tool-scalebar', 'Scale bar tool'],
-      ['fit', 'Fit image'],
-      ['undo', 'Undo'],
-      ['redo', 'Redo'],
-      ['add-guide-x', 'Toggle vertical guide'],
-      ['add-guide-y', 'Toggle horizontal guide'],
-      ['export-json', 'Export JSON'],
-      ['export-png', 'Export PNG']
-    ].filter(([, label]) => label.toLowerCase().includes(query));
-    list.innerHTML = commands.map(([id, label]) => `<button data-command="${id}">${_escape(label)}</button>`).join('');
+      ['tool-select', 'studio.selectMove', 'Select tool'],
+      ['tool-distance', 'studio.distance', 'Distance tool'],
+      ['tool-angle', 'studio.angle', 'Angle tool'],
+      ['tool-scalebar', 'studio.scalebar', 'Scale bar tool'],
+      ['fit', 'studio.cmdFit', 'Fit image'],
+      ['undo', 'js.undo', 'Undo'],
+      ['redo', 'js.redo', 'Redo'],
+      ['add-guide-x', 'studio.cmdGuideX', 'Toggle vertical guide'],
+      ['add-guide-y', 'studio.cmdGuideY', 'Toggle horizontal guide'],
+      ['export-json', 'studio.cmdExportJson', 'Export JSON'],
+      ['export-png', 'studio.cmdExportPng', 'Export PNG']
+    ].map(([id, key, english]) => ({ id, english, label: _t(key, english) }))
+      .filter(({ label, english }) => !query
+        || label.toLocaleLowerCase().includes(query)
+        || english.toLowerCase().includes(query));
+    list.innerHTML = commands
+      .map(({ id, label }) => `<button type="button" data-command="${id}">${_escape(label)}</button>`)
+      .join('');
   }
 
   function _runCommand(command) {

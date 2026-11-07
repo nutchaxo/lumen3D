@@ -316,9 +316,12 @@ function lumen_up_load_journal($type, $folder): ?array {
 //           log is fsync'ed every 32nd record and deleted at compaction.
 // All integers little-endian. A journal file entry carries an "id" (never reused,
 // "nextId" counts up), replaced whenever its bitmap is reset or its size changes.
+// File completion compacts only when it changes the entry beyond what the log
+// already says, or once the log holds LUMEN_UP_LOG_COMPACT_RECORDS records.
 
 const LUMEN_UP_LOG_MAGIC = 'LUC1';
 const LUMEN_UP_LOG_SYNC_EVERY = 32;
+const LUMEN_UP_LOG_COMPACT_RECORDS = 4096;
 const LUMEN_UP_TABLE_MAGIC = 'LUFT';
 
 function lumen_up_log_path($type, $folder): ?string {
@@ -422,6 +425,13 @@ function lumen_up_ensure_ids(array &$journal): bool {
 /** A fresh incarnation of a file: its old id (and every record naming it) no longer applies. */
 function lumen_up_new_id(array &$journal, array &$entry): void {
     lumen_up_ensure_ids($journal);
+    lumen_up_take_id($journal, $entry);
+}
+
+/** Twin of upload_staging._take_id: lumen_up_new_id for a caller that already ran
+ *  lumen_up_ensure_ids under the lock (the plan loop — re-checking the whole
+ *  journal per new file made a large plan outlive max_execution_time). */
+function lumen_up_take_id(array &$journal, array &$entry): void {
     $entry['id'] = $journal['nextId'];
     $journal['nextId']++;
 }
@@ -473,6 +483,24 @@ function lumen_up_append_log($type, $folder, int $id, int $index): bool {
     }
     fclose($fh);
     return $ok;
+}
+
+function lumen_up_log_record_count($type, $folder): int {
+    $lp = lumen_up_log_path($type, $folder);
+    if ($lp === null) return 0;
+    clearstatcache(true, $lp);
+    $size = @filesize($lp);
+    return $size === false ? 0 : intdiv($size, 16);
+}
+
+/** Make every record appended so far durable (they are fsync'ed in batches). */
+function lumen_up_sync_log($type, $folder): void {
+    $lp = lumen_up_log_path($type, $folder);
+    if ($lp === null || !is_file($lp) || !function_exists('fsync')) return;
+    $fh = @fopen($lp, 'ab');
+    if ($fh === false) return;
+    @fsync($fh);
+    fclose($fh);
 }
 
 function lumen_up_remove_state_files($type, $folder): void {
@@ -617,6 +645,37 @@ function lumen_up_missing(array $entry): array {
     return $out;
 }
 
+/** Twin of upload_staging._needs_rechunk: a partial file planned at a larger
+ *  chunk size than the client now asks for (after a chunk was refused as too
+ *  large by a proxy body limit). A file no larger than the new size is left alone. */
+function lumen_up_needs_rechunk(array $entry, int $size, int $chunkSize): bool {
+    $recorded = (int)($entry['chunkSize'] ?? LUMEN_UP_DEFAULT_CHUNK) ?: LUMEN_UP_DEFAULT_CHUNK;
+    return $recorded > $chunkSize && $size > $chunkSize;
+}
+
+/** Twin of upload_staging._rechunked: a copy of $entry at $chunkSize, its bitmap
+ *  re-expressed. Chunks land at byte offset index·chunkSize, so a new chunk is
+ *  received iff every old chunk overlapping it is. Same id: the caller assigns one. */
+function lumen_up_rechunked(array $entry, int $chunkSize): array {
+    $size = (int)($entry['size'] ?? 0);
+    $old = (int)($entry['chunkSize'] ?? LUMEN_UP_DEFAULT_CHUNK) ?: LUMEN_UP_DEFAULT_CHUNK;
+    $oldBits = lumen_up_bitmap_decode($entry['bits'] ?? '', lumen_up_bits_len($size, $old));
+    $nbits = lumen_up_bits_len($size, $chunkSize);
+    $bits = str_repeat("\0", intdiv($nbits + 7, 8));
+    for ($j = 0; $j < $nbits; $j++) {
+        $start = $j * $chunkSize;
+        $end = min($start + $chunkSize, $size);
+        $all = true;
+        for ($i = intdiv($start, $old), $last = intdiv($end - 1, $old); $i <= $last; $i++) {
+            if (!lumen_up_bit_get($oldBits, $i)) { $all = false; break; }
+        }
+        if ($all) $bits = lumen_up_bit_set($bits, $j);
+    }
+    $entry['chunkSize'] = $chunkSize;
+    $entry['bits'] = lumen_up_bitmap_encode($bits);
+    return $entry;
+}
+
 // ── Plan ─────────────────────────────────────────────────────────────────────
 
 function lumen_up_clamp_chunk($n): int {
@@ -692,6 +751,9 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize,
             foreach ($accepted as $item) {
                 $entry = $journal['files'][$item['path']] ?? null;
                 if ($entry && (int)($entry['size'] ?? -1) === $item['size']) {
+                    if (empty($entry['done']) && lumen_up_needs_rechunk($entry, $item['size'], $chunkSize)) {
+                        $entry = lumen_up_rechunked($entry, $chunkSize);
+                    }
                     $needed += !empty($entry['done']) ? 0 : $item['size'] - lumen_up_received($entry);
                 } else {
                     $needed += $item['size'];
@@ -727,6 +789,12 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize,
                 continue;
             }
             if ($entry && (int)($entry['size'] ?? -1) === $item['size']) {
+                if (lumen_up_needs_rechunk($entry, $item['size'], $chunkSize)) {
+                    // A new incarnation: the old id's log records count old indices.
+                    $entry = lumen_up_rechunked($entry, $chunkSize);
+                    lumen_up_take_id($journal, $entry);
+                    $journal['files'][$rel] = $entry;
+                }
                 $item['received']  = lumen_up_received($entry);
                 $item['chunkSize'] = (int)($entry['chunkSize'] ?? $chunkSize);
                 $item['missing']   = lumen_up_missing($entry);
@@ -740,7 +808,7 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize,
                 'tier' => $item['tier'], 'bits' => lumen_up_bitmap_encode(str_repeat("\0", intdiv($nbits + 7, 8))),
                 'done' => $item['size'] === 0, 'sha' => null,
             ];
-            lumen_up_new_id($journal, $fresh);
+            lumen_up_take_id($journal, $fresh);
             $journal['files'][$rel] = $fresh;
             $item['fileId'] = $fresh['id'];
             $item['received'] = 0;
@@ -921,6 +989,9 @@ function lumen_up_finalize($type, $folder, $rel, ?string $root): array {
         if ($journal === null) return [409, ['error' => 'no_plan']];
         $entry = $journal['files'][$rel] ?? null;
         if ($entry === null) return [409, ['error' => 'file_not_planned']];
+        // Done already after the fold and not flagged invalid: the journal plus its
+        // log already say everything this call would record.
+        $settled = !empty($entry['done']) && !array_key_exists('invalid', $entry);
         $size  = (int)($entry['size'] ?? 0);
         $chunk = (int)($entry['chunkSize'] ?? LUMEN_UP_DEFAULT_CHUNK) ?: LUMEN_UP_DEFAULT_CHUNK;
         $nbits = lumen_up_bits_len($size, $chunk);
@@ -952,9 +1023,17 @@ function lumen_up_finalize($type, $folder, $rel, ?string $root): array {
         }
         unset($entry['invalid']);
         $entry['done'] = true;
+        // Informational only (nothing reads it back): it reaches the journal file
+        // at the next compaction.
         if ($root) $entry['sha'] = substr((string)$root, 0, 128);
         $journal['files'][$rel] = $entry;
-        lumen_up_save_journal($journal);
+        if ($settled && lumen_up_log_record_count($type, $folder) < LUMEN_UP_LOG_COMPACT_RECORDS) {
+            // The 200 below tells the client the file is in: its log records must
+            // survive a power loss as the journal write would have.
+            lumen_up_sync_log($type, $folder);
+        } else {
+            lumen_up_save_journal($journal);
+        }
         return [200, ['ok' => true, 'path' => $rel, 'size' => $size,
                       'state' => lumen_up_state_of($type, $folder, $journal)]];
     });

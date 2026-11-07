@@ -337,3 +337,142 @@
 .footer-links a:hover {
   color: var(--text-primary);
 }
+
+/* ── Navbar menu (phones) ────────────────────────────────── */
+/* Below 900 px the links fold into a panel under the fixed bar, opened by the menu
+   button (js/core/ui-actions.js, action `nav-menu`): a fixed bar cannot scroll, so a
+   row wider than the screen would leave its links and buttons out of reach. */
+.navbar-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.navbar-menu-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.navbar-menu-icon,
+.navbar-menu-icon::before,
+.navbar-menu-icon::after {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  transition: transform var(--transition-fast), background-color var(--transition-fast);
+}
+
+.navbar-menu-icon {
+  position: relative;
+}
+
+.navbar-menu-icon::before,
+.navbar-menu-icon::after {
+  content: '';
+  position: absolute;
+  left: 0;
+}
+
+.navbar-menu-icon::before { top: -6px; }
+.navbar-menu-icon::after  { top: 6px; }
+
+.navbar-menu-btn[aria-expanded="true"] .navbar-menu-icon { background-color: transparent; }
+.navbar-menu-btn[aria-expanded="true"] .navbar-menu-icon::before { transform: translateY(6px) rotate(45deg); }
+.navbar-menu-btn[aria-expanded="true"] .navbar-menu-icon::after  { transform: translateY(-6px) rotate(-45deg); }
+
+@media (max-width: 900px) {
+  .navbar {
+    padding: 0 var(--space-6);
+    gap: var(--space-2);
+  }
+
+  .navbar-brand {
+    min-width: 0;
+    margin-right: auto;
+  }
+
+  .navbar-brand-icon {
+    flex-shrink: 0;
+  }
+
+  .navbar-actions {
+    flex-shrink: 0;
+    gap: var(--space-1);
+  }
+
+  /* Last on screen, but first after the brand in the markup: the keyboard reaches
+     the button right before the links it opens. */
+  .navbar-menu-btn {
+    display: inline-flex;
+    order: 1;
+  }
+
+  .navbar-links {
+    display: none;
+    position: absolute;
+    top: var(--header-height);
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+    padding: var(--space-3) var(--space-4) var(--space-4);
+    background: var(--bg-body);
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-lg);
+    max-height: calc(100vh - var(--header-height));
+    max-height: calc(100dvh - var(--header-height));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .navbar.nav-open .navbar-links {
+    display: flex;
+  }
+
+  .navbar-links .navbar-link {
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-md);
+  }
+
+  .footer-content {
+    flex-direction: column;
+    gap: var(--space-4);
+    text-align: center;
+  }
+
+  .footer-links {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-3) var(--space-6);
+  }
+}
+
+@media (max-width: 600px) {
+  .navbar {
+    padding: 0 var(--space-4);
+  }
+
+  .navbar-brand {
+    gap: var(--space-2);
+  }
+
+  .navbar-brand span {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}

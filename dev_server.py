@@ -242,7 +242,8 @@ _WRITE_LOCK = threading.Lock()
 # never held nested in the same order, so no deadlock (threading.Lock isn't reentrant).
 _STATS_LOCK = threading.Lock()
 # Live self-update progress, polled by the admin UI via /api/admin.php?action=update_status.
-_UPDATE_STATE = {"phase": "idle", "pct": 0, "message": "", "error": None, "running": False, "target": None}
+_UPDATE_STATE = {"phase": "idle", "pct": 0, "message": "", "error": None, "running": False, "target": None,
+                 "done": None, "total": None}
 # Closes the check-then-set race on _UPDATE_STATE["running"] (two concurrent
 # update_apply POSTs must never both launch the pipeline).
 _UPDATE_LOCK = threading.Lock()
@@ -1070,9 +1071,48 @@ def _merge_paths(current: dict, incoming: dict, paths) -> dict:
     return out
 
 
+# Structural keys of the global site docs: a wrong type there breaks every page that
+# reads the doc (InstanceConfig, the theme compiler, legal.html). An empty list is
+# accepted where an object is expected: PHP hosts before lumen_json_decode_doc wrote
+# an empty map as `[]`, and the editors post back what they read.
+_SITE_DOC_OBJECT_KEYS = {
+    "instance": ("brand", "specimen", "datasetTypes", "org", "seo", "pageTitles", "footer", "nav"),
+    "theme": ("tokens", "dark", "light"),
+    "legal": (),
+}
+_SITE_DOC_LIST_KEYS = {
+    "instance": ("channelColorPresets",),
+    "theme": (),
+    "legal": ("sections",),
+}
+
+
+def _site_doc_shape_error(doc: str, data, merge=None):
+    """None when ``data`` may be written as global site doc ``doc`` (instance, theme,
+    legal), else the error string. Pages have their own gate (_validate_page_doc).
+    Twin: api/site.php site_doc_shape_error."""
+    doc = (doc or "").strip()
+    if doc not in _SITE_DOC_OBJECT_KEYS:
+        return None
+    if not isinstance(data, dict):
+        return "Invalid JSON body"
+    if not data and merge is None:
+        return "empty_doc"          # a whole-doc save of {} would wipe the doc
+    for key in _SITE_DOC_OBJECT_KEYS[doc]:
+        if key in data and not (isinstance(data[key], dict) or data[key] == []):
+            return f"Invalid '{key}'"
+    for key in _SITE_DOC_LIST_KEYS[doc]:
+        if key in data and not isinstance(data[key], list):
+            return f"Invalid '{key}'"
+    return None
+
+
 def _site_save_checked(doc: str, data, rev=None, merge=None):
     """Save under _SITE_LOCK with an optional stale-revision check (``rev``) and an
     optional field merge (``merge``: dotted paths). Returns (status, payload)."""
+    shape_err = _site_doc_shape_error(doc, data, merge)
+    if shape_err:
+        return 400, {"error": shape_err}
     with _SITE_LOCK:
         if _site_doc_path(doc) is None:
             return 400, {"error": "Invalid doc"}
@@ -1131,6 +1171,20 @@ def _site_save_draft(doc: str, body, rev=None):
         return 200, {"ok": True, "rev": _site_rev(doc)}
 
 
+def _site_doc_exists(doc: str) -> bool:
+    """True when something backs this doc name: the stored file, its shipped default or
+    a page's private draft. A valid name with none of them is a page that was never
+    written — there is nothing to publish."""
+    res = _site_doc_path(doc)
+    if not res:
+        return False
+    paths = list(res)
+    draft = _site_draft_path(doc)
+    if draft is not None:
+        paths.append(draft)
+    return any(p.is_file() for p in paths)
+
+
 def _publish_site_doc(doc: str) -> bool:
     """Promote a doc's draft to published (page builder). Copies the `draft` block over
     `published` in-place; no-op-safe for docs without a draft/published split."""
@@ -1177,55 +1231,99 @@ def _media_list():
     return out
 
 
-def _media_upload(body):
+_MEDIA_BAD_TYPE = "Type de fichier non supporté (png, jpg, webp, gif, avif)"
+_MEDIA_BAD_SIZE = "Fichier vide ou trop volumineux (max 8 Mo)"
+
+
+def _media_magic_ext(raw: bytes):
+    """The image format from the MAGIC BYTES — the client's file name is not evidence.
+    Twin of api/media.php media_magic_ext."""
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if raw[4:8] == b"ftyp" and raw[8:12] in (b"avif", b"avis"):
+        return "avif"
+    return None
+
+
+def _media_b64_strict(data: str):
+    """PHP base64_decode($s, true): whitespace skipped, any other character outside the
+    alphabet refused, missing trailing padding accepted. None when refused."""
     import base64
-    body = body or {}
-    name = _media_safe_name(body.get("filename") or body.get("name") or "")
+    import binascii
+    compact = "".join(data.split())
+    stripped = compact.rstrip("=")
+    if len(stripped) % 4 == 1:
+        return None
+    try:
+        return base64.b64decode(stripped + "=" * (-len(stripped) % 4), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _media_upload(body):
+    body = body if isinstance(body, dict) else {}
+    # Same precedence as the PHP twin (lumen_str(filename) ?? lumen_str(name) ?? ''):
+    # a field that is not a string is absent, never a 500.
+    fname = body.get("filename")
+    if not isinstance(fname, str):
+        fname = body.get("name")
+    name = _media_safe_name(fname if isinstance(fname, str) else "")
     if not name:
-        return {"ok": False, "error": "Type de fichier non supporté (png, jpg, webp, gif, avif)"}
-    data = body.get("data") or ""
-    if isinstance(data, str) and data.startswith("data:"):
+        return {"ok": False, "error": _MEDIA_BAD_TYPE}
+    data = body.get("data")
+    if not isinstance(data, str):
+        data = ""
+    if data.startswith("data:"):
         comma = data.find(",")
         if comma != -1:
             data = data[comma + 1:]
-    try:
-        raw = base64.b64decode(data or "", validate=False)
-    except Exception:
-        return {"ok": False, "error": "Données invalides"}
+    if len(data) > -(-_MEDIA_MAX // 3) * 4 + 4:
+        return {"ok": False, "error": _MEDIA_BAD_SIZE}
+    raw = _media_b64_strict(data)
     if not raw or len(raw) > _MEDIA_MAX:
-        return {"ok": False, "error": "Fichier vide ou trop volumineux (max 8 Mo)"}
+        return {"ok": False, "error": _MEDIA_BAD_SIZE}
+    # The stored extension is the one the bytes prove, so a page can never be made
+    # to serve something else under an image name.
+    magic = _media_magic_ext(raw)
+    if magic is None:
+        return {"ok": False, "error": _MEDIA_BAD_TYPE}
     try:
         _make_dir(MEDIA_DIR)
         # Images only, never a script — the same guard api/media.php writes.
         upload_staging.write_guard(MEDIA_DIR / ".htaccess", upload_staging.MEDIA_GUARD)
-        stem, ext = name.rsplit(".", 1)
+        stem = name.rsplit(".", 1)[0]
+        name = f"{stem}.{magic}"
         target = MEDIA_DIR / name
         i = 1
         while target.exists():
-            name = f"{stem}-{i}.{ext}"
+            name = f"{stem}-{i}.{magic}"
             target = MEDIA_DIR / name
             i += 1
-        target.write_bytes(raw)
-        try:
-            target.chmod(_file_mode())
-        except Exception:
-            pass
+        _atomic_write(target, raw, binary=True, mode=_file_mode())
         return {"ok": True, "url": f"config/uploads/{name}", "name": name}
     except Exception:
         return {"ok": False, "error": "Écriture impossible"}
 
 
-def _media_delete(name: str) -> bool:
-    name = _media_safe_name(name)
+def _media_delete(name: str):
+    """'ok' | 'invalid' (not an image name) | 'missing' (nothing by that name) | 'failed'."""
+    name = _media_safe_name(name if isinstance(name, str) else "")
     if not name:
-        return False
+        return "invalid"
     try:
         p = MEDIA_DIR / name
-        if p.exists():
-            p.unlink()
-        return True
+        if not p.is_file():
+            return "missing"
+        p.unlink()
+        return "ok"
     except Exception:
-        return False
+        return "failed"
 
 
 def _is_ip(value: str) -> bool:
@@ -1824,6 +1922,11 @@ TELEMETRY_GLOBAL_BURST = 600
 TELEMETRY_GLOBAL_RATE = 20
 TELEMETRY_SLOTS = 4096
 _TELEMETRY_STATE = bytearray(16 * (1 + TELEMETRY_SLOTS))
+# The download counter spends from its own table (same constants), so a loop of GETs
+# of a public download/ file can neither forge the Downloads figures without bound
+# nor drain the buckets the visit/view beacon relies on — and vice versa. Twin:
+# api/_admin_lib.php lumen_download_throttle_store (.telemetry/downloads.bin).
+_DOWNLOAD_THROTTLE_STATE = bytearray(16 * (1 + TELEMETRY_SLOTS))
 _TELEMETRY_LOCK = threading.Lock()
 
 
@@ -3146,8 +3249,33 @@ def _is_protected_rel(rel: str) -> bool:
     return False
 
 
-def _set_update(phase: str, pct: int, message: str, error=None, persist: bool = False) -> None:
-    _UPDATE_STATE.update({"phase": phase, "pct": pct, "message": message})
+class _UpdateError(OSError):
+    """An update refusal the operator can act on. ``code`` is what the admin browser
+    gets; the text (which may name files of this host) only goes to the server log."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+
+
+# Where an update that failed without a specific code of its own stopped.
+_UPDATE_PHASE_CODES = {
+    "preflight": "preflight_failed", "backup": "backup_failed", "download": "download_failed",
+    "verify": "verify_failed", "staging": "staging_failed", "verifying": "startup_check_failed",
+    "planning": "planning_failed", "pivoting": "pivot_failed",
+}
+
+
+def _update_error_code(exc: BaseException, phase: str) -> str:
+    return getattr(exc, "code", None) or _UPDATE_PHASE_CODES.get(phase, "update_failed")
+
+
+def _set_update(phase: str, pct: int, message: str, error=None, persist: bool = False,
+                done: int | None = None, total: int | None = None) -> None:
+    # `message` is the log/journal line (French, never shown): the admin UI builds its
+    # own translated line from `phase` and, while downloading, `done`/`total` bytes.
+    _UPDATE_STATE.update({"phase": phase, "pct": pct, "message": message,
+                          "done": done, "total": total})
     if error is not None:
         _UPDATE_STATE["error"] = error
     if persist:
@@ -3194,7 +3322,8 @@ def _start_update():
                                 "reason": info.get("assetError") or "no_release_asset",
                                 "info": info}
         _UPDATE_STATE.update({"phase": "starting", "pct": 0, "message": "Préparation…",
-                              "error": None, "target": info.get("latest")})
+                              "error": None, "target": info.get("latest"),
+                              "done": None, "total": None})
         threading.Thread(target=_run_update, args=(info,), daemon=True).start()
         return True, 200, {"ok": True, "target": info.get("latest")}
     except BaseException:
@@ -3330,12 +3459,12 @@ def _verify_release_signature(sums_raw: bytes, info: dict) -> None:
               flush=True)
         return
     if _ed25519 is None:
-        raise OSError("vérificateur Ed25519 indisponible (ed25519_pure.py) — "
-                      "impossible d'authentifier la release (fail-closed)")
+        raise _UpdateError("signature_invalid", "vérificateur Ed25519 indisponible (ed25519_pure.py) — "
+                           "impossible d'authentifier la release (fail-closed)")
     sig_url = info.get("sigUrl")
     if not sig_url:
-        raise OSError("release non signée: asset SHA256SUMS.sig absent alors qu'une "
-                      "clé de signature est épinglée (fail-closed)")
+        raise _UpdateError("signature_invalid", "release non signée: asset SHA256SUMS.sig absent alors qu'une "
+                           "clé de signature est épinglée (fail-closed)")
     try:
         raw = _fetch_url_bytes(sig_url, limit=4096)
         txt = raw.strip()
@@ -3349,9 +3478,9 @@ def _verify_release_signature(sums_raw: bytes, info: dict) -> None:
         else:
             sig = txt
     except Exception as e:
-        raise OSError(f"signature illisible: {e}")
+        raise _UpdateError("signature_invalid", f"signature illisible: {e}")
     if not _ed25519.verify(bytes.fromhex(_RELEASE_PUBKEY_HEX), sums_raw, sig):
-        raise OSError("signature de release invalide — authenticité refusée (fail-closed)")
+        raise _UpdateError("signature_invalid", "signature de release invalide — authenticité refusée (fail-closed)")
     print(f"MAJ: signature de release vérifiée (Ed25519, clé {_RELEASE_PUBKEY_HEX[:16]}…).",
           flush=True)
 
@@ -3367,14 +3496,14 @@ def _verify_release_download(info: dict, zip_path: Path) -> None:
     """
     name = info.get("assetName")
     if not info.get("sumsUrl") or not name:
-        raise OSError("release sans SHA256SUMS — intégrité impossible à prouver (fail-closed)")
+        raise _UpdateError("release_unverifiable", "release sans SHA256SUMS — intégrité impossible à prouver (fail-closed)")
     sums_raw = _fetch_url_bytes(info["sumsUrl"])
     _verify_release_signature(sums_raw, info)          # fail-closed if key pinned
     expected = _parse_sha256sums(sums_raw).get(name)
     if not expected:
-        raise OSError(f"{name} absent de SHA256SUMS — archive non couverte, refusée (fail-closed)")
+        raise _UpdateError("release_unverifiable", f"{name} absent de SHA256SUMS — archive non couverte, refusée (fail-closed)")
     if _sha256_file(zip_path) != expected:
-        raise OSError("empreinte SHA-256 de l'archive invalide")
+        raise _UpdateError("release_unverifiable", "empreinte SHA-256 de l'archive invalide")
 
 
 def _extract_release(zip_path: Path, dest: Path) -> Path:
@@ -3845,7 +3974,7 @@ def _update_preflight_report(target: str | None) -> dict:
 def _preflight_update(info: dict) -> None:
     """Everything that can be checked before touching anything, checked first."""
     if JOURNAL_FILE.exists():
-        raise OSError("un basculement précédent n'est pas réconcilié (redémarrer le serveur)")
+        raise _UpdateError("pivot_pending", "un basculement précédent n'est pas réconcilié (redémarrer le serveur)")
     BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
     # The swap is rename-only → staging and ROOT must share a filesystem. backups/
     # lives under ROOT so this holds by construction; assert anyway (a symlinked
@@ -3855,7 +3984,7 @@ def _preflight_update(info: dict) -> None:
     free = shutil.disk_usage(str(ROOT)).free
     need = max(int(info.get("assetSize") or 0) * 3, 300 * 1024 * 1024)
     if free < need:
-        raise OSError(f"espace disque insuffisant ({free / 1e9:.1f} Go libres, {need / 1e9:.1f} Go requis)")
+        raise _UpdateError("insufficient_disk", f"espace disque insuffisant ({free / 1e9:.1f} Go libres, {need / 1e9:.1f} Go requis)")
     probe = BACKUPS_DIR / f".wtest-{os.getpid()}"
     try:
         probe.write_text("x")
@@ -3933,7 +4062,8 @@ def _run_update(info: dict) -> None:
         def _dl_progress(done, total):
             if total:
                 _set_update("download", min(15 + int(35 * done / total), 50),
-                            f"Téléchargement… {done / 1e6:.1f} / {total / 1e6:.1f} Mo")
+                            f"Téléchargement… {done / 1e6:.1f} / {total / 1e6:.1f} Mo",
+                            done=int(done), total=int(total))
         _http_download(url, zip_path, expected_size=info.get("assetSize"),
                        progress=_dl_progress)
 
@@ -3973,11 +4103,14 @@ def _run_update(info: dict) -> None:
             threading.Thread(target=_HTTPD.shutdown, daemon=True).start()
         # The process exits once serve_forever returns; the supervisor takes over.
     except Exception as e:
+        code = _update_error_code(e, str(_UPDATE_STATE.get("phase")))
+        # The text may name files of this host: the log keeps it, the browser gets the code.
+        print(f"  [update] FAILED at phase {_UPDATE_STATE.get('phase')} ({code}): {type(e).__name__}: {e}", flush=True)
         _UPDATE_STATE["running"] = False
         shutil.rmtree(workdir, ignore_errors=True)
         JOURNAL_FILE.unlink(missing_ok=True)
         _set_update("error", 0, "Échec de la mise à jour — installation intacte.",
-                    error=str(e), persist=True)
+                    error=code, persist=True)
 
 
 # ── Pivot supervisor (runs as `dev_server.py --pivot <journal>` from %TEMP%) ────
@@ -4212,7 +4345,7 @@ def _pivot_main(journal_path: str) -> int:
         _journal_save(journal_file, j)
         _reverse_plan(j, root, staging, old)
         _write_result(root, {"phase": "rolled_back", "target": target,
-                             "error": "La nouvelle version n'a pas démarré — restauration automatique effectuée.",
+                             "error": "health_probe_failed",
                              "at": datetime.now().isoformat()})
         journal_file.unlink(missing_ok=True)
         _spawn_server(j)
@@ -4229,7 +4362,7 @@ def _pivot_main(journal_path: str) -> int:
                 _journal_save(journal_file, j)
                 _reverse_plan(j, root, Path(j["staging"]), Path(j["old"]))
                 _write_result(root, {"phase": "rolled_back", "target": j.get("target"),
-                                     "error": str(e), "at": datetime.now().isoformat()})
+                                     "error": "pivot_failed", "at": datetime.now().isoformat()})
                 journal_file.unlink(missing_ok=True)
                 _spawn_server(j)
         except Exception as e2:
@@ -4260,7 +4393,7 @@ def _reconcile_pivot() -> None:
             print("  [update] pivot interrompu ou incomplet — restauration de la version précédente.")
             _reverse_plan(j, root, Path(j.get("staging") or ""), Path(j.get("old") or ""))
             _write_result(root, {"phase": "rolled_back", "target": target,
-                                 "error": "Basculement interrompu — restauration automatique au démarrage.",
+                                 "error": "pivot_interrupted",
                                  "at": datetime.now().isoformat()})
             JOURNAL_FILE.unlink(missing_ok=True)
     except Exception as e:
@@ -4678,6 +4811,25 @@ def _migrations_bind() -> None:
             ROOT, data_web=data_web, uploads_dir=uploads, meta_lock=_META_LOCK,
             on_metadata_change=lambda: _CATALOG_CACHE.__setitem__("sig", None),
             file_mode=_file_mode())
+
+
+def _dataset_meta_field_error(body):
+    """The name of the first field of a posted metadata.json whose type the viewer or
+    the catalog cannot read, else None. Only gross type errors are refused (values are
+    the viewer's job, see viewer.js _validateDatasetMetadata); an absent field keeps
+    the stored value. Twin: api/datasets.php lumen_dataset_meta_field_error."""
+    for key in ("name", "stage"):
+        if key in body and body[key] is not None and not isinstance(body[key], str):
+            return key
+    for key in ("dimensions", "voxel_size"):
+        if key in body and not isinstance(body[key], dict):
+            return key
+    for key in ("channels", "volumeSources"):
+        if key in body:
+            v = body[key]
+            if not isinstance(v, list) or not all(isinstance(x, dict) for x in v):
+                return key
+    return None
 
 
 def _save_dataset(dataset_id: str, body: dict) -> bool:
@@ -5227,7 +5379,22 @@ def _build_catalog() -> list[dict]:
     def _date_key(x):
         d = x.get("date")
         return d if isinstance(d, str) and d not in ("", "Unknown") else "0000-00-00"
-    catalog.sort(key=lambda x: (_date_key(x), x.get("name", "")), reverse=True)
+
+    # A curated `name` can be any JSON value; comparing a str with a number or a list
+    # raises TypeError and dropped catalog.json. Same key as the PHP twin's
+    # `is_scalar ? (string) : ''`.
+    def _name_key(x):
+        n = x.get("name")
+        if isinstance(n, str):
+            return n
+        if isinstance(n, bool):
+            return "1" if n else ""
+        if isinstance(n, int):
+            return str(n)
+        if isinstance(n, float):
+            return repr(int(n)) if n.is_integer() else repr(n)
+        return ""
+    catalog.sort(key=lambda x: (_date_key(x), _name_key(x)), reverse=True)
     return catalog
 
 
@@ -5775,6 +5942,10 @@ _DOWNLOAD_RE = re.compile(
 # loading same-origin scripts, would sidestep the plugin trust gate.
 _HTML_LIKE_EXT = (".html", ".htm", ".xhtml", ".shtml")
 
+# First path segments whose misses stay a plain answer: they are fetched by scripts,
+# never opened in a tab, so a branded page would only hide the error from them.
+_PLAIN_404_ROOTS = frozenset({"api", "data_web"})
+
 # Text assets worth compressing on the wire. A pretty-printed brick manifest runs to
 # 23 MB and gzips to about 1.5 MB; it is the first heavy request of every open.
 _COMPRESSIBLE_EXT = frozenset({".json", ".jsonl", ".js", ".mjs", ".css", ".svg",
@@ -6007,18 +6178,20 @@ def _content_disposition_attachment(name: str) -> str:
 # /api/plugins hashes every plugin file (trust classification) and inlines every
 # plugin dictionary; it is called on each page boot, by anyone. The response is
 # rebuilt only when something it depends on changes.
-_PLUGINS_CACHE: dict = {"sig": None, "body": None}
+# One tuple (signature, body, gzip body), replaced in one assignment so a concurrent
+# request never pairs a body with another build's compressed bytes.
+_PLUGINS_CACHE: dict = {"entry": None}
+# The per-file walk of js/modules is the expensive half of the signature (~170 stats
+# per /api/plugins, and every page boot asks — a Compare page five times at once), so
+# it is reused for _CATALOG_SIG_TTL_S like the catalog's. Keyed on the trust epoch
+# and the modules dir: an install, uninstall, approval or revocation bumps the epoch
+# and re-walks on the next request; only a plugin folder edited by hand shows up to
+# that many seconds late.
+_PLUGINS_WALK: dict = {"entry": None}  # (key, digest, monotonic time of the walk)
 
 
-def _plugins_signature() -> str:
+def _plugins_walk_digest() -> str:
     h = hashlib.sha256()
-    h.update(f"{_DEV_TRUST}|{_TRUST_EPOCH}|{MODULES_DIR}".encode("utf-8", "surrogatepass"))
-    for f in (TRUST_FILE, ROOT / "version.json", DISABLED_PLUGINS_FILE, CHANGELOG_DIR):
-        try:
-            st = os.stat(f)
-            h.update(f"|{f.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
-        except OSError:
-            h.update(f"|{f.name}:-".encode("utf-8", "surrogatepass"))
     for placement in PLUGIN_PLACEMENTS:
         base = MODULES_DIR / placement
         for dirpath, dirnames, filenames in os.walk(base):
@@ -6031,6 +6204,27 @@ def _plugins_signature() -> str:
                     continue
                 rel = os.path.relpath(full, MODULES_DIR)
                 h.update(f"|{rel}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
+    return h.hexdigest()
+
+
+def _plugins_signature() -> str:
+    h = hashlib.sha256()
+    h.update(f"{_DEV_TRUST}|{_TRUST_EPOCH}|{MODULES_DIR}".encode("utf-8", "surrogatepass"))
+    for f in (TRUST_FILE, ROOT / "version.json", DISABLED_PLUGINS_FILE, CHANGELOG_DIR):
+        try:
+            st = os.stat(f)
+            h.update(f"|{f.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
+        except OSError:
+            h.update(f"|{f.name}:-".encode("utf-8", "surrogatepass"))
+    key = (_TRUST_EPOCH, str(MODULES_DIR))
+    now = time.monotonic()
+    walk = _PLUGINS_WALK["entry"]
+    if walk is not None and walk[0] == key and now - walk[2] < _CATALOG_SIG_TTL_S:
+        digest = walk[1]
+    else:
+        digest = _plugins_walk_digest()
+        _PLUGINS_WALK["entry"] = (key, digest, now)
+    h.update(f"|walk:{digest}".encode("ascii"))
     return h.hexdigest()
 
 
@@ -6120,6 +6314,13 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return str(ROOT / "__forbidden__")   # never exists → 404
         return fs
 
+    def handle_one_request(self):
+        # The handler instance lives for the whole kept-alive connection: without the
+        # reset, a route failing on the second request would find the flag left by
+        # the first and send no 500 at all.
+        self._response_started = False
+        super().handle_one_request()
+
     def send_response(self, code, message=None):
         self._response_started = True
         super().send_response(code, message)
@@ -6151,7 +6352,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         clean_path = urllib.parse.unquote(parsed.path).strip("/")
         if clean_path in ("DATA_WEB/catalog.json", "DATA_WEB/catalog.json/"):
-            self._serve_dynamic_catalog()
+            self._guarded(self._serve_dynamic_catalog)
         elif parsed.path == "/api/health":
             # Liveness + version probe: consumed by the pivot supervisor's online
             # gate after an update, and usable by any external monitor. Public and
@@ -6167,11 +6368,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 payload["lastUpdate"] = {"phase": last["phase"], "target": last.get("target")}
             self._json_nostore(200, payload)
         elif parsed.path in ("/api/plugins", "/api/plugins.php"):
-            self._serve_plugins()
+            self._guarded(self._serve_plugins)
         elif parsed.path in ("/api/languages", "/api/languages.php"):
-            self._serve_languages()
+            self._guarded(self._serve_languages)
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
-            self._serve_downloads(parsed)
+            self._guarded(self._serve_downloads, parsed)
         elif parsed.path == "/api/upload.php":
             self._guarded(self._handle_upload, parsed, body=None, raw=None)
         elif parsed.path == "/api/migrations.php":
@@ -6182,14 +6383,20 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._guarded(self._handle_api, parsed, body=None)
         elif _is_forbidden_static(clean_path) or _has_dot_segment(clean_path) or "\x00" in clean_path:
             self._json(404, {"error": "Not found"})
+        elif clean_path == "favicon.ico" and not (ROOT / "favicon.ico").is_file():
+            # Pages declare assets/favicon.svg; the implicit /favicon.ico probe of a
+            # bare document (a JSON answer, an image) gets "no icon", not a 404.
+            self.send_response(204)
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
         elif clean_path == "":
-            self._serve_html("index.html")
+            self._guarded(self._serve_html, "index.html")
         elif clean_path.lower().endswith(_HTML_LIKE_EXT):
             # HTML documents get a per-request CSP nonce injected + the enforcing
             # nonce-CSP header (INV-1) — but only the platform's own top-level pages.
-            self._serve_html(clean_path)
+            self._guarded(self._serve_html, clean_path)
         else:
-            self._serve_static(parsed, clean_path)
+            self._guarded(self._serve_static, parsed, clean_path)
 
     def _maybe_count_download(self, clean_path: str):
         """Count a download when a file under DATA_WEB/<type>/<folder>/download/ is
@@ -6207,6 +6414,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # keeps this counter and the telemetry beacon writing the SAME key.
         safe = _safe_dataset_dir(f"{m.group(1).lower()}/{m.group(2)}")
         if safe and safe[2].is_dir():
+            # Only the count is throttled: the caller serves the file either way.
+            if not _telemetry_allow(_client_ip(self), state=_DOWNLOAD_THROTTLE_STATE):
+                return
             try:
                 _record_event("download", f"{safe[0]}/{safe[1]}")
             except Exception:
@@ -6239,7 +6449,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if not is_file or real.suffix.lower() in _HTML_LIKE_EXT:
             # Directories never list; an HTML document reached through an alias
             # (trailing dot, 8.3 name) is not one of our pages either.
-            self._json(404, {"error": "Not found"})
+            if is_dir or not self._not_found_page(clean_path):
+                self._json(404, {"error": "Not found"})
             return
         try:
             st = real.stat()
@@ -6422,7 +6633,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         builds any UI) so the load-order invariant is preserved; the persisted manifest
         mirrors the filtered list so static hosts inherit the same exclusions."""
         sig = _plugins_signature()
-        body = _PLUGINS_CACHE["body"] if _PLUGINS_CACHE["sig"] == sig else None
+        cached = _PLUGINS_CACHE["entry"]
+        body, gz = (cached[1], cached[2]) if cached is not None and cached[0] == sig else (None, None)
         if body is None:
             disabled = _load_disabled_plugins()
             ver = _max_version(CHANGELOG_DIR)
@@ -6450,10 +6662,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             body = json.dumps({"plugins": plugins, "devTrust": _DEV_TRUST,
                                "trustEpoch": _TRUST_EPOCH},
                               ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            _PLUGINS_CACHE.update({"sig": sig, "body": body})
+            gz = gzip.compress(body, compresslevel=6, mtime=0) if len(body) >= _GZIP_MIN_BYTES else None
+            _PLUGINS_CACHE["entry"] = (sig, body, gz)
         encoding = None
-        if len(body) >= _GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding")):
-            body = gzip.compress(body, compresslevel=6, mtime=0)
+        if gz is not None and _accepts_gzip(self.headers.get("Accept-Encoding")):
+            body = gz
             encoding = "gzip"
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -6588,6 +6801,26 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # the nonce is per-request).
         super().end_headers()
 
+    def _not_found_page(self, clean_path: str) -> bool:
+        """Answer a missing PAGE with the branded 404.html (status 404). Returns False
+        when the request is not one for a page, so the caller keeps the plain JSON
+        answer: an API route, a DATA_WEB path, anything with a non-HTML extension (a
+        missing script, image, pack), or a client that asked for something else than
+        HTML. Twin of api/_html_server.php:lumen_wants_not_found_page."""
+        segs = clean_path.replace("\\", "/").strip("/").split("/")
+        if segs[0].lower() in _PLAIN_404_ROOTS:
+            return False
+        ext = os.path.splitext(segs[-1])[1].lower()
+        if ext and ext not in (".html", ".htm"):
+            return False
+        accept = self.headers.get("Accept", "")
+        if accept and "text/html" not in accept:
+            return False
+        if not (ROOT / "404.html").is_file():
+            return False
+        self._serve_html("404.html")
+        return True
+
     def _serve_html(self, rel_path: str):
         """Serve one of the platform's top-level HTML pages with a fresh per-request
         CSP nonce substituted for the {{CSP_NONCE}} placeholder, and the matching
@@ -6599,14 +6832,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         folder or a dataset would otherwise be handed a valid nonce for this origin."""
         rel = rel_path.replace("\\", "/").strip("/")
         if not rel or "/" in rel or not rel.lower().endswith(".html"):
-            self._json(404, {"error": "Not found"}); return
+            if not self._not_found_page(rel):
+                self._json(404, {"error": "Not found"})
+            return
         try:
             fs_path = (ROOT / rel).resolve()
             ok = fs_path.parent == ROOT and fs_path.suffix.lower() == ".html" and fs_path.is_file()
         except OSError:
             ok = False
         if not ok:
-            self._json(404, {"error": "Not found"}); return
+            if rel == "404.html" or not self._not_found_page(rel):
+                self._json(404, {"error": "Not found"})
+            return
         try:
             html = fs_path.read_text(encoding="utf-8")
         except OSError:
@@ -6623,9 +6860,23 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             _tv = 0
         doc = doc.replace('href="config/theme.css"', f'href="config/theme.css?v={_tv}"')
+        status = 200
+        if rel == "404.html":
+            # The page answers for any missing path, however deep: pin its relative
+            # URLs to the install root (the platform's own root is the server's).
+            doc = doc.replace('<base href="./">', '<base href="/">')
+            status = 404
         body = doc.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
-        self.send_response(200)
+        # Twin of the Apache DEFLATE filter on text/html. The page reflects no request
+        # input (only the random nonce varies), so compression leaks nothing (BREACH).
+        gzipped = len(body) >= _GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding"))
+        if gzipped:
+            body = gzip.compress(body, compresslevel=6, mtime=0)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Security-Policy", _csp_policy(nonce))
         self.send_header("X-Frame-Options", "SAMEORIGIN")  # clickjacking (legacy; CSP frame-ancestors covers modern)
@@ -6662,6 +6913,43 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return None
         return length
 
+    # Actions that need POST + the session's CSRF token, per endpoint (datasets.php
+    # uses _is_write_action). Read by the router and by _pre_body_refusal.
+    _WRITE_ACTIONS = {
+        "/api/site.php": frozenset({"save", "save_draft", "reset", "publish", "delete"}),
+        "/api/media.php": frozenset({"upload", "delete"}),
+        "/api/admin.php": frozenset({"set_plugin", "update_apply", "update_ack",
+                                     "approve_plugin", "revoke_plugin",
+                                     "install_plugin", "update_plugin", "uninstall_plugin",
+                                     "repair_permissions"}),
+    }
+
+    def _is_endpoint_write(self, path: str, action: str) -> bool:
+        if path == "/api/datasets.php":
+            return _is_write_action(action)
+        return action in self._WRITE_ACTIONS.get(path, ())
+
+    def _pre_body_refusal(self, parsed):
+        """(status, payload) when an admin POST must be refused before its body is
+        read, else None: an anonymous peer, or one without the CSRF token of a write,
+        must not make the server buffer up to 16 MiB. auth.php (login/setup) and the
+        telemetry beacon are public; site.php `get` is the public read."""
+        path = parsed.path
+        if path in ("/api/auth.php", "/api/telemetry.php"):
+            return None
+        action = dict(urllib.parse.parse_qsl(parsed.query)).get("action", "")
+        if path == "/api/site.php" and action == "get":
+            return None
+        session = _get_session(self._token())
+        if not session:
+            return 401, {"error": "Not authenticated"}
+        if self._is_endpoint_write(path, action):
+            ok, status, payload = _authorize_write(
+                self.command, session, self.headers.get("X-CSRF-Token"))
+            if not ok:
+                return status, payload
+        return None
+
     def _guarded(self, fn, *args, **kwargs):
         """Run a route; an unexpected exception becomes a 500 JSON answer and a
         closed connection instead of a reset socket and a stderr traceback."""
@@ -6690,6 +6978,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if limit is None:
             self._reject(405, {"error": "Method not allowed"})
             return
+        refusal = self._pre_body_refusal(parsed)
+        if refusal:
+            self._reject(*refusal)
+            return
         length = self._content_length(limit)
         if length is None:
             return
@@ -6707,18 +6999,19 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 return
             self._guarded(self._handle_api, parsed, body={}, raw_image=raw)
             return
-        raw = self._read_exact(length) if length else b"{}"
+        raw = self._read_exact(length) if length else b""
         if raw is None:
             self._reject(400, {"error": "short_body"})
             return
+        # body is None unless the request carried a JSON OBJECT (twin of PHP's
+        # lumen_request_json): handlers that read fields use `(body or {})`, the ones
+        # that store the body refuse None instead of writing an empty document.
         try:
-            body = json.loads(raw.decode("utf-8"))
+            body = json.loads(raw.decode("utf-8")) if raw else None
         except Exception:
-            body = {}
-        # Every handler reads fields with .get(): a JSON array, string or number
-        # is treated as an empty object rather than raising.
+            body = None
         if not isinstance(body, dict):
-            body = {}
+            body = None
         self._guarded(self._handle_api, parsed, body=body)
 
     def _read_upload_post(self, parsed):
@@ -7113,7 +7406,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("save", "save_draft", "reset", "publish", "delete"):
+            if self._is_endpoint_write(path, action):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
@@ -7127,12 +7420,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     if merge is None:
                         self._json(400, {"error": "bad_merge"})
                         return
+                if not isinstance(body, dict):
+                    self._json(400, {"error": "Invalid JSON body"})
+                    return
                 if doc_name.startswith("pages/"):
-                    _vok, _verr = _validate_page_doc(body if isinstance(body, dict) else {})
+                    _vok, _verr = _validate_page_doc(body)
                     if not _vok:
                         self._json(400, {"error": _verr or "Invalid page"})
                         return
-                st, pl = _site_save_checked(doc_name, body or {}, rev=rev, merge=merge)
+                st, pl = _site_save_checked(doc_name, body, rev=rev, merge=merge)
                 self._json(st, pl)
             elif action == "save_draft":
                 st, pl = _site_save_draft(doc_name, body or {}, rev=rev)
@@ -7148,11 +7444,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "publish":
                 with _SITE_LOCK:
-                    ok = _publish_site_doc(doc_name)
-                self._json(200 if ok else 400,
-                           {"ok": True, "rev": _site_rev(doc_name)} if ok else {"error": "Invalid doc"})
+                    known = _site_doc_exists(doc_name)
+                    ok = known and _publish_site_doc(doc_name)
+                if not known and _site_doc_path(doc_name):
+                    self._json(404, {"error": "Not found"})
+                else:
+                    self._json(200 if ok else 400,
+                               {"ok": True, "rev": _site_rev(doc_name)} if ok else {"error": "Invalid doc"})
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         # ── Media library (operator image uploads) ────────────────────────────
@@ -7161,7 +7461,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("upload", "delete"):
+            if self._is_endpoint_write(path, action):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
@@ -7173,10 +7473,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 res = _media_upload(body or {})
                 self._json(200 if res.get("ok") else 400, res)
             elif action == "delete":
-                ok = _media_delete((body or {}).get("name", ""))
-                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid file"})
+                name = (body or {}).get("name")
+                res = _media_delete(name if isinstance(name, str) else "")
+                if res == "ok":
+                    self._json(200, {"ok": True})
+                elif res == "missing":
+                    self._json(404, {"error": "Not found"})
+                elif res == "failed":
+                    self._json(500, {"error": "delete_failed"})
+                else:
+                    self._json(400, {"error": "Invalid file"})
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         # ── Auth ──────────────────────────────────────────────────────────────
@@ -7203,11 +7511,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 # The attempt is counted BEFORE the password is hashed (proxy-aware
                 # client address), so a burst of parallel guesses cannot all slip
                 # past the lockout check.
+                username = (body or {}).get("username")
+                password = (body or {}).get("password")
+                if not isinstance(username, str) or not isinstance(password, str):
+                    self._json(400, {"error": "bad_request"})
+                    return
+                username = username.strip(" \t\n\r\0\x0b")   # PHP trim()'s set, as the twin
                 ip = self._bf_gate()
                 if ip is None:
                     return
-                username = (body or {}).get("username", "")
-                password = (body or {}).get("password", "")
                 if _check_credentials(username, password):
                     _brute_clear(ip)
                     token = _new_session(username)
@@ -7215,7 +7527,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self._json(200, {"ok": True, "username": username, "csrf": session.get("csrf")},
                                cookie=self._session_cookie(token))
                 else:
-                    self._json(401, {"error": "Identifiants incorrects."})
+                    self._json(401, {"error": "Identifiants incorrects.", "code": "bad_credentials"})
 
             elif action == "logout":
                 _drop_session(self._token())
@@ -7229,14 +7541,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if self.command != "POST":
                     self._json(405, {"error": "Method not allowed (use POST)"})
                     return
+                # `?? default` in the twin: an absent or null field takes the default.
+                username = (body or {}).get("username")
+                username = DEFAULT_USERNAME if username is None else username
+                password = (body or {}).get("password")
+                password = "" if password is None else password
+                if not isinstance(username, str) or not isinstance(password, str):
+                    self._json(400, {"error": "bad_request"})
+                    return
                 ip = self._bf_gate()
                 if ip is None:
                     return
-                username = (body or {}).get("username") or DEFAULT_USERNAME
-                if not isinstance(username, str):
-                    username = DEFAULT_USERNAME
-                password = (body or {}).get("password", "")
-                ok, status, payload = _setup_credential(username, password)
+                ok, status, payload = _setup_credential(username or DEFAULT_USERNAME, password)
                 if ok:
                     _brute_clear(ip)
                     token = _new_session(payload["username"])
@@ -7257,12 +7573,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if not ok:
                     self._json(status, payload)
                     return
+                cur = (body or {}).get("current")
+                new = (body or {}).get("new")
+                if not isinstance(cur, str) or not isinstance(new, str):
+                    self._json(400, {"error": "bad_request"})
+                    return
                 ip = self._bf_gate()
                 if ip is None:
                     return
-                ok2, st2, pl2 = _change_credential(
-                    (body or {}).get("current", ""), (body or {}).get("new", "")
-                )
+                ok2, st2, pl2 = _change_credential(cur, new)
                 if st2 != 401:          # only a wrong current password counts
                     _brute_clear(ip)
                 if ok2:
@@ -7272,7 +7591,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(st2, pl2)
 
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action."})
             return
 
         # ── Datasets (require auth) ────────────────────────────────────────────
@@ -7340,11 +7659,16 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
             elif action == "save":
                 ds_id = params.get("id", "")
-                if _is_staged_id(ds_id):
+                bad_field = _dataset_meta_field_error(body) if isinstance(body, dict) else None
+                if not isinstance(body, dict):
+                    self._json(400, {"error": "Invalid JSON body"})
+                elif bad_field:
+                    self._json(400, {"error": "Invalid field", "field": bad_field})
+                elif _is_staged_id(ds_id):
                     t, f = _split_staged_id(ds_id)
-                    status, payload = upload_staging.write_staged_metadata(t, f, body or {})
+                    status, payload = upload_staging.write_staged_metadata(t, f, body)
                     self._json(status, payload)
-                elif _save_dataset(ds_id, body or {}):
+                elif _save_dataset(ds_id, body):
                     self._json(200, {"ok": True})
                 else:
                     self._json(400, {"error": "Invalid dataset ID"})
@@ -7368,7 +7692,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     if raw_image is not None:
                         body = {"raw": raw_image, "filename": params.get("filename", ""),
                                 "title": params.get("title", ""), "caption": params.get("caption", "")}
-                    self._json(*_gallery_add(ds_id, body or {}))
+                    if not isinstance(body, dict):
+                        self._json(400, {"error": "Invalid JSON body"})
+                    else:
+                        self._json(*_gallery_add(ds_id, body))
                 elif action == "gallery_thumbs":
                     self._json(*_gallery_thumbs(ds_id))
                 else:
@@ -7388,7 +7715,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self._json(400, {"error": "Invalid dataset ID"})
 
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         # ── Telemetry (public usage beacons, no auth) ──────────────────────────
@@ -7435,10 +7762,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("set_plugin", "update_apply", "update_ack",
-                          "approve_plugin", "revoke_plugin",
-                          "install_plugin", "update_plugin", "uninstall_plugin",
-                          "repair_permissions"):
+            if self._is_endpoint_write(path, action):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
                 )
@@ -7546,7 +7870,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 LAST_UPDATE_FILE.unlink(missing_ok=True)
                 self._json(200, {"ok": True})
             else:
-                self._json(400, {"error": f"Unknown action: {action}"})
+                self._json(400, {"error": "Unknown action"})
             return
 
         self._json(404, {"error": "Not found"})

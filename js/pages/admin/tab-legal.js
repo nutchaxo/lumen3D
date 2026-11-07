@@ -55,7 +55,7 @@ function render() {
           <select class="adm-field-input" id="legal-loc" style="width:auto">${locOpts}</select>
         </label>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="legal-reset"><i data-lucide="rotate-ccw"></i> ${escHtml(t('legal.reset', 'Réinitialiser'))}</button>
-        <button class="adm-btn adm-btn-accent adm-btn-sm" id="legal-save" disabled><i data-lucide="save"></i> ${escHtml(t('legal.save', 'Enregistrer'))}</button>
+        <button class="adm-btn adm-btn-accent adm-btn-sm" id="legal-save" ${_dirty ? '' : 'disabled'}><i data-lucide="save"></i> ${escHtml(t('legal.save', 'Enregistrer'))}</button>
       </div>
     </div>
 
@@ -101,7 +101,7 @@ function load() {
 
 function discard() { _mark(false); }
 
-function relabel() { render(); _mark(_dirty); }
+function relabel() { render(); }
 
 async function save() {
   if (!_loaded) { toast(t('legal.saveError', "Échec de l'enregistrement."), 'error'); load(); return; }

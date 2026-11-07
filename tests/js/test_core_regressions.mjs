@@ -272,6 +272,27 @@ await ok('S7-28 stage / date / throttle', async () => {
   assert.deepEqual(calls, [1, 3], 'the last call inside the window is delivered');
 });
 
+await ok('R1-25 one stage rule: Utils.stageNumber matches formatStage, Catalog sorts with it', async () => {
+  const Utils = loadModule('js/core/utils.js', 'Utils', { document: {}, window: {}, I18n: { getLanguage: () => 'en' }, InstanceConfig: undefined });
+  for (const s of ['E7', 'E75', 'E775', 'E10', 'E105', 'E185', 'E85', 'E95', 'E18']) {
+    assert.equal(Utils.stageNumber(s), parseFloat(Utils.formatStage(s).slice(1)), s);
+  }
+  assert.equal(Utils.stageNumber('E8.5'), 8.5, 'a written decimal is read as written');
+  assert.equal(Utils.stageNumber('e105'), 10.5, 'case-insensitive');
+  assert.equal(Utils.stageNumber(9.25), 9.25, 'a number passes through');
+  for (const bad of ['', null, undefined, 'P0', 'E', 'E8.', 'stage E85', NaN, Infinity]) {
+    assert.equal(Utils.stageNumber(bad), 0, String(bad));
+  }
+  const csrc = readFileSync(path.join(ROOT, 'js/core/catalog.js'), 'utf8');
+  assert.ok(!/firstTwo|>= 50/.test(csrc), 'the digit rule is not copied into catalog.js');
+  const rows = ['E185', 'E85', 'E10', 'E775', 'E8.5', 'E105', 'E95'].map((stage, i) => ({ id: `3d/d${i}`, type: '3d', name: `D${i}`, stage }));
+  const Catalog = loadModule('js/core/catalog.js', 'Catalog', { Utils, fetch: async () => ({ ok: true, json: async () => rows }) });
+  await Catalog.load();
+  const expected = ['E775', 'E85', 'E8.5', 'E95', 'E10', 'E105', 'E185'];
+  assert.deepEqual([...Catalog.sort(rows, 'stage').map(d => d.stage)], expected, 'stage sort follows the displayed value');
+  assert.deepEqual([...Catalog.getStages()], expected, 'stage list follows the displayed value');
+});
+
 // ── CSV formula neutralisation ──────────────────────────────────────────────────
 await ok('S7-25 CSV cells beginning with = + - @ are neutralised, numbers untouched', async () => {
   const MS = loadModule('js/core/measurement-store.js', 'MeasurementStore', { Utils: { uid: () => 'u' }, window: {} });
@@ -281,7 +302,7 @@ await ok('S7-25 CSV cells beginning with = + - @ are neutralised, numbers untouc
 });
 
 // ── PluginTrust: fetch policy keeps INV-2 ───────────────────────────────────────
-await ok('S7-4 executable files are fetched no-store, .json files revalidated, all in parallel', async () => {
+await ok('S7-4 every plugin file is revalidated (no-cache, never no-store), all in parallel', async () => {
   const seen = []; let inFlight = 0; let maxInFlight = 0;
   const fetchStub = async (url, opts) => {
     seen.push([url, opts.cache]); inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
@@ -293,8 +314,10 @@ await ok('S7-4 executable files are fetched no-store, .json files revalidated, a
   const h = await PT2.hashPluginFiles('js/modules', 'tools/x', files);
   assert.ok(h && h.hash, 'composite hash computed');
   const mode = Object.fromEntries(seen.map(([u, c]) => [u.split('/tools/x/')[1], c]));
-  assert.equal(mode['index.js'], 'no-store'); assert.equal(mode['worker.js'], 'no-store');
+  assert.equal(mode['index.js'], 'no-cache'); assert.equal(mode['worker.js'], 'no-cache');
   assert.equal(mode['plugin.json'], 'no-cache'); assert.equal(mode['lang/en.json'], 'no-cache');
+  assert.equal(mode['lang/fr.json'], 'no-cache');
+  assert.equal(seen.length, files.length, 'each file fetched exactly once');
   assert.ok(maxInFlight > 1, 'files of one plugin are fetched concurrently');
   // The hash is the canonical composite of the real bytes.
   const fh = {};
@@ -369,3 +392,44 @@ await ok('S7-9/S7-30 channel colours are validated; the markup carries no inline
 });
 
 console.log('core regressions (channel panel): OK');
+
+// ── ChannelPanel: a renamed channel survives a workspace / shared-link restore ──
+await ok('R2-53 setState restores a channel name; a blank or non-string name keeps the current one', async () => {
+  const mkPanel = () => {
+    let html = '';
+    const container = {
+      set innerHTML(v) { html = v; }, get innerHTML() { return html; },
+      querySelector: () => null, querySelectorAll: () => [], addEventListener() {},
+    };
+    const win = { addEventListener() {} };
+    const doc = { getElementById: () => container, addEventListener() {}, querySelectorAll: () => [] };
+    loadModule('js/components/channel-panel.js', 'createChannelPanel', {
+      window: win, document: doc, Utils: { escapeHtml: s => String(s) }, ChannelPanel: undefined,
+    });
+    const panel = win.createChannelPanel();
+    const notified = [];
+    panel.init('c', { dimensions: { c: 3 }, channels: [{ name: 'Channel 1' }, { name: 'Channel 2' }, { name: 'Channel 3' }] },
+      (idx, params) => notified.push([idx, params]));
+    return { panel, notified, html: () => html };
+  };
+  const first = mkPanel();
+  const saved = first.panel.getState().map(ch => ({ ...ch }));
+  saved[0].name = 'DAPI';
+  const restored = mkPanel();
+  restored.panel.setState(JSON.parse(JSON.stringify(saved)));
+  assert.equal(restored.panel.getState()[0].name, 'DAPI', 'the saved name comes back');
+  assert.ok(restored.html().includes('value="DAPI"'), 'and is what the name field shows');
+  assert.ok(restored.notified.some(([idx, params]) => idx === 0 && params.name === 'DAPI'),
+    'the restore notifies the page with the restored name (Compare pairs channels by it)');
+  restored.panel.setState([{ name: '   ' }, { name: 42 }, { name: '  GFP  ' }], { notify: false });
+  const st = restored.panel.getState();
+  assert.equal(st[0].name, 'DAPI', 'a blank name keeps the current one');
+  assert.equal(st[1].name, 'Channel 2', 'a non-string name keeps the current one');
+  assert.equal(st[2].name, 'GFP', 'a name is trimmed');
+  restored.panel.setState([{ name: 'x'.repeat(500) }], { notify: false });
+  assert.equal(restored.panel.getState()[0].name.length, 128, 'a name is capped');
+  restored.panel.setState([{ color: '#00ff00' }], { notify: false });
+  assert.equal(restored.panel.getState()[0].name.length, 128, 'a state without a name leaves it alone');
+});
+
+console.log('core regressions (channel names): OK');

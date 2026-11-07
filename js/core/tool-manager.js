@@ -62,6 +62,10 @@ const ToolManager = (() => {
     if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
     // A modal owns the keyboard while it is open.
     if (typeof Dialog !== 'undefined' && Dialog.isOpen && Dialog.isOpen()) return;
+    // So does the Studio overlay: its own tool letters (v, d, …) and Escape listen on
+    // window, after this document listener, and would otherwise switch the page's tool
+    // underneath (closing the slice inspector the figure was opened from).
+    if (typeof StudioEditor !== 'undefined' && StudioEditor.isOpen && StudioEditor.isOpen()) return;
     const key = e.key.toLowerCase();
     if (!Object.prototype.hasOwnProperty.call(_shortcuts, key)) return;
     activate(_shortcuts[key]);

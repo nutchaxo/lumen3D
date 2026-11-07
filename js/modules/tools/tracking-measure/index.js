@@ -33,6 +33,7 @@ PluginRegistry.implement('tracking-measure', {
   _materials: new Map(),   // colour -> shared material
   _unsubLang: null,
   _pointerStart: null,
+  _lastStabilized: null,
 
   COLORS: ['#ff4d4f', '#ffd700', '#00ffff', '#7fff00', '#ff69b4', '#9400d3', '#1e90ff', '#ff8c00'],
   LINE_RADIUS_UM: 1.2,
@@ -53,18 +54,26 @@ PluginRegistry.implement('tracking-measure', {
     });
     this._unsubs = [
       this._T.on('loaded', () => { this._indexById = null; this._renderAll(); }),
-      this._T.on('frame', () => {
-        // Only a follow-cells row or a pending first pick depends on the frame.
-        if (this._draft.length || this._measurements.some(r => r.mode === 'follow-cells')) this._renderAll();
-      }),
+      this._T.on('frame', () => this._onFrame()),
       this._T.on('refresh', () => this._draw()),
       this._T.on('style', () => this._draw()),
       ctx.tools.onChange((tool) => this._onTool(tool))
     ];
+    this._lastStabilized = this._T.isStabilized();
     this._bindCanvas();
     this._unsubLang = ctx.i18n.onLanguageChange?.(() => this._applyLabels()) || null;
     this._renderAll();
     return this;
+  },
+
+  /** A frame change moves follow-cells rows and a pending first pick; a switch
+   *  between the stabilised and raw frames of reference (announced as a frame
+   *  event on the same timepoint) moves every row, snapshots included. */
+  _onFrame() {
+    const stabilized = this._T.isStabilized();
+    const spaceChanged = stabilized !== this._lastStabilized;
+    this._lastStabilized = stabilized;
+    if (spaceChanged || this._draft.length || this._measurements.some(r => r.mode === 'follow-cells')) this._renderAll();
   },
 
   // ── Workspace state ───────────────────────────────────────
@@ -128,15 +137,26 @@ PluginRegistry.implement('tracking-measure', {
     return Math.hypot((a[0] || 0) - (b[0] || 0), (a[1] || 0) - (b[1] || 0), (a[2] || 0) - (b[2] || 0));
   },
 
-  /** A stored row as it stands at the current frame. */
+  /** A stored row as it stands at the current frame, its points in the frame of
+   *  reference on screen. A snapshot's stored points are in the frame of
+   *  reference it was taken in, so they are re-read at its own timepoint; its
+   *  distance is kept, the stabilisation being a rigid motion per frame. */
   resolve(row) {
     const base = { ...row, status: row.status || 'ok', points: Array.isArray(row.points) ? row.points : [], cells: Array.isArray(row.cells) ? row.cells : [] };
-    if (row.mode !== 'follow-cells') return base;
+    const space = this._T.isStabilized() ? 'stabilized' : 'raw';
+    const metadata = { ...(row.metadata || {}), coordinateSpace: space };
+    if (row.mode !== 'follow-cells') {
+      if (base.cells.length !== 2 || !Number.isInteger(row.timepoint)) return base;
+      const a = this._T.positionUm(this._lookup(base.cells[0]), row.timepoint);
+      const b = this._T.positionUm(this._lookup(base.cells[1]), row.timepoint);
+      if (!a || !b) return base;
+      return { ...base, points: [a, b], metadata };
+    }
     const frame = this._T.getFrame();
     const a = this._T.positionUm(this._lookup(base.cells[0]), frame);
     const b = this._T.positionUm(this._lookup(base.cells[1]), frame);
-    if (!a || !b) return { ...base, status: 'out-of-frame', distance: null, points: [] };
-    return { ...base, status: 'ok', distance: this._distance(a, b), points: [a, b], timepoint: frame };
+    if (!a || !b) return { ...base, status: 'out-of-frame', distance: null, points: [], metadata };
+    return { ...base, status: 'ok', distance: this._distance(a, b), points: [a, b], timepoint: frame, metadata };
   },
 
   listMeasurements() { return this._measurements.map(row => this.resolve(row)); },
@@ -376,7 +396,10 @@ PluginRegistry.implement('tracking-measure', {
     if (!this._els) return;
     const esc = (s) => this._esc(s);
     const rows = this.listMeasurements();
-    this._els.list.innerHTML = rows.length ? rows.map((row, idx) => `
+    const deleteLabel = esc(this._t('deleteMeasure'));
+    this._els.list.innerHTML = rows.length ? rows.map((row, idx) => {
+      const visLabel = esc(this._t(row.visible === false ? 'showMeasure' : 'hideMeasure'));
+      return `
       <div class="measurement-row">
         <strong>${esc(row.label || this._t('measureN', { n: idx + 1 }))}</strong>
         <span>
@@ -384,10 +407,11 @@ PluginRegistry.implement('tracking-measure', {
           <small>${esc(row.mode === 'follow-cells' ? this._t('followCells') : this._t('snapshot'))} · ${esc((row.metadata?.tracks || row.cells || []).join(' → '))}</small>
         </span>
         <span class="related-actions">
-          <button class="btn btn-ghost btn-sm" type="button" data-tm-action="toggle" data-measurement-id="${esc(row.id)}"><i data-lucide="${row.visible === false ? 'eye-off' : 'eye'}"></i></button>
-          <button class="btn btn-ghost btn-sm" type="button" data-tm-action="delete" data-measurement-id="${esc(row.id)}"><i data-lucide="trash-2"></i></button>
+          <button class="btn btn-ghost btn-sm" type="button" data-tm-action="toggle" data-measurement-id="${esc(row.id)}" title="${visLabel}" aria-label="${visLabel}"><i data-lucide="${row.visible === false ? 'eye-off' : 'eye'}" aria-hidden="true"></i></button>
+          <button class="btn btn-ghost btn-sm" type="button" data-tm-action="delete" data-measurement-id="${esc(row.id)}" title="${deleteLabel}" aria-label="${deleteLabel}"><i data-lucide="trash-2" aria-hidden="true"></i></button>
         </span>
-      </div>`).join('') : esc(this._t('noMeasure'));
+      </div>`;
+    }).join('') : esc(this._t('noMeasure'));
     this._ctx.ui.createIcons({ nodes: [this._els.list] });
 
     const data = this._T.getData();

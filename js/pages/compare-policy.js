@@ -159,12 +159,18 @@ const ComparePanelRpc = (() => {
     REQUEST_CAPTURE: 'CAPTURE',
     REQUEST_STUDIO_SLICE: 'STUDIO_SLICE',
     REQUEST_WORKSPACE_STATE: 'WORKSPACE_STATE',
-    REQUEST_CHANNEL_STATE: 'CHANNEL_STATE'
+    REQUEST_CHANNEL_STATE: 'CHANNEL_STATE',
+    REQUEST_GRAPH_DATA: 'GRAPH_DATA'
   });
   const ANSWERS = new Set(Object.values(ANSWER_OF));
 
   function _error(code, message) {
     return Object.assign(new Error(message), { code });
+  }
+
+  /** An error code a panel sent (`NOT_READY`…), or null for free text. */
+  function _panelCode(v) {
+    return typeof v === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(v) ? v : null;
   }
 
   /**
@@ -213,8 +219,13 @@ const ComparePanelRpc = (() => {
       if (!entry || String(entry.key) !== String(key) || message.type !== entry.answer) return false;
       open.delete(id);
       clearT(entry.timer);
-      if (message.ok === false) entry.reject(_error('COMPARE_PANEL_ERROR', String(message.error || `${message.type} failed`)));
-      else entry.resolve(message);
+      if (message.ok === false) {
+        // The panel's own reason travels as `panelCode`, beside the transport's code,
+        // so a caller can tell "not loaded yet" from a real failure.
+        const err = _error('COMPARE_PANEL_ERROR', String(message.error || `${message.type} failed`));
+        err.panelCode = _panelCode(message.code) || _panelCode(message.error);
+        entry.reject(err);
+      } else entry.resolve(message);
       return true;
     }
 

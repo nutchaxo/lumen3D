@@ -95,6 +95,75 @@ const ds = (id, px, w = 4000, h = 3000) => ({ id, name: id, stage: 'E8', pixelSi
   assert.equal(fp._images.size, 0);
 }
 
+// ── the dialog is modal for the keyboard: focus trapped, Escape closes, focus released ──
+{
+  const traps = [];
+  const trapFocus = (container, opts) => {
+    const trap = { container, initialFocus: opts?.initialFocus, released: 0 };
+    traps.push(trap);
+    return () => { trap.released++; };
+  };
+  const nodes = { card: { id: 'card' }, close: { id: 'close' } };
+  let keydown = null;
+  const modal = {
+    hidden: true,
+    innerHTML: '',
+    removed: false,
+    querySelector: (sel) => (sel === '.p2d-modal-card' ? nodes.card : sel === '[data-fp="close"]' ? nodes.close : null),
+    addEventListener: (type, fn) => { if (type === 'keydown') keydown = fn; },
+    remove() { this.removed = true; }
+  };
+  const docStub = { createElement: () => modal, body: { appendChild() {} } };
+  const fp = loadPlugin('js/modules/tools/figure-panel/index.js', {
+    Utils: { formatStage: (s) => String(s), trapFocus },
+    document: docStub
+  });
+  fp._ctx = {
+    i18n: { t: (k) => k },
+    ui: { escapeHtml: (s) => String(s), createIcons() {}, openStudioWith: (sr) => { fp._studio = sr; } },
+    dataset: { getId: () => 'a', getCollection: () => [] }
+  };
+  fp._renderList = () => {};
+  fp._preview = () => {};
+
+  fp.activate();
+  assert.equal(modal.hidden, false);
+  assert.match(modal.innerHTML, /role="dialog" aria-modal="true"/, 'the card says it is modal');
+  assert.equal(traps.length, 1, 'opening traps the focus');
+  assert.equal(traps[0].container, nodes.card);
+  assert.equal(traps[0].initialFocus, nodes.close, 'focus moves into the dialog');
+  fp.activate();
+  assert.equal(traps.length, 1, 'a second activation keeps the first trap');
+
+  let stopped = 0, prevented = 0;
+  const key = (k) => ({ key: k, stopPropagation: () => { stopped++; }, preventDefault: () => { prevented++; } });
+  keydown(key('ArrowRight'));
+  assert.equal(modal.hidden, false, 'another key does not close');
+  assert.equal(stopped, 1, 'page shortcuts do not act behind the dialog');
+  keydown(key('Escape'));
+  assert.equal(modal.hidden, true, 'Escape closes');
+  assert.equal(prevented, 1);
+  assert.equal(traps[0].released, 1, 'closing releases the trap (focus returns to the opener)');
+
+  fp.activate();
+  assert.equal(traps.length, 2, 'reopening traps again');
+  fp._onClick({ target: { closest: () => ({ dataset: { fp: 'close' } }) } });
+  assert.equal(modal.hidden, true);
+  assert.equal(traps[1].released, 1, 'the close button releases the trap');
+
+  fp.activate();
+  fp._result = { canvas: { width: 10, height: 10 }, pixelSizeUm: 2, calibrated: true, layoutMaps: [], count: 1 };
+  fp._openStudio();
+  assert.equal(modal.hidden, true);
+  assert.equal(traps[2].released, 1, 'opening the Studio releases the trap');
+  assert.equal(fp._studio.width, 10, 'the Studio still receives the figure');
+
+  fp.activate();
+  fp.dispose();
+  assert.equal(traps[3].released, 1, 'dispose releases the trap');
+  assert.equal(modal.removed, true);
+}
+
 // ── source checks ──
 {
   const orient = loadPlugin('js/modules/tools/orientation-2d/index.js');

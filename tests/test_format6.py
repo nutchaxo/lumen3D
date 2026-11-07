@@ -98,6 +98,37 @@ class Pipeline(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_write_tree_keep_hands_back_levels_without_changing_the_tree(self):
+        from test_format5 import write_raw
+        rng = np.random.default_rng(21)
+        X, Y, Z = 600, 200, 8
+        vols = [rng.integers(0, 256, (Z, Y, X), dtype=np.uint8) for _ in range(2)]
+        vols[1][:, :, 300:] = 0
+        paths = write_raw(self.tmp, vols)
+        voxel = (0.5, 0.5, 2.0)
+        run = lambda fn, ts: map(fn, ts)  # noqa: E731
+        ref = self.tmp / "ref" / "bricks"
+        f5.write_tree(paths, (X, Y, Z), voxel, ref, self.tmp / "w_ref", run, fmt=6)
+        out = self.tmp / "kept"
+        out.mkdir()
+        keep = {0: [out / "l0_c0.u8", out / "l0_c1.u8"],
+                1: [out / "l1_c0.u8", None],
+                2: [out / "l2_c0.u8", out / "l2_c1.u8"]}
+        got = self.tmp / "got" / "bricks"
+        tree = f5.write_tree(paths, (X, Y, Z), voxel, got, self.tmp / "w_got", run, fmt=6, keep=keep)
+        a, b = files_under(ref), files_under(got)
+        self.assertEqual(sorted(a), sorted(b))
+        for rel in a:
+            self.assertEqual(a[rel], b[rel], rel)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["l1_c0.u8", "l2_c0.u8", "l2_c1.u8"])
+        for k, c in ((1, 0), (2, 0), (2, 1)):
+            d = tree["levels"][k]["dimensions"]
+            want = np.stack([f5.resample_plane(vols[c][z], d["x"], d["y"]) for z in range(Z)])
+            kept = np.fromfile(out / f"l{k}_c{c}.u8", dtype=np.uint8).reshape(d["z"], d["y"], d["x"])
+            self.assertTrue(np.array_equal(kept, want), (k, c))
+        self.assertEqual([p for p in (self.tmp / "w_got").rglob("*") if p.is_file()], [])
+        self.assertTrue(all(Path(p).is_file() for p in paths), "level 0 belongs to the caller")
+
     def test_write_tree_fmt6(self):
         from test_format5 import write_raw
         rng = np.random.default_rng(13)
@@ -293,6 +324,55 @@ class Migration(unittest.TestCase):
         while not dm.finalize(ds, M6, 30).get("complete"):
             pass
         self._check_v6(root, ds, before)
+
+    def test_crash_between_commit_and_swapped_keeps_the_restamp(self):
+        root, ds = self._site("window")
+        d = root / "DATA_WEB" / ds
+        before = files_under(d / "bricks", kept_v5)
+        dm.plan_job(ds, M6)
+        while dm.unit_run(ds, M6, max_seconds=20)["done"] < dm.plan_job(ds, M6)["total"]:
+            pass
+        crash_after_commit(self, ds)
+        jpath = dm.journal_path(*ds.split("/"), M6)
+        j = json.loads(jpath.read_text(encoding="utf-8"))
+        self.assertEqual(j["state"], "assembling")
+        self.assertIn("oldManifestSha", j)
+        with self.assertRaises(dm.MigrationError) as cm:
+            dm.cancel(ds, M6)
+        self.assertEqual((cm.exception.code, cm.exception.status), ("finalize_in_progress", 409))
+        self.assertTrue(jpath.is_file(), "a refused cancel keeps the journal")
+        # Retry = plan, then finalize: the journal is promoted, oldManifestSha kept.
+        self.assertEqual(dm.plan_job(ds, M6)["state"], "swapped")
+        self.assertEqual(json.loads(jpath.read_text(encoding="utf-8"))["oldManifestSha"], j["oldManifestSha"])
+        while not dm.finalize(ds, M6, 30).get("complete"):
+            pass
+        self._check_v6(root, ds, before)
+        sha = dm._manifest_sha(d / "bricks" / "manifest.json")
+        stamps = list((d / "planes").rglob("manifest.json")) + list((d / "mips").rglob("manifest.json"))
+        self.assertTrue(stamps)
+        for pm in stamps:
+            self.assertEqual(json.loads(pm.read_text(encoding="utf-8"))["source"]["manifestSha256"], sha, pm)
+        st = dm.dataset_status(*ds.split("/"), d)
+        self.assertEqual((st["pending"], st.get("problem")), ([], None), st)
+
+
+def crash_after_commit(test, ds):
+    """Run the m006 finalize until it dies right after the v6 manifest (the commit point),
+    before its journal says "swapped"."""
+    real = dm._save_journal
+
+    def save(path, j):
+        if j.get("migration") == M6 and j.get("state") == "swapped":
+            raise OSError("process died after the commit point")
+        return real(path, j)
+
+    dm._save_journal = save
+    try:
+        with test.assertRaises(OSError):
+            for _ in range(10000):
+                dm.finalize(ds, M6, 30)
+    finally:
+        dm._save_journal = real
 
 
 if __name__ == "__main__":

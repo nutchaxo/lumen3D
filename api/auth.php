@@ -16,10 +16,12 @@
  *
  * Login throttling, the client address behind a declared proxy, the session rules
  * (strict ids, absolute 8 h expiry, sign-out of other sessions on a password change)
- * and the same-origin check for the token-less login/logout live in _admin_lib.php.
+ * and the same-origin check for the token-less login/logout/setup live in _admin_lib.php.
  */
 
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
 
 admin_update_finish_pending();   // no-op unless a prior update parked busy files
@@ -55,7 +57,7 @@ switch ($action) {
         [$ok, $why] = admin_login_verify($u, $p);
         if (!$ok) {
             if ($why === 'credential_upgrade_failed') admin_json_out(['error' => $why], 500);
-            admin_json_out(['error' => 'Identifiants incorrects.'], 401);
+            admin_json_out(['error' => 'Identifiants incorrects.', 'code' => 'bad_credentials'], 401);
         }
         admin_bf_success();
         admin_session_login($u);
@@ -71,7 +73,10 @@ switch ($action) {
 
     case 'setup':
         if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
-        $u = lumen_str($body['username'] ?? 'admin');
+        // A cross-site text/plain POST (no preflight) would otherwise claim a fresh
+        // install with a password of the attacker's choosing.
+        if (!admin_same_origin_json()) admin_json_out(['error' => 'cross_origin_refused'], 403);
+        $u =lumen_str($body['username'] ?? 'admin');
         $p = lumen_str($body['password'] ?? '');
         if ($u === null || $p === null) admin_json_out(['error' => 'bad_request'], 400);
         admin_bf_gate();

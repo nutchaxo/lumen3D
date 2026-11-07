@@ -270,14 +270,6 @@
   .type-cards {
     grid-template-columns: 1fr;
   }
-  .navbar-links {
-    display: none;
-  }
-  .footer-content {
-    flex-direction: column;
-    gap: var(--space-4);
-    text-align: center;
-  }
 }
 
 @media (max-width: 600px) {
@@ -292,4 +284,12 @@
     grid-template-columns: repeat(2, 1fr);
     gap: var(--space-4);
   }
+}
+
+/* A section, heading or counter the script hides while the catalog is failed or empty:
+   the component classes set `display`, which would otherwise outrank [hidden]. */
+.section[hidden],
+.section-header[hidden],
+.type-card-count[hidden] {
+  display: none;
 }

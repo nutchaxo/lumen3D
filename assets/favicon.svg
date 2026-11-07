@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>
+    .bg { fill: #1b1b2f; }
+    .mark { fill: none; stroke: #8f88ff; stroke-width: 4; stroke-linejoin: round; stroke-linecap: round; }
+    .dot { fill: #8f88ff; }
+    @media (prefers-color-scheme: light) {
+      .bg { fill: #ececf8; }
+      .mark { stroke: #4f46e5; }
+      .dot { fill: #4f46e5; }
+    }
+  </style>
+  <rect class="bg" width="64" height="64" rx="14"/>
+  <path class="mark" d="M32 11 51 22v20L32 53 13 42V22z"/>
+  <path class="mark" d="M13 22l19 11 19-11M32 33v20"/>
+  <circle class="dot" cx="32" cy="33" r="3.5"/>
+</svg>

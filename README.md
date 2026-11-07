@@ -13,7 +13,7 @@ It was designed and built by **Morgan CLIMENT**, originally for the **IRIBHM** (
 
 The platform bridges raw scientific data and seamless web exploration through a **Python preprocessing pipeline** (Imaris `.ims` → brick-packed LOD pyramids, 3D **and 4D**) and a **vanilla-JS / Three.js client** with a custom WebGL2 ray-marcher and sparse 3D atlas streaming. It is **offline-capable** (all JS libraries self-hosted, no CDN) and ships with a **signed self-updater**, a **signed plugin marketplace** and in-place **data updates** that upgrade published datasets to newer storage formats.
 
-> **Current versions** — Web platform `1.66.0` · Preprocessing tool `0.22.0`.
+> **Current versions** — Web platform `1.79.0` · Preprocessing tool `0.23.0`.
 > The web version is defined solely by the newest `changelog/changelog_X.Y.Z.md` (there is **no** source `__version__` constant for the platform); the preprocessing tool tracks its own `__version__` in `preprocess/run_preprocess.py`.
 
 ---
@@ -187,7 +187,7 @@ graph TD
 │   ├── 2d_importer.py         # Standalone: one ImageJ/Leica TIFF → one DATA_WEB/2d/<name>/ dataset
 │   ├── run_preprocess.py      # Unified runner (orchestrates 1 → 5, --format 4|5, routes 4D to live/, download bundles)
 │   ├── requirements.txt       # Python dependencies (h5py, numpy, scipy, Pillow, tqdm)
-│   └── changelog/             # Preprocessing tool versions (0.11.x → 0.22.0)
+│   └── changelog/             # Preprocessing tool versions (0.11.x → 0.23.0)
 ├── SCRIPTS/                   # Imaris tracking-analysis scripts (shipped in the Pipeline pack)
 ├── tools/                     # build_release.py, build_pipeline_bundle.py, convert_dataset.py (local format-5
 │                              #   conversion), bench_brick_codecs.py, publish_plugin.py, gen_signing_key.py,
@@ -229,7 +229,7 @@ Then open <http://localhost:8080>.
 
 On a development checkout, run it with `--dev-trust-local` (`start_dev.bat` and `.claude/launch.json` already do): without that flag, local plugins are untrusted and are not loaded. Production hosts trust the plugins installed from the marketplace and are not affected.
 
-`fast_server.py` and `start.bat` are static-only fallbacks (no admin API) useful for perf tests. `fast_server.py` binds **loopback by default** since v1.29.0 — pass an explicit host as its second argument to expose it deliberately.
+`fast_server.py` is a static-only fallback (no admin API) useful for perf tests; `start.bat` launches `dev_server.py` (admin API included). `fast_server.py` binds **loopback by default** since v1.29.0 — pass an explicit host as its second argument to expose it deliberately.
 
 ### 2. Deploy on a Shared PHP Host (`install.php`)
 

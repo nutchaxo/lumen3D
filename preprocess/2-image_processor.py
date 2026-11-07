@@ -23,8 +23,9 @@ import bricks_v3_writer as v3  # noqa: E402
 # root must be on it from the start, or a format-5/6 task cannot be unpickled in a worker.
 if not (Path(__file__).resolve().parent / "format5.py").is_file() and str(Path(__file__).resolve().parent.parent) not in sys.path:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
+import format5  # noqa: E402
 
-__version__ = "0.15.0"
+__version__ = "0.15.1"
 
 # Dataset format the run produces: 4 (brick pyramid v3 + planes + layer MIPs, SPEC §12-13)
 # by default; 2 (v2 bricks on the square 256·2^k ladder + planes) is kept for the
@@ -34,6 +35,14 @@ DEFAULT_DATASET_FORMAT = v3.FORMAT_VERSION
 # How many timepoints are sampled to establish the shared window of a timelapse.
 # Evenly spaced over the series and always including the first and the last frame.
 GLOBAL_NORM_SAMPLES = 8
+
+# What a channel's white point and per-frame signal levels are ranked over: the voxels
+# brighter than the noise floor, or every voxel when the pooled series holds too few of
+# those to rank (MIN_ABOVE_FLOOR). Chosen ONCE per channel so that every frame of a
+# series is measured with the same estimator.
+SIGNAL_BASIS_ABOVE_FLOOR = "above-floor"
+SIGNAL_BASIS_VOLUME = "volume"
+MIN_ABOVE_FLOOR = 1000
 
 # ── Streaming geometry ─────────────────────────────────────────────────────────
 # A channel is never held whole in memory. It is read from the .ims in tiles; each
@@ -346,17 +355,32 @@ def _estimate_global_bounds(executor, path, res0, tp_keys, c_idx, shape):
     # voxels, so a whole-volume percentile sits inside the background and clips 15 %
     # of the real signal to pure white. Ranking only the voxels above the noise floor
     # keeps the same intent and drops the clipped fraction to ~0.06 %.
-    above = pooled[pooled > bg_floor]
-    if above.size >= 1000:
-        sig_max = float(np.percentile(above, 99.9))
-        basis = f"{above.size} voxels above the noise floor"
-    else:
-        sig_max = float(np.percentile(pooled, 99.9))
-        basis = "whole volume (too little signal to rank)"
+    above_count = int(np.count_nonzero(pooled > bg_floor))
+    basis = SIGNAL_BASIS_ABOVE_FLOOR if above_count >= MIN_ABOVE_FLOOR else SIGNAL_BASIS_VOLUME
+    sig_max = signal_level(pooled, bg_floor, basis)
+    told = (f"{above_count} voxels above the noise floor" if basis == SIGNAL_BASIS_ABOVE_FLOOR
+            else "whole volume (too little signal to rank)")
     print(f"    global bg_floor={bg_floor:.2f}  sig_max={sig_max:.2f} "
-          f"(pooled over {len(corner_pool)} timepoints, white point from {basis})", flush=True)
+          f"(pooled over {len(corner_pool)} timepoints, white point from {told})", flush=True)
     _warn_window(bg_floor, sig_max, pooled)
-    return bg_floor, sig_max
+    return bg_floor, sig_max, basis
+
+
+def signal_level(sub, bg_floor: float, basis: str) -> float:
+    """99.9th percentile of a raw subsample, ranked over the channel's basis.
+
+    On the above-floor basis the level reads how bright the signal is, whatever share
+    of the frame the specimen fills: a whole-volume percentile of a sparse frame sits
+    on whichever voxel holds rank 99.9 %, so it rises when cells divide or enter the
+    field and drops into the background once the signal falls below 0.1 % of the
+    voxels. A frame with no voxel above the floor is at the floor itself, the limit
+    the above-floor percentile tends to as its signal fades — the series stays on
+    one estimator instead of switching to the volume rule part-way through.
+    """
+    if basis == SIGNAL_BASIS_ABOVE_FLOOR:
+        above = sub[sub > bg_floor]
+        return float(np.percentile(above, 99.9)) if above.size else float(bg_floor)
+    return float(np.percentile(sub, 99.9))
 
 
 def _warn_window(bg_floor: float, sig_max: float, subsample) -> None:
@@ -402,6 +426,26 @@ def pyramid_levels(W: int, H: int, D: int, voxel_size):
             for lv in v3.level_ladder((W, H, D), voxel_size)]
 
 
+def format5_levels(W: int, H: int, D: int, voxel_size):
+    """Format-5/6 levels as LOD entries: format5.level_ladder (level 0 native, then the
+    256·2^k targets below max(W, H), Z never reduced). Step 2 writes level 0 only; the
+    packer's format5.write_tree resamples the others from it and hands back the coarsest
+    one (histograms) and the thumbnail's (see 3-chunk_packer.pack_timepoint_v5)."""
+    return [{"lod": L["level"], "width": L["dimensions"]["x"], "height": L["dimensions"]["y"],
+             "depth": L["dimensions"]["z"], "voxelSize": L["voxelSize"], "target": L["target"]}
+            for L in format5.level_ladder((W, H, D), voxel_size)]
+
+
+def levels_for_format(W: int, H: int, D: int, voxel_size, dataset_format: int):
+    """The LOD entries of a run: the format-5 ladder for formats 5 and 6, the v3 pyramid
+    for format 4, the legacy square ladder for format 2."""
+    if dataset_format >= format5.FORMAT_VERSION:
+        return format5_levels(W, H, D, voxel_size)
+    if dataset_format >= v3.FORMAT_VERSION:
+        return pyramid_levels(W, H, D, voxel_size)
+    return lod_ladder(W, H, D)
+
+
 def reduce_levels(executor, temp_dir: Path, t_idx: int, c_idx: int, lod_info) -> None:
     """Levels 1… of one channel, each from the previous one (integer mean, half up), in
     z ranges over the pool: a worker holds two planes of the finer level at a time."""
@@ -421,8 +465,9 @@ def reduce_levels(executor, temp_dir: Path, t_idx: int, c_idx: int, lod_info) ->
 def process_channel(executor, path, name, shape, lod_info, temp_dir, t_idx, c_idx,
                     bounds=None, dataset_format=DEFAULT_DATASET_FORMAT):
     """Level one channel of one timepoint into its LOD files. `bounds` is the shared
-    window of a timelapse; without it the window comes from this volume. Returns the
-    99.9th percentile of the raw subsample (the frame's signal level)."""
+    window of a timelapse — (bg_floor, sig_max, signal basis) —; without it the window
+    comes from this volume. Returns the frame's signal level: the 99.9th percentile of
+    the raw subsample, ranked over the channel's basis (see signal_level)."""
     D, H, W = shape
     n_voxels = D * H * W
     want_subsample = bounds is not None
@@ -442,7 +487,7 @@ def process_channel(executor, path, name, shape, lod_info, temp_dir, t_idx, c_id
         _warn_window(bg_floor, sig_max, sub)
         del sub, corner_data
     else:
-        bg_floor, sig_max = bounds
+        bg_floor, sig_max, basis = bounds
 
     # ─── Steps 2-3 : signal mask, masked median, window leveling, per tile ─
     print("  Step 2-3: Masque de signal + Masked Median Filtering + Window Leveling...",
@@ -460,12 +505,16 @@ def process_channel(executor, path, name, shape, lod_info, temp_dir, t_idx, c_id
     print(f"    Couverture du masque: {100.0 * masked / max(1, n_voxels):.2f}% des voxels",
           flush=True)
     if want_subsample:
-        frame_sig = float(np.percentile(np.concatenate(parts), 99.9))
+        frame_sig = signal_level(np.concatenate(parts), bg_floor, basis)
         print(f"    bornes globales: bg_floor={bg_floor:.2f} sig_max={sig_max:.2f} "
               f"(signal propre a cette frame: {frame_sig:.2f})", flush=True)
         del parts
 
     # ─── Step 4 : Exporting downscaled LOD levels ─────────────────────────
+    if dataset_format >= format5.FORMAT_VERSION:
+        # format5.write_tree resamples its own levels from level 0 when it packs.
+        print(f"  Channel {c_idx} processed successfully.")
+        return frame_sig
     print("  Step 4: Exporting downscaled LOD levels...", flush=True)
     if dataset_format >= v3.FORMAT_VERSION:
         reduce_levels(executor, temp_dir, t_idx, c_idx, lod_info)
@@ -524,8 +573,8 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
     path = str(input_ims)
 
     v4 = dataset_format >= v3.FORMAT_VERSION
-    lod_info = pyramid_levels(W, H, D, meta.get("voxel_size")) if v4 else lod_ladder(W, H, D)
-    print(f"[PROCESS] LOD levels to generate: {len(lod_info)} (dataset format {dataset_format})")
+    lod_info = levels_for_format(W, H, D, meta.get("voxel_size"), dataset_format)
+    print(f"[PROCESS] LOD levels: {len(lod_info)} (dataset format {dataset_format})")
     for li in lod_info:
         print(f"  LOD {li['lod']}: {li['width']}x{li['height']}x{li['depth']}")
 
@@ -605,7 +654,9 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
             "mode": "global" if is_timelapse else "per-volume",
             "bounds": {f"c{c}": {"bgFloor": round(b[0], 4), "sigMax": round(b[1], 4)}
                        for c, b in global_bounds.items()},
-            "signalLevels": signal_levels
+            "signalLevels": signal_levels,
+            "signalBasis": {f"c{c}": (global_bounds[c][2] if c in global_bounds
+                                      else SIGNAL_BASIS_VOLUME) for c in range(n_ch)}
         }
     }, indent=2)
 

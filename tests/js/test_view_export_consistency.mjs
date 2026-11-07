@@ -94,6 +94,8 @@ function makeViewer(world, onTile) {
     let _activeVolumeEntry = { name: 'A' };
     let _qualityState = { progress: 0.4 };
     let _targetSteps = 400;
+    const SETTLED_PIXEL_SAMPLE_BUDGET = 6e9;
+    let _settledBudgetScale = 1;
     let _planeSpec = { mode: 'xy', value: 0.5, yaw: 0, pitch: 0, roll: 0, visible: false };
     let _poseAnim = null;
     let _lastDisplayRequest = null;
@@ -114,6 +116,7 @@ function makeViewer(world, onTile) {
     ${lift('_viewExportError')}
     ${lift('_viewExportAbortError')}
     ${lift('_throwIfViewExportStopped')}
+    ${lift('_exportTileBudgetCap')}
     ${lift('_exportTileConfigs')}
     ${lift('_planExportTiles')}
     ${lift('_rayMarchMaterials')}

@@ -69,6 +69,37 @@ let _netDown = false;
 let _probeTimer = null;
 let _probeDelay = 2000;
 
+// A request refused for its CSRF token: the session was signed in again (here or in
+// another tab) after the manager handed this worker its copy. Not a file failure:
+// every request waits here for the current token, once per refused token — the
+// same token answered back means the session itself is gone.
+let _csrfWait = null;   // { token, waiters[] } while waiting
+
+function isCsrfRefusal(status, payload) {
+  return status === 403 && typeof payload.error === 'string' && /csrf/i.test(payload.error);
+}
+
+/** Resolves true once a token other than `sentToken` is in hand, false if the
+ *  transfer ends first. */
+function waitForCsrf(sentToken) {
+  if (sentToken !== _csrf) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    if (!_csrfWait) {
+      _csrfWait = { token: sentToken, waiters: [] };
+      post({ type: 'csrf-stale' });
+    }
+    _csrfWait.waiters.push(resolve);
+  });
+}
+
+function settleCsrfWait(ok) {
+  const w = _csrfWait;
+  if (!w) return;
+  _csrfWait = null;
+  w.waiters.forEach((resolve) => resolve(ok));
+  if (ok) pump();
+}
+
 // A request that gets no answer in this long is treated as a dead connection.
 // 8 MiB at a floor of 50 KB/s is ~2.7 min; never less than a minute.
 function requestTimeoutMs(bytes) { return Math.max(60000, Math.ceil((bytes || 0) / 50000) * 1000); }
@@ -105,6 +136,15 @@ self.onmessage = (e) => {
       _endpoint = msg.endpoint || _endpoint;
       _csrf = msg.csrf ?? _csrf;
       _parallel = Math.max(1, Math.min(8, msg.parallel || _parallel));
+      if (_csrfWait && _csrf !== _csrfWait.token) settleCsrfWait(true);
+      break;
+    case 'csrf':
+      // The manager's answer to `csrf-stale`, after asking the server.
+      _csrf = msg.csrf ?? _csrf;
+      if (_csrfWait) {
+        if (_csrf !== _csrfWait.token) settleCsrfWait(true);
+        else failAll('unauthorized');
+      }
       break;
     case 'enqueue':
       enqueue(msg.jobs || []);
@@ -150,6 +190,7 @@ function cancelPending() {
   _retrying = 0;
   clearTimeout(_probeTimer); _probeTimer = null;
   _netDown = false;
+  settleCsrfWait(false);
 }
 
 function enqueue(jobs) {
@@ -203,7 +244,7 @@ function enqueue(jobs) {
 // ── Pump ───────────────────────────────────────────────────────────────────────
 
 function pump() {
-  if (_paused || _stopped || _netDown) return;
+  if (_paused || _stopped || _netDown || _csrfWait) return;
   while (_active < _parallel && _queue.length) {
     const job = _queue.shift();
     const entry = _files.get(job.key);
@@ -213,7 +254,7 @@ function pump() {
       .catch(() => { /* handled inside */ })
       .finally(() => { _active--; pump(); });
   }
-  if (!_active && !_queue.length && !_retrying && !_netDown) {
+  if (!_active && !_queue.length && !_retrying && !_netDown && !_csrfWait) {
     flushProgress();
     post({ type: 'idle' });
   }
@@ -260,6 +301,7 @@ async function sendChunk(job, entry) {
             + (entry.fileId !== null ? `&fid=${entry.fileId}` : '');
 
   let res;
+  const sentToken = _csrf;
   const ctl = new AbortController();
   ctl.__ds = job.ds;
   _inflight.add(ctl);
@@ -300,13 +342,21 @@ async function sendChunk(job, entry) {
     let payload = {};
     try { payload = await res.json(); } catch (_) { /* non-JSON */ }
     post({ type: 'chunk-too-large', ds: job.ds, path: job.path,
-           maxChunkSize: payload.maxChunkSize || null });
+           bytes: buffer.byteLength, maxChunkSize: payload.maxChunkSize || null });
     failFile(job.key, 'chunk_too_large', '');
     return;
   }
   if (!res.ok) {
     let payload = {};
     try { payload = await res.json(); } catch (_) { /* non-JSON */ }
+    if (isCsrfRefusal(res.status, payload)) {
+      // Back to the head of the queue, no attempt spent, once a new token is in.
+      if (await waitForCsrf(sentToken)) {
+        const still = _files.get(job.key);
+        if (!_stopped && still && !still.failed) _queue.unshift(job);
+      }
+      return;
+    }
     // A 4xx that is not a checksum problem is a contract violation (the path is
     // not allowed, the plan is gone). Retrying cannot fix it.
     const retryable = res.status >= 500 || RETRYABLE_STATUS.has(res.status) || payload.error === 'checksum_mismatch';
@@ -432,11 +482,13 @@ async function finishFile(key) {
   const root = entry.digests.every(Boolean) ? await digestRoot(entry.digests) : null;
 
   let res;
+  let sentToken;
   for (let attempt = 0; ; attempt++) {
     const ctl = new AbortController();
     ctl.__ds = entry.ds;
     _inflight.add(ctl);
     const timeout = setTimeout(() => ctl.abort(), 60000);
+    sentToken = _csrf;
     try {
       res = await fetch(`${_endpoint}?action=file_done&ds=${encodeURIComponent(entry.ds)}`, {
         method: 'POST',
@@ -460,6 +512,12 @@ async function finishFile(key) {
   let payload = {};
   try { payload = await res.json(); } catch (_) { /* non-JSON */ }
 
+  if (isCsrfRefusal(res.status, payload)) {
+    if (await waitForCsrf(sentToken) && _files.get(key) === entry && !entry.failed && !_stopped) {
+      await finishFile(key);
+    }
+    return;
+  }
   if (!res.ok) {
     // `incomplete` / `size_mismatch` mean the server disagrees about what landed.
     // The manager re-plans that dataset, which returns a fresh missing list.

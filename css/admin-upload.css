@@ -41,7 +41,7 @@
   background: var(--adm-card);
   font-size: 12.5px; color: var(--adm-text-sec); line-height: 1.55;
 }
-.upl-note i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--adm-success); }
+.upl-note i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--adm-success-text); }
 
 /* ── Import tab: global progress ──────────────────────────── */
 
@@ -74,7 +74,7 @@
 .upl-error, .upl-card-err {
   display: flex; align-items: center; gap: 8px; margin-top: 10px;
   padding: 9px 12px; border-radius: var(--adm-radius-sm);
-  background: rgba(248, 113, 113, 0.1); color: var(--adm-danger);
+  background: rgba(248, 113, 113, 0.1); color: var(--adm-danger-text);
   font-size: 12.5px;
 }
 .upl-error i, .upl-card-err i { width: 15px; height: 15px; flex-shrink: 0; }
@@ -107,12 +107,12 @@
   font-size: 11.5px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums;
 }
 .upl-card-hint { font-size: 11.5px; color: var(--adm-text-muted); line-height: 1.5; }
-.upl-warn { color: var(--adm-warning); }
+.upl-warn { color: var(--adm-warning-text); }
 .upl-card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.upl-btn-danger:hover { color: var(--adm-danger); border-color: var(--adm-danger); }
+.upl-btn-danger:hover { color: var(--adm-danger-text); border-color: var(--adm-danger); }
 
 .upl-card-rejected { font-size: 11.5px; color: var(--adm-text-sec); }
-.upl-card-rejected summary { cursor: pointer; color: var(--adm-warning); }
+.upl-card-rejected summary { cursor: pointer; color: var(--adm-warning-text); }
 .upl-card-rejected ul, .upl-rejected { list-style: none; margin: 6px 0 0; padding: 0; }
 .upl-card-rejected li, .upl-rejected li {
   padding: 3px 0; border-bottom: 1px solid var(--adm-border);
@@ -139,16 +139,16 @@
   background: rgba(148, 163, 184, 0.14); color: #94a3b8; border-color: rgba(148, 163, 184, 0.3);
 }
 .upl-state-editable, .dock-state-editable, .ds-staging-badge.is-editable {
-  background: rgba(251, 191, 36, 0.14); color: var(--adm-warning); border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.14); color: var(--adm-warning-text); border-color: rgba(251, 191, 36, 0.35);
 }
 .upl-state-staged, .dock-state-staged, .ds-staging-badge.is-staged {
   background: rgba(108, 99, 255, 0.14); color: var(--adm-accent); border-color: rgba(108, 99, 255, 0.35);
 }
 .upl-state-stalled, .dock-state-stalled, .ds-staging-badge.is-stalled {
-  background: rgba(248, 113, 113, 0.14); color: var(--adm-danger); border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.14); color: var(--adm-danger-text); border-color: rgba(248, 113, 113, 0.35);
 }
 .upl-state-published, .dock-state-published, .ds-staging-badge.is-published {
-  background: rgba(52, 211, 153, 0.14); color: var(--adm-success); border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.14); color: var(--adm-success-text); border-color: rgba(52, 211, 153, 0.35);
 }
 
 /* ── Floating dock ────────────────────────────────────────── */
@@ -278,7 +278,7 @@ body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-co
 .dock-global { padding: 10px 12px; border-bottom: 1px solid var(--adm-border); display: flex; flex-direction: column; gap: 5px; }
 .dock-error {
   display: flex; align-items: center; gap: 7px; padding: 8px 12px;
-  background: rgba(248, 113, 113, 0.1); color: var(--adm-danger); font-size: 11.5px;
+  background: rgba(248, 113, 113, 0.1); color: var(--adm-danger-text); font-size: 11.5px;
 }
 .dock-error i { width: 14px; height: 14px; flex-shrink: 0; }
 
@@ -295,8 +295,8 @@ body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-co
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dock-row-sub { font-size: 11px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums; }
-.dock-row-err { font-size: 11px; color: var(--adm-danger); overflow-wrap: anywhere; }
-.dock-expiry { color: var(--adm-warning); }
+.dock-row-err { font-size: 11px; color: var(--adm-danger-text); overflow-wrap: anywhere; }
+.dock-expiry { color: var(--adm-warning-text); }
 .dock-row-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
 
 .dock-mini {
@@ -311,7 +311,7 @@ body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-co
 .dock-mini:hover { background: var(--adm-card-hover); color: var(--adm-text); }
 .dock-mini-accent { color: var(--adm-accent); border-color: rgba(108, 99, 255, 0.4); }
 .dock-mini-accent:hover { background: var(--adm-accent); color: #fff; }
-.dock-mini-danger:hover { color: var(--adm-danger); border-color: var(--adm-danger); }
+.dock-mini-danger:hover { color: var(--adm-danger-text); border-color: var(--adm-danger); }
 
 /* ── Exit guard overlay ───────────────────────────────────── */
 
@@ -327,7 +327,7 @@ body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-co
   background: var(--adm-surface); text-align: center;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
-.upl-exit-icon { width: 34px; height: 34px; color: var(--adm-warning); }
+.upl-exit-icon { width: 34px; height: 34px; color: var(--adm-warning-text); }
 .upl-exit-title { font-size: 17px; font-weight: 700; margin: 10px 0 8px; }
 .upl-exit-body { font-size: 13px; color: var(--adm-text-sec); line-height: 1.6; }
 .upl-exit-actions { display: flex; gap: 9px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
@@ -345,11 +345,11 @@ body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-co
 .ds-staging-banner.is-uploading { border-color: rgba(148, 163, 184, 0.4); }
 .ds-staging-banner.is-uploading i { color: #94a3b8; }
 .ds-staging-banner.is-editable  { border-color: rgba(251, 191, 36, 0.4); }
-.ds-staging-banner.is-editable i { color: var(--adm-warning); }
+.ds-staging-banner.is-editable i { color: var(--adm-warning-text); }
 .ds-staging-banner.is-staged    { border-color: rgba(108, 99, 255, 0.4); }
 .ds-staging-banner.is-staged i { color: var(--adm-accent); }
 .ds-staging-banner.is-stalled   { border-color: rgba(248, 113, 113, 0.4); }
-.ds-staging-banner.is-stalled i { color: var(--adm-danger); }
+.ds-staging-banner.is-stalled i { color: var(--adm-danger-text); }
 
 /* ── Small screens ────────────────────────────────────────── */
 

@@ -9,6 +9,8 @@
  * built-in server's normal static/script handling.
  */
 
+if (is_file(__DIR__ . '/api/_bootstrap.php')) require_once __DIR__ . '/api/_bootstrap.php';
+
 // Derive the path WITHOUT parse_url(). A request beginning with two slashes makes
 // parse_url() read the first segment as an authority: for '//api/admin_credential.json'
 // it returns host='api', path='/admin_credential.json', which matches no deny rule —
@@ -67,11 +69,19 @@ if ($path === '/' || substr($path, -5) === '.html') {
     if (lumen_serve_html(__DIR__, lumen_request_rel($_SERVER, __DIR__))) {
         return true;
     }
-    // Not one of the platform's pages: never fall through to a raw static serve,
-    // which would hand the document out with no CSP at all.
+    // Not one of the platform's pages: never a raw static serve (no CSP at all); the branded 404.html for a page request.
+    if (lumen_serve_not_found(__DIR__, ltrim($path, '/'), (string)($_SERVER['HTTP_ACCEPT'] ?? ''), '/')) return true;
     http_response_code(404);
     header('Content-Type: text/plain');
     echo 'Not found';
+    return true;
+}
+
+// The implicit /favicon.ico probe: pages declare assets/favicon.svg, so a bare
+// document asks for no icon rather than getting a 404 (a real file wins).
+if ($path === '/favicon.ico' && !is_file(__DIR__ . $path)) {
+    http_response_code(204);
+    header('Cache-Control: public, max-age=86400');
     return true;
 }
 
@@ -81,6 +91,24 @@ if ($path === '/' || substr($path, -5) === '.html') {
 if (preg_match('#^/DATA_WEB/[^/]+/[^/]+/download/.+#', $path) && is_file(__DIR__ . $path)) {
     require_once __DIR__ . '/api/_admin_lib.php';
     lumen_count_download(substr($path, 1), (string)($_SERVER['REQUEST_METHOD'] ?? 'GET'), isset($_SERVER['HTTP_RANGE']));
+}
+
+// A path that is neither a file nor a directory: a page request gets the branded 404
+// (the API and DATA_WEB stay plain). Existing files fall through to php -S below.
+if (!file_exists(__DIR__ . $path)) {
+    require_once __DIR__ . '/api/_html_server.php';
+    if (lumen_serve_not_found(__DIR__, ltrim($path, '/'), (string)($_SERVER['HTTP_ACCEPT'] ?? ''), '/')) {
+        return true;
+    }
+    // Left to php -S, an extension-less miss falls back to the nearest index.html, served
+    // raw: placeholders unreplaced and no CSP. Say 404 instead (a script/PATH_INFO URL is
+    // php -S's own business).
+    if (strpos($path, '.php') === false && !preg_match('#\.[A-Za-z0-9]+$#', $path)) {
+        http_response_code(404);
+        header('Content-Type: text/plain');
+        echo 'Not found';
+        return true;
+    }
 }
 
 // No directory listings (php -S has none, but say so for every host shape).

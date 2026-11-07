@@ -74,7 +74,7 @@ function makeWorld({ files, max3D = 2048, fetchMode = 'multipart', delay = 0 }) 
   const THREE = Object.assign({}, REAL_THREE, { WebGLRenderer: function WebGLRenderer() { return renderer; } });
   const fetchImpl = mockFetch(files, { mode: fetchMode, delay });
   const ctx = vm.createContext({
-    console: { log() {}, warn() {}, error() {}, info() {} },
+    console: { log() {}, warn() {}, error() {}, info() {}, debug() {} },
     setTimeout, clearTimeout, Promise, URL, Map, Set, WeakMap, Uint8Array, Float64Array, Int32Array, ArrayBuffer, DataView, TextDecoder,
     AbortController, DOMException, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
     MessageChannel, Blob, Response, crypto: webcrypto,
@@ -210,6 +210,73 @@ const tree2 = buildV3Tree({ base: BASE_SVR, channels: 2, levels: LEVELS, value, 
     'the interior row, not the border (stored voxel 1 is volume voxel 64·b)');
   W.VV.dispose();
   console.log('v3 level → dense texture holding the 64³ interiors: OK');
+}
+
+// ── A stabilised frame is shown through its own warp from its first picture ──
+// The page hands each load the frame's rigid transform (`timepointTransform`); the
+// renderer sets it when that frame's entry becomes the one on screen — the coarse
+// preview included — not after the whole load resolves.
+{
+  const W = makeWorld({ files: tree2.files, max3D: 264 });
+  W.SVR.setVramBudget(2048 * MiB);
+  W.VV.init('webgl-canvas');
+  const ACQ = { min: [0, 0, 0], max: [300, 150, 128] };
+  W.VV.setStabilizationSpace(ACQ, { min: [-20, -20, -20], max: [320, 170, 148] });
+  const T = REAL_THREE;
+  const expectedWarp = (m) => {
+    const S = new T.Vector3(300, 150, 128), A = new T.Vector3(0, 0, 0);
+    const toUm = new T.Matrix4().makeScale(S.x, S.y, S.z)
+      .premultiply(new T.Matrix4().makeTranslation(A.x + 0.5 * S.x, A.y + 0.5 * S.y, A.z + 0.5 * S.z));
+    const toRaw = new T.Matrix4().fromArray(m).invert();
+    const toTex = new T.Matrix4().makeTranslation(-A.x, -A.y, -A.z)
+      .premultiply(new T.Matrix4().makeScale(1 / S.x, 1 / S.y, 1 / S.z));
+    return Array.from(toTex.multiply(toRaw).multiply(toUm).elements);
+  };
+  const warpNow = () => Array.from(W.VV.getMaterial().uniforms.volumeWarp.value.elements);
+  const same = (a, b, label) => {
+    assert.equal(a.length, 16, label);
+    a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-9, `${label}: element ${i} ${v} vs ${b[i]}`));
+  };
+  const M1 = new T.Matrix4().makeTranslation(12, -7, 5).toArray();
+  const M2 = new T.Matrix4().makeRotationZ(0.2).setPosition(-9, 4, 11).toArray();
+  const M3 = new T.Matrix4().makeTranslation(-3, 18, -6).toArray();
+
+  // The previous frame on screen, stabilised by the page as before.
+  let res = await W.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, { quality: 'lod1' });
+  assert.equal(res.available, true, res.reason);
+  assert.equal(W.VV.setTimepointTransform(M1), true);
+  same(warpNow(), expectedWarp(M1), 'the previous frame is warped by its own transform');
+
+  // A first visit: coarse preview, then the asked level streams behind it.
+  const atFirstPicture = [];
+  res = await W.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, {
+    quality: 'lod0', coarseFirst: true, timepointTransform: M2,
+    onFirstPicture: (info) => atFirstPicture.push({ info, warp: warpNow(), stabilized: W.VV.isStabilized() })
+  });
+  assert.equal(res.available, true, res.reason);
+  assert.equal(atFirstPicture.length, 1, 'one first picture');
+  assert.equal(atFirstPicture[0].info.preview, true, 'the coarse preview is the first picture');
+  assert.equal(atFirstPicture[0].stabilized, true);
+  same(atFirstPicture[0].warp, expectedWarp(M2), 'the preview of the new frame is drawn through ITS warp, not the previous one');
+  same(warpNow(), expectedWarp(M2), 'and the finished frame keeps it');
+
+  // A deferred swap (a revisit / quality switch): the warp follows the swap.
+  res = await W.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, {
+    quality: 'lod1', deferActivation: true, hideTransition: true, timepointTransform: M3
+  });
+  assert.equal(res.available, true, res.reason);
+  same(warpNow(), expectedWarp(M3), 'the swapped-in frame carries its warp');
+
+  // A load that says nothing about stabilisation leaves the warp alone; null = raw frame.
+  res = await W.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, { quality: 'lod2' });
+  assert.equal(res.available, true, res.reason);
+  same(warpNow(), expectedWarp(M3), 'no timepointTransform option: untouched');
+  assert.equal(W.VV.isStabilized(), true);
+  res = await W.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, { quality: 'lod1', timepointTransform: null });
+  assert.equal(res.available, true, res.reason);
+  assert.equal(W.VV.isStabilized(), false, 'timepointTransform null shows the acquisition frame');
+  W.VV.dispose();
+  console.log('stabilised frame: its warp is set when it is shown (coarse preview included): OK');
 }
 
 console.log('v3 render: OK');

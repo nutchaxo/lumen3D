@@ -576,8 +576,8 @@ async function onRun(msg) {
     };
     const work = await h.planUnitWork(msg.unit, state, io);
     const res = await h.runUnit(work, state, io);
-    // m005 results can outgrow the host's request limit: they go in pieces.
-    const reply = !msg.dry && (msg.migration === 'm005-matrix' || msg.migration === 'm006-q30') && res.body.length + PIECE_MARGIN > _maxBody
+    // A result can outgrow the host's request limit (a PHP host's post_max_size): it goes in pieces.
+    const reply = !msg.dry && res.body.length + PIECE_MARGIN > _maxBody
       ? await putInPieces(msg.migration, msg.dataset, msg.unit, res.body, ac.signal)
       : await putUnit(msg.migration, msg.dataset, msg.unit, res.body, !!msg.dry, ac.signal);
     post({
@@ -627,6 +627,8 @@ async function putInPieces(migration, dataset, key, body, signal) {
       }
       return data;
     }, signal);
+    // A retried last piece whose first answer was lost is acknowledged as complete.
+    if (reply && reply.complete) break;
   }
   return reply;
 }
@@ -660,19 +662,29 @@ async function onRunBatch(msg) {
       throw err;
     }
     const byKey = new Map(items.map((it) => [it.unit, it]));
+    const runsOf = (it) => new Set([...(it.tiles || []), ...(it.bricks || [])].map(RUN_KEY));
+    // How many units of the batch still list each run: a run leaves the cache after its last
+    // unit, so the batch holds at most BATCH_PREFETCH_BYTES of runs for later units on top of
+    // the input of the unit being computed (a batch of neighbouring C units would otherwise
+    // keep the compressed input of all sixteen until it ends).
+    const uses = new Map();
+    for (const it of items) {
+      if (!it || it.ok === false || it.empty) continue;
+      for (const k of runsOf(it)) uses.set(k, (uses.get(k) || 0) + 1);
+    }
     // The runs of the batch, each once, as far as the prefetch budget goes.
     const cache = new Map();
     const want = [];
-    let bytes = 0;
+    let held = 0;
     for (const it of items) {
       if (!it || it.ok === false || it.empty) continue;
       for (const r of [...(it.tiles || []), ...(it.bricks || [])]) {
         const k = RUN_KEY(r);
         if (cache.has(k)) continue;
-        if (bytes + (r.end - r.start) > BATCH_PREFETCH_BYTES) continue;
+        if (held + (r.end - r.start) > BATCH_PREFETCH_BYTES) continue;
         cache.set(k, null);
         want.push(r);
-        bytes += r.end - r.start;
+        held += r.end - r.start;
       }
     }
     let bytesIn = 0;
@@ -680,17 +692,47 @@ async function onRunBatch(msg) {
       const got = await readRels(msg.dataset, want, ac.signal);
       want.forEach((r, i) => { cache.set(RUN_KEY(r), got[i]); bytesIn += got[i].length; });
     }
+    let current = new Set();
+    const release = (runKeys) => {
+      for (const k of runKeys) {
+        const n = (uses.get(k) || 0) - 1;
+        if (n > 0) { uses.set(k, n); continue; }
+        uses.delete(k);
+        const b = cache.get(k);
+        if (b) held -= b.length;
+        cache.delete(k);
+      }
+    };
     const io = {
       fetchRange: (url, s, e) => fetchRange(url, s, e, ac.signal),
       fetchRanges: (list) => fetchRanges(msg.dataset, _bases.get(`${msg.migration}|${msg.dataset}`), list, ac.signal),
       fetchStored: (req) => fetchStored(msg.migration, msg.dataset, req, ac.signal),
       readRels: async (list) => {
-        const missing = list.filter((r) => !cache.get(RUN_KEY(r)));
+        const fresh = new Map();
+        const missing = [];
+        for (const r of list) {
+          const k = RUN_KEY(r);
+          if (cache.get(k) || fresh.has(k)) continue;
+          fresh.set(k, null);
+          missing.push(r);
+        }
         if (missing.length) {
           const got = await readRels(msg.dataset, missing, ac.signal);
-          missing.forEach((r, i) => { bytesIn += got[i].length; cache.set(RUN_KEY(r), got[i]); });
+          missing.forEach((r, i) => {
+            const k = RUN_KEY(r);
+            const b = got[i];
+            bytesIn += b.length;
+            fresh.set(k, b);
+            const later = (uses.get(k) || 0) - (current.has(k) ? 1 : 0);
+            if (later > 0 && !cache.has(k) && held + b.length <= BATCH_PREFETCH_BYTES) {
+              // Own copy: the run is a view into a whole read_ranges answer, most of which no
+              // later unit needs.
+              cache.set(k, b.slice());
+              held += b.length;
+            }
+          });
         }
-        return list.map((r) => cache.get(RUN_KEY(r)));
+        return list.map((r) => cache.get(RUN_KEY(r)) || fresh.get(RUN_KEY(r)));
       },
       signal: ac.signal,
     };
@@ -737,18 +779,23 @@ async function onRunBatch(msg) {
       if (inp.ok === false) { results.set(key, failure(key, httpError(inp.status || 400, inp.error, inp.detail || inp.error))); continue; }
       if (inp.empty) { results.set(key, failure(key, httpError(409, 'empty_unit', 'the server lists no work for ' + key))); continue; }
       const before = bytesIn;
+      current = runsOf(inp);
       try {
         const res = await h.runUnit(inp, state, io);
+        release(current);
+        current = new Set();
         // Flush first when this result would take the batch past what one request may carry.
         if (pending.length && pendingBytes + res.body.length + 64 * (pending.length + 1) > Math.min(BATCH_PUT_BYTES, _maxBody - PIECE_MARGIN)) await flush();
         pending.push({ key, body: res.body, bytesIn: bytesIn - before, tiles: res.tiles });
         pendingBytes += res.body.length;
       } catch (err) {
         if (err && err.name === 'AbortError') throw err;
+        release(current);
+        current = new Set();
         results.set(key, failure(key, err));
         continue;
       }
-      if (pendingBytes >= Math.min(BATCH_PUT_BYTES, _maxBody - PIECE_MARGIN)) await flush();
+      if (pendingBytes >=Math.min(BATCH_PUT_BYTES, _maxBody - PIECE_MARGIN)) await flush();
     }
     await flush();
     const secs = (performance.now() - t0) / 1000;

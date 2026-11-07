@@ -14,40 +14,60 @@ const Catalog = (() => {
   /**
    * Load the catalog from JSON. Concurrent callers share one request; a failed load is
    * not remembered as "loaded", so the next call retries (see getLoadError()).
+   * `force` refetches even when a catalog is already held (the pages' Retry button).
+   * @param {{force?: boolean}} [opts]
    * @returns {Promise<void>}
    */
-  function load() {
-    if (_loaded) return Promise.resolve();
+  function load(opts) {
+    if (_loaded && !(opts && opts.force)) return Promise.resolve();
     if (!_inflight) _inflight = _fetchCatalog().finally(() => { _inflight = null; });
     return _inflight;
   }
 
-  /** The error of the last failed load, or null. Lets a page say "could not load" instead of "not found". */
+  /**
+   * Why the last load failed, or null when the catalog loaded. Lets a page say
+   * "could not load" instead of "nothing here". `code`: 'http' (status = the HTTP
+   * status), 'network' (status 0), 'parse' (body is not JSON), 'shape' (JSON, but
+   * not a list of datasets). Carries no message text: nothing for a page to print.
+   * @returns {{code: string, status: number}|null}
+   */
   function getLoadError() {
     return _loadError;
   }
 
   async function _fetchCatalog() {
+    let resp;
     try {
       // The index is generated per request from the metadata.json files, so it must be
       // revalidated each time (a dataset that was just published has to show up).
-      const resp = await fetch('./DATA_WEB/catalog.json', { cache: 'no-cache' });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const datasetsArray = Array.isArray(data) ? data : (data.datasets || []);
-      _datasets = datasetsArray.map(dataset => ({
-        ...dataset,
-        volumeSources: typeof VolumeSourceManager !== 'undefined'
-          ? VolumeSourceManager.normalizeSources(dataset)
-          : (dataset.volumeSources || [])
-      }));
-      _loaded = true;
-      _loadError = null;
+      resp = await fetch('./DATA_WEB/catalog.json', { cache: 'no-cache' });
     } catch (err) {
-      console.warn('[Catalog] Failed to load catalog, using embedded data:', err);
-      _datasets = _getEmbeddedCatalog();
-      _loadError = err;
+      return _fail('network', 0, err);
     }
+    if (!resp || !resp.ok) return _fail('http', resp ? Number(resp.status) || 0 : 0, new Error(`HTTP ${resp && resp.status}`));
+    let data;
+    try {
+      data = await resp.json();
+    } catch (err) {
+      return _fail('parse', resp.status, err);
+    }
+    const datasetsArray = Array.isArray(data) ? data : (data && data.datasets === undefined ? [] : data && data.datasets);
+    if (!Array.isArray(datasetsArray)) return _fail('shape', resp.status, new Error('catalog is not a list'));
+    _datasets = datasetsArray.map(dataset => ({
+      ...dataset,
+      volumeSources: typeof VolumeSourceManager !== 'undefined'
+        ? VolumeSourceManager.normalizeSources(dataset)
+        : (dataset.volumeSources || [])
+    }));
+    _loaded = true;
+    _loadError = null;
+  }
+
+  function _fail(code, status, err) {
+    console.warn('[Catalog] Failed to load catalog:', err);
+    _datasets = _getEmbeddedCatalog();
+    _loaded = false;
+    _loadError = { code, status };
   }
 
   /**
@@ -136,33 +156,6 @@ const Catalog = (() => {
     );
   }
 
-  function getRelationMeta(sourceId, targetId) {
-    const source = getById(sourceId);
-    const target = getById(targetId);
-    if (!source || !target) return null;
-
-    const explicitRelated = Array.isArray(source.relatedIds) && source.relatedIds.includes(target.id)
-      || Array.isArray(target.relatedIds) && target.relatedIds.includes(source.id);
-    const sameEmbryoStage = Boolean(source.embryo && target.embryo && source.embryo === target.embryo && source.stage === target.stage);
-    const registration = source.registration || target.registration || null;
-    const qc = registration?.qcSummary || null;
-
-    let type = 'context';
-    if (registration) type = 'registered';
-    else if (explicitRelated) type = 'related';
-    else if (sameEmbryoStage) type = 'same-embryo';
-
-    return {
-      type,
-      registration,
-      qcSummary: qc,
-      calibrationAvailable: Boolean(registration?.transforms?.length),
-      appliedToVolume: Boolean(registration?.appliedToVolume),
-      label: _relationLabel(type),
-      description: _relationDescription(type, registration, qc)
-    };
-  }
-
   /**
    * Get statistics summary
    * @returns {object}
@@ -241,50 +234,12 @@ const Catalog = (() => {
     return sorted;
   }
 
-  // White-label: the relation type key stays 'same-embryo' (it is only emitted for
-  // datasets carrying specimen+stage metadata), but the human label uses the
-  // operator's specimen noun instead of a hardcoded 'embryo'.
-  function _specimenNoun() {
-    try {
-      if (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) {
-        // `specimen.singular` is localizable: the stored value is a flat string OR
-        // a per-locale object, so a bare get() can hand back an object that the
-        // template literals below would render as '[object Object]'.
-        const v = InstanceConfig.localized
-          ? InstanceConfig.localized(InstanceConfig.get('specimen.singular'))
-          : InstanceConfig.get('specimen.singular');
-        if (typeof v === 'string' && v) return v;
-      }
-    } catch (_) { /* fall through */ }
-    return 'sample';
-  }
-
   /** The displayed name of a dataset type — never the raw id, which is an
    *  internal token the operator can rename in config/instance.json. */
   function _typeLabel(type) {
     if (!type) return '';
     if (typeof Utils !== 'undefined' && Utils.datasetTypeLabel) return Utils.datasetTypeLabel(type);
     return String(type);
-  }
-
-  function _relationLabel(type) {
-    return {
-      registered: 'Registered',
-      related: 'Related dataset',
-      'same-embryo': `Same ${_specimenNoun()}/stage`,
-      context: 'Context dataset'
-    }[type] || 'Related dataset';
-  }
-
-  function _relationDescription(type, registration, qc) {
-    if (registration) {
-      const method = registration.method || 'registration';
-      const median = Number.isFinite(qc?.medianRmsAfter) ? `, median RMS ${qc.medianRmsAfter.toFixed(3)}` : '';
-      return `${method}${median}`;
-    }
-    if (type === 'same-embryo') return `Matched by ${_specimenNoun()} and stage metadata.`;
-    if (type === 'related') return 'Explicitly linked by dataset metadata.';
-    return 'Related by experimental context.';
   }
 
   /**
@@ -300,25 +255,10 @@ const Catalog = (() => {
     return typeof channel === 'string' ? channel : (channel.name || '');
   }
 
+  // The stage rule lives in Utils (loaded before this file on every page that has a catalog).
   function _stageNumber(stage) {
-    if (typeof stage === 'number') return stage;
-    if (!stage) return 0;
-    const match = String(stage).match(/^E(\d+)(?:\.(\d+))?$/i);
-    if (!match) return 0;
-    if (match[2]) return parseFloat(`${match[1]}.${match[2]}`);
-
-    const digits = match[1];
-    if (digits.length <= 1) return parseFloat(digits);
-    if (digits.length === 2) {
-      const value = parseFloat(digits);
-      return value >= 50 ? parseFloat(`${digits[0]}.${digits.slice(1)}`) : value;
-    }
-
-    const firstTwo = parseInt(digits.slice(0, 2), 10);
-    if (firstTwo >= 10 && firstTwo <= 20) {
-      return parseFloat(`${digits.slice(0, 2)}.${digits.slice(2)}`);
-    }
-    return parseFloat(`${digits[0]}.${digits.slice(1)}`);
+    if (typeof Utils !== 'undefined' && typeof Utils.stageNumber === 'function') return Utils.stageNumber(stage);
+    return (typeof stage === 'number' && Number.isFinite(stage)) ? stage : 0;
   }
 
   return {
@@ -329,7 +269,6 @@ const Catalog = (() => {
     filter,
     getStages,
     getRelated,
-    getRelationMeta,
     getStats,
     sort
   };

@@ -36,7 +36,10 @@ function makeWorker() {
   vm.runInContext(SRC, sandbox, { filename: 'brick-decode-worker.js' });
   return {
     send: (m) => self.onmessage({ data: m }),
-    resolveBitmap: () => pending && pending.resolve({ width: 4, height: 4 }),
+    resolveBitmap: (width = 4, height = 4) => pending && pending.resolve({ width, height }),
+    // The worker's assembly map: a top-level const of the script, reachable by name
+    // from another script run in the same context.
+    assemblies: () => vm.runInContext('assemblies', sandbox),
     ids: () => results.filter((m) => m.type === 'DECODE_RESULT').map((m) => m.id),
     results,
   };
@@ -78,6 +81,64 @@ const DEC = (id) => ({ type: 'DECODE', id, buffer: new ArrayBuffer(0), brickSize
   w.resolveBitmap();          // decode proceeds, hits success guard -> suppressed
   await tick(); await tick();
   assert.ok(!w.ids().includes(1), 'in-flight cancelled job must not post a result');
+}
+
+// 4) A compose job whose batch is cancelled (and its assembly dropped) while it awaits
+//    its bitmap must not create the assembly afterwards: nothing would ever free it.
+const ASM = (id, key, slot, batch) => ({
+  type: 'DECODE', id, batch, buffer: new ArrayBuffer(0), brickSize: 4,
+  packing: { mode: 'grid', cols: 2 }, assemble: { key, slot, components: 4 },
+});
+{
+  const w = makeWorker();
+  w.send(ASM(1, '7:u0:0', 0, 7));
+  await tick();                         // in flight, awaiting the bitmap
+  w.send({ type: 'CANCEL', batch: 7 });
+  w.send({ type: 'DROP', key: '7:u0:0' });
+  w.resolveBitmap(8, 8);
+  await tick(); await tick(); await tick();
+  assert.deepEqual(w.ids(), [], 'a cancelled compose job posts no result');
+  assert.equal(w.assemblies().size, 0, 'a cancelled compose job leaves no assembly behind');
+}
+
+// 5) The same for a global CANCEL (epoch), without any DROP.
+{
+  const w = makeWorker();
+  w.send(ASM(1, '3:u0:0', 0, 3));
+  await tick();
+  w.send({ type: 'CANCEL' });
+  w.resolveBitmap(8, 8);
+  await tick(); await tick(); await tick();
+  assert.equal(w.assemblies().size, 0, 'an epoch-cancelled compose job leaves no assembly behind');
+}
+
+// 6) A DROP runs after the jobs posted before it: a live job still decoding when its
+//    unit drops the key (every channel failed elsewhere) cannot re-create the assembly.
+{
+  const w = makeWorker();
+  w.send(ASM(1, '5:u1:0', 1, 5));
+  await tick();
+  w.send({ type: 'DROP', key: '5:u1:0' });
+  w.resolveBitmap(8, 8);
+  await tick(); await tick(); await tick();
+  assert.deepEqual(w.ids(), [1], 'the live job still answers');
+  assert.equal(w.assemblies().size, 0, 'the DROP that followed it freed the assembly');
+}
+
+// 7) A live compose job keeps its assembly for the TAKE that follows.
+{
+  const w = makeWorker();
+  w.send(ASM(1, '9:u2:0', 0, 9));
+  await tick();
+  w.resolveBitmap(8, 8);
+  await tick(); await tick(); await tick();
+  assert.deepEqual(w.ids(), [1]);
+  assert.equal(w.assemblies().size, 1, 'the assembly waits for its TAKE');
+  assert.equal(w.assemblies().get('9:u2:0').buf.length, 4 * 4 * 4 * 4);
+  w.send({ type: 'TAKE', id: 2, batch: 9, key: '9:u2:0', voxels: 64, components: 4 });
+  await tick(); await tick();
+  assert.equal(w.assemblies().size, 0, 'TAKE hands the assembly over and forgets it');
+  assert.equal(w.results.find((m) => m.id === 2).buffer.byteLength, 256);
 }
 
 console.log('ELE-16 brick-decode-worker CANCEL epoch: OK');

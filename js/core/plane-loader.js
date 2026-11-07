@@ -78,6 +78,41 @@ const PlaneLoader = (() => {
   function _throwIfAborted(signal) {
     if (signal && signal.aborted) throw _abortError();
   }
+  function _isAbort(err) {
+    return Boolean(err) && err.name === 'AbortError';
+  }
+  /** Settles with `promise`, or rejects (AbortError) once `signal` aborts; the work behind `promise` goes on. */
+  function _awaitWithSignal(promise, signal) {
+    if (!signal) return promise;
+    if (signal.aborted) {
+      Promise.resolve(promise).catch(() => {});   // its failure is no longer anyone's
+      return Promise.reject(_abortError());
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(_abortError());
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+        (e) => { signal.removeEventListener('abort', onAbort); reject(e); }
+      );
+    });
+  }
+  /**
+   * One caller's wait on a cached, shared promise (`get()` returns it, creating it when
+   * absent). A whole-pack body is read under the signal of the caller that started it;
+   * when that caller cancels, the entry is evicted (its eviction handler runs before any
+   * waiter's) and a caller whose own signal is still live asks again instead of failing
+   * with somebody else's AbortError.
+   */
+  async function _awaitShared(get, signal) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await _awaitWithSignal(get(), signal);
+      } catch (err) {
+        if ((signal && signal.aborted) || !_isAbort(err) || attempt >= 2) throw err;
+      }
+    }
+  }
   function _planeError(code, message) {
     return Object.assign(new Error(message), { code });
   }
@@ -228,10 +263,65 @@ const PlaneLoader = (() => {
   let _pool = null;
   let _seq = 0;
   const _pending = new Map();   // id → { resolve, reject }
+  // The pool lives only while a load uses it: a worker keeps a slab's band accumulators
+  // between two of its messages, so "no message in flight" is not "idle" — the loads
+  // themselves are counted. IDLE_MS after the last one ends the workers go, and with them
+  // their heaps; a Compare page with four panels would otherwise keep sixteen of them.
+  const IDLE_MS = 5000;
+  let _users = 0;
+  let _idleTimer = null;
+  let _maxWorkers = 0;          // 0 = this page's own default (configure)
 
   function _poolSize() {
     const hc = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) || 4 : 4;
-    return Math.max(1, Math.min(4, hc - 1));
+    const own = Math.max(1, Math.min(4, hc - 1));
+    return _maxWorkers > 0 ? Math.min(own, _maxWorkers) : own;
+  }
+
+  function _terminatePool() {
+    if (_pool) _pool.forEach(r => { try { r.w.terminate(); } catch (e) { /* gone */ } });
+    _pool = null;
+  }
+
+  /** The pool for one load; every _acquire is paired with one _release. */
+  function _acquire() {
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
+    const pool = _workers();
+    _users++;
+    return pool;
+  }
+
+  function _release() {
+    _users = Math.max(0, _users - 1);
+    if (_users > 0 || !_pool) return;
+    // A pool sized before a lower cap (configure) is replaced as soon as nobody holds it.
+    if (_pool.length > _poolSize()) { _terminatePool(); return; }
+    if (_idleTimer) clearTimeout(_idleTimer);
+    _idleTimer = setTimeout(() => {
+      _idleTimer = null;
+      // Still unanswered here: band messages of a load that already failed — nobody waits.
+      if (_users === 0) dispose();
+    }, IDLE_MS);
+  }
+
+  /**
+   * Settings of this page's plane reads.
+   *   workers       most decode workers at once, 1–4 (a Compare panel gets its share of
+   *                 the machine's cores); null gives the page's own default back.
+   *   fetchStallMs  how long a shared read (a pack header no caller owns) may go without
+   *                 an answer before it is dropped, ≥ 1000 (default 30 s).
+   */
+  function configure(options = {}) {
+    if (!options) return;
+    const stall = Number(options.fetchStallMs);
+    if ('fetchStallMs' in options && Number.isFinite(stall)) _stallMs = Math.max(1000, stall);
+    if (!('workers' in options)) return;
+    const n = Number(options.workers);
+    _maxWorkers = options.workers === null || !Number.isFinite(n) ? 0 : Math.max(1, Math.min(4, Math.round(n)));
+    if (_users === 0 && _pool && _pool.length > _poolSize()) {
+      if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
+      _terminatePool();
+    }
   }
 
   function _workers() {
@@ -281,17 +371,22 @@ const PlaneLoader = (() => {
 
   /** Terminates the decode workers (they are respawned on the next load). */
   function dispose() {
-    if (_pool) _pool.forEach(r => { try { r.w.terminate(); } catch (e) { /* gone */ } });
-    _pool = null;
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
+    _terminatePool();
     for (const [, p] of _pending) p.reject(_abortError());
     _pending.clear();
   }
 
   // ── Network ──────────────────────────────────────────────────────────────────
 
-  async function _readBody(resp, onBytes, signal) {
+  // A shared read (a pack header every reader of the plane waits on) runs under no
+  // caller's signal: past this long without an answer it is dropped (configure).
+  let _stallMs = 30000;
+
+  /** `onChunk()` runs after every body chunk (a stall watchdog re-arms there). */
+  async function _readBody(resp, onBytes, signal, onChunk) {
     if (!resp.body || typeof resp.body.getReader !== 'function') {
-      const buf = new Uint8Array(await resp.arrayBuffer());
+      const buf = new Uint8Array(await _awaitWithSignal(resp.arrayBuffer(), signal));
       onBytes && onBytes(buf.length);
       return buf;
     }
@@ -303,8 +398,9 @@ const PlaneLoader = (() => {
         try { reader.cancel(); } catch (e) { /* closed */ }
         throw _abortError();
       }
-      const { done, value } = await reader.read();
+      const { done, value } = await _awaitWithSignal(reader.read(), signal);
       if (done) break;
+      onChunk && onChunk();
       parts.push(value);
       total += value.length;
       onBytes && onBytes(value.length);
@@ -340,7 +436,7 @@ const PlaneLoader = (() => {
     /** Bytes [start, end) of pack z (a 200 answer: the whole pack, kept for this z). */
     async function fetchBytes(z, start, end, signal, onBytes) {
       if (rangeless) {
-        const whole = await wholeFile(z, signal, onBytes);
+        const whole = await _awaitShared(() => wholeFile(z, signal, onBytes), signal);
         if (end > whole.length) throw _planeError('PLANES_SHORT', `pack ${P}${z} is ${whole.length} bytes, needs ${end}`);
         return whole.subarray(start, end);
       }
@@ -362,7 +458,7 @@ const PlaneLoader = (() => {
         rangeless = true;
         const p = _readBody(resp, onBytes, signal);
         wholeFiles.set(z, p);
-        p.catch(() => wholeFiles.delete(z));
+        p.catch(() => { if (wholeFiles.get(z) === p) wholeFiles.delete(z); });
         const whole = await p;
         if (end > whole.length) throw _planeError('PLANES_SHORT', `pack ${P}${z} is ${whole.length} bytes, needs ${end}`);
         return whole.subarray(start, end);
@@ -370,6 +466,53 @@ const PlaneLoader = (() => {
       throw _planeError('PLANES_HTTP', `pack ${P}${z}: HTTP ${resp.status}`);
     }
 
+    /**
+     * Bytes [start, end) of pack z for a read no caller owns (a header): a Range request
+     * with its own controller and a deadline — no response headers, then no body bytes,
+     * for `fetchStallMs` — so a server that never answers rejects it (PLANES_STALL) and the
+     * cached promise is dropped. A host that ignores Range answers with the whole pack: that
+     * body is dropped (PLANES_RANGELESS) and read again under a caller's signal (wholeFile),
+     * never by a shared read nobody can cancel.
+     */
+    async function sharedRange(z, start, end, onBytes) {
+      const controller = new AbortController();
+      let stalled = false;
+      let timer = null;
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          stalled = true;
+          try { controller.abort(); } catch (e) { /* settled */ }
+        }, _stallMs);
+      };
+      try {
+        arm();
+        const resp = await _awaitWithSignal(fetch(packUrl(z), { headers: { Range: `bytes=${start}-${end - 1}` }, signal: controller.signal }), controller.signal);
+        if (resp.status === 200) {
+          rangeless = true;
+          try { controller.abort(); } catch (e) { /* settled */ }
+          throw _planeError('PLANES_RANGELESS', `pack ${P}${z}: the host ignores Range`);
+        }
+        if (resp.status !== 206) throw _planeError('PLANES_HTTP', `pack ${P}${z}: HTTP ${resp.status}`);
+        const cr = resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get('Content-Range') : null;
+        const m = cr ? /bytes\s+(\d+)-(\d+)\//i.exec(cr) : null;
+        if (m && (Number(m[1]) !== start || Number(m[2]) !== end - 1)) {
+          throw _planeError('PLANES_RANGE', `pack ${P}${z}: asked bytes ${start}-${end - 1}, got ${cr}`);
+        }
+        arm();
+        const body = await _readBody(resp, onBytes, controller.signal, arm);
+        if (body.length !== end - start) throw _planeError('PLANES_SHORT', `pack ${P}${z}: ${body.length} bytes for a ${end - start}-byte range`);
+        return body;
+      } catch (err) {
+        if (stalled) throw _planeError('PLANES_STALL', `pack ${P}${z}: no answer within ${_stallMs} ms`);
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // A whole pack is large: its download stays under the signal of the caller that
+    // started it, so a cancelled pass stops it; other callers wait through _awaitShared.
     function wholeFile(z, signal, onBytes) {
       let p = wholeFiles.get(z);
       if (!p) {
@@ -378,39 +521,62 @@ const PlaneLoader = (() => {
           return _readBody(resp, onBytes, signal);
         });
         wholeFiles.set(z, p);
-        p.catch(() => wholeFiles.delete(z));
+        const own = p;
+        own.catch(() => { if (wholeFiles.get(z) === own) wholeFiles.delete(z); });
         // Keep the last few only: a slab walks through z once.
         while (wholeFiles.size > 4) wholeFiles.delete(wholeFiles.keys().next().value);
       }
       return p;
     }
 
-    /** The entry table of pack z, cached. */
-    function header(z, opts = {}) {
+    /**
+     * The entry table of pack z, cached. Every caller shares one read, made under no
+     * caller's signal (a header is a few KiB, its request bounded by `fetchStallMs`);
+     * `opts.signal` only ends this caller's wait. On a host that ignores Range the header
+     * comes out of the whole pack, read under the caller's signal.
+     */
+    async function header(z, opts = {}) {
       checkZ(z);
-      let p = headers.get(z);
-      if (p) return p;
-      p = (async () => {
-        const bytes = await fetchBytes(z, 0, headerBytes, opts.signal, opts.onBytes);
-        const codec = _codec();
-        if (!codec) throw _planeError('PLANES_NO_CODEC', 'PlaneCodec is not loaded');
-        const h = _parseHeader(codec, bytes, kind.magic, `pack ${P}${z}`);
-        if (h.channels !== C || h.tilesX !== TX || h.tilesY !== TY || h.z !== z) {
-          throw _planeError('PLANES_INVALID', `pack ${P}${z} header (${h.channels} ch, ${h.tilesX}×${h.tilesY}, z ${h.z}) ≠ the manifest's`);
-        }
-        const offsets = new Float64Array(h.entries.length);
-        const lengths = new Uint32Array(h.entries.length);
-        h.entries.forEach((e, i) => {
-          if (e.length > 0 && e.offset < headerBytes) throw _planeError('PLANES_INVALID', `pack ${P}${z}: tile ${i} overlaps the header`);
-          offsets[i] = e.offset;
-          lengths[i] = e.length;
-        });
-        return { offsets, lengths };
-      })();
+      try {
+        return await _awaitShared(() => sharedHeader(z, opts.onBytes), opts.signal);
+      } catch (err) {
+        if (!err || err.code !== 'PLANES_RANGELESS') throw err;
+      }
+      const h = parseHeader(z, await fetchBytes(z, 0, headerBytes, opts.signal, opts.onBytes));
+      if (!headers.has(z)) keepHeader(z, Promise.resolve(h));
+      return h;
+    }
+
+    function keepHeader(z, p) {
       headers.set(z, p);
-      p.catch(() => headers.delete(z));
+      p.catch(() => { if (headers.get(z) === p) headers.delete(z); });
       if (headers.size > HEADER_CACHE_MAX) headers.delete(headers.keys().next().value);
+    }
+
+    function sharedHeader(z, onBytes) {
+      const cached = headers.get(z);
+      if (cached) return cached;
+      if (rangeless) return Promise.reject(_planeError('PLANES_RANGELESS', `pack ${P}${z}: the host ignores Range`));
+      const p = sharedRange(z, 0, headerBytes, onBytes).then(bytes => parseHeader(z, bytes));
+      keepHeader(z, p);
       return p;
+    }
+
+    function parseHeader(z, bytes) {
+      const codec = _codec();
+      if (!codec) throw _planeError('PLANES_NO_CODEC', 'PlaneCodec is not loaded');
+      const h = _parseHeader(codec, bytes, kind.magic, `pack ${P}${z}`);
+      if (h.channels !== C || h.tilesX !== TX || h.tilesY !== TY || h.z !== z) {
+        throw _planeError('PLANES_INVALID', `pack ${P}${z} header (${h.channels} ch, ${h.tilesX}×${h.tilesY}, z ${h.z}) ≠ the manifest's`);
+      }
+      const offsets = new Float64Array(h.entries.length);
+      const lengths = new Uint32Array(h.entries.length);
+      h.entries.forEach((e, i) => {
+        if (e.length > 0 && e.offset < headerBytes) throw _planeError('PLANES_INVALID', `pack ${P}${z}: tile ${i} overlaps the header`);
+        offsets[i] = e.offset;
+        lengths[i] = e.length;
+      });
+      return { offsets, lengths };
     }
 
     function normRect(rect) {
@@ -532,18 +698,22 @@ const PlaneLoader = (() => {
       const list = normChannels(channels);
       const r = normRect(rect);
       _throwIfAborted(opts.signal);
-      const pool = _workers();
-      const bands = bandsOf(r, pool.length);
-      const compose = composeSpec(opts.compose);
-      const results = await dispatch(z, list, r, bands, opts, (bi, band, msg, transfer) =>
-        _post(pool[bi % pool.length], { ...msg, mode: 'new', compose }, transfer).then((answer) => {
-          _throwIfAborted(opts.signal);
-          const out = _bandResult(band, r, answer, compose);
-          opts.onBand && opts.onBand(out);
-          return out;
-        }));
-      if (opts.bands) return { width: r.x1 - r.x0, height: r.y1 - r.y0, bands: results };
-      return _joinBands(r, list, results, compose);
+      const pool = _acquire();
+      try {
+        const bands = bandsOf(r, pool.length);
+        const compose = composeSpec(opts.compose);
+        const results = await dispatch(z, list, r, bands, opts, (bi, band, msg, transfer) =>
+          _post(pool[bi % pool.length], { ...msg, mode: 'new', compose }, transfer).then((answer) => {
+            _throwIfAborted(opts.signal);
+            const out = _bandResult(band, r, answer, compose);
+            opts.onBand && opts.onBand(out);
+            return out;
+          }));
+        if (opts.bands) return { width: r.x1 - r.x0, height: r.y1 - r.y0, bands: results };
+        return _joinBands(r, list, results, compose);
+      } finally {
+        _release();
+      }
     }
 
     /**
@@ -648,7 +818,15 @@ const PlaneLoader = (() => {
    */
   async function _reduceMax(items, list, r, opts = {}) {
     _throwIfAborted(opts.signal);
-    const pool = _workers();
+    const pool = _acquire();
+    try {
+      return await _reduceMaxIn(pool, items, list, r, opts);
+    } finally {
+      _release();
+    }
+  }
+
+  async function _reduceMaxIn(pool, items, list, r, opts) {
     const bands = items[0].tree._bandsOf(r, pool.length);
     const compose = composeSpec(opts.compose);
     const job = `max${++_seq}`;
@@ -660,23 +838,29 @@ const PlaneLoader = (() => {
       let next = 0;
       let done = 0;
       let failed = false;
+      let firstError = null;
       const lane = async () => {
         try {
           while (next < items.length && !failed) {
             const item = items[next++];
             await item.tree._dispatch(item.index, list, r, bands, opts, (bi, band, msg, transfer) =>
-              _post(pool[bi % pool.length], { ...msg, mode: 'max', key: keyOf(bi) }, transfer));
+              (failed ? Promise.reject(_abortError())
+                : _post(pool[bi % pool.length], { ...msg, mode: 'max', key: keyOf(bi) }, transfer)));
             _throwIfAborted(opts.signal);
             done++;
             opts.onPlane && opts.onPlane(done, items.length);
           }
         } catch (err) {
-          failed = true;   // the other lanes stop at their next pack
+          if (!failed) { failed = true; firstError = err; }   // the other lanes stop at their next pack
           throw err;
         }
       };
       const lanes = Math.max(1, Math.min(items.length, Math.floor(Number(opts.concurrency) || 3)));
-      await Promise.all(Array.from({ length: lanes }, lane));
+      // Every lane settles before the drop: a lane still fetching when another fails would
+      // otherwise post its `max` after the drop and the worker would re-create (and keep)
+      // the band accumulator.
+      const settled = await Promise.allSettled(Array.from({ length: lanes }, lane));
+      if (settled.some(s => s.status === 'rejected')) throw firstError;
       const results = await Promise.all(bands.map((band, bi) =>
         _post(pool[bi % pool.length], { op: 'take', key: keyOf(bi), compose }).then((answer) => {
           _throwIfAborted(opts.signal);
@@ -809,6 +993,6 @@ const PlaneLoader = (() => {
 
   return {
     open, openMips, validateManifest, validateMipsManifest, planSlabMax, loadSlabMax,
-    sha256Hex, dispose, LAYER_DEPTH, _sha256Js, _fnv1a
+    sha256Hex, dispose, configure, LAYER_DEPTH, _sha256Js, _fnv1a
   };
 })();

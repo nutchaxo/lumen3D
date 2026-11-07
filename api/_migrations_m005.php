@@ -571,8 +571,19 @@ function lumen_m005_runnable(array $pending): array {
 
 function lumen_m005_stage_ready(array $us, array $done, array $unit): bool {
     if (!$unit[0] || !$unit[2]) return true;
-    foreach ($us['units'] as $k => $u) if ($u[0] === 0 && $u[1] === $unit[1] && $u[3] === $unit[3] && !isset($done[$k])) return false;
-    return true;
+    return empty(lumen_m005_a_left($us, $done)[$unit[1] . ':' . $unit[3]]);
+}
+
+/** "t:c" => stage-A units of that tree and channel not done yet (dataset_migrations._m005_a_left). */
+function lumen_m005_a_left(array $us, array $done): array {
+    $out = [];
+    foreach ($us['units'] as $k => $u) {
+        if ($u[0] === 0 && !isset($done[$k])) {
+            $g = $u[1] . ':' . $u[3];
+            $out[$g] = ($out[$g] ?? 0) + 1;
+        }
+    }
+    return $out;
 }
 
 function lumen_m005_stage_progress(array $us, array $done): array {
@@ -636,8 +647,11 @@ function lumen_m005_plane_tiles(array $plan, string $store, int $t, int $k, int 
     return $out;
 }
 
-/** What a browser m005 unit reads and makes (dataset_migrations._unit_inputs_m005). */
-function lumen_m005_unit_inputs(array $plan, string $path, $key): array {
+/**
+ * What a browser m005 unit reads and makes (dataset_migrations._unit_inputs_m005). $aLeft:
+ * lumen_m005_a_left of the journal, when the caller (a batch) has read it already.
+ */
+function lumen_m005_unit_inputs(array $plan, string $path, $key, ?array $aLeft = null): array {
     $us = lumen_mig_unitset($plan, LUMEN_M005);
     $unit = lumen_m005_parse($key);
     [$s, $t, $k, $c, $a, $b, $d] = $unit;
@@ -645,8 +659,11 @@ function lumen_m005_unit_inputs(array $plan, string $path, $key): array {
     if ($tree === null || $c >= $tree['C'] || $k >= count($us['levels'])) throw new LumenMigError('bad_unit');
     $ukey = lumen_m005_key($unit);
     if (!isset($us['unitBytes'][$ukey])) return ['ok' => true, 'migration' => LUMEN_M005, 'unit' => $ukey, 'empty' => true];
-    $j = lumen_mig_load_journal($path) ?? [];
-    if (!lumen_m005_stage_ready($us, array_flip($j['done'] ?? []), $unit)) throw new LumenMigError('unit_blocked', 409, 'stage A of this tree/channel is not complete');
+    if ($aLeft === null) {
+        $j = lumen_mig_load_journal($path) ?? [];
+        $aLeft = ($s && $k) ? lumen_m005_a_left($us, array_flip($j['done'] ?? [])) : [];
+    }
+    if ($s && $k && !empty($aLeft["$t:$c"])) throw new LumenMigError('unit_blocked', 409, 'stage A of this tree/channel is not complete');
     $store = lumen_mig_store_dir($plan['type'], $plan['folder'], LUMEN_M005);
     $L = $us['levels'][$k];
     [$X, $Y, $Z] = [$L['dimensions']['x'], $L['dimensions']['y'], $L['dimensions']['z']];
@@ -930,10 +947,20 @@ function lumen_m005_unit_inputs_many(array $plan, string $path, $keys, string $m
     if (!is_array($keys) || count($keys) < 1 || count($keys) > LUMEN_M005_BATCH_MAX || array_keys($keys) !== range(0, count($keys) - 1)) {
         throw new LumenMigError('bad_unit', 400, '1..' . LUMEN_M005_BATCH_MAX . ' units');
     }
+    $aLeft = null;
+    if ($mid === LUMEN_M005) {
+        // The journal read and the stage-A census once per request, not once per unit.
+        try {
+            $j = lumen_mig_load_journal($path) ?? [];
+            $aLeft = lumen_m005_a_left(lumen_mig_unitset($plan, LUMEN_M005), array_flip($j['done'] ?? []));
+        } catch (LumenMigError $e) {
+            $aLeft = null;   // each unit then reports the error, as unit_inputs would
+        }
+    }
     $items = [];
     foreach ($keys as $key) {
         try {
-            $items[] = $mid === LUMEN_M005 ? lumen_m005_unit_inputs($plan, $path, $key) : lumen_m006_unit_inputs($plan, $key);
+            $items[] = $mid === LUMEN_M005 ? lumen_m005_unit_inputs($plan, $path, $key, $aLeft) : lumen_m006_unit_inputs($plan, $key);
         } catch (LumenMigError $e) {
             $items[] = lumen_m005_unit_error($key, $e);
         }
@@ -973,6 +1000,7 @@ function lumen_m005_unit_put_many(array $plan, array $m, string $path, string $b
     lumen_mig_check_source($plan, $j, $path, false);
     if (($j['state'] ?? null) !== 'running') throw new LumenMigError('job_not_running', 409);
     $done = array_flip($j['done'] ?? []);
+    $aLeft = lumen_m005_a_left($us, $done);
     $store = lumen_mig_store_dir($plan['type'], $plan['folder'], LUMEN_M005);
     $results = []; $accepted = [];
     foreach ($entries as $i => [$key, $data]) {
@@ -984,10 +1012,11 @@ function lumen_m005_unit_put_many(array $plan, array $m, string $path, string $b
             if ($tree === null || $c >= $tree['C'] || $k >= count($us['levels'])) throw new LumenMigError('bad_unit');
             $ukey = lumen_m005_key($unit);
             if (!isset($us['unitBytes'][$ukey])) throw new LumenMigError('empty_unit', 409);
-            if (!lumen_m005_stage_ready($us, $done, $unit)) throw new LumenMigError('unit_blocked', 409, 'stage A of this tree/channel is not complete');
+            if ($s && $k && !empty($aLeft["$t:$c"])) throw new LumenMigError('unit_blocked', 409, 'stage A of this tree/channel is not complete');
             lumen_m005_store($store, $unit, lumen_m005_validate_put($us, $unit, $data));
             $accepted[] = $ukey;
             // A stage-A unit of this batch counts for the later units of the same batch.
+            if ($s === 0 && !isset($done[$ukey])) $aLeft["$t:$c"] = ($aLeft["$t:$c"] ?? 0) - 1;
             $done[$ukey] = true;
             $results[] = ['ok' => true, 'unit' => $key];
         } catch (LumenMigError $e) {
@@ -1000,20 +1029,36 @@ function lumen_m005_unit_put_many(array $plan, array $m, string $path, string $b
     return ['ok' => true, 'results' => $results, 'done' => $sm['done'], 'total' => $sm['total']];
 }
 
-/** One piece of a unit result larger than one request may carry (dataset_migrations.unit_put_part). */
+/**
+ * One piece of a unit result larger than one request may carry, any migration
+ * (dataset_migrations.unit_put_part).
+ */
 function lumen_m005_unit_put_part(array $plan, array $m, string $path, $key, $offset, $total, string $body): array {
     if (!is_numeric($offset) || !is_numeric($total)) throw new LumenMigError('bad_blob', 400, 'offset / total');
     $offset = (int)$offset; $total = (int)$total;
     if ($total < 1 || $total > LUMEN_MIG_MAX_UNIT_TOTAL || $offset < 0 || $offset + strlen($body) > $total || $body === '') throw new LumenMigError('bad_blob', 400, 'piece outside the unit');
     $mid = $m['id'];
-    if ($mid === LUMEN_M005) lumen_m005_parse($key); else lumen_m006_parse($key);
+    if ($mid !== LUMEN_M005 && $mid !== LUMEN_M006 && $total > LUMEN_MIG_MAX_BODY) throw new LumenMigError('body_too_large', 413);
+    $ukey = lumen_mig_unit_key_for($mid, lumen_mig_parse_key_for($mid, $key));
+    // Before anything is written: a piece in flight when the job was cancelled or paused must
+    // not recreate the store the cancel removed.
+    $j = lumen_mig_load_journal($path);
+    if ($j === null) throw new LumenMigError('no_job', 404);
+    lumen_mig_check_source($plan, $j, $path, false);
+    if (($j['state'] ?? null) !== 'running') throw new LumenMigError('job_not_running', 409);
     // In the job's own store, so a cancel of that job drops its pieces too.
     $dir = lumen_mig_store_dir($plan['type'], $plan['folder'], $mid) . '/.parts';
-    if (!is_dir($dir) && !admin_make_dir($dir)) throw new LumenMigError('store_write_failed', 500);
     $p = $dir . '/' . preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$key) . '.part';
     clearstatcache(true, $p);
     $have = is_file($p) ? (int)filesize($p) : 0;
+    if ($offset > $have && $have === 0 && in_array($ukey, $j['done'] ?? [], true)) {
+        // The last piece stored the unit (and dropped the part file) but its answer was lost:
+        // the worker's retry of that piece is acknowledged.
+        $sm = lumen_mig_summary($j);
+        return ['ok' => true, 'done' => $sm['done'], 'total' => $sm['total'], 'complete' => true];
+    }
     if ($offset > $have) throw new LumenMigError('bad_blob', 409, "piece at $offset, $have bytes received");
+    if (!is_dir($dir) && !admin_make_dir($dir)) throw new LumenMigError('store_write_failed', 500);
     $fh = @fopen($p, is_file($p) ? 'r+b' : 'wb');
     if ($fh === false) throw new LumenMigError('store_write_failed', 500);
     fseek($fh, $offset);
@@ -1025,7 +1070,7 @@ function lumen_m005_unit_put_part(array $plan, array $m, string $path, $key, $of
     unset($body);
     $data = (string)file_get_contents($p);
     try {
-        $out = $mid === LUMEN_M005 ? lumen_m005_unit_put($plan, $m, $path, $key, $data) : lumen_m006_unit_put($plan, $m, $path, $key, $data);
+        $out = lumen_mig_unit_put_any($plan, $m, $path, $key, $data);
     } finally {
         @unlink($p);
     }

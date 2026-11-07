@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "serial": 7,
-  "issuedAt": "2026-10-29T13:26:28Z",
+  "serial": 20,
+  "issuedAt": "2026-11-07T18:52:32Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -183,12 +183,29 @@
       "icon": "layout-template",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.3",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/plugin-figure-panel-1.1.3.zip",
+      "latestVersion": "1.1.4",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/plugin-figure-panel-1.1.4.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/SHA256SUMS.sig",
-      "sha256": "533f65b0beed276588edddf2a81307db3c29001da71c7ce59f2e9389c9d13002",
+      "sha256": "36246a57023cdead9b70132eeb9aabc69a3b60e665c545169578d842dfbe1590",
       "recommended": false
+    },
+    {
+      "id": "graphs",
+      "name": "Graphs",
+      "placement": "tools",
+      "subtype": "action",
+      "description": "Live graphs of the dataset on screen: pick what goes on X and on Y from the variables of its type (intensity profiles, histograms, co-localisation, cell speed over time, mean squared displacement, colour channels of a photograph…), aggregate and group them, and export the plot or its data. In Compare every open dataset is plotted in its own colour on the same axes.",
+      "creator": "IRIBHM",
+      "icon": "line-chart",
+      "platformCompat": ">=1.80.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/plugin-graphs-1.0.3.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/SHA256SUMS.sig",
+      "sha256": "ebcdc5cfd802ee9e61a684f0b5b2a7f01857186b085ffa3f105f8b93ca1dfd71",
+      "recommended": true
     },
     {
       "id": "measure-distance",
@@ -200,11 +217,11 @@
       "icon": "ruler",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.4",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/plugin-measure-distance-1.1.4.zip",
+      "latestVersion": "1.1.5",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/plugin-measure-distance-1.1.5.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/SHA256SUMS.sig",
-      "sha256": "4bdaed6539f74537165c77a79c220dfd9708c4127185b7972bd3b903704986a7",
+      "sha256": "5252c01f7a792ecee7cfe98ca38b283df65451f20c6ac71770a69400262975d6",
       "recommended": true
     },
     {
@@ -217,11 +234,11 @@
       "icon": "compass",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.3",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/plugin-orientation-2d-1.0.3.zip",
+      "latestVersion": "1.0.4",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/plugin-orientation-2d-1.0.4.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/SHA256SUMS.sig",
-      "sha256": "52b1a434ebcebcf9ab5d718aa33496053e360b35d9b2da3e26d75ad05a6a2315",
+      "sha256": "ad0a08a256f1b4134662849501805b00048d9a13ef9d4d7de16f51dcc7b46764",
       "recommended": false
     },
     {
@@ -234,11 +251,11 @@
       "icon": "compass",
       "platformCompat": ">=1.73.12",
       "sandboxCapabilities": null,
-      "latestVersion": "1.3.4",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.3.4.zip",
+      "latestVersion": "1.3.5",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.3.5.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS.sig",
-      "sha256": "854b494df6616bed94305f64a2d3c63c96c946e0251a0cdf3a59dfc9369e3913",
+      "sha256": "d3f6d38130635b171d9a3a3fd86e36ad304d40d2dcbdaed7cd71c02e3028ff39",
       "recommended": true
     },
     {
@@ -246,16 +263,16 @@
       "name": "Presentation Mode",
       "placement": "tools",
       "subtype": "toggle",
-      "description": "Toggle fullscreen presentation mode, hiding sidebar and header.",
+      "description": "Toggle fullscreen presentation mode, hiding sidebar and header; Escape or the exit button on the canvas leaves it.",
       "creator": "IRIBHM",
       "icon": "presentation",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.3",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/plugin-presentation-mode-1.1.3.zip",
+      "latestVersion": "1.1.4",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/plugin-presentation-mode-1.1.4.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/SHA256SUMS.sig",
-      "sha256": "8157ee9d7d1a8de7e6e333802a18b65c9b6afdcbaca28cde1fc4ec2ec0ce00a3",
+      "sha256": "3bb32dd0f652d40d300db72ee92c8c05e85409d66166c54dd1c26b080caddd3a",
       "recommended": true
     },
     {
@@ -342,11 +359,11 @@
       "icon": "corner-down-right",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/plugin-toggle-axes-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/plugin-toggle-axes-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/SHA256SUMS.sig",
-      "sha256": "9023e0f9fb55bcfdaed1fd1ff349db9a9e45677d18a7c561ec9d3dc7db6bb01a",
+      "sha256": "fb82fe2424f7702f48649ca339c532fa8b3ee6602eb3ced3d509ab0a4fbdf896",
       "recommended": true
     },
     {
@@ -359,11 +376,11 @@
       "icon": "grid",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/plugin-toggle-grid-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/plugin-toggle-grid-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/SHA256SUMS.sig",
-      "sha256": "54e60aa70754ca285c19b8bdf357ac9b4539a889e737f4785ce5cdd9597c5dc0",
+      "sha256": "4b0a30dc8d808ecf89dafa8ecd693ddc351b74685d968d85ade8ecb15ad22c78",
       "recommended": true
     },
     {
@@ -376,11 +393,11 @@
       "icon": "eye-off",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/plugin-toggle-volume-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/plugin-toggle-volume-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/SHA256SUMS.sig",
-      "sha256": "aaa4379d50edd7855a18483612ebd7438f69bcebd3b1d4625e0b9801df0ed290",
+      "sha256": "203a9f622069d4b4751b271ab7757e5aaba1e92409bb7c8287f8675d8ba2fa13",
       "recommended": true
     },
     {
@@ -393,11 +410,11 @@
       "icon": "bar-chart-2",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/plugin-tracking-charts-1.0.2.zip",
+      "latestVersion": "1.0.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/plugin-tracking-charts-1.0.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/SHA256SUMS.sig",
-      "sha256": "4c7464ba60ae1bb0fd172e3f52d179d70b3be0a7113110b2b21dd6ce3810f750",
+      "sha256": "c4e90f5f34a7369bb6d7ac354e7f05e26ea99a058d24ccfa8d028fbd1509b3c8",
       "recommended": true
     },
     {
@@ -427,11 +444,11 @@
       "icon": "move-horizontal",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/plugin-tracking-measure-1.0.2.zip",
+      "latestVersion": "1.0.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/plugin-tracking-measure-1.0.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/SHA256SUMS.sig",
-      "sha256": "f43e9bf7932c653522045769c01694ee5224123add017bdc4d551b35d1674910",
+      "sha256": "b952e57296e44b5767168edcc3c73af217e4f9e5afca68816e5b7ae0d35a1bce",
       "recommended": true
     },
     {
@@ -444,11 +461,11 @@
       "icon": "shell",
       "platformCompat": ">=1.60.7",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.3",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/plugin-tracking-surface-1.0.3.zip",
+      "latestVersion": "1.0.4",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/plugin-tracking-surface-1.0.4.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/SHA256SUMS.sig",
-      "sha256": "9011a5901584c8e52af7a9c23e57143cfc9256565b28f0a1f0e8eb4ed8d7a674",
+      "sha256": "3e6480d84a38de809ebefbc4ff65dbdf01edf83ee0d8240287498191ca0187c1",
       "recommended": true
     },
     {
@@ -478,11 +495,11 @@
       "icon": "layers-3",
       "platformCompat": ">=1.55.9",
       "sandboxCapabilities": null,
-      "latestVersion": "1.2.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.2.2.zip",
+      "latestVersion": "1.2.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.2.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS.sig",
-      "sha256": "813983721cc9fb9b1c34ef7f359170fc3f0a2a9df9d071c740d9968210511544",
+      "sha256": "070c3d8971e191b49e99d0b53251339040deca7a1b2aef4b3e8b941935149257",
       "recommended": true
     }
   ]

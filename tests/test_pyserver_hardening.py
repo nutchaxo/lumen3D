@@ -204,6 +204,27 @@ class TestRangeParser(unittest.TestCase):
             self.assertIsNone(p(bad, 1000), bad)
 
 
+# ── Update progress state ─────────────────────────────────────────────────────
+
+class TestUpdateProgressState(unittest.TestCase):
+    def setUp(self):
+        self._state = dict(dev_server._UPDATE_STATE)
+
+    def tearDown(self):
+        dev_server._UPDATE_STATE.clear()
+        dev_server._UPDATE_STATE.update(self._state)
+
+    def test_download_bytes_reported_then_cleared(self):
+        # The admin builds its translated line from phase + bytes; the bytes of the
+        # download must not leak into the next phase's line.
+        dev_server._set_update("download", 30, "log line", done=5_000_000, total=20_000_000)
+        st = dict(dev_server._UPDATE_STATE)
+        self.assertEqual((st["phase"], st["done"], st["total"]), ("download", 5_000_000, 20_000_000))
+        dev_server._set_update("verify", 55, "log line")
+        st = dict(dev_server._UPDATE_STATE)
+        self.assertEqual((st["phase"], st["done"], st["total"]), ("verify", None, None))
+
+
 # ── Statistics ───────────────────────────────────────────────────────────────
 
 class TestDownloadCounter(unittest.TestCase):
@@ -222,6 +243,7 @@ class TestDownloadCounter(unittest.TestCase):
     class _H:
         headers = {}
         _head_only = False
+        client_address = ("192.0.2.10", 50000)
 
     def test_only_existing_datasets_are_counted(self):
         h = self._H()
@@ -318,6 +340,30 @@ class LiveServer(unittest.TestCase):
         st2, hg, _ = self.req("GET", "/index.html")
         self.assertEqual((st, body), (200, b""))
         self.assertEqual(hh.get("content-length"), hg.get("content-length"))
+
+    def test_pages_are_compressed_with_their_nonce(self):
+        st, h, body = self.req("GET", "/viewer.html", {"Accept-Encoding": "gzip"})
+        self.assertEqual(st, 200)
+        self.assertEqual(h.get("content-encoding"), "gzip")
+        self.assertEqual(h.get("vary"), "Accept-Encoding")
+        self.assertEqual(int(h.get("content-length")), len(body))
+        page = gzip.decompress(body).decode("utf-8")
+        self.assertNotIn("{{CSP_NONCE}}", page)
+        csp = h.get("content-security-policy", "")
+        nonce = csp.split("'nonce-", 1)[1].split("'", 1)[0]
+        self.assertIn(f'nonce="{nonce}"', page)
+        self.assertLess(len(body), len(page.encode("utf-8")))
+        # No Accept-Encoding (or gzip refused): an identity body, still varied.
+        for headers in ({}, {"Accept-Encoding": "gzip;q=0"}):
+            st, h, body = self.req("GET", "/viewer.html", headers)
+            self.assertEqual(st, 200)
+            self.assertIsNone(h.get("content-encoding"))
+            self.assertEqual(h.get("vary"), "Accept-Encoding")
+            self.assertTrue(body.lstrip().lower().startswith(b"<!doctype html"))
+            self.assertEqual(int(h.get("content-length")), len(body))
+        # HEAD announces the length of the body a GET with the same headers gets.
+        st, hh, body = self.req("HEAD", "/viewer.html", {"Accept-Encoding": "gzip"})
+        self.assertEqual((st, body, hh.get("content-encoding")), (200, b"", "gzip"))
 
     def test_dot_segments_are_never_served(self):
         st, _, _ = self.req("GET", "/DATA_WEB/3d/.replaced-x-1/metadata.json")

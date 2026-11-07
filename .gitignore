@@ -73,6 +73,7 @@ api/.telemetry/
 api/marketplace-state.json
 api/.locks/
 api/.catalog-cache.json
+api/.metadata-identity.sig
 api/.plugin-hash-cache.json
 api/.update.lock
 api/.update-pending.json

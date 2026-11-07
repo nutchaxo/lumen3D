@@ -77,12 +77,14 @@ const Explorer = (() => {
   }
 
   function _populateStageFilter() {
-    const stages = Catalog.getStages();
     const group = document.getElementById('filter-stage-group');
-    if (!group || stages.length === 0) return;
+    if (!group) return;
+    // A retried catalog repopulates the list: drop what an earlier pass added.
+    group.querySelectorAll('label[data-dynamic-stage]').forEach(el => el.remove());
+    const stages = Catalog.getStages();
 
     stages.forEach(stage => {
-      const label = Utils.el('label', { class: 'filter-option' });
+      const label = Utils.el('label', { class: 'filter-option', 'data-dynamic-stage': '1' });
       const input = Utils.el('input', { type: 'radio', name: 'filter-stage', value: stage });
       const span = Utils.el('span', {}, Utils.formatStage(stage));
       label.appendChild(input);
@@ -96,19 +98,17 @@ const Explorer = (() => {
     const btnGrid = document.getElementById('btn-view-grid');
     const btnList = document.getElementById('btn-view-list');
 
-    btnGrid?.addEventListener('click', () => {
-      _currentView = 'grid';
-      btnGrid.classList.add('active');
-      btnList.classList.remove('active');
+    const showView = (view) => {
+      _currentView = view;
+      [[btnGrid, 'grid'], [btnList, 'list']].forEach(([btn, v]) => {
+        if (!btn) return;
+        btn.classList.toggle('active', v === view);
+        btn.setAttribute('aria-pressed', String(v === view));
+      });
       _render();
-    });
-
-    btnList?.addEventListener('click', () => {
-      _currentView = 'list';
-      btnList.classList.add('active');
-      btnGrid.classList.remove('active');
-      _render();
-    });
+    };
+    btnGrid?.addEventListener('click', () => showView('grid'));
+    btnList?.addEventListener('click', () => showView('list'));
 
     // Search Input
     const searchInput = document.getElementById('search-input');
@@ -117,15 +117,14 @@ const Explorer = (() => {
       _render();
     }, 300));
 
-    // Radio Filters
-    document.querySelectorAll('input[type="radio"]').forEach(radio => {
-      radio.addEventListener('change', (e) => {
-        const name = e.target.name;
-        const value = e.target.value;
-        if (name === 'filter-type') _filters.type = value;
-        if (name === 'filter-stage') _filters.stage = value;
-        _render();
-      });
+    // Radio Filters. Delegated: the stage radios are rebuilt when the catalog is retried.
+    document.addEventListener('change', (e) => {
+      const radio = e.target;
+      if (!radio || radio.type !== 'radio') return;
+      if (radio.name === 'filter-type') _filters.type = radio.value;
+      else if (radio.name === 'filter-stage') _filters.stage = radio.value;
+      else return;
+      _render();
     });
 
     // Sort Select
@@ -145,6 +144,11 @@ const Explorer = (() => {
     });
 
     document.getElementById('dataset-container')?.addEventListener('click', (e) => {
+      if (e.target.closest('[data-catalog-retry]')) {
+        e.preventDefault();
+        _retryCatalog();
+        return;
+      }
       const btn = e.target.closest('[data-download-id]');
       const compare = e.target.closest('[data-compare-id]');
       if (btn) {
@@ -158,12 +162,6 @@ const Explorer = (() => {
         e.stopPropagation();
         window.location.href = `compare.html?add=${encodeURIComponent(compare.dataset.compareId)}`;
       }
-    });
-    document.getElementById('dataset-container')?.addEventListener('keydown', (e) => {
-      if (!['Enter', ' '].includes(e.key)) return;
-      if (!e.target.closest('[data-download-id], [data-compare-id]')) return;
-      e.preventDefault();
-      e.target.click();
     });
   }
 
@@ -183,13 +181,33 @@ const Explorer = (() => {
     const [sortField, sortDir] = _sortBy.split('_');
     filtered = Catalog.sort(filtered, sortField, sortDir === 'asc');
 
+    // A failed catalog and an empty one both list nothing, but they are not the same
+    // news: "0 datasets" would tell the visitor the collection is empty.
+    const failed = Catalog.getLoadError();
+    const empty = !failed && Catalog.getAll().length === 0;
+
     // Update count
     if (resultsCount) {
-      resultsCount.textContent = I18n.t('explorer.resultsCount', { count: filtered.length });
+      resultsCount.textContent = failed || empty ? '' : I18n.t('explorer.resultsCount', { count: filtered.length });
     }
 
     // Render HTML
-    if (filtered.length === 0) {
+    if (failed) {
+      container.className = 'empty-state';
+      container.innerHTML = `
+        <i data-lucide="cloud-off"></i>
+        <h3>${esc(_tr('explorer.loadFailed', 'Could not load the datasets'))}</h3>
+        <p style="margin-top:var(--space-2)">${esc(_tr('explorer.loadFailedHint', 'The catalog is unreachable right now. Check your connection and try again.'))}</p>
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:var(--space-4)" data-catalog-retry>${esc(_tr('explorer.retry', 'Retry'))}</button>
+      `;
+    } else if (empty) {
+      container.className = 'empty-state';
+      container.innerHTML = `
+        <i data-lucide="database"></i>
+        <h3>${esc(_tr('explorer.noDatasets', 'No datasets yet'))}</h3>
+        <p style="margin-top:var(--space-2)">${esc(_tr('explorer.noDatasetsHint', 'Datasets will appear here once they are published.'))}</p>
+      `;
+    } else if (filtered.length === 0) {
       container.className = 'empty-state';
       container.innerHTML = `
         <i data-lucide="search-x"></i>
@@ -217,8 +235,10 @@ const Explorer = (() => {
     const cellCount = Number(dataset.tracking?.cellCount) || 0;
     if (cellCount) metaItems.push(`<span>${cellCount} ${I18n.t('js.trackingCells').toLowerCase()}</span>`);
 
+    // One real link (the title, stretched over the card by CSS) and sibling real buttons:
+    // an interactive control is never nested inside the link.
     return `
-      <a href="${_datasetUrl(dataset)}" class="card animate-fade-in-up" style="text-decoration:none;color:inherit;animation-duration:0.3s;">
+      <article class="card dataset-card animate-fade-in-up" style="animation-duration:0.3s;">
         <div class="card-image" style="background: ${Utils.datasetTypeGradient(dataset.type)}; display:flex; align-items:center; justify-content:center;">
           ${_datasetPreview(dataset)}
         </div>
@@ -227,16 +247,16 @@ const Explorer = (() => {
             ${_typeBadge(dataset)}
             ${_availabilityBadges(dataset)}
           </div>
-          <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
+          <div class="card-title"><a class="dataset-card-link" href="${_datasetUrl(dataset)}">${Utils.escapeHtml(dataset.name)}</a></div>
           <div class="card-subtitle">${Utils.escapeHtml(dataset.description || '')}</div>
           <div class="card-meta">${metaItems.join('<span style="opacity:0.3">&middot;</span>')}</div>
         </div>
         <div class="card-actions dataset-card-actions">
-          <span class="btn btn-primary btn-sm"><i data-lucide="eye"></i> ${esc(_tr('explorer.view', 'View'))}</span>
+          <span class="btn btn-primary btn-sm" aria-hidden="true"><i data-lucide="eye"></i> ${esc(_tr('explorer.view', 'View'))}</span>
           ${_compareButton(dataset, `<i data-lucide="columns-3"></i> ${esc(_tr('nav.compare', 'Compare'))}`)}
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> ${esc(_tr('app.download', 'Download'))}</span>
+          <button type="button" class="btn btn-outline btn-sm" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> ${esc(_tr('app.download', 'Download'))}</button>
         </div>
-      </a>
+      </article>
     `;
   }
 
@@ -245,7 +265,7 @@ const Explorer = (() => {
     const dateDisplay = Utils.formatDate(dataset.date);
 
     return `
-      <a href="${_datasetUrl(dataset)}" class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
+      <article class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
         <div class="dataset-list-icon" style="background: ${Utils.datasetTypeGradient(dataset.type)};">
           ${dataset.thumbnail ? `<img src="${esc(dataset.thumbnail)}" alt="" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="color:var(--text-muted);opacity:0.6"></i>`}
         </div>
@@ -255,20 +275,20 @@ const Explorer = (() => {
             <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? esc(stageDisplay) + ' &middot; ' : ''}${esc(dateDisplay)}</span>
             ${_availabilityBadges(dataset)}
           </div>
-          <div class="dataset-list-title">${Utils.escapeHtml(dataset.name)}</div>
+          <div class="dataset-list-title"><a class="dataset-card-link" href="${_datasetUrl(dataset)}">${Utils.escapeHtml(dataset.name)}</a></div>
           <div style="font-size:var(--text-sm);color:var(--text-secondary);">${Utils.escapeHtml(dataset.description || '')}</div>
         </div>
-        <div style="display:flex;align-items:center;padding:0 var(--space-4);">
-          <span class="btn btn-primary btn-sm">${esc(_tr('explorer.view', 'View'))}</span>
+        <div class="dataset-list-actions">
+          <span class="btn btn-primary btn-sm" aria-hidden="true">${esc(_tr('explorer.view', 'View'))}</span>
           ${_compareButton(dataset, esc(_tr('nav.compare', 'Compare')))}
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}">${esc(_tr('app.download', 'Download'))}</span>
+          <button type="button" class="btn btn-outline btn-sm" data-download-id="${Utils.escapeHtml(dataset.id)}">${esc(_tr('app.download', 'Download'))}</button>
         </div>
-      </a>
+      </article>
     `;
   }
 
   function _compareButton(dataset, label) {
-    return `<span class="btn btn-outline btn-sm" role="button" tabindex="0" data-compare-id="${Utils.escapeHtml(dataset.id)}">${label}</span>`;
+    return `<button type="button" class="btn btn-outline btn-sm" data-compare-id="${Utils.escapeHtml(dataset.id)}">${label}</button>`;
   }
 
   // The colour class and the name both come from Utils: the name may be the
@@ -303,6 +323,14 @@ const Explorer = (() => {
     if (dataset.path) badges.push(`<span class="availability-badge">${esc(_tr('explorer.badgeWeb', 'Web'))}</span>`);
     if (hasTracking) badges.push(`<span class="availability-badge">${Utils.escapeHtml(I18n.t('explorer.tracked'))}</span>`);
     return badges.join('');
+  }
+
+  async function _retryCatalog() {
+    const btn = document.querySelector('#dataset-container [data-catalog-retry]');
+    if (btn) btn.disabled = true;
+    await Catalog.load({ force: true });
+    _populateStageFilter();
+    _render();
   }
 
   function refresh() {

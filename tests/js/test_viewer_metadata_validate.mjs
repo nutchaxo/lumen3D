@@ -28,7 +28,7 @@ assert.ok(src.includes('datasetMeta?.dimensions?.t'), 'live t-check uses the eff
 const mergeStart = src.indexOf('async function _mergeDatasetMetadata');
 const mergeEnd = src.indexOf('\n  async function ', mergeStart + 1);
 const mergeBody = src.slice(mergeStart, mergeEnd > 0 ? mergeEnd : mergeStart + 2400);
-assert.ok(mergeBody.includes('if (!v.ok) throw new Error'), 'invalid metadata throws');
+assert.ok(/if \(!v\.ok\) throw (new Error|Utils\.userError)\(/.test(mergeBody), 'invalid metadata throws');
 assert.ok(mergeBody.includes('throw err;'), 'catch re-throws (no longer swallowed)');
 
 // the caller wraps the merge and surfaces the error / aborts mount

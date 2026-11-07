@@ -17,6 +17,8 @@
  */
 
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
 
 admin_update_finish_pending();   // no-op unless a prior update parked busy files
@@ -46,8 +48,11 @@ switch ($action) {
         // rather than read from DATA_WEB/catalog.json: that file is no longer the source
         // of truth (api/catalog.php generates the catalog per request), so reading it
         // would show stale names for any dataset added since the last admin rebuild.
+        // Every published dataset, hidden and unconfigured ones included (the public
+        // catalog filter does not apply): a dataset hidden after it was viewed, or
+        // opened by direct link, still has rows here. Twin of dev_server.py _admin_stats.
         $names = [];
-        foreach (rebuild_catalog() as $ds) {
+        foreach (lumen_catalog_rows() as $ds) {
             if (isset($ds['path'])) $names[$ds['path']] = $ds['name'] ?? $ds['path'];
         }
         $rows = [];

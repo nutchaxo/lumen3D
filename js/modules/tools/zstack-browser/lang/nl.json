@@ -7,13 +7,14 @@
   "notchTitle": "3D-weergave van alle behouden doorsneden. Sleep de cursor omlaag in de baan om doorsnede per doorsnede te bladeren.",
   "trackTitle": "Sleep om door de doorsneden te bladeren. Sleep de cursor omhoog in de 3D-inkeping om ze allemaal te tonen.",
   "cursorTitle": "Sleep om te verplaatsen. Trek aan een rand om het aantal getoonde doorsneden te wijzigen.",
-  "trimAboveTitle": "Doorsneden erboven wegsnijden",
-  "trimBelowTitle": "Doorsneden eronder wegsnijden",
+  "trimAboveTitle": "Doorsneden erboven wegsnijden (Shift+↑/↓)",
+  "trimBelowTitle": "Doorsneden eronder wegsnijden (Alt+↑/↓)",
   "thickness": "Dikte",
   "thicknessTitle": "Doorsneden tegelijk getoond",
   "kept": "Behouden {lo}–{hi} · {n} van {total} doorsneden",
   "keptAll": "Alle {total} doorsneden behouden",
   "resetTrim": "Alle doorsneden herstellen",
   "spin": "Rotatie",
-  "spinTitle": "De doorsneden op het scherm draaien"
+  "spinTitle": "De doorsneden op het scherm draaien",
+  "keysHelp": "↑/↓ verplaatsen de cursor, Home toont alle behouden doorsneden in 3D, End gaat naar de laatste doorsnede, + en − wijzigen de dikte, Shift+↑/↓ verplaatst de bovenste snede en Alt+↑/↓ de onderste."
 }

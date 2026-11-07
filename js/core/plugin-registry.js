@@ -127,11 +127,14 @@ const PluginRegistry = (() => {
   //   'panel' — that same page embedded chrome-less by a host (a Compare panel,
   //             a split-view pane, the admin preview): no toolbar of its own, the
   //             host drives it by postMessage and shows the buttons it asks for.
+  //   'compare' — the Compare page itself, which hosts no volume of its own: a
+  //             plugin that declared it gets a host context (panels to ask, a
+  //             toolbar button and a drawer to fill) and aggregates the panels.
   // A plugin declaring nothing predates the field and is taken on a page only:
   // an embedded page never runs a plugin that did not say it copes with being
   // driven from outside (a nested split view, a fullscreen request, a modal in a
   // 300 px panel). The vocabulary is closed and is the one plugin.json uses.
-  const CONTEXTS = ['page', 'panel'];
+  const CONTEXTS = ['page', 'panel', 'compare'];
 
   function _acceptsContext(meta, context) {
     if (!context) return true;
@@ -224,7 +227,7 @@ const PluginRegistry = (() => {
     for (const { url, authoritative } of candidates) {
       const paths = await _fetchPluginList(url, authoritative);
       if (paths) {
-        console.log(`[PluginRegistry] Discovered ${paths.length} plugins via ${url}`);
+        console.debug(`[PluginRegistry] Discovered ${paths.length} plugins via ${url}`);
         return paths;
       }
     }
@@ -240,10 +243,12 @@ const PluginRegistry = (() => {
    * @param {string[]} modulePaths  e.g. ['tools/toggle-grid', 'shaders/fluorescence']
    */
   // version.json `files` map (release installs) — the content-addressed source of
-  // truth for 'bundled'. Fetched once per loadModules batch; null on dev/static.
+  // truth for 'bundled' when no server vouches for a plugin. Null on dev/static.
+  // 'no-cache': Compat.platformVersion() has just read the same file, so the
+  // origin answers a revalidation (304) instead of sending the hash list again.
   async function _releaseManifest() {
     try {
-      const resp = await fetch('version.json', { cache: 'no-store' });
+      const resp = await fetch('version.json', { cache: 'no-cache' });
       if (!resp.ok) return null;
       const m = await resp.json();
       return (m && m.files && typeof m.files === 'object') ? m.files : null;
@@ -256,7 +261,12 @@ const PluginRegistry = (() => {
     const platformVer = (typeof Compat !== 'undefined' && Compat.platformVersion)
       ? await Compat.platformVersion()
       : null;
-    const releaseManifest = (typeof PluginTrust !== 'undefined') ? await _releaseManifest() : null;
+    // Only a plugin WITHOUT a server vouch (a static host) is checked against the
+    // release manifest; on a Python/PHP host every plugin is vouched, and the
+    // manifest (one hash per shipped file) is never needed. Fetched on first use,
+    // shared by the whole batch.
+    let releaseManifestPromise = null;
+    const releaseManifest = () => (releaseManifestPromise ||= _releaseManifest());
 
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
@@ -326,14 +336,12 @@ const PluginRegistry = (() => {
         // quarantine. A page passing no dataType is unchanged.
         _warnUnknownDataTypes(meta, modPath);
         if (opts.dataType && !_acceptsDataType(meta, opts.dataType, opts.allowUndeclaredDataTypes)) {
-          console.info(`[PluginRegistry] "${modPath}" left out: its dataTypes do not cover "${opts.dataType}"`);
           return;
         }
         // Context gate, same shape: an embedded page (opts.context 'panel') keeps
         // only the plugins that declared they can be driven from outside.
         _warnUnknownContexts(meta, modPath);
         if (opts.context && !_acceptsContext(meta, opts.context)) {
-          console.info(`[PluginRegistry] "${modPath}" left out: its contexts do not cover "${opts.context}"`);
           return;
         }
 
@@ -350,7 +358,8 @@ const PluginRegistry = (() => {
         //   bundled/dev/approved-trusted → executed IN-PAGE from the hashed bytes.
         if (typeof PluginTrust !== 'undefined') {
           const vouch = _discoveredVouch.get(modPath) || null;
-          const verdict = await PluginTrust.evaluate(meta, vouch, basePath, modPath, releaseManifest);
+          const verdict = await PluginTrust.evaluate(meta, vouch, basePath, modPath,
+            vouch ? null : await releaseManifest());
           if (verdict.tier === 'untrusted') {
             _quarantine(modPath, 'untrusted', verdict.reason);
             return;
@@ -408,7 +417,7 @@ const PluginRegistry = (() => {
           }
           // Trusted in-page: register + execute the exact hashed bytes (no re-fetch).
           _modules.set(meta.id, { meta, impl: null, instance: null, state: 'registered' });
-          const [, execOk] = await Promise.all([_grafti18n(meta), _execTrustedInPage(meta, verdict.bytes)]);
+          const [, execOk] = await Promise.all([_grafti18n(meta, verdict.files), _execTrustedInPage(meta, verdict.bytes)]);
           if (!execOk) {
             _modules.delete(meta.id);
             _quarantine(modPath, 'script-failed', 'index.js failed to load or parse');
@@ -432,17 +441,48 @@ const PluginRegistry = (() => {
 
   /**
    * Graft a plugin's own translation dictionaries into the i18n tree before UI is
-   * built (preserves the v0.12.45 invariant). Returns a promise for the fetch
-   * fallback, or a resolved promise when dictionaries arrived inline (live endpoint).
+   * built (preserves the v0.12.45 invariant). Sources, first that holds English:
+   * the dictionaries inlined by the discovery endpoint (Python host), then the
+   * lang/<code>.json bytes the trust pass already fetched and hashed (`files`,
+   * every host), then a fetch per locale. Returns a promise for that last path.
    */
-  function _grafti18n(meta) {
+  function _grafti18n(meta, files) {
     if (typeof I18n === 'undefined') return Promise.resolve();
     if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
       I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
       return Promise.resolve();
     }
+    const fromFiles = _langDictsFromFiles(files, meta.i18nLanguages);
+    if (fromFiles && I18n.registerPluginLang) {
+      I18n.registerPluginLang(meta.id, meta._path, fromFiles, meta.i18nLanguages);
+      return Promise.resolve();
+    }
     if (I18n.loadPluginLang) return I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
     return Promise.resolve();
+  }
+
+  /**
+   * The plugin's dictionaries decoded from the verified bytes of its lang/ folder,
+   * restricted to the locales it declares (plugin.json i18nLanguages) when it
+   * declares any. A file that does not parse is left out (that locale then falls
+   * back to English, as a failed fetch would). Null without a usable English one.
+   */
+  function _langDictsFromFiles(files, langs) {
+    if (!files || typeof files !== 'object' || typeof TextDecoder === 'undefined') return null;
+    const declared = Array.isArray(langs) ? langs : null;
+    const decoder = new TextDecoder('utf-8');
+    const dicts = {};
+    for (const rel of Object.keys(files)) {
+      const m = /^lang\/([A-Za-z0-9_-]+)\.json$/.exec(rel);
+      if (!m) continue;
+      const code = m[1];
+      if (declared && code !== 'en' && !declared.includes(code)) continue;
+      try {
+        const dict = JSON.parse(decoder.decode(files[rel]));
+        if (dict && typeof dict === 'object' && !Array.isArray(dict)) dicts[code] = dict;
+      } catch (_) { /* unparsable locale: left to the English fallback */ }
+    }
+    return dicts.en ? dicts : null;
   }
 
   /**
@@ -501,6 +541,63 @@ const PluginRegistry = (() => {
     style.appendChild(document.createTextNode(''));
     document.head.appendChild(style);
     return Boolean(style.sheet);
+  }
+
+  /**
+   * Self-hosted libraries a plugin may ask for by name, with the SRI hash of the
+   * vendored file. Kept here so a library update changes one place, and so two
+   * plugins asking for the same library at once share one <script> and one parse.
+   * `style`: the <style id> the library writes its CSS into (see ensureNoncedStyle).
+   */
+  const VENDOR_LIBS = Object.freeze({
+    plotly: Object.freeze({
+      src: 'js/vendor/plotly.min.js',
+      sri: 'sha384-Hl48Kq2HifOWdXEjMsKo6qxqvRLTYqIGbvlENBmkHAxZKIGCXv43H6W1jA671RzC',
+      global: 'Plotly',
+      style: 'plotly.js-style-global'
+    })
+  });
+  const _vendorLoads = new Map();   // name -> Promise of the library's global
+
+  /**
+   * Load a library of VENDOR_LIBS once for the page and resolve with its global.
+   * A tag still in flight (`data-vendor-state="loading"`, also set by the inline
+   * loaders plugins keep for older cores) is joined instead of appending another;
+   * a failed tag is removed and the next call tries again.
+   * @param {string} name  e.g. 'plotly'
+   * @returns {Promise<any>}
+   */
+  function loadVendor(name) {
+    const lib = Object.prototype.hasOwnProperty.call(VENDOR_LIBS, name) ? VENDOR_LIBS[name] : null;
+    if (!lib) return Promise.reject(Object.assign(new Error(`unknown vendor library "${name}"`), { code: 'UNKNOWN_VENDOR' }));
+    if (typeof window !== 'undefined' && window[lib.global]) return Promise.resolve(window[lib.global]);
+    if (_vendorLoads.has(name)) return _vendorLoads.get(name);
+    const promise = new Promise((resolve, reject) => {
+      if (lib.style) ensureNoncedStyle(lib.style);
+      let script = Array.from(document.querySelectorAll('script[data-vendor-state="loading"]'))
+        .find(s => s.getAttribute('src') === lib.src) || null;
+      if (!script) {
+        script = document.createElement('script');
+        script.src = lib.src;
+        script.integrity = lib.sri;
+        script.crossOrigin = 'anonymous';
+        script.setAttribute('data-vendor-state', 'loading');
+        document.head.appendChild(script);
+      }
+      const tag = script;
+      tag.addEventListener('load', () => {
+        tag.setAttribute('data-vendor-state', 'loaded');
+        if (window[lib.global]) resolve(window[lib.global]);
+        else reject(new Error(`${name} did not define itself`));
+      });
+      tag.addEventListener('error', () => {
+        tag.remove();
+        reject(new Error(`${name} failed to load`));
+      });
+    });
+    _vendorLoads.set(name, promise);
+    promise.catch(() => { if (_vendorLoads.get(name) === promise) _vendorLoads.delete(name); });
+    return promise;
   }
 
   // ─── Implementation Binding ───────────────────────────────
@@ -809,6 +906,56 @@ const PluginRegistry = (() => {
     return () => { _toolbarStateListeners = _toolbarStateListeners.filter(f => f !== fn); };
   }
 
+  // ─── Compare: keeping a toggle the same in every panel ─────
+  // A plugin that says `"compareSync": "display"` in plugin.json has a state that means
+  // the same thing in every panel (a grid, the axes, a hidden volume): the Compare host
+  // relays what the operator did in one panel to the others. The state travels as the
+  // plugin's own getState() / setState() — the pair the workspace already uses — so a
+  // plugin needs nothing more than the two hooks it has, and its setState must be
+  // silent about being driven (a workspace restore is the same call).
+  const SYNC_GROUPS = ['display'];
+
+  function syncGroupOf(meta) {
+    const g = meta && typeof meta.compareSync === 'string' ? meta.compareSync : null;
+    return g && SYNC_GROUPS.includes(g) ? g : null;
+  }
+
+  /**
+   * The state of a toggle that takes part in a sync group, for the host to relay.
+   * @returns {{ id: string, group: string, state: * } | null} null for a plugin that does not
+   */
+  function getSyncState(id) {
+    const entry = _modules.get(id);
+    if (!entry || !entry.impl || entry.state === 'disposed' || entry.state === 'quarantined' || entry.state === 'registered') return null;
+    const group = syncGroupOf(entry.meta);
+    if (!group || typeof entry.impl.getState !== 'function') return null;
+    try {
+      const state = entry.impl.getState.call(entry.instance || entry.impl);
+      return state === undefined || state === null ? null : { id, group, state };
+    } catch (err) {
+      console.warn(`[PluginRegistry] getState failed for "${id}":`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Apply a sibling panel's state to a toggle of the same sync group. A plugin that is
+   * absent here, is not in that group, or is not initialised yet is left alone.
+   * @returns {boolean} whether the plugin took it
+   */
+  function applySyncState(id, group, state) {
+    const entry = _modules.get(id);
+    if (!entry || !entry.impl || entry.state === 'disposed' || entry.state === 'quarantined' || entry.state === 'registered') return false;
+    if (syncGroupOf(entry.meta) !== group || typeof entry.impl.setState !== 'function') return false;
+    try {
+      entry.impl.setState.call(entry.instance || entry.impl, state);
+      return true;
+    } catch (err) {
+      console.warn(`[PluginRegistry] setState failed for "${id}":`, err);
+      return false;
+    }
+  }
+
   /**
    * What the generated toolbar offers, for a host that cannot see it: the
    * exclusive tools (chips the ToolManager multiplexes) and the toggles, in
@@ -842,7 +989,9 @@ const PluginRegistry = (() => {
         toggles.push({
           ...base,
           active: btn.classList.contains('btn-solid'),
-          icon: (glyph && glyph.getAttribute('data-lucide')) || base.icon
+          icon: (glyph && glyph.getAttribute('data-lucide')) || base.icon,
+          // 'display': the host keeps this toggle the same in every panel (plugin.json#compareSync)
+          sync: syncGroupOf(meta)
         });
       }
     }
@@ -1088,7 +1237,7 @@ const PluginRegistry = (() => {
         _quarantine(entry.meta._modPath || id, 'revoked', 'operator revoked approval (torn down live)');
         // Remove its toolbar button (action/toggle → data-plugin-id).
         document.querySelectorAll(`[data-plugin-id="${CSS.escape(id)}"]`).forEach(b => b.remove());
-        console.info(`[PluginRegistry] sandboxed plugin "${id}" revoked — iframe torn down`);
+        console.debug(`[PluginRegistry] sandboxed plugin "${id}" revoked — iframe torn down`);
       }
     }
   }
@@ -1099,6 +1248,11 @@ const PluginRegistry = (() => {
     // A host that vouched no epoch has no live revocation to watch for; polling it
     // forever cannot ever change anything. Revocation still applies on the next reload.
     if (_trustEpoch === null) return;
+    // Only a sandboxed plugin can be torn down live: with none loaded (the usual case, and
+    // always so in a Compare panel, which runs four pages at once) the poll is a request
+    // every few seconds that can change nothing.
+    const sandboxed = (id) => typeof PluginSandbox !== 'undefined' && PluginSandbox.isSandboxed && PluginSandbox.isSandboxed(id);
+    if (![..._modules.keys()].some(sandboxed)) return;
     _trustWatchTimer = setInterval(_revokeCheck, intervalMs);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) _revokeCheck(); });
   }
@@ -1123,9 +1277,12 @@ const PluginRegistry = (() => {
     resetAll,
     collect,
     ensureNoncedStyle,
+    loadVendor,
     syncToolbarButton,
     onToolbarState,
     describeToolbar,
+    getSyncState,
+    applySyncState,
     CONTEXTS,
     bindToolbarButtons,
     disposeAll,

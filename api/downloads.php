@@ -21,6 +21,8 @@
 
 declare(strict_types=1);
 
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';   // LUMEN_DATASET_TYPES (no session, no auth)
 
 header('Content-Type: application/json; charset=utf-8');
@@ -96,14 +98,15 @@ if ($targetReal === null || !is_dir($targetReal)) fail(404, 'Not found');
 $relPosix = implode('/', $segs);
 
 $entries = [];
-foreach ((scandir($targetReal) ?: []) as $name) {
+// An unreadable folder is an empty listing, not a warning inside the JSON body.
+foreach ((@scandir($targetReal) ?: []) as $name) {
     if ($name === '.' || $name === '..' || $name[0] === '.') continue;
     $realFull = within($targetReal . DIRECTORY_SEPARATOR . $name, $rootReal);
     if ($realFull === null) continue;  // symlink/junction pointing outside the root
     $childRel = ($relPosix === '') ? $name : ($relPosix . '/' . $name);
     if (is_dir($realFull)) {
         $count = 0;
-        foreach ((scandir($realFull) ?: []) as $sub) {
+        foreach ((@scandir($realFull) ?: []) as $sub) {
             if ($sub === '.' || $sub === '..' || $sub[0] === '.') continue;
             $count++;
         }
@@ -130,7 +133,11 @@ usort($entries, function ($a, $b) {
     return strcasecmp($a['name'], $b['name']);
 });
 
-echo json_encode(
+// admin_json_body substitutes invalid UTF-8 (a file name from an old SFTP client):
+// a bare json_encode() returned false and `echo false` sent an empty 200.
+[$encStatus, $encJson] = admin_json_body(
     ['dataset' => $datasetSafe, 'path' => $relPosix, 'available' => true, 'entries' => $entries],
     JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
 );
+if ($encStatus) http_response_code($encStatus);
+echo $encJson;

@@ -112,6 +112,16 @@ const PageRenderer = (() => {
     } catch (_) {}
     return 'No datasets to show yet.';
   }
+  // A translated key, or `fallback` when the key is missing (I18n.t returns the key itself).
+  function _tr(key, fallback) {
+    try {
+      if (typeof I18n !== 'undefined' && I18n.t) {
+        const s = I18n.t(key);
+        if (s && s !== key) return s;
+      }
+    } catch (_) {}
+    return fallback;
+  }
   // Coalesce the per-widget Lucide passes into ONE document scan per frame: a
   // content-rich page used to queue ~1 setTimeout+DOM-scan per icon-bearing
   // widget. createIcons() is idempotent (a replaced <i> loses its data-lucide),
@@ -125,11 +135,16 @@ const PageRenderer = (() => {
   // widget that throws should degrade to nothing on a LIVE page, but stay a
   // visible, selectable, fixable placeholder while editing.
   function _editMode() { try { return !!(document.body && document.body.dataset && document.body.dataset.editing); } catch (_) { return false; } }
-  function _errorBox(w, err) {
+  // `kind` is 'unknown' (no renderer for the type) or 'error' (the renderer threw).
+  // The exception itself goes to the console, never into the page.
+  function _errorBox(w, kind) {
     const box = _el('div', 'margin:0 0 10px');
     const inner = _el('div', 'padding:12px 14px;border:1px dashed var(--color-danger,#e5484d);border-radius:8px;' +
       'color:var(--color-danger,#e5484d);font-size:12px;background:color-mix(in srgb,var(--color-danger,#e5484d) 8%,transparent)');
-    inner.textContent = '⚠ ' + ((w && w.type) || 'widget') + ' — ' + (err ? String(err.message || err).slice(0, 90) : 'rendu impossible');
+    const reason = kind === 'unknown'
+      ? _tr('pages.widgetUnknown', 'Unknown widget type: remove it or pick another.')
+      : _tr('pages.widgetError', 'This widget could not be drawn: check its settings or remove it.');
+    inner.textContent = '⚠ ' + ((w && w.type) || 'widget') + ' — ' + reason;
     box.appendChild(inner);
     return box;
   }
@@ -609,7 +624,7 @@ const PageRenderer = (() => {
       if (variant !== 'lg' && p.size === 'lg') cls += ' btn-lg';
       a.className = cls.trim();
       const iconName = String(p.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
-      const label = _lv(b.text) || 'Button';
+      const label = _lv(b.text) || _tr('pages.block.button', 'Button');
       if (iconName) {
         const ic = document.createElement('i');
         ic.setAttribute('data-lucide', iconName);
@@ -1338,7 +1353,7 @@ const PageRenderer = (() => {
         a.appendChild(badge);
         wrap.appendChild(a);
       } else {
-        wrap.appendChild(_el('div', 'opacity:.5;font-size:13px;padding:20px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px', _lv(b.text) || 'Vidéo'));
+        wrap.appendChild(_el('div', 'opacity:.5;font-size:13px;padding:20px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px', _lv(b.text) || _tr('pages.block.video', 'Video')));
       }
       return wrap;
     },
@@ -1504,7 +1519,7 @@ const PageRenderer = (() => {
 
   function renderWidget(w) {
     const fn = RENDERERS[w && w.type];
-    if (!fn) return _editMode() ? _errorBox(w, new Error('type inconnu')) : null;
+    if (!fn) return _editMode() ? _errorBox(w, 'unknown') : null;
     try {
       const node = fn(w);
       if (!node) return null;
@@ -1524,7 +1539,7 @@ const PageRenderer = (() => {
       box.appendChild(node);
       return box;
     } catch (e) {
-      if (_editMode()) { try { console.warn('[PageRenderer] widget render failed:', w && w.type, e); } catch (_) {} return _errorBox(w, e); }
+      if (_editMode()) { try { console.warn('[PageRenderer] widget render failed:', w && w.type, e); } catch (_) {} return _errorBox(w, 'error'); }
       return null;
     }
   }

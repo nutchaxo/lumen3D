@@ -24,7 +24,10 @@
 
 'use strict';
 
-import { API_SITE, API_MEDIA, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, refreshIcons } from './shared.js';
+import {
+  API_SITE, API_MEDIA, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, refreshIcons, fmtBytes,
+  modalize, modalId,
+} from './shared.js';
 import {
   SCHEMA, FILE_EXTENSION, isEmptyDoc, pageEntry, usedVariables, collectMediaRefs, collectTokens,
   buildBundle, bundleFileName, mediaType, parseBundle, planImport, planMedia, planVariables,
@@ -34,25 +37,35 @@ import {
 const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 
 // ── Small dialog shell (same overlay as the admin's other confirmations) ─────
-function openDialog(html) {
+// Named by its first heading; `initialFocus` is a selector inside the card (else
+// its first control). The rest of the admin is inert while it is open.
+function openDialog(html, { initialFocus = null } = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'upl-exit pg-xfer';
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
   overlay.innerHTML = `<div class="upl-exit-card pg-xfer-card">${html}</div>`;
-  const previous = document.activeElement;
+  const card = overlay.firstElementChild;
+  const title = card.querySelector('h3');
+  if (title && !title.id) title.id = modalId('pg-xfer-title');
   let onClose = null;
+  let release = null;
   const close = () => {
     document.removeEventListener('keydown', onKey, true);
+    if (release) release();
     overlay.remove();
-    try { previous?.focus?.(); } catch (_) { /* gone */ }
     if (onClose) onClose();
   };
   const onKey = (e) => { if (e.key === 'Escape' && !overlay.dataset.busy) { e.preventDefault(); close(); } };
   document.addEventListener('keydown', onKey, true);
   document.body.appendChild(overlay);
   refreshIcons(overlay);
-  return { overlay, card: overlay.firstElementChild, close, set onClose(fn) { onClose = fn; } };
+  release = modalize(overlay, {
+    labelledBy: title ? title.id : null,
+    initialFocus: initialFocus ? card.querySelector(initialFocus) : null,
+    container: card,
+  });
+  return { overlay, card, close, set onClose(fn) { onClose = fn; } };
 }
 
 function localLabel(v, loc) {
@@ -63,12 +76,6 @@ function localLabel(v, loc) {
 
 function widgetsText(n) {
   return `${n} ${n === 1 ? t('pages.xfer.widget', 'widget') : t('pages.xfer.widgets', 'widgets')}`;
-}
-
-function fmtBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1048576).toFixed(1)} MB`;
 }
 
 async function blobToBase64(blob) {
@@ -122,7 +129,7 @@ export async function openExportDialog(ctx) {
     <div class="upl-exit-actions">
       <button type="button" class="adm-btn adm-btn-ghost" data-act="cancel">${escHtml(t('admin.cancel', 'Annuler'))}</button>
       <button type="button" class="adm-btn adm-btn-accent" data-act="go" disabled><i data-lucide="download"></i> ${escHtml(t('pages.xfer.download', 'Télécharger'))}</button>
-    </div>`);
+    </div>`, { initialFocus: '[data-act="cancel"]' });
   const $ = (sel) => dlg.card.querySelector(sel);
   $('[data-act="cancel"]').addEventListener('click', dlg.close);
 
@@ -155,6 +162,8 @@ export async function openExportDialog(ctx) {
   const sync = () => { go.disabled = !dlg.card.querySelector('input[data-slug]:checked'); };
   dlg.card.querySelectorAll('input[data-slug]').forEach((i) => i.addEventListener('change', sync));
   sync();
+  // Focus waited on Cancel while the pages were read; the list is what comes first.
+  if (document.activeElement === $('[data-act="cancel"]')) $('input[data-slug]:not(:disabled)')?.focus();
 
   go.addEventListener('click', async () => {
     const slugs = [...dlg.card.querySelectorAll('input[data-slug]:checked')].map((i) => i.dataset.slug);
@@ -231,7 +240,8 @@ export function pickImportFile(ctx) {
         <h3 class="upl-exit-title">${escHtml(t('pages.xfer.importTitle', 'Importer des pages'))}</h3>
         <p class="upl-exit-body">${escHtml(t('pages.xfer.refused', 'Rien n\'a été importé :'))} <strong>${escHtml(file.name)}</strong></p>
         <ul class="pg-xfer-errors">${lines.map((l) => `<li>${escHtml(l)}</li>`).join('')}</ul>
-        <div class="upl-exit-actions"><button type="button" class="adm-btn adm-btn-accent" data-act="ok">OK</button></div>`);
+        <div class="upl-exit-actions"><button type="button" class="adm-btn adm-btn-accent" data-act="ok">OK</button></div>`,
+      { initialFocus: '[data-act="ok"]' });
       dlg.card.querySelector('[data-act="ok"]').addEventListener('click', dlg.close);
       return;
     }
@@ -302,14 +312,23 @@ export function openImportDialog(ctx, parsed, fileName) {
       </div>`;
     }).join('');
     refreshIcons($('[data-role="list"]'));
-    dlg.card.querySelectorAll('input[data-i]').forEach((i) => i.addEventListener('change', () => { checked[+i.dataset.i] = i.checked; draw(); }));
-    dlg.card.querySelectorAll('input[data-t]').forEach((i) => i.addEventListener('change', () => { targets[+i.dataset.t] = i.value.trim().toLowerCase(); draw(); }));
+    dlg.card.querySelectorAll('input[data-i]').forEach((i) => i.addEventListener('change', () => { checked[+i.dataset.i] = i.checked; redraw(); }));
+    dlg.card.querySelectorAll('input[data-t]').forEach((i) => i.addEventListener('change', () => { targets[+i.dataset.t] = i.value.trim().toLowerCase(); redraw(); }));
     const live = plan.filter((r) => checked[r.index]);
     go.disabled = !live.length || live.some((r) => r.error);
+  };
+  // The list is rebuilt on every change: focus goes back to the row control that held it.
+  const redraw = () => {
+    const a = document.activeElement;
+    const d = (a && a.dataset) || {};
+    const key = d.i != null ? `input[data-i="${d.i}"]` : (d.t != null ? `input[data-t="${d.t}"]` : null);
+    draw();
+    if (key) $(key)?.focus();
   };
   publishBox.addEventListener('change', hint);
   hint();
   draw();
+  $('input[data-i]')?.focus();
 
   go.addEventListener('click', async () => {
     const plan = planImport(bundle, existing, targets).filter((r) => checked[r.index]);

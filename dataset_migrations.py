@@ -25,10 +25,12 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import heapq
 import io
 import json
 import os
 import re
+import secrets
 import shutil
 import struct
 import tempfile
@@ -1376,6 +1378,8 @@ def _build_tree(t: int, rel: str, bricks_dir: Path, levels, channels, transport,
     b2p = transport.get("brickToPack")
     ext = {"raw-u8": ".bin", "raw-u8-gzip": ".bin.gz"}.get(tree.encoding, ".webp")
     if isinstance(b2p, dict) and b2p:
+        # A handful of packs hold every brick: one Path per pack, shared by its entries.
+        pack_paths = {}
         for key, entry in b2p.items():
             m = _BRICK_KEY_RE.match(str(key).lstrip("/"))
             if not m or not isinstance(entry, dict):
@@ -1389,7 +1393,13 @@ def _build_tree(t: int, rel: str, bricks_dir: Path, levels, channels, transport,
             off, length = int(off), int(length)
             if off < 0 or length <= 0:
                 continue
-            index[(c, bx, by, bz)] = (_safe_rel_file(bricks_dir, entry.get("url")), off, length)
+            url = entry.get("url")
+            pack = pack_paths.get(url) if isinstance(url, str) else None
+            if pack is None:
+                pack = _safe_rel_file(bricks_dir, url)
+                if isinstance(url, str):
+                    pack_paths[url] = pack
+            index[(c, bx, by, bz)] = (pack, off, length)
     else:
         # A manifest without a pack index: one file per brick, present when it exists.
         for c in range(tree.channels):
@@ -1595,6 +1605,19 @@ def _frame_number(key: str, fallback: int) -> int:
     return int(m.group(1)) if m else fallback
 
 
+def _slim_v2_manifest(manifest: dict) -> dict:
+    """A format-1/2 manifest without its brick index (`brickTransport`, top level and per
+    timepoint row): the trees already hold it, and a cached plan keeps the manifest for
+    as long as the server runs — the index alone is most of a 20 MB manifest."""
+    slim = {k: v for k, v in manifest.items() if k != "brickTransport"}
+    tps = manifest.get("timepoints")
+    if isinstance(tps, dict):
+        slim["timepoints"] = {key: ({k: v for k, v in row.items() if k != "brickTransport"}
+                                    if isinstance(row, dict) else row)
+                              for key, row in tps.items()}
+    return slim
+
+
 def _plan_for(dataset_id: str) -> Plan:
     """The unit plan of a volume dataset, cached while its bricks manifest is unchanged."""
     type_dir, folder, ds_dir = _resolve_dataset(dataset_id)
@@ -1659,7 +1682,8 @@ def _plan_for(dataset_id: str) -> Plan:
     plan = Plan()
     plan.dataset, plan.type, plan.folder, plan.ds_dir = f"{type_dir}/{folder}", type_dir, folder, ds_dir
     plan.manifest_path = manifest_path
-    plan.v3, plan.v3_problem, plan.manifest, plan.extra = is_v3, v3_problem, manifest, {}
+    plan.v3, plan.v3_problem, plan.extra = is_v3, v3_problem, {}
+    plan.manifest = manifest if (is_v3 or is_v5) else _slim_v2_manifest(manifest)
     plan.v5, plan.v5_problem, plan.v6 = is_v5, v5_problem, is_v6
     if is_v3:
         plan.extra["_index_stamp"] = _v3_index_stamp_trees(trees)
@@ -2465,6 +2489,12 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
                 j["state"] = "running"
                 j.pop("error", None)
                 _save_journal(path, j)
+        if m["id"] == M006 and j is not None and j.get("state") == "assembling" and plan.v6:
+            # Interrupted between the v6 manifest (commit point) and the "swapped" save: the
+            # journal still holds oldManifestSha, which the re-stamp of planes/ and mips/ needs.
+            j["state"] = "swapped"
+            j.pop("assembly", None)
+            _save_journal(path, j)
         if j is not None and j.get("state") != "swapped":
             try:
                 _check_source(plan, j, path, persist=False)
@@ -2518,6 +2548,7 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
                 "sourceManifests": {str(t): plan.sha for t in sorted(plan.trees)},
                 "units": {"total": us.total, "empty": us.empty},
                 "done": [], "executors": {"browser": 0, "server": 0}, "state": "running",
+                "jobId": _new_job_id(),
             }
             if us.inputs:
                 j["inputManifests"] = dict(us.inputs)
@@ -2562,11 +2593,28 @@ def _write_unit_tiles(plan: Plan, mid: str, unit: tuple, tiles: dict) -> None:
                     pass
 
 
-def _mark_done(plan: Plan, m: dict, path: Path, keys, executor: str) -> dict:
+def _new_job_id() -> str:
+    return secrets.token_hex(8)
+
+
+def _job_identity(j) -> tuple:
+    """What tells one job of a dataset from the next: createdAt alone has a one-second
+    resolution, so a cancel and a re-plan within the same second would share it. A
+    journal written before jobId existed is told apart by createdAt alone."""
+    j = j if isinstance(j, dict) else {}
+    return (j.get("createdAt"), j.get("jobId"))
+
+
+def _mark_done(plan: Plan, m: dict, path: Path, keys, executor: str, job=None) -> dict:
+    """`job` (_job_identity of the journal the units were computed for) refuses to credit
+    units to another job: cancel deletes the tile store without waiting for a running
+    unit_run, so a later job of the same dataset never holds those units' files."""
     base = _job_base(plan, mid=m["id"])
     with _JobLock(base):
         j = _load_journal(path)
         if j is None:
+            raise MigrationError("no_job", 404)
+        if job is not None and _job_identity(j) != job:
             raise MigrationError("no_job", 404)
         _check_source(plan, j, path)
         if j.get("state") != "running":
@@ -2631,6 +2679,10 @@ def unit_put(dataset_id, mid, key, body: bytes, dry: bool = False) -> dict:
             pass
         return out
     m, plan, path = _open_job(dataset_id, mid)
+    return _unit_put_any(plan, m, path, key, body)
+
+
+def _unit_put_any(plan: Plan, m: dict, path: Path, key, body: bytes) -> dict:
     mid = m["id"]
     if mid == M005:
         return _unit_put_m005(plan, m, path, key, body)
@@ -2720,6 +2772,187 @@ def _release(base: str, key: str) -> None:
         (_CLAIMS.get(base) or {}).pop(key, None)
 
 
+class _RunQueue:
+    """The units a server run may still start, in the unit set's order, without a pass over
+    the whole set per unit (a 100-frame timelapse has ~140 000 m005 units): every key is
+    formatted once, the units whose gate is open wait in a heap of their indices, and a gate
+    opens when a counter of the units it waits for reaches zero —
+    m004 (SPEC §13.5): level k of tree t / channel c once every lower level of (t, c) is done;
+    m005: a level-k >= 1 unit of B, C or D once every stage-A unit of (t, c) is done;
+    every other migration: no gate.
+    `done` holds what this run stored plus what the journal said when last read (absorb)."""
+
+    def __init__(self, us: UnitSet, done):
+        self.mid = us.mid
+        self.units = us.units
+        self.keys = [unit_key_for(us.mid, u) for u in us.units]
+        self.index = {k: i for i, k in enumerate(self.keys)}
+        self.done = set()
+        self.taken = set()
+        self.heap = []
+        self.closed = {}        # gate -> [unit indices waiting for it]
+        self.left = {}          # counter -> units not done
+        self.levels = {}        # m004: (t, c) -> its levels with units not done, ascending
+        self.seen = 0           # entries of the journal's `done` list already absorbed
+        done = set(done)
+        for i, k in enumerate(self.keys):
+            if k in done:
+                self.done.add(k)
+                continue
+            c = self._counter(self.units[i])
+            if c is not None:
+                self.left[c] = self.left.get(c, 0) + 1
+        if self.mid == M004:
+            for (t, c, k) in self.left:
+                self.levels.setdefault((t, c), []).append(k)
+            for v in self.levels.values():
+                v.sort()
+        for i, k in enumerate(self.keys):
+            if k in self.done:
+                continue
+            g = self._gate(self.units[i])
+            if g is None or self._open(g):
+                self.heap.append(i)
+            else:
+                self.closed.setdefault(g, []).append(i)
+        heapq.heapify(self.heap)
+
+    def _counter(self, u):
+        """The counter a unit's completion decrements (None: it holds no gate)."""
+        if self.mid == M004:
+            return (u[0], u[2], u[1])
+        if self.mid == M005:
+            return (u[1], u[3]) if u[0] == 0 else None
+        return None
+
+    def _gate(self, u):
+        if self.mid == M004:
+            return (u[0], u[2], u[1])
+        if self.mid == M005:
+            return None if (u[0] == 0 or u[2] == 0) else (u[1], u[3])
+        return None
+
+    def _open(self, g) -> bool:
+        if self.mid == M004:
+            t, c, k = g
+            lv = self.levels.get((t, c))
+            return not lv or lv[0] >= k
+        return self.left.get(g, 0) == 0
+
+    def _release_gate(self, g) -> None:
+        for i in self.closed.pop(g, ()):
+            heapq.heappush(self.heap, i)
+
+    def finish(self, key) -> None:
+        """A unit is done (stored by this run, or by another executor per the journal)."""
+        if key in self.done:
+            return
+        i = self.index.get(key)
+        self.done.add(key)
+        if i is None:
+            return
+        c = self._counter(self.units[i])
+        if c is None:
+            return
+        n = self.left.get(c, 0) - 1
+        self.left[c] = n
+        if n > 0:
+            return
+        if self.mid == M005:
+            self._release_gate(c)
+            return
+        t, ch, _k = c
+        lv = self.levels.get((t, ch)) or []
+        while lv and self.left.get((t, ch, lv[0]), 0) <= 0:
+            lv.pop(0)
+        if lv:
+            self._release_gate((t, ch, lv[0]))
+
+    def absorb(self, journal_done) -> None:
+        """The units the journal lists past what was already absorbed (append-only list)."""
+        if len(journal_done) < self.seen:
+            self.seen = 0
+        for k in journal_done[self.seen:]:
+            self.finish(k)
+        self.seen = len(journal_done)
+
+    def claim_key(self, base: str, key: str) -> bool:
+        """Claims one given unit when it is listed, open, not done, not taken by this run and
+        not claimed by another request; its heap entry is skipped later (taken)."""
+        i = self.index.get(key)
+        if i is None or key in self.done or key in self.taken:
+            return False
+        g = self._gate(self.units[i])
+        if g is not None and not self._open(g):
+            return False
+        if _claim(base, (key,)) is None:
+            return False
+        self.taken.add(key)
+        return True
+
+    def claim(self, base: str):
+        """The first open unit not done, not taken by this run and not claimed by another
+        request (_claim); None when there is none now."""
+        skipped = []
+        try:
+            while self.heap:
+                i = heapq.heappop(self.heap)
+                k = self.keys[i]
+                if k in self.done or k in self.taken:
+                    continue
+                if _claim(base, (k,)) is not None:
+                    self.taken.add(k)
+                    return k
+                skipped.append(i)
+            return None
+        finally:
+            for i in skipped:
+                heapq.heappush(self.heap, i)
+
+
+RUN_FLUSH_UNITS = 32
+RUN_FLUSH_SECONDS = 1.0
+
+
+class _RunJournal:
+    """The units a server run stored, journaled in batches: one journal parse, source check
+    and atomic rewrite (_mark_done) per RUN_FLUSH_UNITS units or RUN_FLUSH_SECONDS instead
+    of one per unit. A stored unit is idempotent, so a run that dies between two flushes only
+    leaves those units to be done again. A batch is credited only to the job it was computed
+    for (self.job): a run outliving a cancel + re-plan must not mark units whose tiles the
+    cancel deleted."""
+
+    def __init__(self, plan: Plan, m: dict, path: Path, j: dict, queue: _RunQueue):
+        self.plan, self.m, self.path, self.j, self.queue = plan, m, path, j, queue
+        self.job = _job_identity(j)
+        self.keys = []
+        self.at = time.monotonic()
+        queue.absorb(j.get("done") or [])
+
+    def add(self, key: str) -> None:
+        self.queue.finish(key)
+        self.keys.append(key)
+        if len(self.keys) >= RUN_FLUSH_UNITS or time.monotonic() - self.at >= RUN_FLUSH_SECONDS:
+            self.flush()
+
+    def flush(self) -> dict:
+        if self.keys:
+            keys, self.keys = self.keys, []
+            self.j = _mark_done(self.plan, self.m, self.path, keys, "server", job=self.job)
+            self.queue.absorb(self.j.get("done") or [])
+        self.at = time.monotonic()
+        return self.j
+
+    def close(self, failed: bool) -> dict:
+        """Flush what is left; after a failure the run's own error is the one reported."""
+        if not failed:
+            return self.flush()
+        try:
+            return self.flush()
+        except MigrationError:
+            return self.j
+
+
 def unit_run(dataset_id, mid, max_seconds=MAX_RUN_SECONDS, dry: bool = False, workers=None) -> dict:
     """Server executor: process runnable units for at most ~max_seconds (at least one).
     m005 runs up to `workers` units at once (default M005_WORKERS)."""
@@ -2762,30 +2995,32 @@ def unit_run(dataset_id, mid, max_seconds=MAX_RUN_SECONDS, dry: bool = False, wo
         raise MigrationError("job_not_running", 409)
     us = _unitset(plan, m["id"])
     cache = _BrickCache()
-    taken = set()
-    while True:
-        done = set(j.get("done") or [])
-        runnable, _pending = _pending_units(us, done)
-        candidates = (k for k in (unit_key_for(us.mid, u) for u in runnable) if k not in taken)
-        key = _claim(base, candidates)
-        if key is None:
-            break
-        u0 = time.monotonic()
-        try:
-            unit = parse_unit_key_for(us.mid, key)
-            result, nread, nwritten = _process_any(plan, us, unit, store, cache)
-            bytes_read += nread
-            bytes_written += nwritten
-            if not dry:
-                _store_any(plan, us, unit, store, result)
-                j = _mark_done(plan, m, path, [key], "server")
-            processed.append(key)
-            taken.add(key)
-        finally:
-            _release(base, key)
-        slowest = max(slowest, time.monotonic() - u0)
-        if time.monotonic() - t0 + slowest > budget:
-            break
+    queue = _RunQueue(us, j.get("done") or [])
+    log = _RunJournal(plan, m, path, j, queue)
+    try:
+        while True:
+            key = queue.claim(base)
+            if key is None:
+                break
+            u0 = time.monotonic()
+            try:
+                unit = parse_unit_key_for(us.mid, key)
+                result, nread, nwritten = _process_any(plan, us, unit, store, cache)
+                bytes_read += nread
+                bytes_written += nwritten
+                if not dry:
+                    _store_any(plan, us, unit, store, result)
+                    log.add(key)
+                processed.append(key)
+            finally:
+                _release(base, key)
+            slowest = max(slowest, time.monotonic() - u0)
+            if time.monotonic() - t0 + slowest > budget:
+                break
+    except BaseException:
+        log.close(failed=True)
+        raise
+    j = log.close(failed=False)
     s = _summary(j)
     return {"ok": True, "processed": processed, "done": s["done"], "total": s["total"],
             "seconds": round(time.monotonic() - t0, 3), "bytesRead": bytes_read,
@@ -3446,10 +3681,14 @@ def cancel(dataset_id, mid) -> dict:
         if m["id"] == M006 and j is not None:
             try:
                 live_plan = _plan_for(f"{type_dir}/{folder}")
-                if not live_plan.v6:
-                    _m006_drop_q30([tr.bricks_dir for tr in live_plan.trees.values()])
             except MigrationError:
-                pass
+                live_plan = None
+            if live_plan is not None and live_plan.v6:
+                # The v6 manifest (the commit point) is live while the journal is not yet
+                # "swapped": only finishing re-stamps planes/ and mips/ (oldManifestSha).
+                raise MigrationError("finalize_in_progress", 409)
+            if live_plan is not None:
+                _m006_drop_q30([tr.bricks_dir for tr in live_plan.trees.values()])
         _rmtree(tile_store_dir(type_dir, folder, m["id"]))
         _rmtree(ds_dir / inc_name)
         try:
@@ -4181,10 +4420,18 @@ class _M005Planes:
         self.bytes_read = 0
 
     def region(self, k: int, z: int, y0: int, y1: int, x0: int, x1: int):
+        return self.regions(k, z, [(y0, y1, x0, x1)])[0]
+
+    def regions(self, k: int, z: int, boxes):
+        """Plane z of level k over each (y0, y1, x0, x1) box, every tile read and decoded
+        once however many boxes it meets."""
         L = self.us.levels[k]["dimensions"]
         X, Y = L["x"], L["y"]
-        out = _np.zeros((y1 - y0, x1 - x0), dtype=_np.uint8)
+        outs = [_np.zeros((y1 - y0, x1 - x0), dtype=_np.uint8) for y0, y1, x0, x1 in boxes]
         txn, tyn = -(-X // TILE_SIZE), -(-Y // TILE_SIZE)
+        wanted = sorted({(ty, tx) for y0, y1, x0, x1 in boxes
+                         for ty in range(y0 // TILE_SIZE, -(-y1 // TILE_SIZE))
+                         for tx in range(x0 // TILE_SIZE, -(-x1 // TILE_SIZE))})
         if k == 0:
             path = _tree_planes_dir(self.plan.ds_dir, self.tree) / pack_name(z)
             channels, cidx = self.tree.channels, self.c
@@ -4196,7 +4443,7 @@ class _M005Planes:
         except FileNotFoundError:
             if k == 0:
                 raise MigrationError("plane_unreadable", 500, pack_name(z))
-            return out
+            return outs
         with fh:
             hb = pack_header_bytes(channels, txn, tyn)
             head = fh.read(hb)
@@ -4206,33 +4453,38 @@ class _M005Planes:
                 raise MigrationError("plane_unreadable", 500, f"{path.name}: {exc}")
             if (cc, ttx, tty) != (channels, txn, tyn):
                 raise MigrationError("plane_unreadable", 500, f"{path.name}: header")
-            for ty in range(y0 // TILE_SIZE, -(-y1 // TILE_SIZE)):
-                for tx in range(x0 // TILE_SIZE, -(-x1 // TILE_SIZE)):
-                    off, ln = entries[(cidx * tyn + ty) * txn + tx]
-                    if not ln:
-                        continue
-                    fh.seek(off)
-                    png = fh.read(ln)
-                    self.bytes_read += ln
+            for ty, tx in wanted:
+                off, ln = entries[(cidx * tyn + ty) * txn + tx]
+                if not ln:
+                    continue
+                fh.seek(off)
+                png = fh.read(ln)
+                self.bytes_read += ln
+                try:
+                    tile = _f5.unpng_gray8(png)
+                except ValueError:
                     try:
-                        tile = _f5.unpng_gray8(png)
-                    except ValueError:
-                        try:
-                            w, h, px = decode_png_gray8(png)
-                        except ValueError as exc:
-                            raise MigrationError("plane_undecodable", 500, f"{path.name} y{ty} x{tx}: {exc}")
-                        tile = _np.frombuffer(px, dtype=_np.uint8).reshape(h, w)
-                    ty0, tx0 = ty * TILE_SIZE, tx * TILE_SIZE
+                        w, h, px = decode_png_gray8(png)
+                    except ValueError as exc:
+                        raise MigrationError("plane_undecodable", 500, f"{path.name} y{ty} x{tx}: {exc}")
+                    tile = _np.frombuffer(px, dtype=_np.uint8).reshape(h, w)
+                ty0, tx0 = ty * TILE_SIZE, tx * TILE_SIZE
+                for out, (y0, y1, x0, x1) in zip(outs, boxes):
                     a0, a1 = max(y0, ty0), min(y1, ty0 + tile.shape[0])
                     b0, b1 = max(x0, tx0), min(x1, tx0 + tile.shape[1])
-                    out[a0 - y0:a1 - y0, b0 - x0:b1 - x0] = tile[a0 - ty0:a1 - ty0, b0 - tx0:b1 - tx0]
-        return out
+                    if a0 < a1 and b0 < b1:
+                        out[a0 - y0:a1 - y0, b0 - x0:b1 - x0] = tile[a0 - ty0:a1 - ty0, b0 - tx0:b1 - tx0]
+        return outs
 
     def volume(self, k: int, z0: int, z1: int, y0: int, y1: int, x0: int, x1: int):
-        v = _np.zeros((z1 - z0, y1 - y0, x1 - x0), dtype=_np.uint8)
+        return self.volumes(k, z0, z1, [(y0, y1, x0, x1)])[0]
+
+    def volumes(self, k: int, z0: int, z1: int, boxes):
+        vs = [_np.zeros((z1 - z0, y1 - y0, x1 - x0), dtype=_np.uint8) for y0, y1, x0, x1 in boxes]
         for z in range(z0, z1):
-            v[z - z0] = self.region(k, z, y0, y1, x0, x1)
-        return v
+            for v, plane in zip(vs, self.regions(k, z, boxes)):
+                v[z - z0] = plane
+        return vs
 
 
 def _m005_columns(k: int):
@@ -4338,15 +4590,8 @@ def process_unit_m005(plan: Plan, us: UnitSet, unit, store: Path):
                     bricks[(bz, by, bx)] = _f5.encode_brick_columns(b66, cols)
         return (_m005_brick_blob(bricks, cols) if bricks else None), nread
     if s == 2:
-        n = Y if a == 0 else X
-        first, last = b * _f5.ORTH_ROWS, min(n, b * _f5.ORTH_ROWS + _f5.ORTH_ROWS)
-        if a == 0:
-            band = rd.volume(k, 0, Z, first, last, 0, X)
-            images = [band[:, r, :] for r in range(last - first)]
-        else:
-            band = rd.volume(k, 0, Z, 0, Y, first, last)
-            images = [band[:, :, r] for r in range(last - first)]
-        return _f5.orth_pack(_M005_ORTH[a], first, images), rd.bytes_read
+        results, nread = process_orth_group_m005(plan, us, [unit], store)
+        return results[0], nread
     bz = _f5.cut_depth(L["voxelSize"])
     sxy, szz = _f5.CUT_XY * _f5.CUT_SUPER, bz * _f5.CUT_SUPER
     x0, x1 = sxy * d, min(X, sxy * d + sxy)
@@ -4354,6 +4599,64 @@ def process_unit_m005(plan: Plan, us: UnitSet, unit, store: Path):
     z0, z1 = szz * a, min(Z, szz * a + szz)
     region = rd.volume(k, z0, z1, y0, y1, x0, x1)
     return _f5.cut_record(region, (x0, y0, z0), (X, Y, Z), bz, a, b, d), rd.bytes_read
+
+
+def process_orth_group_m005(plan: Plan, us: UnitSet, units, store: Path):
+    """Server executor of stage-C units of one tree, level, channel and axis: ([pack per
+    unit], bytes_read). The plane tiles their bands meet are read and decoded once for the
+    whole group (a 512-px tile holds the bands of eight units); each pack is the one the
+    unit makes alone."""
+    if _f5 is None or _np is None:
+        raise MigrationError("server_unavailable", 409, "numpy is not installed")
+    if not units:
+        return [], 0
+    s, t, k, c, a, _b, _d = units[0]
+    if s != 2 or any(tuple(u[:5]) != (s, t, k, c, a) for u in units):
+        raise MigrationError("bad_unit")
+    tree = plan.trees.get(t)
+    if tree is None or c >= tree.channels or k >= len(us.levels) or a not in (0, 1):
+        raise MigrationError("bad_unit")
+    L = us.levels[k]["dimensions"]
+    X, Y, Z = L["x"], L["y"], L["z"]
+    n = Y if a == 0 else X
+    spans = [(u[5] * _f5.ORTH_ROWS, min(n, u[5] * _f5.ORTH_ROWS + _f5.ORTH_ROWS)) for u in units]
+    if any(first >= last for first, last in spans):
+        raise MigrationError("bad_unit")
+    boxes = [(first, last, 0, X) if a == 0 else (0, Y, first, last) for first, last in spans]
+    rd = _M005Planes(plan, us, store, t, c)
+    bands = rd.volumes(k, 0, Z, boxes)
+    results = []
+    for i, (first, last) in enumerate(spans):
+        band = bands[i]
+        if a == 0:
+            images = [band[:, r, :] for r in range(last - first)]
+        else:
+            images = [band[:, :, r] for r in range(last - first)]
+        results.append(_f5.orth_pack(_M005_ORTH[a], first, images))
+        bands[i] = band = images = None
+    return results, rd.bytes_read
+
+
+# Stage-C units whose bands lie in one row (xz) / column (yz) of plane tiles run as one task
+# that decodes those tiles once (alone, each unit decoded all of them for 64 of their 512
+# rows). A band is Z x 64 x A bytes: a group holds at most M005_ORTH_GROUP_BYTES of them and
+# the bands of every running stage-C task stay within M005_ORTH_RUN_BYTES; a single unit is
+# always admitted.
+M005_ORTH_GROUP_BYTES = 256 * 1024 * 1024
+M005_ORTH_RUN_BYTES = 512 * 1024 * 1024
+
+
+def _m005_orth_band_bytes(us: UnitSet, unit) -> int:
+    L = us.levels[unit[2]]["dimensions"]
+    return L["z"] * _f5.ORTH_ROWS * (L["x"] if unit[4] == 0 else L["y"])
+
+
+def _m005_orth_siblings(unit) -> list:
+    """The other stage-C units whose bands lie in the same tile row (xz) / column (yz)."""
+    s, t, k, c, a, b, _d = unit
+    per_tile = max(1, TILE_SIZE // _f5.ORTH_ROWS)
+    b0 = b - b % per_tile
+    return [(s, t, k, c, a, bb, 0) for bb in range(b0, b0 + per_tile) if bb != b]
 
 
 def _store_m005(store: Path, unit, result) -> None:
@@ -4397,46 +4700,69 @@ def _unit_run_m005(dataset_id, m: dict, plan: Plan, path: Path, budget: float, d
     t0 = time.monotonic()
     processed, bytes_read, bytes_written, slowest = [], 0, 0, 0.0
     j = _load_journal(path) or {}
-    taken = set()
-    running = {}
+    queue = _RunQueue(us, j.get("done") or [])
+    log = _RunJournal(plan, m, path, j, queue)
+    running = {}             # future -> [keys]
+    band_bytes = {}          # future -> bytes of the stage-C bands it holds
+    failed = True
     with ThreadPoolExecutor(max_workers=workers) as ex:
+        def orth_group(unit):
+            """The unit and the siblings this run could claim with it, within the RAM budget."""
+            per = _m005_orth_band_bytes(us, unit)
+            room = min(M005_ORTH_GROUP_BYTES, M005_ORTH_RUN_BYTES - sum(band_bytes.values()))
+            units = [unit]
+            for sib in _m005_orth_siblings(unit):
+                if per * (len(units) + 1) > room:
+                    break
+                if queue.claim_key(base, _m005_key(sib)):
+                    units.append(sib)
+            units.sort(key=lambda u: u[5])
+            return units, per * len(units)
+
         def submit_more():
-            nonlocal j
             while len(running) < workers:
                 if time.monotonic() - t0 + slowest > budget and (processed or running):
                     return
-                done = set(j.get("done") or [])
-                pending = [u for u in us.units if _m005_key(u) not in done]
-                runnable = _m005_runnable(us, pending)
-                key = _claim(base, (k for k in (_m005_key(u) for u in runnable) if k not in taken))
+                key = queue.claim(base)
                 if key is None:
                     return
-                taken.add(key)
                 unit = _m005_parse(key)
-                running[ex.submit(_m005_timed, plan, us, unit, store)] = key
+                if unit[0] == 2:
+                    units, nbytes = orth_group(unit)
+                    fut = ex.submit(_m005_orth_timed, plan, us, units, store)
+                    running[fut] = [_m005_key(u) for u in units]
+                    band_bytes[fut] = nbytes
+                else:
+                    running[ex.submit(_m005_timed, plan, us, unit, store)] = [key]
 
-        submit_more()
         try:
+            submit_more()
             while running:
                 finished, _ = wait(list(running), return_when=FIRST_COMPLETED)
                 for fut in finished:
-                    key = running.pop(fut)
+                    keys = running.pop(fut)
+                    band_bytes.pop(fut, None)
                     try:
-                        result, nread, secs = fut.result()
+                        results, nread, secs = fut.result()
                         bytes_read += nread
-                        bytes_written += _m005_result_bytes(result)
                         slowest = max(slowest, secs)
-                        if not dry:
-                            _store_m005(store, _m005_parse(key), result)
-                            j = _mark_done(plan, m, path, [key], "server")
-                        processed.append(key)
+                        for key, result in zip(keys, results):
+                            bytes_written += _m005_result_bytes(result)
+                            if not dry:
+                                _store_m005(store, _m005_parse(key), result)
+                                log.add(key)
+                            processed.append(key)
                     finally:
-                        _release(base, key)
+                        for key in keys:
+                            _release(base, key)
                 submit_more()
+            failed = False
         finally:
-            for fut, key in list(running.items()):
+            for fut, keys in list(running.items()):
                 fut.cancel()
-                _release(base, key)
+                for key in keys:
+                    _release(base, key)
+            j = log.close(failed)
     s = _summary(j)
     return {"ok": True, "processed": processed, "done": s["done"], "total": s["total"],
             "seconds": round(time.monotonic() - t0, 3), "bytesRead": bytes_read,
@@ -4446,7 +4772,13 @@ def _unit_run_m005(dataset_id, m: dict, plan: Plan, path: Path, budget: float, d
 def _m005_timed(plan, us, unit, store):
     u0 = time.monotonic()
     result, nread = process_unit_m005(plan, us, unit, store)
-    return result, nread, time.monotonic() - u0
+    return [result], nread, time.monotonic() - u0
+
+
+def _m005_orth_timed(plan, us, units, store):
+    u0 = time.monotonic()
+    results, nread = process_orth_group_m005(plan, us, units, store)
+    return results, nread, time.monotonic() - u0
 
 
 def _m005_stage_progress(us: UnitSet, done) -> list:
@@ -4500,19 +4832,31 @@ def _m005_plane_tiles(plan: Plan, store: Path, t: int, k: int, c: int, z: int, y
     return out
 
 
-def _unit_inputs_m005(plan: Plan, journal: Path, key) -> dict:
-    """What a browser m005 unit reads and makes (see the section header)."""
+def _m005_a_left(us: UnitSet, done) -> dict:
+    """(t, c) -> stage-A units of that tree and channel not done yet (absent = none left)."""
+    out = {}
+    for u in us.units:
+        if u[0] == 0 and _m005_key(u) not in done:
+            g = (u[1], u[3])
+            out[g] = out.get(g, 0) + 1
+    return out
+
+
+def _unit_inputs_m005(plan: Plan, journal: Path, key, a_left=None) -> dict:
+    """What a browser m005 unit reads and makes (see the section header). `a_left`:
+    _m005_a_left of the journal, when the caller (a batch) has read it already."""
     us = _unitset(plan, M005)
     unit = _m005_parse(key)
     s, t, k, c, a, b, d = unit
     tree = plan.trees.get(t)
     if tree is None or c >= tree.channels or k >= len(us.levels):
         raise MigrationError("bad_unit")
-    j = _load_journal(journal) or {}
-    done = set(j.get("done") or [])
+    if a_left is None:
+        j = _load_journal(journal) or {}
+        a_left = _m005_a_left(us, set(j.get("done") or [])) if s and k else {}
     if unit not in us.unit_bytes:
         return {"ok": True, "migration": M005, "unit": _m005_key(unit), "empty": True}
-    if s and k and any(u[0] == 0 and u[1] == t and u[3] == c and _m005_key(u) not in done for u in us.units):
+    if s and k and a_left.get((t, c)):
         raise MigrationError("unit_blocked", 409, "stage A of this tree/channel is not complete")
     store = tile_store_dir(plan.type, plan.folder, M005)
     L = us.levels[k]
@@ -4720,8 +5064,7 @@ def _unit_put_m005(plan: Plan, m: dict, path: Path, key, body: bytes) -> dict:
     _check_source(plan, j, path, persist=False)
     if j.get("state") != "running":
         raise MigrationError("job_not_running", 409)
-    done = set(j.get("done") or [])
-    if s and k and any(u[0] == 0 and u[1] == t and u[3] == c and _m005_key(u) not in done for u in us.units):
+    if s and k and _m005_a_left(us, set(j.get("done") or [])).get((t, c)):
         raise MigrationError("unit_blocked", 409, "stage A of this tree/channel is not complete")
     result = _m005_validate_put(us, unit, body)
     _store_m005(tile_store_dir(plan.type, plan.folder, M005), unit, result)
@@ -4756,10 +5099,18 @@ def unit_inputs_many(dataset_id, mid, keys) -> dict:
     m, plan, path = _open_job(dataset_id, mid)
     if m["id"] not in (M005, M006):
         raise MigrationError("not_applicable", 409, "batches are an m005 / m006 protocol")
+    a_left = None
+    if m["id"] == M005:
+        # The journal read and the stage-A census once per request, not once per unit.
+        try:
+            j = _load_journal(path) or {}
+            a_left = _m005_a_left(_unitset(plan, M005), set(j.get("done") or []))
+        except MigrationError:
+            a_left = None      # each unit then reports the error, as unit_inputs would
     items = []
     for key in keys:
         try:
-            items.append(_unit_inputs_m005(plan, path, key) if m["id"] == M005 else _unit_inputs_m006(plan, key))
+            items.append(_unit_inputs_m005(plan, path, key, a_left) if m["id"] == M005 else _unit_inputs_m006(plan, key))
         except MigrationError as exc:
             items.append(_unit_error(key, exc))
     return {"ok": True, "items": items}
@@ -4821,6 +5172,7 @@ def unit_put_many(dataset_id, mid, body: bytes) -> dict:
     if j.get("state") != "running":
         raise MigrationError("job_not_running", 409)
     done = set(j.get("done") or [])
+    a_left = _m005_a_left(us, done) if m["id"] == M005 else {}
     store = tile_store_dir(plan.type, plan.folder, m["id"])
     results, accepted = [], []
     for key, data in entries:
@@ -4843,12 +5195,15 @@ def unit_put_many(dataset_id, mid, body: bytes) -> dict:
                 raise MigrationError("bad_unit")
             if unit not in us.unit_bytes:
                 raise MigrationError("empty_unit", 409)
-            if s and k and any(u[0] == 0 and u[1] == t and u[3] == c and _m005_key(u) not in done for u in us.units):
+            if s and k and a_left.get((t, c)):
                 raise MigrationError("unit_blocked", 409, "stage A of this tree/channel is not complete")
             _store_m005(store, unit, _m005_validate_put(us, unit, data))
-            accepted.append(_m005_key(unit))
+            ukey = _m005_key(unit)
+            accepted.append(ukey)
             # A stage-A unit of this batch counts for the later units of the same batch.
-            done.add(_m005_key(unit))
+            if s == 0 and ukey not in done:
+                a_left[(t, c)] = a_left.get((t, c), 0) - 1
+            done.add(ukey)
             results.append({"ok": True, "unit": key})
         except MigrationError as exc:
             results.append(_unit_error(key, exc))
@@ -4863,25 +5218,38 @@ def _part_path(plan: Plan, key: str, mid: str = None) -> Path:
 
 
 def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
-    """One piece of an m005 unit result larger than one request may carry (the host's
-    post_max_size): pieces arrive in order (`offset` = the bytes received so far; a repeated
-    piece is accepted again), and the last one (offset + length = total) stores the unit like
-    unit_put. {ok, complete, received} or unit_put's answer + complete: true."""
+    """One piece of a unit result larger than one request may carry (the host's
+    post_max_size), any migration: pieces arrive in order (`offset` = the bytes received so
+    far; a repeated piece is accepted again), and the last one (offset + length = total) stores
+    the unit like unit_put. {ok, complete, received} or unit_put's answer + complete: true."""
     m, plan, path = _open_job(dataset_id, mid)
-    if m["id"] not in (M005, M006):
-        raise MigrationError("not_applicable", 409, "pieces are an m005 / m006 protocol")
     try:
         offset, total = int(offset), int(total)
     except (TypeError, ValueError):
         raise MigrationError("bad_blob", 400, "offset / total")
     if total < 1 or total > MAX_UNIT_TOTAL or offset < 0 or offset + len(body) > total or not body:
         raise MigrationError("bad_blob", 400, "piece outside the unit")
-    (_m005_parse if m["id"] == M005 else _m006_parse)(key)
+    if m["id"] not in (M005, M006) and total > MAX_UNIT_BODY:
+        raise MigrationError("body_too_large", 413)
+    unit_key_canon = unit_key_for(m["id"], parse_unit_key_for(m["id"], key))
+    # Before anything is written: a piece in flight when the job was cancelled or paused must
+    # not recreate the store the cancel removed.
+    j = _load_journal(path)
+    if j is None:
+        raise MigrationError("no_job", 404)
+    _check_source(plan, j, path, persist=False)
+    if j.get("state") != "running":
+        raise MigrationError("job_not_running", 409)
     p = _part_path(plan, str(key), m["id"])
-    p.parent.mkdir(parents=True, exist_ok=True)
     have = p.stat().st_size if p.exists() else 0
+    if offset > have and have == 0 and unit_key_canon in (j.get("done") or []):
+        # The last piece stored the unit (and dropped the part file) but its answer was lost:
+        # the worker's retry of that piece is acknowledged.
+        s = _summary(j)
+        return {"ok": True, "done": s["done"], "total": s["total"], "complete": True}
     if offset > have:
         raise MigrationError("bad_blob", 409, "piece at %d, %d bytes received" % (offset, have))
+    p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "r+b" if p.exists() else "wb") as fh:
         fh.seek(offset)
         fh.write(body)
@@ -4890,7 +5258,7 @@ def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
         return {"ok": True, "complete": False, "received": offset + len(body)}
     data = p.read_bytes()
     try:
-        out = _unit_put_m005(plan, m, path, key, data) if m["id"] == M005 else _unit_put_m006(plan, m, path, key, data)
+        out = _unit_put_any(plan, m, path, key, data)
     finally:
         try:
             p.unlink()
@@ -5451,22 +5819,22 @@ def _unit_run_m006(dataset_id, m: dict, plan: Plan, path: Path, budget: float, d
     t0 = time.monotonic()
     processed, bytes_read, bytes_written, slowest = [], 0, 0, 0.0
     j = _load_journal(path) or {}
-    taken, running = set(), {}
+    queue = _RunQueue(us, j.get("done") or [])
+    log = _RunJournal(plan, m, path, j, queue)
+    running = {}
+    failed = True
     with ThreadPoolExecutor(max_workers=workers) as ex:
         def submit_more():
             while len(running) < workers:
                 if time.monotonic() - t0 + slowest > budget and (processed or running):
                     return
-                done = set(j.get("done") or [])
-                key = _claim(base, (k for k in (_m006_key(u) for u in us.units)
-                                    if k not in done and k not in taken))
+                key = queue.claim(base)
                 if key is None:
                     return
-                taken.add(key)
                 running[ex.submit(_m006_timed, plan, us, _m006_parse(key), store)] = key
 
-        submit_more()
         try:
+            submit_more()
             while running:
                 finished, _ = wait(list(running), return_when=FIRST_COMPLETED)
                 for fut in finished:
@@ -5478,15 +5846,17 @@ def _unit_run_m006(dataset_id, m: dict, plan: Plan, path: Path, budget: float, d
                         slowest = max(slowest, secs)
                         if not dry:
                             _store_m006(store, _m006_parse(key), result)
-                            j = _mark_done(plan, m, path, [key], "server")
+                            log.add(key)
                         processed.append(key)
                     finally:
                         _release(base, key)
                 submit_more()
+            failed = False
         finally:
             for fut, key in list(running.items()):
                 fut.cancel()
                 _release(base, key)
+            j = log.close(failed)
     s = _summary(j)
     return {"ok": True, "processed": processed, "done": s["done"], "total": s["total"],
             "seconds": round(time.monotonic() - t0, 3), "bytesRead": bytes_read,

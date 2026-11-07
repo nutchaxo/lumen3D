@@ -15,7 +15,9 @@
                     TOOL_CHANGED  a tool picked in the page (keyboard shortcut)
                     QUALITY_STATUS a SET_QUALITY settled
                     SYNC_*        camera / channels / exposure / z / time / slicer
-                                  plane / z-stack, relayed to the siblings
+                                  plane / z-stack, relayed to the siblings; and how
+                                  the volumes are drawn: SYNC_PLUGIN (a display
+                                  toggle, plugin.json#compareSync) / SYNC_RENDER_MODE
                     WM_PHYSICAL_VIEW a photograph's physical view (µm per px);
                                   only a calibrated photograph sends or receives one
                     SIDEBAR_CLOSED, REQUEST_COMPARE_STUDIO
@@ -25,7 +27,11 @@
                     TOGGLE_SIDEBAR, TOGGLE_ZSTACK, ZSTACK_HOVER_STATE,
                     SET_CHANNEL_ACTIVE, APPLY_WORKSPACE_STATE, the SYNC_* relays,
                     WM_SET_PHYSICAL_VIEW
-                    REQUEST_CAPTURE        what the panel shows, as an ImageBitmap
+                    PANEL_RESOURCES        how many volume panels share the machine (the
+                                           page divides its loader by it) and the GPU
+                                           budget each may plan against (PanelResources); also `?panels=N`
+                                           in the page's address, for its first load
+                    REQUEST_CAPTURE       what the panel shows, as an ImageBitmap
                     REQUEST_STUDIO_SLICE   the slice the Studio composes (bitmap +
                                            raw channel values + histograms)
                     REQUEST_WORKSPACE_STATE / REQUEST_CHANNEL_STATE
@@ -41,10 +47,13 @@ const CompareApp = (() => {
   // The panels share one renderer and one GPU: the sum of their atlases stays under
   // one budget (CompareQuality), a panel that has not priced its levels yet is
   // assumed to hold the 512 level of a typical dataset.
+  // Used until the panels report the GPU budget they would give themselves
+  // (PanelResources.totalBudget); an older page never reports one.
   const SHARED_ATLAS_BUDGET_BYTES = 1.5 * 1024 * 1024 * 1024;
   const UNPRICED_PANEL_BYTES = 256 * 1024 * 1024;
   const AUTO_QUALITY_CEILING = '1024x1024';
   const INITIAL_PANEL_QUALITY = '512x512';
+  const PANEL_PASSTHROUGH_PARAMS = ['rawCache', 'denseCells', 'perf'];
   const QUALITY_RANK = { '256x256': 0, '512x512': 1, '1024x1024': 2, '2048x2048': 3, '4096x4096': 4, native: 5 };
 
   let _datasets = [];
@@ -58,7 +67,7 @@ const CompareApp = (() => {
     gridRows: [1, 1]
   };
   let _resizeNotifyTimer = null;
-  let _syncOptions = { z: true, time: true, camera: true, channels: true };
+  let _syncOptions = { z: true, time: true, camera: true, channels: true, display: true };
   let _tool = 'navigate';
   let _qualityMode = 'auto';
   // The last relayed view of each kind, replayed to a panel that joins later so
@@ -66,6 +75,7 @@ const CompareApp = (() => {
   const _lastSync = {};
   const _lastSyncSource = {};      // sync key -> index of the panel that produced it
   const _channelSource = {};       // channel name -> index of the panel that produced it
+  const _pluginSource = {};        // plugin id (a display toggle) -> index of the panel that produced it
 
   let _loadQueue = [];
   let _activeLoads = 0;
@@ -97,11 +107,14 @@ const CompareApp = (() => {
 
   async function init() {
     Theme.init();
+    // The catalog needs neither the instance config nor the translations: its
+    // request runs beside them (Catalog.load() never rejects).
+    const catalogReady = Catalog.load();
     await InstanceConfig.load();
     await I18n.init();
     InstanceConfig.applyHead();
     InstanceConfig.applyDom();
-    await Catalog.load();
+    await catalogReady;
 
     _datasets = Catalog.getAll();
     _updateThemeIcon();
@@ -110,6 +123,7 @@ const CompareApp = (() => {
     I18n.onLanguageChange(() => {
       _renderModalList();
       _renderModalTypeChips();
+      document.querySelectorAll('.compare-drawer-close').forEach(b => b.setAttribute('aria-label', _t('app.close', 'Close')));
       // The panels follow the language on their own (storage event) and re-describe
       // their toolbar; ask once more a little later for any that were still busy.
       setTimeout(() => _broadcast({ type: 'PANEL_HELLO' }, null), 600);
@@ -117,6 +131,8 @@ const CompareApp = (() => {
 
     _bindToolbar();
     _bindModal();
+    _watchLayoutVisibility();
+    _watchNarrowLayout();
     _updateLayout();
     _bindExport();
     // Panels answer the host in messages: listen before the first one is added.
@@ -145,6 +161,7 @@ const CompareApp = (() => {
       _initialPending = added.length;
     }
     document.addEventListener('keydown', _onKeydown);
+    _initHostPlugins();
 
     if (typeof UrlState !== 'undefined') {
       UrlState.startSync(_getWorkspaceState, 1000, { pristine: !restored });
@@ -166,7 +183,7 @@ const CompareApp = (() => {
   }
 
   function _bindToolbar() {
-    ['z', 'time', 'camera', 'channels'].forEach(key => {
+    ['z', 'time', 'camera', 'channels', 'display'].forEach(key => {
       const cb = document.getElementById(`sync-${key}`);
       if (cb) cb.addEventListener('change', (e) => { _syncOptions[key] = e.target.checked; });
     });
@@ -237,6 +254,8 @@ const CompareApp = (() => {
 
   // ── Dataset picker ────────────────────────────────────────
 
+  let _releaseModalFocus = null;
+
   function _bindModal() {
     document.getElementById('btn-close-modal').addEventListener('click', _closeModal);
     document.getElementById('modal-select').addEventListener('click', (e) => {
@@ -253,10 +272,22 @@ const CompareApp = (() => {
       const chip = e.target.closest('[data-type]');
       if (!chip) return;
       _modalFilter.type = chip.dataset.type;
+      const hadFocus = chip === document.activeElement;
       _renderModalTypeChips();
       _renderModalList();
+      // The chips are rebuilt: give the keyboard back the one it pressed.
+      if (hadFocus) _modalTypeChip(_modalFilter.type)?.focus();
     });
-    document.getElementById('modal-dataset-list').addEventListener('click', (e) => {
+    document.getElementById('modal-dataset-list').addEventListener('click', async (e) => {
+      const retry = e.target.closest('[data-catalog-retry]');
+      if (retry) {
+        retry.disabled = true;
+        await Catalog.load({ force: true });
+        _datasets = Catalog.getAll();
+        _renderModalTypeChips();
+        _renderModalList();
+        return;
+      }
       const card = e.target.closest('.dataset-mini-card');
       if (!card) return;
       _addPanel(card.dataset.id);
@@ -277,9 +308,17 @@ const CompareApp = (() => {
     const host = document.getElementById('modal-type-chips');
     if (!host) return;
     const present = new Set(_datasets.map(d => d.type));
-    const chip = (type, label) => `<button type="button" class="modal-type-chip${_modalFilter.type === type ? ' is-active' : ''}" data-type="${Utils.escapeHtml(type)}">${Utils.escapeHtml(label)}</button>`;
+    const chip = (type, label) => {
+      const on = _modalFilter.type === type;
+      return `<button type="button" class="modal-type-chip${on ? ' is-active' : ''}" aria-pressed="${on}" data-type="${Utils.escapeHtml(type)}">${Utils.escapeHtml(label)}</button>`;
+    };
     host.innerHTML = chip('all', _t('compare.allTypes', 'All'))
       + Utils.DATASET_TYPES.filter(t => present.has(t)).map(t => chip(t, Utils.datasetTypeLabel(t))).join('');
+  }
+
+  function _modalTypeChip(type) {
+    const host = document.getElementById('modal-type-chips');
+    return host ? Array.from(host.querySelectorAll('[data-type]')).find(b => b.dataset.type === type) || null : null;
   }
 
   function _modalMatches(d) {
@@ -294,6 +333,11 @@ const CompareApp = (() => {
     if (!list) return;
     const shown = _datasets.filter(_modalMatches);
     if (!shown.length) {
+      if (!_datasets.length && Catalog.getLoadError()) {
+        list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(_t('compare.loadFailed', 'Could not load the datasets.'))}
+          <div><button type="button" class="btn btn-outline btn-sm" data-catalog-retry>${Utils.escapeHtml(_t('compare.retry', 'Retry'))}</button></div></div>`;
+        return;
+      }
       const message = _datasets.length ? _t('compare.noMatch', 'No dataset matches.') : _t('compare.noDatasets', 'The catalog has no dataset yet.');
       list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(message)}</div>`;
       return;
@@ -315,12 +359,19 @@ const CompareApp = (() => {
       _toast(_t('toast.maxPanels', `Maximum of ${MAX_PANELS} panels reached.`, { count: MAX_PANELS }));
       return;
     }
-    document.getElementById('modal-select').classList.add('active');
-    document.getElementById('modal-search')?.focus();
+    const modal = document.getElementById('modal-select');
+    const wasOpen = modal.classList.contains('active');
+    modal.classList.add('active');
+    // Focus enters the picker (search field first), Tab stays inside it, and closing hands
+    // focus back to the control that opened it.
+    if (!wasOpen) {
+      _releaseModalFocus = Utils.trapFocus(modal, { initialFocus: document.getElementById('modal-search') });
+    }
   }
 
   function _closeModal() {
     document.getElementById('modal-select').classList.remove('active');
+    if (_releaseModalFocus) { const release = _releaseModalFocus; _releaseModalFocus = null; release(); }
   }
 
   // ── Panels ────────────────────────────────────────────────
@@ -376,10 +427,10 @@ const CompareApp = (() => {
         <div class="panel-title-badge" title="${Utils.escapeHtml(panel.name)}">${Utils.escapeHtml(panel.name)}</div>
         <div class="panel-actions">
           <div class="panel-toggles" data-index="${index}"></div>
-          <button class="btn btn-outline btn-sm bg-surface p-1 btn-settings" data-index="${index}" title="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" data-i18n-title="js.toggleSettings">
+          <button type="button" class="btn btn-outline btn-sm bg-surface p-1 btn-settings" data-index="${index}" aria-pressed="false" title="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" aria-label="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" data-i18n-title="js.toggleSettings" data-i18n-aria="js.toggleSettings">
             <i data-lucide="settings" class="w-4 h-4"></i>
           </button>
-          <button class="btn btn-outline btn-sm bg-surface p-1 btn-close-panel" data-index="${index}" title="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" data-i18n-title="js.closePanel">
+          <button type="button" class="btn btn-outline btn-sm bg-surface p-1 btn-close-panel" data-index="${index}" title="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" aria-label="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" data-i18n-title="js.closePanel" data-i18n-aria="js.closePanel">
             <i data-lucide="x" class="w-4 h-4"></i>
           </button>
         </div>
@@ -409,12 +460,17 @@ const CompareApp = (() => {
 
     _updateLayout();
     _queuePanelLoad(panel);
+    // The panels already up give up part of their share to the newcomer.
+    _postResources();
     return panel;
   }
 
   function _removePanel(index) {
     const panel = _panelByIndex(index);
     if (!panel) return;
+    // Removing the focused element would drop the keyboard back at the top of the page.
+    const hadFocus = Boolean(panel.el && document.activeElement && panel.el.contains(document.activeElement));
+    const position = _panels.indexOf(panel);
     panel.timers.forEach(t => clearTimeout(t));
     panel.timers.clear();
     panel.readyResolve?.(false);
@@ -422,6 +478,7 @@ const CompareApp = (() => {
     _panels = _panels.filter(p => p !== panel);
     _loadQueue = _loadQueue.filter(p => p !== panel);
     _qualityQueue = _qualityQueue.filter(p => p !== panel);
+    _emitPanelsChanged();
     if (_qualityBusy?.panel === panel) _finishQuality();
     // What a closed panel last shared must not be replayed onto the next one.
     _forgetSyncFrom(panel.index);
@@ -435,7 +492,56 @@ const CompareApp = (() => {
     _renderToolChips();
     _updateActionButtons();
     _updateLayout();
+    if (hadFocus) {
+      const neighbour = _panels[Math.min(position, _panels.length - 1)];
+      const target = neighbour?.el?.querySelector('.btn-close-panel') || document.getElementById('btn-add-dataset');
+      target?.focus();
+    }
+    // The room a closed panel held goes back to the others before they are raised.
+    _postResources();
     _scheduleQuality();
+  }
+
+  // While the Studio covers the page the panels are display:none: a page that is not rendered
+  // never gets an animation frame, so a volume streaming in it waits for the Studio to close.
+  // A deadline therefore does not run out under the Studio: it starts over each time it would.
+  // `holder.timer` follows the live timer, for a caller that clears it early.
+  let _layoutHidden = false;
+
+  function _setDeadline(panel, ms, onExpire, holder = null) {
+    const arm = () => {
+      const t = _setTimer(panel, () => {
+        if (_layoutHidden) { const again = arm(); if (holder) holder.timer = again; return; }
+        onExpire();
+      }, ms);
+      return t;
+    };
+    const t = arm();
+    if (holder) holder.timer = t;
+    return t;
+  }
+
+  /** The panels' page is shown again: resize what was folded, and resume the quality staging. */
+  function _watchLayoutVisibility() {
+    const layout = document.querySelector('.compare-layout');
+    if (!layout || typeof MutationObserver === 'undefined') return;
+    new MutationObserver(() => {
+      const hidden = layout.classList.contains('hidden');
+      if (hidden === _layoutHidden) return;
+      _layoutHidden = hidden;
+      if (!hidden) { _notifyFramesResize(); _scheduleQuality(); }
+    }).observe(layout, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  // Below this width compare.html stacks the automatic layout in one scrolling column.
+  const NARROW_LAYOUT_QUERY = '(max-width: 720px)';
+
+  /** Crossing the narrow breakpoint reshapes every panel at once: let them re-measure. */
+  function _watchNarrowLayout() {
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(NARROW_LAYOUT_QUERY);
+    if (typeof query.addEventListener === 'function') query.addEventListener('change', _notifyFramesResize);
+    else if (typeof query.addListener === 'function') query.addListener(_notifyFramesResize);
   }
 
   function _setTimer(panel, fn, ms) {
@@ -449,7 +555,31 @@ const CompareApp = (() => {
   function _queuePanelLoad(panel) {
     if (_loadQueue.includes(panel)) return;
     _loadQueue.push(panel);
-    _drainLoadQueue();
+    // A burst of additions (?add=, a restored workspace, Decompose) is all queued before
+    // the first page starts: each page is told how many volume panels share the machine
+    // (`panels=`) when it boots, so its worker pool and caches are sized for the real count.
+    Promise.resolve().then(_drainLoadQueue);
+  }
+
+  function _volumePanelCount() {
+    return _panels.filter(p => p.type !== '2d').length;
+  }
+
+  /** The panel's address with the number of volume panels it shares the machine with. */
+  function _withPanelCount(src) {
+    const at = String(src).indexOf('?');
+    const path = at < 0 ? String(src) : String(src).slice(0, at);
+    const params = new URLSearchParams(at < 0 ? '' : String(src).slice(at + 1));
+    params.set('panels', String(Math.max(1, _volumePanelCount())));
+    // The renderer's own switches (?rawCache=0, ?denseCells=1, ?perf=1) given to this page
+    // reach the panels, so a comparison can be profiled or bisected like a lone viewer.
+    try {
+      const own = new URLSearchParams(window.location.search);
+      for (const key of PANEL_PASSTHROUGH_PARAMS) {
+        if (own.has(key) && !params.has(key)) params.set(key, own.get(key));
+      }
+    } catch (_) { /* no location: nothing to pass on */ }
+    return `${path}?${params.toString()}`;
   }
 
   function _drainLoadQueue() {
@@ -469,7 +599,7 @@ const CompareApp = (() => {
   async function _loadPanelFrame(panel) {
     const iframe = panel.iframe;
     if (!iframe?.dataset.src) return;
-    const src = iframe.dataset.src;
+    const src = _withPanelCount(iframe.dataset.src);
     delete iframe.dataset.src;
     // A restored workspace goes down as soon as the document exists: the viewer
     // buffers it and skips its initial camera fit, so the saved camera is not
@@ -529,7 +659,7 @@ const CompareApp = (() => {
     if (panel.ready || panel.failed) return Promise.resolve(panel.ready);
     return new Promise(resolve => {
       panel.readyResolve = resolve;
-      _setTimer(panel, () => {
+      _setDeadline(panel, PANEL_READY_TIMEOUT_MS, () => {
         // A timer of an earlier attempt (the panel was retried since) has no say.
         if (panel.readyResolve !== resolve) return;
         if (!panel.ready && !panel.failed) {
@@ -541,7 +671,7 @@ const CompareApp = (() => {
           _updateActionButtons();
           resolve(false);
         }
-      }, PANEL_READY_TIMEOUT_MS);
+      });
     });
   }
 
@@ -555,6 +685,7 @@ const CompareApp = (() => {
     };
     panel.features = data.features || {};
     panel.qualityBytes = _cleanQualityBytes(data.features?.qualityBytes);
+    panel.gpuBudget = Number(data.features?.gpuBudgetBytes) > 0 ? Number(data.features.gpuBudgetBytes) : null;
     panel.quality = data.quality || panel.quality;
     if (data.name) _setPanelTitle(panel, data.name);
     if (data.datasetType) { panel.type = data.datasetType; panel.el.dataset.panelType = data.datasetType; }
@@ -563,7 +694,9 @@ const CompareApp = (() => {
     _updateActionButtons();
     _showPanelLoadState(panel, null);
     _refreshPanelState(panel);
-    if (!first) return;
+    // A panel that describes itself again (a language switch, PANEL_HELLO): what a
+    // host plugin asked it before may be out of date.
+    if (!first) { _emitPanelsChanged(); return; }
 
     // The host's state, now that the page listens: tool, then whatever a restore
     // or a decomposition had reserved for it, then the view the others share.
@@ -576,6 +709,8 @@ const CompareApp = (() => {
     if (!panel.restored) _replayLastSync(panel);
     panel.readyResolve?.(true);
     panel.readyResolve = null;
+    _emitPanelsChanged();
+    _postResources();
     _scheduleQuality();
     // The panels the URL asked for are the page's untouched state.
     if (_initialPending > 0 && --_initialPending === 0 && !_restoredFromUrl && typeof UrlState !== 'undefined') {
@@ -609,6 +744,10 @@ const CompareApp = (() => {
       _postTo(panel, _lastSync.SYNC_TIME);
     }
     if (!volume) return;
+    if (_syncOptions.display) {
+      Object.values(_lastSync.plugins || {}).forEach(msg => _postTo(panel, msg));
+      if (_lastSync.SYNC_RENDER_MODE) _postTo(panel, _lastSync.SYNC_RENDER_MODE);
+    }
     if (_syncOptions.channels) {
       Object.values(_lastSync.channels || {}).forEach(msg => _postTo(panel, msg));
       if (_lastSync.SYNC_EXPOSURE) _postTo(panel, _lastSync.SYNC_EXPOSURE);
@@ -708,6 +847,7 @@ const CompareApp = (() => {
   function _syncToolChips() {
     document.querySelectorAll('#compare-tool-chips [data-tool]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tool === _tool);
+      btn.setAttribute('aria-pressed', String(btn.dataset.tool === _tool));
     });
   }
 
@@ -747,7 +887,48 @@ const CompareApp = (() => {
     const reserve = (volumes.length - priced.length) * UNPRICED_PANEL_BYTES;
     return CompareQuality.plan(
       priced.map(p => ({ key: p.index, quality: p.quality, bytes: p.qualityBytes })),
-      SHARED_ATLAS_BUDGET_BYTES, reserve, AUTO_QUALITY_CEILING);
+      _atlasBudget(), reserve, AUTO_QUALITY_CEILING);
+  }
+
+  // ── What each panel may hold (PanelResources) ─────────────
+
+  /** The GPU memory the panels may take together, from what they report; null before any did. */
+  function _gpuTotal() {
+    const reported = _panels.filter(p => p.ready && p.gpuBudget).map(p => p.gpuBudget);
+    return reported.length ? PanelResources.totalBudget(reported) : null;
+  }
+
+  /** The atlas bytes the quality plan may spend: the total less the headroom each page keeps. */
+  function _atlasBudget() {
+    const total = _gpuTotal();
+    return total ? Math.floor(total / PanelResources.HEADROOM) : SHARED_ATLAS_BUDGET_BYTES;
+  }
+
+  /**
+   * Tell every ready volume panel how many volume panels share the machine and how much
+   * GPU memory it may plan and evict against (PANEL_RESOURCES). A page alone, or one that
+   * never reported its budget, keeps the whole card. A panel on the move between two
+   * qualities holds both at the swap, so it is given room for the two.
+   */
+  function _postResources() {
+    const volumes = _panels.filter(p => p.type !== '2d');
+    const count = volumes.length;
+    if (!count) return;
+    const total = _gpuTotal();
+    const plan = _qualityMode === 'auto' ? _budgetPlan() : null;
+    const bytesAt = (p, q) => (Number(p.qualityBytes?.[q]) > 0 ? Number(p.qualityBytes[q]) : UNPRICED_PANEL_BYTES);
+    const shares = total && count > 1
+      ? PanelResources.vramShares(volumes.map(p => {
+        const now = bytesAt(p, p.quality);
+        const next = p.ready && p.quality ? bytesAt(p, _targetFor(p, plan)) : now;
+        return { key: p.index, bytes: _qualityBusy?.panel === p ? now + next : Math.max(now, next) };
+      }), total)
+      : null;
+    // The loader settings are divided in the panel, from its own BrickLoader's defaults.
+    volumes.forEach(p => {
+      if (!p.ready) return;
+      _postTo(p, { type: 'PANEL_RESOURCES', panels: count, vramBytes: shares ? shares.get(p.index) : null });
+    });
   }
 
   function _targetFor(panel, plan) {
@@ -775,16 +956,19 @@ const CompareApp = (() => {
   }
 
   function _drainQualityQueue() {
-    while (!_qualityBusy && _qualityQueue.length) {
+    // Nothing is staged under the Studio: the panels' pages are not rendered there.
+    while (!_qualityBusy && _qualityQueue.length && !_layoutHidden) {
       const panel = _qualityQueue.shift();
       const target = _targetFor(panel);
       if (panel.quality === target) continue;      // the plan moved while it waited
       _qualityBusy = { panel, target, timer: null };
-      _qualityBusy.timer = _setTimer(panel, () => {
+      _setDeadline(panel, QUALITY_TIMEOUT_MS, () => {
         console.warn(`[Compare] Panel ${panel.index} did not settle at ${target} within ${QUALITY_TIMEOUT_MS / 1000} s.`);
         panel.qualityFailed = target;
         _finishQuality();
-      }, QUALITY_TIMEOUT_MS);
+      }, _qualityBusy);
+      // Room for the two levels first: the page loads the new atlas beside the one on screen.
+      _postResources();
       _postTo(panel, { type: 'SET_QUALITY', quality: target });
     }
   }
@@ -795,6 +979,7 @@ const CompareApp = (() => {
       if (timer) { clearTimeout(timer); panel.timers.delete(timer); }
     }
     _qualityBusy = null;
+    _postResources();
     _drainQualityQueue();
   }
 
@@ -818,9 +1003,15 @@ const CompareApp = (() => {
       const btn = panel.el?.querySelector('.btn-settings');
       const isTarget = String(panel.index) === String(index);
       const next = isTarget && btn ? !btn.classList.contains('active') : false;
-      if (btn) btn.classList.toggle('active', next);
+      _setSettingsButton(btn, next);
       _postTo(panel, { type: 'TOGGLE_SIDEBAR', value: next });
     });
+  }
+
+  function _setSettingsButton(btn, on) {
+    if (!btn) return;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
   }
 
   // ── Layout ────────────────────────────────────────────────
@@ -1017,6 +1208,14 @@ const CompareApp = (() => {
     });
   }
 
+  /** To the volume panels that are up, not to a photograph (it has no volume to draw) nor one still loading. */
+  function _broadcastVolumes(message, skipIndex) {
+    _panels.forEach(panel => {
+      if (String(panel.index) === String(skipIndex) || !panel.ready || !panel.features.volume) return;
+      _postTo(panel, message);
+    });
+  }
+
   function _handleIframeMessage(event) {
     if (!Utils.isTrustedMessageOrigin(event)) return;
     const data = event.data;
@@ -1074,9 +1273,24 @@ const CompareApp = (() => {
         _remember(data.type, data, panel);
         _broadcast(data, panel.index);
         break;
+      // How the volumes are drawn: a toggle the operator pressed in one panel (a plugin
+      // that declared `compareSync: "display"`: grid, axes, hidden volume) and the render
+      // mode. A comparison read with one panel showing the grid and another not, or one in
+      // emission and the other in DVR, compares the settings rather than the specimens.
+      case 'SYNC_PLUGIN':
+        if (!_syncOptions.display || typeof data.id !== 'string' || !data.id) break;
+        _lastSync.plugins = _lastSync.plugins || {};
+        _lastSync.plugins[data.id] = data;
+        _pluginSource[data.id] = panel.index;
+        _broadcastVolumes(data, panel.index);
+        break;
+      case 'SYNC_RENDER_MODE':
+        if (!_syncOptions.display || typeof data.value !== 'string' || !data.value) break;
+        _remember('SYNC_RENDER_MODE', data, panel);
+        _broadcastVolumes(data, panel.index);
+        break;
       case 'SIDEBAR_CLOSED': {
-        const btn = panel.el?.querySelector('.btn-settings');
-        if (btn) btn.classList.remove('active');
+        _setSettingsButton(panel.el?.querySelector('.btn-settings'), false);
         break;
       }
       case 'REQUEST_COMPARE_STUDIO': _openCompareStudio(); break;
@@ -1085,6 +1299,7 @@ const CompareApp = (() => {
       case 'STUDIO_SLICE':
       case 'WORKSPACE_STATE':
       case 'CHANNEL_STATE':
+      case 'GRAPH_DATA':
         // A late answer (its request timed out) or a duplicate: release its pictures.
         if (!_rpc.settle(panel.index, data)) _releaseAnswer(data);
         break;
@@ -1110,12 +1325,18 @@ const CompareApp = (() => {
       delete _channelSource[name];
       if (_lastSync.channels) delete _lastSync.channels[name];
     }
+    for (const id of Object.keys(_pluginSource)) {
+      if (!same(_pluginSource[id])) continue;
+      delete _pluginSource[id];
+      if (_lastSync.plugins) delete _lastSync.plugins[id];
+    }
   }
 
   function _clearLastSync() {
     for (const key of Object.keys(_lastSync)) delete _lastSync[key];
     for (const key of Object.keys(_lastSyncSource)) delete _lastSyncSource[key];
     for (const key of Object.keys(_channelSource)) delete _channelSource[key];
+    for (const key of Object.keys(_pluginSource)) delete _pluginSource[key];
   }
 
   // ── Time sync ─────────────────────────────────────────────────
@@ -1636,6 +1857,106 @@ const CompareApp = (() => {
       return;
     }
     console.warn(`[Compare] ${text}`);
+  }
+
+  // ── Plugins that extend this page ─────────────────────────
+  // A plugin declaring the "compare" context gets a host context instead of a
+  // viewer one: the open panels (to ask, by request / response), a toolbar button
+  // and a drawer under the grid. The panels themselves load the same plugin in
+  // their "panel" context and answer it. Nothing here knows what the plugin draws.
+
+  let _panelListeners = [];
+
+  function _emitPanelsChanged() {
+    _panelListeners.slice().forEach(fn => { try { fn(); } catch (err) { console.warn('[Compare] panel listener failed:', err); } });
+  }
+
+  function _hostPluginCtx() {
+    return {
+      context: 'compare',
+      panels: {
+        list: () => _panels.map(p => ({ index: p.index, id: p.id, name: p.name, type: p.type, ready: p.ready, failed: p.failed })),
+        request: (index, type, payload, opts) => _rpc.request(index, type, payload, opts),
+        onChange: (cb) => {
+          if (typeof cb !== 'function') return () => {};
+          _panelListeners.push(cb);
+          return () => { _panelListeners = _panelListeners.filter(fn => fn !== cb); };
+        }
+      },
+      ui: {
+        toast: (msg) => _toast(msg),
+        escapeHtml: (s) => Utils.escapeHtml(s),
+        /** A button in the toolbar that opens / closes a drawer under the panels. */
+        addDrawer: (def = {}) => {
+          const bar = document.getElementById('compare-plugin-actions');
+          const host = document.getElementById('compare-drawers');
+          if (!bar || !host || !def.id) return null;
+          const id = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-outline btn-sm flex items-center gap-2';
+          btn.id = `compare-plugin-${id}`;
+          btn.setAttribute('aria-pressed', 'false');
+          btn.innerHTML = `<i data-lucide="${Utils.escapeHtml(def.icon || 'square')}"></i> <span></span>`;
+          btn.querySelector('span').textContent = def.title || id;
+          bar.appendChild(btn);
+          const el = document.createElement('section');
+          el.className = 'compare-drawer';
+          el.id = `compare-drawer-${id}`;
+          const close = document.createElement('button');
+          close.type = 'button';
+          close.className = 'btn btn-icon btn-ghost compare-drawer-close';
+          close.setAttribute('aria-label', _t('app.close', 'Close'));
+          close.innerHTML = '<i data-lucide="x"></i>';
+          const body = document.createElement('div');
+          body.style.cssText = 'flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:auto';
+          body.innerHTML = def.html || '';
+          el.append(close, body);
+          host.appendChild(el);
+          if (window.lucide) lucide.createIcons({ nodes: [btn, el] });
+          let open = false;
+          const set = (on) => {
+            on = Boolean(on);
+            if (on === open) return;
+            open = on;
+            // A closing drawer hides whatever had the focus in it: hand it to its toolbar button.
+            const focusBack = !on && el.contains(document.activeElement);
+            el.classList.toggle('open', on);
+            if (focusBack) btn.focus();
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-pressed', String(on));
+            try { def.onToggle?.(on); } catch (err) { console.warn('[Compare] drawer toggle failed:', err); }
+            // The panels share the height with the drawer: let them re-measure.
+            requestAnimationFrame(() => {
+              try { def.onResize?.(); } catch (_) { /* drawer gone */ }
+              window.dispatchEvent(new Event('resize'));
+            });
+          };
+          btn.addEventListener('click', () => set(!open));
+          close.addEventListener('click', () => set(false));
+          return {
+            el: body,
+            open: () => set(true),
+            close: () => set(false),
+            isOpen: () => open,
+            setTitle: (title) => { btn.querySelector('span').textContent = title; },
+            remove: () => { btn.remove(); el.remove(); }
+          };
+        }
+      }
+    };
+  }
+
+  async function _initHostPlugins() {
+    if (typeof PluginRegistry === 'undefined' || typeof PluginRegistry.loadModules !== 'function') return;
+    try {
+      const paths = await PluginRegistry.discover('js/modules');
+      await PluginRegistry.loadModules('js/modules', paths, { context: 'compare' });
+      await PluginRegistry.initAll(_hostPluginCtx());
+    } catch (err) {
+      // A plugin must never cost the page: Compare works without them.
+      console.warn('[Compare] Host plugins unavailable:', err);
+    }
   }
 
   // ── Workspace ─────────────────────────────────────────────

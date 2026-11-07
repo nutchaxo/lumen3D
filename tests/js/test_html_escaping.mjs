@@ -44,7 +44,8 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 // ── SEC-018 measure-distance ──
 {
   const s = read('js/modules/tools/measure-distance/index.js');
-  assert.ok(s.includes('${esc(item.color)}'), 'SEC-018: item.color escaped in inline style');
+  // Escaping alone lets a second CSS declaration through: the colour goes through the hex allowlist.
+  assert.ok(s.includes('background:${this._safeColor(item.color)};'), 'SEC-018: item.color validated in inline style');
   assert.ok(!/background:\$\{item\.color\}/.test(s), 'SEC-018: raw item.color removed');
 }
 

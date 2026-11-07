@@ -16,6 +16,13 @@ const Q30Export = (() => {
     if (params && typeof v === 'string') v = v.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? String(params[k]) : m));
     return v;
   }
+  // The reader sees a translated category; the raw cause (HTTP status, URL, parser
+  // message) goes to the console only.
+  function _why(err, context) {
+    let text = '';
+    try { text = (typeof Utils !== 'undefined' && Utils.friendlyErrorText) ? Utils.friendlyErrorText(err, { context }) : ''; } catch (e) { text = ''; }
+    return text || _t('app.errUnknown', 'Something went wrong. Try again; if it keeps happening, reload the page.');
+  }
   const _esc = (s) => (typeof Utils !== 'undefined' && Utils.escapeHtml) ? Utils.escapeHtml(String(s)) : String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
   function _bytes(n) {
@@ -26,8 +33,25 @@ const Q30Export = (() => {
     return `${n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)} ${u[i]}`;
   }
 
+  /**
+   * The tree to download: { manifest, base } of the volume on screen (DataAccess.displayedTree:
+   * on a timelapse, BrickLoader's mounted tree is often a frame the prefetch loaded after it);
+   * null before a mount, and null while the viewer shows no brick tree (a WebGL context
+   * loss released it: the mounted tree is then a prefetched frame, not the one named on
+   * screen). The mounted tree only on a page without DataAccess.
+   */
+  function _tree() {
+    if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.()) return null;
+    if (typeof DataAccess !== 'undefined' && typeof DataAccess.displayedTree === 'function') {
+      const shown = DataAccess.displayedTree();
+      return shown && shown.path && shown.manifest ? { manifest: shown.manifest, base: String(shown.path).replace(/\/$/, '') } : null;
+    }
+    const m = BrickLoader.getManifest?.();
+    return m ? { manifest: m, base: _base() } : null;
+  }
+
   function _manifest() {
-    return typeof BrickLoader !== 'undefined' && BrickLoader.isReady?.() ? BrickLoader.getManifest?.() : null;
+    return _tree()?.manifest || null;
   }
 
   function available() {
@@ -77,7 +101,7 @@ const Q30Export = (() => {
   }
 
   function _base() { return String(BrickLoader.getBasePath()).replace(/\/$/, ''); }
-  function _datasetBase() { return _base().replace(/\/bricks(\/t\d{3,})?$/, ''); }
+  function _datasetBase(base) { return base.replace(/\/bricks(\/t\d{3,})?$/, ''); }
   function _stamp(ref) { return String(ref.sha256 || '').slice(0, 12); }
 
   async function _fetch(url, signal) {
@@ -86,21 +110,23 @@ const Q30Export = (() => {
     return new Uint8Array(await r.arrayBuffer());
   }
 
+  /** The q30 index of the tree `m` served at `base`: { key, parsed, bytes } (the last one kept). */
   let _index = null;
-  async function _loadIndex(signal) {
-    const m = _manifest();
+  async function _loadIndex(signal, base, m) {
     const ref = m.index.columns.q30;
-    const key = `${_base()}|${ref.sha256}`;
-    if (_index && _index.key === key) return _index.parsed;
-    const bytes = await _fetch(`${_base()}/${String(ref.url).replace(/^\/+/, '')}?v=${_stamp(ref)}`, signal);
-    _index = { key, parsed: parseIndex(bytes), bytes };
-    return _index.parsed;
+    const key = `${base}|${ref.sha256}`;
+    if (_index && _index.key === key) return _index;
+    const bytes = await _fetch(`${base}/${String(ref.url).replace(/^\/+/, '')}?v=${_stamp(ref)}`, signal);
+    const rec = { key, parsed: parseIndex(bytes), bytes };
+    _index = rec;
+    return rec;
   }
 
   /** Bytes per level of the q30 column (from the manifest, every channel). */
   function sizes() {
     const m = _manifest();
     const out = {};
+    if (!m) return out;
     for (const L of m.levels || []) {
       const per = m.bytes?.[String(L.level)]?.q30;
       out[L.level] = Array.isArray(per) ? per.reduce((a, b) => a + (Number(b) || 0), 0) : 0;
@@ -135,8 +161,15 @@ const Q30Export = (() => {
   }
 
   async function run({ levelIds, name, sink, signal, onProgress }) {
-    const m = _manifest();
-    const index = await _loadIndex(signal);
+    // The tree on screen now is the one downloaded to the end: a timepoint shown or
+    // prefetched meanwhile mounts another tree in BrickLoader, but this one's index,
+    // manifest and packs stay served, and packs of another frame under this frame's index
+    // would be a corrupt download.
+    const tree = _tree();
+    if (!tree) throw Object.assign(new Error('Q30Export: no tree mounted'), { code: 'BRICKS_NOT_INITIALIZED' });
+    const m = tree.manifest;
+    const base = tree.base;
+    const { parsed: index, bytes: indexBytes } = await _loadIndex(signal, base, m);
     const ref = m.index.columns.q30;
     const zip = new OmeZarr.ZipWriter();
     const enc = new TextEncoder();
@@ -146,14 +179,14 @@ const Q30Export = (() => {
     const total = packs.reduce((a, p) => a + p.end, 0) || 1;
     let done = 0;
     let metadata = null;
-    try { metadata = await _fetch(`${_datasetBase()}/metadata.json`, signal); } catch (err) { if (err?.name === 'AbortError') throw err; }
+    try { metadata = await _fetch(`${_datasetBase(base)}/metadata.json`, signal); } catch (err) { if (err?.name === 'AbortError') throw err; }
     if (metadata) await write(zip.add('metadata.json', metadata));
     await write(zip.add('bricks/manifest.json', enc.encode(JSON.stringify(m))));
-    await write(zip.add('bricks/index/q30.bin', _index.bytes));
+    await write(zip.add('bricks/index/q30.bin', indexBytes));
     for (const p of packs) {
       if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       const rel = `l${p.level}/q30/c${p.channel}/p${String(p.pack).padStart(5, '0')}.bin`;
-      const data = await _fetch(`${_base()}/${rel}?v=${_stamp(ref)}`, signal);
+      const data = await _fetch(`${base}/${rel}?v=${_stamp(ref)}`, signal);
       await write(zip.add(`bricks/${rel}`, data));
       done += p.end;
       onProgress?.({ done, total, bytesOut, step: rel });
@@ -165,8 +198,12 @@ const Q30Export = (() => {
 
   function mount(el, { dataset }) {
     if (!el) return;
+    // Not offered yet: keep looking while the section is on screen, until a tree IS shown
+    // and is not a q30 one. Nothing on screen covers the loader not mounted yet, a timepoint's
+    // coarse preview (the previous volume detached) and a WebGL context loss: each ends with
+    // a tree on screen, and the section must appear then without reopening the Download Center.
     if (!available()) {
-      if (el.isConnected && typeof BrickLoader !== 'undefined' && !BrickLoader.isReady?.()) setTimeout(() => mount(el, { dataset }), 1000);
+      if (el.isConnected && typeof BrickLoader !== 'undefined' && !_tree()) setTimeout(() => mount(el, { dataset }), 1000);
       return;
     }
     el.hidden = false;
@@ -216,7 +253,11 @@ const Q30Export = (() => {
         sink = await OmeZarrExport.openSink(`${name}.q30.zip`);
       } catch (err) {
         if (err && err.name === 'AbortError') return;
-        throw err;
+        console.error('[Q30Export] The destination file could not be opened:', err);
+        q('[data-q30-progress]').hidden = false;
+        q('[data-q30-fill]').style.width = '0%';
+        q('[data-q30-label]').textContent = _t('download.omezarr.failed', 'Export failed: {error}', { error: _why(err, 'save') });
+        return;
       }
       const ac = new AbortController();
       _job = { ac };
@@ -240,9 +281,10 @@ const Q30Export = (() => {
         label.textContent = _t('download.q30.done', 'Done: {size}, {packs} pack(s).', { size: _bytes(r.bytesOut), packs: r.packs });
       } catch (err) {
         await sink.abort?.();
+        if (!err || err.name !== 'AbortError') console.error('[Q30Export] Export failed:', err);
         label.textContent = err && err.name === 'AbortError'
           ? _t('download.omezarr.cancelled', 'Export cancelled.')
-          : _t('download.omezarr.failed', 'Export failed: {error}', { error: String(err && err.message || err) });
+          : _t('download.omezarr.failed', 'Export failed: {error}', { error: _why(err) });
       } finally {
         _job = null;
         q('[data-q30-cancel]').hidden = true;

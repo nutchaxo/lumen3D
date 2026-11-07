@@ -14,16 +14,21 @@
        With `assemble: {key, slot, components}` the voxels are written, LUT applied,
        at stride `components` into the assembly buffer `key` (created zero-filled on
        first use, sized region voxels × components) and the result carries no bytes.
-     TAKE {id, batch, key, voxels, components, encode?} → DECODE_RESULT {id, ok, buffer}:
+     TAKE {id, batch, key, voxels, components, encode?, split?} → DECODE_RESULT {id, ok, buffer}:
        the assembly, transferred and forgotten (zero-filled when no channel was written).
        With `encode: {format: 'bc', channels, w, h, d}` (the assembly is that w × h × d
        box) the assembly is encoded to the GPU's BC4 / BC5 blocks (bc-codec.js) and the
        result carries `encoded: {width, height, depth, planes: [{format, channels,
        buffer}]}` instead of `buffer`: the display atlas uploads the blocks as they are.
+       With `split: true` (an assembly of 3 or 4 components, for the split display atlas
+       of SVRManager: an RG8 and an R8 texture per page) the result carries `split:
+       {planes: [rg, r]}` instead of `buffer`: bytes 0–1 of each voxel interleaved
+       (voxels × 2) and byte 2 alone (voxels); byte 3 is dropped, as the atlas does.
        With `cells: {w, h, d, apron, margin, blocks}` the result also carries `cellMax`
        (cell-max.js): the 8³ maxima of that w × h × d box, computed on the voxels the
        GPU will read (before the BC encode) — the shader's fine empty-space skip.
-     DROP {key}: forget an assembly.
+     DROP {key}: forget an assembly, once every job posted before it has run (a
+       decode still in flight for that key would otherwise create it again).
      CANCEL {batch?}: with a batch id, drop that batch's queued jobs, suppress its
        in-flight results and forget its assemblies; without, the same for every job
        posted so far (epoch). */
@@ -64,7 +69,7 @@ self.onmessage = (event) => {
     return;
   }
   if (msg.type === 'DROP') {
-    assemblies.delete(msg.key);
+    decodeQueue = decodeQueue.then(() => { assemblies.delete(msg.key); }).catch(console.error);
     return;
   }
   if (msg.type === 'DECODE' || msg.type === 'TAKE') {
@@ -75,6 +80,13 @@ self.onmessage = (event) => {
 
 function isLive(msg, epoch) {
   return epoch === cancelEpoch && !(msg.batch !== undefined && msg.batch !== null && cancelledBatches.has(msg.batch));
+}
+
+// A cancelled job forgets the assembly it may have written to: the CANCEL / DROP that
+// would have freed it can arrive while the job awaits its bitmap, and no TAKE follows.
+function abandon(msg) {
+  const a = msg.assemble;
+  if (a && typeof a === 'object' && a.key !== undefined) assemblies.delete(a.key);
 }
 
 function processTake(msg, epoch) {
@@ -110,6 +122,26 @@ function processTake(msg, epoch) {
     }, planes.map(p => p.buffer).concat(cellMax ? [cellMax.buffer] : []));
     return;
   }
+  if (msg.split) {
+    if (components < 3) {
+      self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: false, message: `a split brick needs 3 or 4 components, not ${components}` });
+      return;
+    }
+    const n = (buf.length / components) | 0;
+    const rg = new Uint8Array(n * 2);
+    const r = new Uint8Array(n);
+    for (let i = 0, s = 0; i < n; i++, s += components) {
+      rg[i * 2] = buf[s];
+      rg[i * 2 + 1] = buf[s + 1];
+      r[i] = buf[s + 2];
+    }
+    self.postMessage({
+      type: 'DECODE_RESULT', id: msg.id, ok: true, assembled: true,
+      split: { planes: [rg.buffer, r.buffer] },
+      cellMax: cellMax ? cellMax.buffer : null
+    }, [rg.buffer, r.buffer].concat(cellMax ? [cellMax.buffer] : []));
+    return;
+  }
   self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: true, buffer: buf.buffer, assembled: true, cellMax: cellMax ? cellMax.buffer : null },
     [buf.buffer].concat(cellMax ? [cellMax.buffer] : []));
 }
@@ -132,6 +164,9 @@ async function processDecode(msg, epoch) {
     // The bytes are measured intensities, not colours: no colour management, no
     // alpha premultiplication may touch them on the way to the canvas.
     bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    // A CANCEL that arrived during the await found no assembly yet; checking here, with
+    // nothing awaited from now to the end of the job, keeps a dead job from creating one.
+    if (!isLive(msg, epoch)) { abandon(msg); return; }
     const t1 = performance.now();
     // A mosaic of a known size (a v3 brick: 9 × 8 slices of 66², 594 × 528) that
     // decodes to another size is corrupt: refuse it rather than pad it with zeros.
@@ -270,7 +305,7 @@ async function processDecode(msg, epoch) {
       // BUG-065 (Rule 1.4 / 1.1): unknown or absent packing mode — fail loud rather
       // than silently producing a scrambled volume. The loader surfaces the dropped
       // brick as a status (onBrickError) instead of mounting corrupt data.
-      if (!isLive(msg, epoch)) return;
+      if (!isLive(msg, epoch)) { abandon(msg); return; }
       self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: 'unknown packing mode: ' + JSON.stringify(packing.mode) });
       return;
     }
@@ -278,7 +313,7 @@ async function processDecode(msg, epoch) {
     const t3 = performance.now();
 
     // Suppress the result if a CANCEL arrived while we were decoding.
-    if (!isLive(msg, epoch)) return;
+    if (!isLive(msg, epoch)) { abandon(msg); return; }
     const perf = { bmp: t1 - t0, img: t2 - t1, loop: t3 - t2, total: t3 - t0 };
     if (assemble) {
       self.postMessage({ type: 'DECODE_RESULT', id, ok: true, assembled: true, region, perf });
@@ -286,7 +321,7 @@ async function processDecode(msg, epoch) {
       self.postMessage({ type: 'DECODE_RESULT', id, ok: true, buffer: dst.buffer, region, perf }, [dst.buffer]);
     }
   } catch (err) {
-    if (!isLive(msg, epoch)) return;
+    if (!isLive(msg, epoch)) { abandon(msg); return; }
     self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: err && err.message ? err.message : String(err) });
   } finally {
     // LEAK-011 (Rule 1.2): release the decoded ImageBitmap graphics handle on every

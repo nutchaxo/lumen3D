@@ -13,45 +13,52 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, el, refreshIcons, Utils } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, el, refreshIcons, toast, Utils, fmtBytes as fmtBytesShared } from './shared.js';
 
 let _report = null;
 let _loading = false;
+let _failed = false;
 
-// Labels of the children of the "code" category. Anything not listed shows its own
-// folder name, so a new top-level folder appears without a change here.
+// Labels of the children of the "code" category: [translation key, English fallback].
+// Anything not listed shows its own folder name, so a new top-level folder appears
+// without a change here.
 const CODE_LABELS = {
-  'js/modules': ['Plugins', 'js/modules'],
-  'js/vendor': ['Bibliothèques embarquées', 'js/vendor'],
-  'js': ['Scripts', 'js'],
-  'css': ['Feuilles de style', 'css'],
-  'api': ['API serveur', 'api'],
-  'lang': ['Traductions', 'lang'],
-  'config': ['Configuration', 'config'],
-  'changelog': ['Notes de version', 'changelog'],
-  'DOCS': ['Documentation', 'DOCS'],
-  'preprocess': ['Pipeline de prétraitement', 'preprocess'],
-  'SCRIPTS': ['Scripts du pipeline', 'SCRIPTS'],
-  'tools': ['Outils de build', 'tools'],
-  'tests': ['Tests', 'tests'],
-  'marketplace': ['Catalogue de plugins signé', 'marketplace'],
-  'logs': ['Journaux du serveur', 'logs'],
-  '.git': ['Historique Git', '.git'],
-  '.venv-312': ['Environnement Python local', '.venv-312'],
-  '__pycache__': ['Cache Python', '__pycache__'],
-  'assets': ['Ressources graphiques', 'assets'],
-  'dist': ['Paquets générés', 'dist'],
-  'audits': ['Audits', 'audits'],
-  '(racine)': ['Fichiers à la racine', null],
+  'js/modules': ['storageCodeModules', 'Plugins'],
+  'js/vendor': ['storageCodeVendor', 'Bundled libraries'],
+  'js': ['storageCodeScripts', 'Scripts'],
+  'css': ['storageCodeCss', 'Stylesheets'],
+  'api': ['storageCodeApi', 'Server API'],
+  'lang': ['storageCodeLang', 'Translations'],
+  'config': ['storageCodeConfig', 'Configuration'],
+  'changelog': ['storageCodeChangelog', 'Release notes'],
+  'DOCS': ['storageCodeDocs', 'Documentation'],
+  'preprocess': ['storageCodePreprocess', 'Preprocessing pipeline'],
+  'SCRIPTS': ['storageCodeScriptsDir', 'Pipeline scripts'],
+  'tools': ['storageCodeTools', 'Build tools'],
+  'tests': ['storageCodeTests', 'Tests'],
+  'marketplace': ['storageCodeMarketplace', 'Signed plugin catalog'],
+  'logs': ['storageCodeLogs', 'Server logs'],
+  '.git': ['storageCodeGit', 'Git history'],
+  '.venv-312': ['storageCodeVenv', 'Local Python environment'],
+  '__pycache__': ['storageCodePycache', 'Python cache'],
+  'assets': ['storageCodeAssets', 'Graphic assets'],
+  'dist': ['storageCodeDist', 'Generated packages'],
+  'audits': ['storageCodeAudits', 'Audits'],
+  '(racine)': ['storageCodeRoot', 'Files at the root'],
 };
 
 const UPLOAD_LABELS = {
-  staging: ['Imports en cours', 'uploads/staging'],
-  trash: ['Corbeille (60 jours)', 'uploads/trash'],
-  migrations: ['Migrations de données', 'uploads/migrations'],
-  state: ['Journaux d’import', 'uploads/state'],
-  autres: ['Autres', null],
+  staging: ['storageUpStaging', 'Imports in progress'],
+  trash: ['storageUpTrash', 'Trash (60 days)'],
+  migrations: ['storageUpMigrations', 'Data migrations'],
+  state: ['storageUpState', 'Import journals'],
+  autres: ['storageUpOther', 'Other'],
 };
+
+function labelOf(table, id) {
+  const entry = table[id];
+  return entry ? t(`admin.${entry[0]}`, entry[1]) : id;
+}
 
 // Segment colours of the volume bar: theme-aware through the admin tokens.
 const SEG = {
@@ -62,16 +69,12 @@ const SEG = {
   free: 'var(--adm-success)',
 };
 
-function units() { return t('admin.storageUnits', 'o|Ko|Mo|Go|To').split('|'); }
-
-function fmtBytes(n) {
-  n = Number(n) || 0;
-  const u = units();
-  let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  const digits = i === 0 || n >= 100 ? 0 : 1;
-  return `${n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${u[i]}`;
+// The page language, not the browser's: the labels around a number are in it.
+function locale() {
+  try { return (typeof I18n !== 'undefined' && I18n?.getLanguage) ? I18n.getLanguage() : undefined; } catch { return undefined; }
 }
+
+const fmtBytes = (n) => fmtBytesShared(Number(n) || 0);
 
 function pct(part, total) {
   if (!total || total <= 0) return 0;
@@ -84,22 +87,21 @@ function fmtPct(part, total) {
 }
 
 function fmtAge(seconds) {
-  if (seconds < 60) return t('admin.storageAgeNow', 'à l’instant');
+  if (seconds < 60) return t('admin.storageAgeNow', 'just now');
   const m = Math.round(seconds / 60);
-  return t('admin.storageAgeMin', 'il y a {n} min').replace('{n}', m);
+  return t('admin.storageAgeMin', '{n} min ago').replace('{n}', m);
 }
 
 function fmtScanned(iso) {
   try {
-    const loc = (typeof I18n !== 'undefined' && I18n?.getLanguage) ? I18n.getLanguage() : undefined;
-    return new Date(iso).toLocaleString(loc, { dateStyle: 'short', timeStyle: 'short' });
+    return new Date(iso).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' });
   } catch { return iso || ''; }
 }
 
 function bar(segments, total) {
   const cells = segments.filter((s) => s.bytes > 0).map((s) =>
     `<span style="width:${pct(s.bytes, total).toFixed(3)}%;background:${s.color}" title="${escHtml(s.label)} — ${escHtml(fmtBytes(s.bytes))}"></span>`).join('');
-  return `<div class="adm-storage-bar" role="img" aria-label="${escHtml(t('admin.storageBarAria', 'Répartition du volume'))}">${cells}</div>`;
+  return `<div class="adm-storage-bar" role="img" aria-label="${escHtml(t('admin.storageBarAria', 'Volume breakdown'))}">${cells}</div>`;
 }
 
 function legend(segments, total) {
@@ -125,7 +127,7 @@ function trackRow(label, bytes, total, count, color) {
 const DATASET_TYPES = (Utils && Utils.DATASET_TYPES) || ['3d', '2d', 'live'];
 
 function typeLabel(type) {
-  if (type === 'autres') return t('admin.storageOtherData', 'Autres fichiers');
+  if (type === 'autres') return t('admin.storageOtherData', 'Other files');
   return (Utils && Utils.datasetTypeLabel) ? Utils.datasetTypeLabel(type) : type;
 }
 
@@ -138,35 +140,35 @@ function renderVolume(r) {
   const data = cat('data').bytes, uploads = cat('uploads').bytes, code = cat('code').bytes;
   const other = r.otherBytes || 0;
   const segs = [
-    { label: t('admin.storageSegData', 'Données publiées'), bytes: data, color: SEG.data },
-    { label: t('admin.storageSegUploads', 'Imports & corbeille'), bytes: uploads, color: SEG.uploads },
-    { label: t('admin.storageSegCode', 'Plateforme & code'), bytes: code, color: SEG.code },
-    { label: t('admin.storageSegOther', 'Autres sur le volume'), bytes: other, color: SEG.other },
-    { label: t('admin.storageSegFree', 'Disponible'), bytes: free, color: SEG.free },
+    { label: t('admin.storageSegData', 'Published data'), bytes: data, color: SEG.data },
+    { label: t('admin.storageSegUploads', 'Imports & trash'), bytes: uploads, color: SEG.uploads },
+    { label: t('admin.storageSegCode', 'Platform & code'), bytes: code, color: SEG.code },
+    { label: t('admin.storageSegOther', 'Other on the volume'), bytes: other, color: SEG.other },
+    { label: t('admin.storageSegFree', 'Available'), bytes: free, color: SEG.free },
   ];
-  const age = r.cached ? fmtAge(r.ageSeconds || 0) : t('admin.storageAgeNow', 'à l’instant');
+  const age = r.cached ? fmtAge(r.ageSeconds || 0) : t('admin.storageAgeNow', 'just now');
   return `
     <div class="adm-card">
       <div class="adm-card-head">
         <i data-lucide="hard-drive"></i>
-        <span>${escHtml(t('admin.storageVolume', 'Volume de la plateforme'))}</span>
-        <span class="adm-card-count">${escHtml(t('admin.storageScanned', 'mesuré'))} ${escHtml(age)} · ${escHtml(fmtScanned(r.scannedAt))}</span>
+        <span>${escHtml(t('admin.storageVolume', 'Platform volume'))}</span>
+        <span class="adm-card-count">${escHtml(t('admin.storageScanned', 'measured'))} ${escHtml(age)} · ${escHtml(fmtScanned(r.scannedAt))}</span>
       </div>
       <div class="adm-card-body">
         <div class="adm-stat-grid">
           <div class="adm-stat-card">
-            <div class="adm-stat-top"><span class="adm-stat-label">${escHtml(t('admin.storageTotal', 'Capacité totale'))}</span></div>
+            <div class="adm-stat-top"><span class="adm-stat-label">${escHtml(t('admin.storageTotal', 'Total capacity'))}</span></div>
             <div class="adm-stat-value">${escHtml(fmtBytes(total))}</div>
           </div>
           <div class="adm-stat-card">
-            <div class="adm-stat-top"><span class="adm-stat-label">${escHtml(t('admin.storageUsed', 'Occupé'))}</span></div>
+            <div class="adm-stat-top"><span class="adm-stat-label">${escHtml(t('admin.storageUsed', 'Used'))}</span></div>
             <div class="adm-stat-value">${escHtml(fmtBytes(used))}</div>
-            <div class="adm-stat-hint">${escHtml(fmtPct(used, total))} ${escHtml(t('admin.storageOfVolume', 'de la capacité'))}</div>
+            <div class="adm-stat-hint">${escHtml(fmtPct(used, total))} ${escHtml(t('admin.storageOfVolume', 'of capacity'))}</div>
           </div>
           <div class="adm-stat-card">
-            <div class="adm-stat-top"><span class="adm-stat-label">${escHtml(t('admin.storageFree', 'Disponible'))}</span></div>
+            <div class="adm-stat-top"><span class="adm-stat-label">${escHtml(t('admin.storageFree', 'Available'))}</span></div>
             <div class="adm-stat-value">${escHtml(fmtBytes(free))}</div>
-            <div class="adm-stat-hint">${escHtml(fmtPct(free, total))} ${escHtml(t('admin.storageOfVolume', 'de la capacité'))}</div>
+            <div class="adm-stat-hint">${escHtml(fmtPct(free, total))} ${escHtml(t('admin.storageOfVolume', 'of capacity'))}</div>
           </div>
         </div>
         <div class="adm-storage-volume">
@@ -174,7 +176,7 @@ function renderVolume(r) {
           ${legend(segs, total)}
         </div>
         <p class="adm-storage-note adm-muted">${escHtml(t('admin.storageNote',
-          'Le volume est celui qui héberge l’installation. S’il est partagé avec d’autres services, « Autres sur le volume » les regroupe, et « Disponible » reste l’espace libre réel du volume (un quota d’hébergeur plus strict n’y apparaît pas). Les fichiers liés en dur ne sont comptés qu’une fois.'))}</p>
+          'The volume is the one hosting the installation. If it is shared with other services, "Other on the volume" groups them, and "Available" is the real free space of the volume (a stricter hosting quota does not show here). Hard-linked files are counted once.'))}</p>
       </div>
     </div>`;
 }
@@ -187,14 +189,14 @@ function renderDataCard(r) {
   const rows = kids.map((k) => {
     const isType = DATASET_TYPES.includes(k.id);
     const label = isType ? typeLabel(k.id) : typeLabel('autres');
-    const count = isType ? `${dsCount(k.id)} ${t('admin.storageDatasets', 'jeu(x)')}` : null;
+    const count = isType ? `${dsCount(k.id)} ${t('admin.storageDatasets', 'dataset(s)')}` : null;
     return trackRow(label, k.bytes, total, count, isType ? SEG.data : SEG.other);
   }).join('');
   return `
     <div class="adm-card">
-      <div class="adm-card-head"><i data-lucide="database"></i><span>${escHtml(t('admin.storageDataCard', 'Données publiées'))}</span>
+      <div class="adm-card-head"><i data-lucide="database"></i><span>${escHtml(t('admin.storageDataCard', 'Published data'))}</span>
         <span class="adm-card-count">${escHtml(fmtBytes(total))}</span></div>
-      <div class="adm-card-body">${rows || `<p class="adm-muted">${escHtml(t('admin.storageEmpty', 'Aucune donnée.'))}</p>`}</div>
+      <div class="adm-card-body">${rows || `<p class="adm-muted">${escHtml(t('admin.storageEmpty', 'No data.'))}</p>`}</div>
     </div>`;
 }
 
@@ -202,14 +204,13 @@ function renderUploadsCard(r) {
   const up = (r.categories || []).find((c) => c.id === 'uploads');
   const total = up ? up.bytes : 0;
   const rows = (up ? up.children : []).map((k) => {
-    const [label] = UPLOAD_LABELS[k.id] || [k.id, null];
-    return trackRow(label, k.bytes, total, k.files, SEG.uploads);
+    return trackRow(labelOf(UPLOAD_LABELS, k.id), k.bytes, total, k.files, SEG.uploads);
   }).join('');
   return `
     <div class="adm-card">
-      <div class="adm-card-head"><i data-lucide="upload-cloud"></i><span>${escHtml(t('admin.storageUploadsCard', 'Imports & corbeille'))}</span>
+      <div class="adm-card-head"><i data-lucide="upload-cloud"></i><span>${escHtml(t('admin.storageUploadsCard', 'Imports & trash'))}</span>
         <span class="adm-card-count">${escHtml(fmtBytes(total))}</span></div>
-      <div class="adm-card-body">${rows || `<p class="adm-muted">${escHtml(t('admin.storageEmpty', 'Aucune donnée.'))}</p>`}</div>
+      <div class="adm-card-body">${rows || `<p class="adm-muted">${escHtml(t('admin.storageEmpty', 'No data.'))}</p>`}</div>
     </div>`;
 }
 
@@ -217,14 +218,13 @@ function renderCodeCard(r) {
   const code = (r.categories || []).find((c) => c.id === 'code');
   const total = code ? code.bytes : 0;
   const rows = (code ? code.children : []).map((k) => {
-    const [label] = CODE_LABELS[k.id] || [k.id, null];
-    return trackRow(label, k.bytes, total, k.files, SEG.code);
+    return trackRow(labelOf(CODE_LABELS, k.id), k.bytes, total, k.files, SEG.code);
   }).join('');
   return `
     <div class="adm-card">
-      <div class="adm-card-head"><i data-lucide="code"></i><span>${escHtml(t('admin.storageCodeCard', 'Plateforme & code'))}</span>
+      <div class="adm-card-head"><i data-lucide="code"></i><span>${escHtml(t('admin.storageCodeCard', 'Platform & code'))}</span>
         <span class="adm-card-count">${escHtml(fmtBytes(total))}</span></div>
-      <div class="adm-card-body">${rows || `<p class="adm-muted">${escHtml(t('admin.storageEmpty', 'Aucune donnée.'))}</p>`}</div>
+      <div class="adm-card-body">${rows || `<p class="adm-muted">${escHtml(t('admin.storageEmpty', 'No data.'))}</p>`}</div>
     </div>`;
 }
 
@@ -239,24 +239,24 @@ function renderDatasets(r) {
         <td class="adm-td-name" title="${escHtml(d.id)}">${escHtml(d.name || d.id)}<div class="adm-storage-id adm-muted">${escHtml(d.id)}</div></td>
         <td><span class="badge badge-${escHtml(d.type)}">${escHtml(typeLabel(d.type))}</span></td>
         <td class="adm-td-num">${escHtml(fmtBytes(d.bytes))}</td>
-        <td class="adm-td-num">${Number(d.files || 0).toLocaleString()}</td>
+        <td class="adm-td-num">${Number(d.files || 0).toLocaleString(locale())}</td>
         <td><div class="adm-storage-track"><span style="width:${pct(d.bytes, max).toFixed(2)}%;background:${SEG.data}"></span></div></td>
         <td class="adm-storage-parts">${parts}</td>
       </tr>`;
-  }).join('') : `<tr><td colspan="6" class="adm-muted">${escHtml(t('admin.storageNoDataset', 'Aucun dataset publié.'))}</td></tr>`;
+  }).join('') : `<tr><td colspan="6" class="adm-muted">${escHtml(t('admin.storageNoDataset', 'No published dataset.'))}</td></tr>`;
   return `
     <div class="adm-card" style="margin-top:18px">
-      <div class="adm-card-head"><i data-lucide="table"></i><span>${escHtml(t('admin.storageByDataset', 'Par dataset'))}</span>
-        <span class="adm-card-count">${rows.length} ${escHtml(t('admin.storageDatasets', 'jeu(x)'))}</span></div>
+      <div class="adm-card-head"><i data-lucide="table"></i><span>${escHtml(t('admin.storageByDataset', 'By dataset'))}</span>
+        <span class="adm-card-count">${rows.length} ${escHtml(t('admin.storageDatasets', 'dataset(s)'))}</span></div>
       <div class="adm-table-wrap">
         <table class="adm-table">
           <thead><tr>
             <th>${escHtml(t('admin.colDataset', 'Dataset'))}</th>
             <th>${escHtml(t('admin.storageColType', 'Type'))}</th>
-            <th class="adm-th-num">${escHtml(t('admin.storageColSize', 'Taille'))}</th>
-            <th class="adm-th-num">${escHtml(t('admin.storageColFiles', 'Fichiers'))}</th>
-            <th>${escHtml(t('admin.storageColShare', 'Part'))}</th>
-            <th>${escHtml(t('admin.storageColParts', 'Détail par dossier'))}</th>
+            <th class="adm-th-num">${escHtml(t('admin.storageColSize', 'Size'))}</th>
+            <th class="adm-th-num">${escHtml(t('admin.storageColFiles', 'Files'))}</th>
+            <th>${escHtml(t('admin.storageColShare', 'Share'))}</th>
+            <th>${escHtml(t('admin.storageColParts', 'Breakdown by folder'))}</th>
           </tr></thead>
           <tbody>${body}</tbody>
         </table>
@@ -267,16 +267,24 @@ function renderDatasets(r) {
 function render() {
   const root = el('storage-root');
   if (!root) return;
+  if (!_report && _failed && !_loading) {
+    root.innerHTML = `<div class="adm-loading" role="alert">
+      <p class="adm-muted">${escHtml(t('admin.storageLoadFailed', 'Could not measure the storage.'))}</p>
+      <button class="adm-btn" id="storage-retry"><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.storageRetry', 'Retry'))}</button></div>`;
+    el('storage-retry')?.addEventListener('click', () => load(true));
+    refreshIcons(root);
+    return;
+  }
   if (!_report) {
     root.innerHTML = `<div class="adm-loading"><span class="spinner spinner-lg"></span>
-      <p class="adm-muted">${escHtml(t('admin.storageMeasuring', 'Mesure du stockage…'))}</p></div>`;
+      <p class="adm-muted">${escHtml(t('admin.storageMeasuring', 'Measuring storage…'))}</p></div>`;
     return;
   }
   root.innerHTML = `
     <div class="adm-storage-head">
       <div></div>
       <button class="adm-btn" id="storage-refresh" ${_loading ? 'disabled' : ''}>
-        <i data-lucide="refresh-cw"></i> ${escHtml(t('admin.storageRefresh', 'Recalculer'))}
+        <i data-lucide="refresh-cw"></i> ${escHtml(t('admin.storageRefresh', 'Recompute'))}
       </button>
     </div>
     ${renderVolume(_report)}
@@ -296,7 +304,12 @@ async function load(refresh = false) {
   render();
   try {
     const data = await apiFetch(`${API_ADMIN}?action=storage${refresh ? '&refresh=1' : ''}`);
-    if (data) _report = data;
+    if (data && typeof data === 'object' && !data.error) { _report = data; _failed = false; }
+    else {
+      _failed = true;
+      // A report already on screen is kept: only say the refresh did not happen.
+      if (_report) toast(t('admin.storageLoadFailed', 'Could not measure the storage.'), 'error');
+    }
   } finally {
     _loading = false;
     render();
@@ -306,7 +319,7 @@ async function load(refresh = false) {
 export const StorageTab = {
   id: 'storage',
   titleKey: 'admin.navStorage',
-  titleDefault: 'Stockage',
+  titleDefault: 'Storage',
   mounted: false,
   mount() { render(); load(); },
   activate() { load(); },

@@ -40,7 +40,7 @@ NODE = shutil.which("node")
 
 def php_eval(code: str) -> str:
     prog = ("define('LUMEN_SITE_LIB', true); require " + json.dumps(str(ROOT / "api" / "site.php")) + ";\n" + code)
-    return subprocess.run([PHP, "-r", prog], capture_output=True, text=True, check=True).stdout
+    return subprocess.run([PHP, "-r", prog], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
 
 class StrongPair(unittest.TestCase):

@@ -11,7 +11,7 @@
 import {
   I18n, Utils, API_AUTH, API_SITE, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, setCsrf,
   setUnauthorizedHandler, toast, refreshIcons, el, storageGet, storageSet, MIN_PASSWORD,
-  throttleText,
+  throttleText, modalize,
 } from './shared.js';
 import { isDirty, discardDirty, setNavigator } from './bus.js';
 import * as UploadDock from './upload-dock.js';
@@ -102,6 +102,10 @@ function checkUpdateDot() {
 // authenticated session. Steps 2–4 (identity / theme / texts) then seed
 // config/instance.json + config/theme.json via the authenticated site endpoint.
 // The operator can Skip after step 1 (account made, defaults kept).
+// The wizard is also what an operator who forgot the password lands on (the
+// credential file renamed away): it must leave an existing site as it was, so the
+// theme is written only when a colour is actually clicked, and then merged into the
+// stored theme instead of replacing it.
 
 const WIZ_PRESETS = [
   { id: 'green',   tokens: { '--color-primary': '#00A654', '--color-primary-hover': '#1FBB6C', '--color-primary-dark': '#008A45', '--color-primary-subtle': 'rgba(0,166,84,0.15)', '--color-accent': '#00D2FF' } },
@@ -115,7 +119,10 @@ const WIZ_PRESETS = [
 let _wizStep = 1;
 let _wizUsername = 'admin';
 let _wizPassword = '';
-let _wizPreset = WIZ_PRESETS[0];
+let _wizPreset = null;
+// Bumped by every initWizard(): a theme probe answering for an earlier run of the
+// wizard must not mark a swatch in this one.
+let _wizRun = 0;
 
 function setupError(msg) {
   const box = el('setup-error');
@@ -124,9 +131,63 @@ function setupError(msg) {
   box.style.display = msg ? 'flex' : 'none';
 }
 
+function _markWizSwatch(id) {
+  const host = el('setup-swatches');
+  if (!host) return;
+  host.querySelectorAll('.setup-swatch').forEach((s) => {
+    const on = !!id && s.dataset.preset === id;
+    s.style.borderColor = on ? 'var(--text-primary,#fff)' : 'transparent';
+    s.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function _isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+async function _fetchWizTheme() {
+  const doc = await apiFetch(`${API_SITE}?action=get&doc=theme`);
+  return _isPlainObject(doc) ? doc : null;
+}
+
+// The swatch that stands for the colour the site has now: green when the stored
+// theme sets no primary colour (it is the shipped default), the preset whose
+// primary matches, none for a colour of the operator's own.
+function _wizPresetOfTheme(doc) {
+  const primary = _isPlainObject(doc?.tokens) ? doc.tokens['--color-primary'] : undefined;
+  if (primary === undefined || primary === null || primary === '') return WIZ_PRESETS[0].id;
+  const want = String(primary).trim().toLowerCase();
+  const hit = WIZ_PRESETS.find((p) => p.tokens['--color-primary'].toLowerCase() === want);
+  return hit ? hit.id : null;
+}
+
+async function _showWizThemeStep() {
+  if (_wizPreset) return;
+  const run = _wizRun;
+  const doc = await _fetchWizTheme();
+  if (run !== _wizRun || _wizPreset) return;
+  _markWizSwatch(doc ? _wizPresetOfTheme(doc) : null);
+}
+
+// The chosen preset over the stored theme: its tokens replace the same tokens, and
+// the per-mode overrides of those tokens are dropped so the colour shows in both
+// modes; every other setting (font, radius, other colours, other overrides) stays.
+function _wizThemeBody(doc, preset) {
+  const base = _isPlainObject(doc) ? doc : {};
+  const strip = (mode) => {
+    const out = Object.assign({}, _isPlainObject(base[mode]) ? base[mode] : {});
+    Object.keys(preset.tokens).forEach((k) => { delete out[k]; });
+    return out;
+  };
+  return Object.assign({}, base, {
+    tokens: Object.assign({}, _isPlainObject(base.tokens) ? base.tokens : {}, preset.tokens),
+    dark: strip('dark'),
+    light: strip('light'),
+  });
+}
+
 function initWizard() {
   _wizStep = 1;
-  _wizPreset = WIZ_PRESETS[0];
+  _wizPreset = null;
+  _wizRun++;
   // Build the colour swatches once.
   const host = el('setup-swatches');
   if (host && !host.dataset.built) {
@@ -134,16 +195,25 @@ function initWizard() {
     WIZ_PRESETS.forEach((p) => {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'setup-swatch'; b.dataset.preset = p.id;
+      // The swatch is a bare colour: its name is what a screen reader announces and
+      // what tells two close hues apart. The data-i18n-* keys let a language switch
+      // rename it.
+      const key = `wizard.preset.${p.id}`;
+      const name = t(key, p.id);
+      b.setAttribute('data-i18n-aria', key);
+      b.setAttribute('data-i18n-title', key);
+      b.setAttribute('aria-label', name);
+      b.title = name;
+      b.setAttribute('aria-pressed', 'false');
       b.style.cssText = `width:44px;height:44px;border-radius:50%;border:3px solid transparent;cursor:pointer;background:${p.tokens['--color-primary']}`;
       b.addEventListener('click', () => {
         _wizPreset = p;
-        host.querySelectorAll('.setup-swatch').forEach((s) => s.style.borderColor = 'transparent');
-        b.style.borderColor = 'var(--text-primary,#fff)';
+        _markWizSwatch(p.id);
       });
       host.appendChild(b);
     });
-    host.querySelector('.setup-swatch').style.borderColor = 'var(--text-primary,#fff)';
   }
+  _markWizSwatch(null);
   renderWizStep();
 }
 
@@ -152,7 +222,8 @@ function renderWizStep() {
   document.querySelectorAll('.setup-dot').forEach((d) => { d.style.background = (+d.getAttribute('data-step') <= _wizStep) ? 'var(--color-primary,#00A654)' : 'var(--border-subtle,#333)'; });
   const subs = { 1: t('wizard.step1sub', 'Compte administrateur'), 2: t('wizard.step2sub', 'Identité'), 3: t('wizard.step3sub', 'Thème'), 4: t('wizard.step4sub', 'Textes'), 5: t('wizard.step5sub', 'Plugins') };
   const sub = el('setup-step-sub'); if (sub) sub.textContent = subs[_wizStep] || '';
-  el('setup-back').style.display = _wizStep > 1 ? '' : 'none';
+  // Step 2 has nothing to go back to: the account of step 1 already exists.
+  el('setup-back').style.display = _wizStep > 2 ? '' : 'none';
   el('setup-skip').style.display = _wizStep > 1 ? '' : 'none';
   el('setup-next').textContent = _wizStep >= 5 ? t('wizard.finish', 'Terminer') : t('wizard.next', 'Suivant');
   setupError('');
@@ -173,11 +244,17 @@ async function wizNext() {
     else setupError(r.data?.error === 'weak_password' ? t('wizard.weak', `Mot de passe trop court (${MIN_PASSWORD} caractères minimum).`, { n: MIN_PASSWORD }) : t('admin.setupFailed', 'Échec de la création du mot de passe.'));
     return;
   }
-  if (_wizStep < 5) { _wizStep++; renderWizStep(); if (_wizStep === 5) _loadWizardPlugins(); return; }
+  if (_wizStep < 5) {
+    _wizStep++;
+    renderWizStep();
+    if (_wizStep === 3) _showWizThemeStep().catch(() => {});
+    if (_wizStep === 5) _loadWizardPlugins();
+    return;
+  }
   await finishWizard();
 }
 
-function wizBack() { if (_wizStep > 2) { _wizStep--; renderWizStep(); } else if (_wizStep === 2) { /* stay — account already created */ } }
+function wizBack() { if (_wizStep > 2) { _wizStep--; renderWizStep(); } }
 
 async function finishWizard() {
   const btn = el('setup-next'); btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('wizard.finishing', 'Finalisation…')}`;
@@ -196,7 +273,10 @@ async function finishWizard() {
     // Only the fields this step wrote: a listed path missing from the body would be deleted.
     const paths = ['brand', 'specimen'].concat(org ? ['org.name'] : [], copyright ? ['footer.copyright'] : []);
     await apiFetchStatus(`${API_SITE}?action=save&doc=instance&merge=${encodeURIComponent(paths.join(','))}`, { method: 'POST', body: JSON.stringify(inst) });
-    if (_wizPreset && _wizPreset.tokens) await apiFetchStatus(`${API_SITE}?action=save&doc=theme`, { method: 'POST', body: JSON.stringify({ tokens: _wizPreset.tokens, dark: {}, light: {} }) });
+    if (_wizPreset) {
+      const theme = _wizThemeBody(await _fetchWizTheme(), _wizPreset);
+      await apiFetchStatus(`${API_SITE}?action=save&doc=theme`, { method: 'POST', body: JSON.stringify(theme) });
+    }
     try { if (typeof InstanceConfig !== 'undefined') { await InstanceConfig.load(); InstanceConfig.applyHead(); InstanceConfig.applyDom(); } } catch (_) {}
   } catch (_) { /* seeding is best-effort; the account is already created */ }
   await _installWizardPlugins();
@@ -253,6 +333,17 @@ async function _installWizardPlugins() {
 
 // ── Login ──────────────────────────────────────────────────────
 
+// Only a 401 means "wrong user name or password": a fault of the server, a lost
+// connection or a throttle must not make the operator retype a correct password.
+function loginFailureText(r) {
+  const throttled = throttleText(r.data);
+  if (throttled) return throttled;
+  if (r.status === 401) return t('admin.badCreds', 'Incorrect credentials.');
+  if (r.status === 429) return t('admin.tooManyAttempts', 'Too many attempts. Try again later.');
+  if (r.status === 0 || (r.status >= 200 && r.status < 300)) return t('admin.loginNetworkError', 'Cannot reach the server. Check the connection and try again.');
+  return t('admin.loginServerError', 'The server could not process the sign-in (HTTP {status}). Try again, or check the server logs.', { status: r.status });
+}
+
 async function doLogin() {
   const username = (el('login-username').value || '').trim();
   const password = el('login-password').value || '';
@@ -261,19 +352,20 @@ async function doLogin() {
   err.style.display = 'none';
   const btn = el('btn-login');
   btn.disabled = true;
-  btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.signingIn', 'Connexion…')}`;
+  btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.signingIn', 'Signing in…')}`;
 
-  const data = await apiFetch(`${API_AUTH}?action=login`, {
+  const r = await apiFetchStatus(`${API_AUTH}?action=login`, {
     method: 'POST', body: JSON.stringify({ username, password }),
   });
+  const data = r.data;
   btn.disabled = false;
-  btn.textContent = t('admin.signIn', 'Se connecter');
+  btn.textContent = t('admin.signIn', 'Sign in');
 
-  if (data?.ok) {
+  if (r.ok && data?.ok) {
     setCsrf(data.csrf || null);
     enterApp(username);
   } else {
-    el('login-error-msg').textContent = throttleText(data) || t('admin.badCreds', 'Identifiants incorrects.');
+    el('login-error-msg').textContent = loginFailureText(r);
     err.style.display = 'flex';
     el('login-password').value = '';
     el('login-password').focus();
@@ -302,6 +394,31 @@ async function ensureTabModule(tab) {
       .finally(() => { tab._loading = null; });
   }
   return tab._loading;
+}
+
+/** An error card with Retry in place of a tab that failed to load or mount; the next attempt starts from a clean panel. */
+function showTabFailure(id) {
+  const tab = _tabs.get(id);
+  if (tab) tab.mounted = false;
+  toast(t('admin.tabLoadFailed', 'Could not load this tab. Reload the page.'), 'error');
+  const panel = document.querySelector(`.adm-tabpanel[data-tab="${id}"]`);
+  if (!panel) return;
+  clearTabFailure(id);
+  const box = document.createElement('div');
+  box.className = 'adm-tab-failure adm-loading';
+  box.setAttribute('role', 'alert');
+  box.innerHTML = `<p class="adm-muted">${escHtml(t('admin.tabLoadFailed', 'Could not load this tab. Reload the page.'))}</p>
+    <button type="button" class="adm-btn">${escHtml(t('admin.retry', 'Retry'))}</button>`;
+  box.querySelector('button').addEventListener('click', () => {
+    box.remove();
+    if (tab) { tab.impl = undefined; }
+    switchTab(id, true);
+  });
+  panel.prepend(box);
+}
+
+function clearTabFailure(id) {
+  document.querySelectorAll(`.adm-tabpanel[data-tab="${id}"] > .adm-tab-failure`).forEach((n) => n.remove());
 }
 
 function switchTab(id, force = false) {
@@ -336,12 +453,19 @@ function switchTab(id, force = false) {
     ensureTabModule(tab).then((impl) => {
       // The operator may have moved on while the module was downloading.
       if (_activeTab !== id) return;
-      if (!tab.mounted) { try { impl.mount?.(); } catch (e) { console.error(e); } tab.mounted = true; }
+      if (!tab.mounted) {
+        try { impl.mount?.(); tab.mounted = true; clearTabFailure(id); }
+        catch (e) {
+          console.error('Admin tab failed to mount:', id, e);
+          showTabFailure(id);
+          return;
+        }
+      }
       try { impl.activate?.(); } catch (e) { console.error(e); }
       refreshIcons();
     }).catch((e) => {
       console.error('Admin tab failed to load:', id, e);
-      toast(t('admin.tabLoadFailed', "Impossible de charger cet onglet. Rechargez la page."), 'error');
+      showTabFailure(id);
     });
   }
   closeMobileSidebar();
@@ -431,9 +555,14 @@ function bindUploadGuard() {
   // (the browser may keep it on the element that was clicked), and Escape must
   // still dismiss.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !el('upload-exit-overlay')?.hidden) closeExitOverlay();
+    if (e.key !== 'Escape') return;
+    if (!el('upload-exit-overlay')?.hidden) { closeExitOverlay(); return; }
+    // A dialog that consumed the Escape (preventDefault) keeps the drawer as it is.
+    if (!e.defaultPrevented && el('adm-sidebar')?.classList.contains('open')) closeMobileSidebar({ restoreFocus: true });
   });
 }
+
+let _releaseExitOverlay = null;
 
 function openExitOverlay(onLeave) {
   const overlay = el('upload-exit-overlay');
@@ -441,13 +570,22 @@ function openExitOverlay(onLeave) {
   _exitTarget = onLeave;
   overlay.hidden = false;
   refreshIcons(overlay);
-  setTimeout(() => el('upl-exit-stay')?.focus(), 30);
+  if (_releaseExitOverlay) return;   // already open: only the destination changed
+  _releaseExitOverlay = modalize(overlay, {
+    labelledBy: 'upl-exit-title',
+    describedBy: 'upl-exit-body',
+    initialFocus: el('upl-exit-stay'),
+    container: overlay.querySelector('.upl-exit-card'),
+  });
 }
 
 function closeExitOverlay() {
   const overlay = el('upload-exit-overlay');
   if (overlay) overlay.hidden = true;
   _exitTarget = null;
+  const release = _releaseExitOverlay;
+  _releaseExitOverlay = null;
+  if (release) release();
 }
 
 /** Logout must not orphan a transfer — the session it authenticates is its own. */
@@ -464,17 +602,57 @@ function applyCollapsed(on) {
   el('adm-sidebar').classList.toggle('collapsed', on);
   const ic = el('collapse-icon');
   if (ic) { ic.setAttribute('data-lucide', on ? 'panel-left-open' : 'panel-left-close'); refreshIcons(); }
+  // The button says what it will do; data-i18n follows so a language switch keeps it.
+  const label = el('btn-collapse')?.querySelector('.adm-nav-label');
+  if (label) {
+    const key = on ? 'admin.expand' : 'admin.collapse';
+    label.setAttribute('data-i18n', key);
+    label.textContent = on ? t(key, 'Déplier') : t(key, 'Réduire');
+  }
+  syncNavTitles();
   storageSet('adm-sidebar-collapsed', on ? '1' : '0');
 }
 function toggleCollapsed() { applyCollapsed(!el('adm-sidebar').classList.contains('collapsed')); }
 
-function openMobileSidebar() {
-  el('adm-sidebar').classList.add('open');
-  el('sidebar-overlay').classList.add('show');
+/**
+ * Collapsed, the rail shows icons alone (two tabs even share one): each item gets its
+ * label as a hover tooltip. Its accessible name stays the visually hidden label.
+ */
+function syncNavTitles() {
+  const sidebar = el('adm-sidebar');
+  if (!sidebar) return;
+  const collapsed = sidebar.classList.contains('collapsed');
+  sidebar.querySelectorAll('.adm-nav-item').forEach((item) => {
+    const text = (item.querySelector('.adm-nav-label')?.textContent || '').trim();
+    if (collapsed && text) item.setAttribute('title', text);
+    else item.removeAttribute('title');
+  });
 }
-function closeMobileSidebar() {
-  el('adm-sidebar').classList.remove('open');
-  el('sidebar-overlay').classList.remove('show');
+
+function openMobileSidebar() {
+  const sidebar = el('adm-sidebar');
+  sidebar.classList.add('open');
+  el('sidebar-overlay').classList.add('show');
+  el('btn-mobile-menu')?.setAttribute('aria-expanded', 'true');
+  // After the class has made the drawer visible again (a hidden element takes no focus).
+  setTimeout(() => {
+    if (!sidebar.classList.contains('open')) return;
+    (sidebar.querySelector('.adm-nav-item.active') || sidebar.querySelector('.adm-nav-item'))?.focus();
+  }, 0);
+}
+
+/**
+ * Close the drawer. Focus goes back to the menu button only when the operator
+ * dismissed it (Escape, the backdrop): picking a tab leaves focus on that tab.
+ */
+function closeMobileSidebar({ restoreFocus = false } = {}) {
+  const sidebar = el('adm-sidebar');
+  if (!sidebar?.classList.contains('open')) return;
+  sidebar.classList.remove('open');
+  el('sidebar-overlay')?.classList.remove('show');
+  const btn = el('btn-mobile-menu');
+  btn?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) btn?.focus();
 }
 
 // ── Theme ──────────────────────────────────────────────────────
@@ -500,6 +678,7 @@ async function switchLanguage(lang) {
   const impl = tab?.impl || (typeof tab?.load === 'function' ? null : tab);
   try { (impl?.relabel || impl?.activate)?.call(impl); } catch (_) {}
   paintTopbarTitle(tab);
+  syncNavTitles();
   refreshIcons();
 }
 
@@ -527,7 +706,7 @@ function bindChrome() {
   // Sidebar / mobile
   el('btn-collapse')?.addEventListener('click', toggleCollapsed);
   el('btn-mobile-menu')?.addEventListener('click', openMobileSidebar);
-  el('sidebar-overlay')?.addEventListener('click', closeMobileSidebar);
+  el('sidebar-overlay')?.addEventListener('click', () => closeMobileSidebar({ restoreFocus: true }));
 
   // Topbar
   el('btn-theme')?.addEventListener('click', toggleTheme);

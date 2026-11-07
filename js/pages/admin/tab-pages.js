@@ -250,15 +250,26 @@ function _migrate(src) {
   return [];
 }
 const _isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+// Members of a props object that hold an object the controls write into by path.
+const _PROP_OBJECTS = ['style', 'badge', 'cta', 'link'];
+// A PHP host before web 1.82.0 stored every empty object as `[]`. The controls then
+// set named members on that array, which JSON.stringify drops: the setting vanished
+// at the next save. Props and their object members are always objects here.
+function _sanitizeProps(p) {
+  const out = _isObj(p) ? Object.assign({}, p) : {};
+  for (const k of _PROP_OBJECTS) if (Array.isArray(out[k])) out[k] = {};
+  return out;
+}
 function _sanitizeSections(list) {
   // A hand-edited or truncated file can hold nulls / scalars anywhere in the tree.
   return (Array.isArray(list) ? list : []).filter(_isObj).map((s) => ({
     id: s.id || _id('s'),
-    props: Object.assign({ bg: '', padY: 48, fullWidth: false, maxWidth: 1080, gap: 24, vAlign: 'stretch' }, s.props || {}),
+    props: Object.assign({ bg: '', padY: 48, fullWidth: false, maxWidth: 1080, gap: 24, vAlign: 'stretch' }, _sanitizeProps(s.props)),
     columns: (Array.isArray(s.columns) ? s.columns.filter(_isObj) : [_newColumn(12)]).map((c) => ({
-      id: c.id || _id('c'), width: Math.min(12, Math.max(1, +c.width || 12)), props: c.props || {},
+      id: c.id || _id('c'), width: Math.min(12, Math.max(1, +c.width || 12)), props: _sanitizeProps(c.props),
       widgets: (Array.isArray(c.widgets) ? c.widgets.filter(_isObj) : []).map((w) => {
         const nw = Object.assign({ id: w.id || _id('w') }, w);
+        nw.props = _sanitizeProps(nw.props);
         // Legacy buttons kept the variant in props.style (a string); the generic
         // style panel now owns props.style (an object), so move it to props.variant
         // — otherwise the first style edit would clobber the variant and vice-versa.
@@ -998,7 +1009,7 @@ function renderLauncher() {
           <span style="flex:1"></span>
           <span class="adm-page-sub" style="font-size:11px;margin:0">${escHtml(t('pages.launcherHint', 'Cliquez « Modifier » pour éditer cette page'))}</span>
         </div>
-        <iframe id="pages-view" title="preview" src="${escHtml(_viewUrl())}" style="width:100%;height:520px;border:none;display:block;background:var(--bg-base,#0d0d1a);pointer-events:none"></iframe>
+        <iframe id="pages-view" title="${escHtml(t('admin.sitePreviewFrame', 'Site preview'))}"src="${escHtml(_viewUrl())}" style="width:100%;height:520px;border:none;display:block;background:var(--bg-base,#0d0d1a);pointer-events:none"></iframe>
       </div>
     </div>`;
   el('pages-select').addEventListener('change', (e) => switchPage(e.target.value));
@@ -1038,10 +1049,10 @@ function renderEditor() {
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-save" ${_dirty ? '' : 'disabled'}><i data-lucide="save"></i> ${escHtml(t('pages.saveDraft', 'Brouillon'))}</button>
       <button class="adm-btn adm-btn-accent adm-btn-sm" id="pe-publish"><i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}</button>
     </div>
-    <div style="flex:1;display:flex;min-height:0">
-      <div id="pages-side" style="width:340px;flex:0 0 340px;border-right:1px solid var(--border-subtle,#2a2a3a);padding:12px;overflow:auto"></div>
+    <div class="pe-body">
+      <div id="pages-side"></div>
       <div id="pages-frame-wrap" style="flex:1;min-width:0;position:relative;overflow:auto;background:var(--bg-base,#0d0d1a)">
-        <iframe id="pages-frame" title="editor" src="${escHtml(_editUrl())}" style="width:100%;height:100%;border:none;display:block;background:var(--bg-base,#0d0d1a)"></iframe>
+        <iframe id="pages-frame" title="${escHtml(t('admin.pageEditorFrame', 'Page editor'))}"src="${escHtml(_editUrl())}" style="width:100%;height:100%;border:none;display:block;background:var(--bg-base,#0d0d1a)"></iframe>
       </div>
     </div>`;
   el('pe-exit').addEventListener('click', exitEditor);
@@ -1970,7 +1981,14 @@ async function newPage() {
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) { toast(t('pages.badSlug', 'Identifiant invalide.'), 'error'); return; }
   if (_pages.some((p) => p.slug === slug)) { toast(t('pages.dupSlug', 'Cette page existe déjà.'), 'error'); return; }
   const label = prompt(t('pages.newLabel', 'Libellé dans le menu :'), slug) || slug;
-  await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(slug)}`, { method: 'POST', body: JSON.stringify({ title: { [_editLoc]: label }, published: { sections: [] }, draft: { sections: [] } }) });
+  const created = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(slug)}`, { method: 'POST', body: JSON.stringify({ title: { [_editLoc]: label }, published: { sections: [] }, draft: { sections: [] } }) });
+  // Nothing below may run for a page that was not written: the menu entry would
+  // point at a missing file and the editor would open on it.
+  if (!created.ok) {
+    console.error('page creation refused:', created.status, created.data);
+    toast(t('pages.saveError', 'Save failed.'), 'error');
+    return;
+  }
   // Add to nav HIDDEN (show:false): an empty page must not leak into the public
   // menu before it has published content — publish() reveals it. Read-reconcile
   // first so a concurrent Identity edit isn't clobbered.

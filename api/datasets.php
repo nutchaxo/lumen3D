@@ -17,6 +17,8 @@
  */
 
 declare(strict_types=1);
+// Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
+if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 
 // catalog.php includes this file purely for rebuild_catalog(); in that mode it must
 // not emit JSON headers, must not start an admin session, and must not run the
@@ -58,9 +60,12 @@ if (!LUMEN_DATASETS_AS_LIB) {
     if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 }
 
+// admin_is_auth(), not the bare flag: the 8 h lifetime and the credential stamp are
+// what end every other session on a password change, and a session still in use is
+// never collected by PHP's GC.
 function require_auth(): void {
-    if (empty($_SESSION['admin_authenticated'])) {
-        json_out(['error' => 'Unauthorized'], 401);
+    if (!admin_is_auth()) {
+        json_out(['error' => 'Not authenticated'], 401);
     }
 }
 
@@ -560,6 +565,28 @@ function list_datasets(): array {
     return $result;
 }
 
+/**
+ * The name of the first field of a posted metadata.json whose type the viewer or the
+ * catalog cannot read, else null. Only gross type errors are refused; an absent field
+ * keeps the stored value. $body comes from lumen_request_json (objects kept apart
+ * from lists). Twin of dev_server.py _dataset_meta_field_error.
+ */
+function lumen_dataset_meta_field_error(array $body): ?string {
+    foreach (['name', 'stage'] as $k) {
+        if (array_key_exists($k, $body) && $body[$k] !== null && !is_string($body[$k])) return $k;
+    }
+    foreach (['dimensions', 'voxel_size'] as $k) {
+        if (array_key_exists($k, $body) && !lumen_json_is_object($body[$k])) return $k;
+    }
+    foreach (['channels', 'volumeSources'] as $k) {
+        if (!array_key_exists($k, $body)) continue;
+        $v = $body[$k];
+        if (!lumen_json_is_list($v)) return $k;
+        foreach ($v as $item) if (!lumen_json_is_object($item)) return $k;
+    }
+    return null;
+}
+
 /** The public catalog builder lives in _admin_lib.php (rebuild_catalog, lumen_catalog_json):
  *  catalog.php, admin.php and the upload publish path use it without this router. */
 
@@ -604,6 +631,8 @@ if (strncmp($id, LUMEN_STAGING_PREFIX, strlen(LUMEN_STAGING_PREFIX)) === 0) {
         case 'save':
             $body = lumen_request_json();
             if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
+            $badField = lumen_dataset_meta_field_error($body);
+            if ($badField !== null) json_out(['error' => 'Invalid field', 'field' => $badField], 400);
             [$st, $pl] = lumen_up_write_metadata($sType, $sFolder, $body);
             json_out($pl, $st);
         case 'save_thumbnail':
@@ -696,6 +725,8 @@ switch ($action) {
         if (!$id) json_out(['error' => 'Missing id'], 400);
         $body = lumen_request_json();
         if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
+        $badField = lumen_dataset_meta_field_error($body);
+        if ($badField !== null) json_out(['error' => 'Invalid field', 'field' => $badField], 400);
         [$st, $pl] = save_dataset_meta($id, dataset_dir($id), $body);
         json_out($pl, $st);
 

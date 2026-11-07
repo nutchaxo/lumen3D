@@ -71,6 +71,7 @@ ORTH_ROWS = 64                                # rows (xz) / columns (yz) per ort
 ORTH_MAGIC = {"xz": b"LPXZ", "yz": b"LPYZ"}
 ORTH_HEADER = 20
 ORTH_ENTRY = 12
+YZ_GROUP_BYTES = 256 * 1024 * 1024            # in-memory column band of one yz group task
 CUT_XY = 32
 CUT_SUPER = 8
 CUT_RECORD_HEAD = CUT_SUPER ** 3 * 8          # 512 × (u32 offset, u32 length)
@@ -1138,6 +1139,54 @@ def orth_task(args):
     return len(data)
 
 
+def yz_groups(shape, workers=None, budget: int = YZ_GROUP_BYTES):
+    """[(b0, b1)] runs of consecutive yz blocks of a (D, H, W) level, one yz_group_task each.
+
+    A yz block is 64 columns of every (z, y) row: on the row-major level file it touches
+    every page, so reading one block per task makes ceil(W/64) passes over the whole file —
+    each a full disk read once the level outgrows the page cache. A group reads its columns
+    in one pass, as long as its band (D·H·64 bytes per block) stays within `budget`; groups
+    are also kept at least as many as `workers` (default: the CPU count) so the PNG encoding
+    of the packs still spreads over the pool when a small level would fit in one band."""
+    D, H, W = (int(v) for v in shape)
+    blocks = orth_blocks(W)
+    if blocks == 0:
+        return []
+    per_block = max(1, ORTH_ROWS * H * D)
+    size = max(1, min(blocks, int(budget) // per_block))
+    workers = max(1, int(workers if workers is not None else (os.cpu_count() or 1)))
+    size = max(1, min(size, -(-blocks // workers)))
+    return [(b, min(blocks, b + size)) for b in range(0, blocks, size)]
+
+
+def yz_group_task(args):
+    """Worker: the yz packs of blocks [b0, b1) of a level channel, from one sequential read
+    of their columns (plane by plane, in file order); each pack is byte-identical to
+    orth_task's. A one-block group (a band over the budget) stays a view of the file, as in
+    orth_task, so it never holds more than the pages it is encoding."""
+    path, shape, b0, b1, dests = args
+    D, H, W = shape
+    c0, c1 = b0 * ORTH_ROWS, min(W, b1 * ORTH_ROWS)
+    vol = np.memmap(path, dtype=np.uint8, mode="r", shape=tuple(shape))
+    band = None
+    written = 0
+    try:
+        if b1 - b0 == 1:
+            band = vol[:, :, c0:c1]
+        else:
+            band = np.empty((D, H, c1 - c0), dtype=np.uint8)
+            for z in range(D):
+                band[z] = vol[z, :, c0:c1]
+        for b, dest in zip(range(b0, b1), dests):
+            first, last = b * ORTH_ROWS, min(W, (b + 1) * ORTH_ROWS)
+            data = orth_pack("yz", first, [band[:, :, r - c0] for r in range(first, last)])
+            atomic_write(dest, data)
+            written += len(data)
+    finally:
+        del band, vol
+    return written
+
+
 def cut_task(args):
     """Worker: the records of one row (sz, sy) of cut super-blocks of a level channel:
     (sz, sy, [record or None per sx])."""
@@ -1156,14 +1205,18 @@ def cut_task(args):
     return sz, sy, out
 
 
-def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None, fmt: int = 5) -> dict:
+def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None, fmt: int = 5,
+               keep=None) -> dict:
     """Every structure of one format-5 (or 6: `fmt`) tree from its level-0 volumes.
 
     level0_files[c]: the (Z, Y, X) uint8 raw file of channel c (None: an empty channel).
     work_dir: where the level files are made (deleted when done). run(fn, tasks): an
     ordered iterator of fn over tasks (a process pool's, or map). progress(step, done,
-    total). Returns {"levels", "index": {columns, cuts}, "bytes", "stored"} — the tree's
-    part of manifest_v5."""
+    total). keep: {level k >= 1: [destination path or None per channel]} — level files
+    moved to those paths once the tree is complete instead of being deleted (a caller
+    that needs a coarse level of the same voxels then never computes it twice). Returns
+    {"levels", "index": {columns, cuts}, "bytes", "stored"} — the tree's part of
+    manifest_v5."""
     levels = level_ladder(dims, voxel)
     channels = len(level0_files)
     COLUMN_IDS = columns_of(fmt)        # noqa: N806 (the tree's own columns)
@@ -1264,6 +1317,14 @@ def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None
                             atomic_write(os.path.join(tree_dir, *orth_pack_rel(kind, k, c, b).split("/")),
                                          orth_pack(kind, first, empty * (min(n, first + ORTH_ROWS) - first)))
                         continue
+                    if kind == "yz":
+                        tasks = [(os.fspath(path), shape, b0, b1,
+                                  [os.path.join(tree_dir, *orth_pack_rel(kind, k, c, b).split("/"))
+                                   for b in range(b0, b1)])
+                                 for b0, b1 in yz_groups(shape)]
+                        for _ in run(yz_group_task, tasks):
+                            pass
+                        continue
                     tasks = [(os.fspath(path), shape, kind, b,
                               os.path.join(tree_dir, *orth_pack_rel(kind, k, c, b).split("/")))
                              for b in range(orth_blocks(n))]
@@ -1305,6 +1366,25 @@ def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None
             cut_refs.append({"bytes": len(blob), "sha256": _sha(blob)})
             if progress:
                 progress(f"cuts level {k}", k + 1, len(levels))
+        for k, dests in (keep or {}).items():
+            if not 0 < int(k) < len(files):
+                continue
+            for src, dest in zip(files[int(k)], dests):
+                if src is None or dest is None:
+                    continue
+                dest = os.fspath(dest)
+                try:
+                    os.replace(src, dest)
+                    made.remove(src)
+                except OSError:
+                    # Another volume, or a file a scanner still holds (Windows): a copy,
+                    # and the work file goes with the others.
+                    with open(src, "rb") as fin, open(dest, "wb") as fout:
+                        while True:
+                            chunk = fin.read(1 << 24)
+                            if not chunk:
+                                break
+                            fout.write(chunk)
     finally:
         for p in made:
             try:

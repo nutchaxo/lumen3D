@@ -236,7 +236,10 @@ def handle(action: str, params: dict):
         try:
             return 200, {"ok": True, "result": (check_staged if staged else check_published)(t, f)}
         except Exception as exc:  # one broken dataset must never blank the whole report
+            # The full text (it may name files of this host) stays in the server log; the
+            # browser gets the class of the failure only.
+            print(f"  [integrity] check of {t}/{f} failed: {type(exc).__name__}: {exc}", flush=True)
             return 200, {"ok": True, "result": {"id": f"{t}/{f}", "type": t, "folder": f, "name": f, "staged": staged,
                                                 "latest": dm.LATEST, "status": "error",
-                                                "findings": [_finding("error", "check_failed", f"{type(exc).__name__}: {exc}")]}}
+                                                "findings": [_finding("error", "check_failed", type(exc).__name__)]}}
     return 400, {"error": "Unknown action"}

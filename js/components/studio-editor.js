@@ -3291,7 +3291,7 @@ const StudioEditor = (() => {
   }
 
   /**
-   * Every PNG export offers the picture as it is or the native lossless one (SPEC §14.7):
+   * A PNG export of a preview offers the picture as it is or the native lossless one (SPEC §14.7):
    * the latter waits for (or re-runs) the native pass; the layers, stored in the
    * picture's pixels, are rescaled with it (setSliceResult) and land on the same voxels.
    */
@@ -3306,16 +3306,15 @@ const StudioEditor = (() => {
       _exportPng();
       return;
     }
-    if (!_nativeProvider || _doc.layoutMaps?.length > 0 || typeof Dialog === 'undefined' || !Dialog.ask) {
+    // A picture that is already the native lossless one has nothing to choose between.
+    if (isNative || !_nativeProvider || _doc.layoutMaps?.length > 0 || typeof Dialog === 'undefined' || !Dialog.ask) {
       _exportPng();
       return;
     }
     const choice = await Dialog.ask({
       icon: 'image',
       title: _t('studio.exportQualityTitle', 'Export quality'),
-      message: isNative
-        ? _t('studio.exportQualityNativeMsg', 'This picture is already the native lossless one.')
-        : _t('studio.exportQualityPreviewMsg', 'This picture is the preview drawn from the volume on screen. The native lossless picture is read from the stored voxels; your layers keep their place.'),
+      message: _t('studio.exportQualityPreviewMsg', 'This picture is the preview drawn from the volume on screen. The native lossless picture is read from the stored voxels; your layers keep their place.'),
       dismissId: 'cancel',
       options: [
         { id: 'native', primary: true, variant: 'primary', label: _t('studio.exportNative', 'Native lossless') },
@@ -3325,11 +3324,9 @@ const StudioEditor = (() => {
     });
     if (choice === 'current') { _exportPng(); return; }
     if (choice !== 'native') return;
-    if (!isNative) {
-      _toast(_t('studio.loadingNativeExport', 'Loading the native lossless picture…'));
-      const ok = await _nativeProvider();
-      if (!ok) { _toast(_t('studio.nativeExportFailed', 'The native picture could not be loaded; nothing was exported.')); return; }
-    }
+    _toast(_t('studio.loadingNativeExport', 'Loading the native lossless picture…'));
+    const ok = await _nativeProvider();
+    if (!ok) { _toast(_t('studio.nativeExportFailed', 'The native picture could not be loaded; nothing was exported.')); return; }
     _exportPng();
   }
 

@@ -406,7 +406,7 @@ Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'ape
 ### Exports et limites
 
 - **PNG** : taille native, fond noir, avec une **ligne de légende toujours incrustée** en haut à gauche (jeu | plan | taille | pixel µm). Une figure qui réunit plusieurs images n'écrit que le jeu et la taille. Refusé au-delà de 16 384 px de côté ou 2²⁸ pixels.
-- Sur un jeu d'un **format antérieur au 6**, l'export PNG pose une question : [Native sans perte]{.ui} ou [Cette image]{.ui}. *Native sans perte* attend la passe native (ou la relance si vous l'aviez arrêtée) ; les calques sont remis à l'échelle de la nouvelle image et **gardent leur place**.
+- Sur un jeu d'un **format antérieur au 6**, l'export PNG d'un aperçu pose une question : [Native sans perte]{.ui} ou [Cette image]{.ui} ; une figure déjà en qualité native est exportée sans la poser. *Native sans perte* attend la passe native (ou la relance si vous l'aviez arrêtée) ; les calques sont remis à l'échelle de la nouvelle image et **gardent leur place**.
 - Sur le **format 6**, aucune question : l'export est **toujours sans perte**, au niveau affiché.
 - **JSON** (`<jeu>_studio.json`) : calques, repères, canaux, plan, calibration. **Jamais de pixels.** À l'import, un fichier de plus de **5 Mo**, 2 000 calques ou 10 000 points est refusé ; un fichier d'une autre figure n'applique que les calques.
 - Au-delà de 4 canaux, seuls les 4 premiers sont montrés. Sans calibration : pas de barre d'échelle, mesures en pixels.

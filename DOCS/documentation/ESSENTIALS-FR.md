@@ -558,7 +558,7 @@ l'adresse de la page (elles voyagent dans le lien) ou en téléchargeant le **CS
 - Les **couleurs des canaux** se règlent dans le Studio sans toucher aux annotations.
 - Export **PNG** (la figure) ou **JSON** (pour la reprendre plus tard) ; au-delà de 5 Mo, l'export est refusé avec un message.
 - **Sur un jeu de format 6, les exports sont sans perte, à la résolution affichée, sans question** : la vue 3D, la figure du Studio et *Décomposer par canal*.
-- **Sur un jeu de format 5**, l'export demande encore : la vue 3D ([Qualité]{.ui} : [Actuelle]{.ui} ou [Sans perte]{.ui}), le Studio ([Native sans perte]{.ui} ou [Cette image]{.ui}). Vos annotations gardent leur place.
+- **Sur un jeu de format 5**, l'export demande encore : la vue 3D ([Qualité]{.ui} : [Actuelle]{.ui} ou [Sans perte]{.ui}), le Studio, tant que la figure n'est qu'un aperçu ([Native sans perte]{.ui} ou [Cette image]{.ui}). Vos annotations gardent leur place.
 - **Décomposer par canal** : un **cadre rouge** sur la vue 3D montre ce que capture l'image principale, dans les dispositions qui en ont une.
 
 ![Comparer : deux volumes et une photographie, outils communs et synchronisation (caméra, temps, coupes, canaux).](img/ch12/comparer.png){.shot width=70%}

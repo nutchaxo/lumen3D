@@ -405,7 +405,7 @@ On the demo dataset (768 × 576 px), the native version is as small as the previ
 ### Exports and limits
 
 - **PNG**: native size, black background, with a **caption line always burned in** at the top left (dataset | plane | size | pixel). Refused beyond 16,384 px per side or 2²⁸ pixels.
-- **Format 5 and older**: before the PNG export, a question: [Native lossless]{.ui} or [This picture]{.ui}. *Native lossless* waits for the native pass (or runs it again if you had stopped it); the layers are rescaled to the new picture and **keep their place**. [Channel Split]{.ui} (§ 12.6) asks the same question.
+- **Format 5 and older**: before the PNG export of a preview, a question: [Native lossless]{.ui} or [This picture]{.ui}; a figure already at native quality is exported without it. *Native lossless* waits for the native pass (or runs it again if you had stopped it); the layers are rescaled to the new picture and **keep their place**. [Channel Split]{.ui} (§ 12.6) asks the same question.
 - **Format 6**: no question. The export loads the lossless picture at the resolution on screen, then writes the PNG; the layers keep their place. If that picture cannot be loaded, nothing is exported and a message says so.
 - **JSON** (`<dataset>_studio.json`): layers, guides, channels, plane, calibration. **Never any pixels.** On import, a file larger than **5 MB**, or with more than 2,000 layers or 10,000 points, is refused; a file from another figure applies only its layers.
 - Beyond 4 channels, only the first 4 are shown. Without calibration: no scale bar, and measurements are in pixels.

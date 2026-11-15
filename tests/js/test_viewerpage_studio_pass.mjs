@@ -558,6 +558,7 @@ console.log('missing chunks: bricks − written: OK');
   await page.upgrade(preview, 7);
   assert.ok(timeline.paused >= 1, 'playback is paused for the pass');
   assert.deepEqual(env.loads, [12], 'the preview\'s frame is loaded again');
+  assert.ok(calls.progress.some(p => /Loading frame 012 again/.test(p.state?.label || '')), 'the label says the frame is loaded again');
   assert.deepEqual(timeline.frames.at(-1), [12, true, false], 'the scrubber follows, silently');
   assert.equal(page.timepoint(), 12);
   assert.equal(calls.finals.length, 1);
@@ -734,6 +735,8 @@ console.log('missing chunks: bricks − written: OK');
   assert.equal(calls.finals.length, 1);
   assert.equal(calls.finals[0].sr.timepoint, 13, 'the native picture is the preview\'s frame');
   assert.ok(!calls.progress.some(p => /no longer on frame/.test(p.state?.label || '')), 'no frame-lost notice');
+  assert.ok(calls.progress.some(p => /Waiting for frame 013 to finish loading/.test(p.state?.label || '')), 'the label says the pass waits for the frame\'s own load');
+  assert.ok(!calls.progress.some(p => /again/.test(p.state?.label || '')), 'never "loaded again" while it only waits');
   console.log('timelapse: a first-visit frame\'s coarse level on screen labels the preview, the pass waits for it: OK');
 }
 {

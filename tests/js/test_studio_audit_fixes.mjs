@@ -128,6 +128,7 @@ const sandbox = {
   SliceCompositor,
   VolumeSlicer,
   I18n: { t: (k) => k, translateDOM() {} },
+  Dialog: { asked: [], answer: 'native', ask(opts) { this.asked.push(opts); return Promise.resolve(this.answer); } },
   ExportManager: { downloadBlob: (blob, name) => downloads.push({ blob, name }), toast: (t) => toasts.push(t) },
   createChannelPanel: () => ({
     init(id, meta, cb) { panel.inits++; panel.callback = cb; },
@@ -148,7 +149,7 @@ const RETURN_RE = /\n  return \{\n    init,/;
 assert.ok(RETURN_RE.test(SRC), 'studio-editor.js still ends its IIFE with `return { init, …`');
 const FNS = ['_onWheel', '_onPointerDown', '_onPointerMove', '_onPointerUp', '_onKeyDown', '_screenToImage', '_imageToScreen',
   '_pushHistory', '_undo', '_redo', '_applySnapping', '_importDocumentText', '_importJson', '_exportPng', '_lineLengthUm',
-  '_measurementLabel'];
+  '_measurementLabel', '_exportPngWithChoice'];
 const HOOK = `
   globalThis.__studio = {
     get doc() { return _doc; },
@@ -502,6 +503,34 @@ const ev = (x, y, more = {}) => ({ clientX: x, clientY: y, pointerId: 1, pointer
   assert.equal(created.find(c => c.log.some(e => e[0] === 'drawImage')).width, 0, 'and gives its canvas back');
   Studio.close();
   console.log('PNG export guard: OK');
+}
+
+// ── PNG export choice: a native picture is exported without a question ───────
+{
+  const dialog = sandbox.Dialog;
+  let passes = 0;
+  Studio.setNativeProvider(async () => { passes++; return true; });
+
+  openSingle(200, 100, { quality: 'native' });
+  dialog.asked.length = 0; downloads.length = 0;
+  await F._exportPngWithChoice();
+  assert.equal(dialog.asked.length, 0, 'nothing to choose: the picture is already native lossless');
+  assert.equal(passes, 0, 'no native pass run again');
+  assert.equal(downloads.length, 1, 'exported straight away');
+  Studio.close();
+
+  openSingle();
+  dialog.asked.length = 0; downloads.length = 0; dialog.answer = 'native';
+  await F._exportPngWithChoice();
+  assert.equal(dialog.asked.length, 1, 'a preview still asks');
+  assert.equal(passes, 1, 'and runs the native pass when asked to');
+  assert.equal(downloads.length, 1);
+  dialog.answer = 'cancel';
+  await F._exportPngWithChoice();
+  assert.equal(downloads.length, 1, 'cancel exports nothing');
+  Studio.close();
+  Studio.setNativeProvider(null);
+  console.log('PNG export choice: OK');
 }
 
 // ── SliceCompositor: slot refill, grow-only canvas, CPU ImageData reuse ──────

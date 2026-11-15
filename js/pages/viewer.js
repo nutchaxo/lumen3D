@@ -3289,19 +3289,24 @@ const ViewerApp = (() => {
    */
   async function _returnToStudioFrame(frame, scoped) {
     if (!_basePath || typeof Timeline === 'undefined') return false;
-    StudioEditor.setLoadProgress?.({
-      percent: 0,
-      label: _tf('studio.nativeReturnFrame', 'Loading frame {frame} again for its native picture…', { frame: _frameLabel(frame) })
-    }, scoped);
     // A frame queued behind the load in flight must not follow this one onto the screen.
     _tpPending = null;
     Timeline.setFrame(frame, true, false);
+    // The load in flight is this frame's own (its coarse level was on screen when the
+    // Studio opened): the pass waits for it, nothing is loaded again.
+    const ownLoadInFlight = _tpInFlight && _tpTarget !== null && _tpTarget.frame === frame;
+    StudioEditor.setLoadProgress?.({
+      percent: 0,
+      label: ownLoadInFlight
+        ? _tf('studio.nativeWaitFrame', 'Waiting for frame {frame} to finish loading for its native picture…', { frame: _frameLabel(frame) })
+        : _tf('studio.nativeReturnFrame', 'Loading frame {frame} again for its native picture…', { frame: _frameLabel(frame) })
+    }, scoped);
     let loaded = null;
     // The page's load token of the load this waits on: a load started after it (a scrub
     // once the Studio was closed, a quality switch) owns the scrubber from then on.
     let ownToken = _activeLoadToken;
     try {
-      if (_tpInFlight && _tpTarget !== null && _tpTarget.frame === frame) {
+      if (ownLoadInFlight) {
         // The load in flight is this frame's (its coarse level was on screen when the
         // Studio opened): it lands on its own, a second load would start it over. When it
         // fails or is superseded, the frame is not put back.

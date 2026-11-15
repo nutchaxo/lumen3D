@@ -17,6 +17,7 @@ declare(strict_types=1);
 // Guarded: an update copies files one by one, and a request landing mid-copy must not die on a missing prelude.
 if (is_file(__DIR__ . '/_bootstrap.php')) require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/_admin_lib.php';
+require_once __DIR__ . '/_upload_lib.php';   // lumen_up_ini_bytes
 admin_session_start();
 // Read-only use of the session from here on (auth, CSRF): release its lock so this
 // request never serialises with the rest of the admin (see api/admin.php).
@@ -113,7 +114,15 @@ if ($action === 'list') admin_json_out(['files' => media_list()]);
 
 if (in_array($action, ['upload', 'delete'], true)) {
     admin_require_write();  // POST + CSRF; exits on failure
-    if ($action === 'upload') { $r = media_upload(is_array($body) ? $body : []); admin_json_out($r, $r['ok'] ? 200 : 400); }
+    if ($action === 'upload') {
+        // A body over post_max_size reaches PHP EMPTY, which would read as "no file type":
+        // name the real cause (the admin maps 413 to its "too large" sentence).
+        $postMax = lumen_up_ini_bytes((string)(ini_get('post_max_size') ?: '8M'));
+        if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
+            admin_json_out(['ok' => false, 'error' => 'too_large', 'limit' => $postMax], 413);
+        }
+        $r = media_upload(is_array($body) ? $body : []); admin_json_out($r, $r['ok'] ? 200 : 400);
+    }
     if ($action === 'delete') {
         $res = media_delete(lumen_str($body['name'] ?? null) ?? '');
         if ($res === 'ok') admin_json_out(['ok' => true]);

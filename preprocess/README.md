@@ -742,5 +742,5 @@ Pour réimplémenter et obtenir le **même résultat** (format 4) :
 ---
 
 <div align="center">
-<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.23.0</sub>
+<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.23.1</sub>
 </div>

@@ -2531,7 +2531,7 @@
       "published_exists": "Publier remplacerait le dataset publié du même nom. Abandonne cet import s’il s’agit d’un doublon.",
       "not_staged": "Le journal d’import a disparu : abandonne puis réimporte."
     },
-    "err401": "Ta session a expiré : reconnecte-toi, puis utilise « Revérifier ».",
+    "err401": "Votre session a expiré : reconnectez-vous, puis utilisez « Revérifier ».",
     "errEmpty": "HTTP {status} : réponse vide du serveur (délai dépassé à la passerelle ou dans PHP, ou PHP à court de mémoire).",
     "errNetwork": "Erreur réseau : le serveur est injoignable.",
     "listFailed": "La liste des datasets n’a pas pu être chargée. Consulte le journal du serveur, puis relance le diagnostic."

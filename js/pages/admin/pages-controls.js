@@ -150,6 +150,7 @@ const FAVORITE_ICONS = [
 const MEDIA_UPLOAD_ERRORS = [
   [/^Type de fichier non support/, () => t('pages.media.errType', 'Type de fichier non supporté (png, jpg, webp, gif, avif).')],
   [/^Fichier vide ou trop volumineux/, () => t('pages.media.errSize', 'Fichier vide ou trop volumineux (8 Mo au plus).')],
+  [/^too_large$/, () => t('pages.media.errSize', 'Fichier vide ou trop volumineux (8 Mo au plus).')],
   [/^[ÉE]criture impossible/, () => t('pages.media.errWrite', 'Le serveur ne peut pas enregistrer le fichier (droits d\'écriture ?).')],
 ];
 export function mediaUploadError(r) {

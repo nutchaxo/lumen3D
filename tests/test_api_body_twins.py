@@ -516,7 +516,8 @@ class PhpBackend(TwinCases, unittest.TestCase):
         rec = dev_server._credential_record("admin", PASSWORD)
         (cls.tree / "api" / "admin_credential.json").write_text(json.dumps(rec), encoding="utf-8")
         cls.port = _free_port()
-        cls.proc = subprocess.Popen([PHP, "-S", f"127.0.0.1:{cls.port}", "router.php"], cwd=str(cls.tree),
+        cls.proc = subprocess.Popen([PHP, "-d", "post_max_size=256K", "-d", "display_errors=0", "-S", f"127.0.0.1:{cls.port}", "router.php"],
+                                    cwd=str(cls.tree),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(200):
             try:
@@ -534,6 +535,17 @@ class PhpBackend(TwinCases, unittest.TestCase):
     def setUp(self):
         self.cookie = self.csrf = None
         self.login()
+
+    def test_media_upload_over_post_max_size_is_too_large(self):
+        # PHP drops a body past post_max_size (256K here): the answer names that cause
+        # (display_errors=0 as on a production host: PHP's own startup warning is not output)
+        # instead of judging the empty body an unsupported type.
+        import base64
+        big = base64.b64encode(self.PNG + b"\x00" * (300 * 1024)).decode()
+        st, data, _ = self.call("POST", "/api/media.php?action=upload", {"filename": "big.png", "data": big})
+        self.assertEqual((st, data), (413, {"ok": False, "error": "too_large", "limit": 256 * 1024}))
+        st, data, _ = self._upload("small.png", self.PNG)
+        self.assertEqual(st, 200, data)
 
 
 if __name__ == "__main__":

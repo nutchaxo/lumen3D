@@ -105,6 +105,13 @@ def git_state() -> set[str] | None:
 
 
 def main() -> int:
+    # A failing test's output can hold characters a Windows console cannot encode; the
+    # report must still print.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description="Run every test of the repository.")
     ap.add_argument("-k", dest="pattern", help="only run files whose repo-relative path contains this text")
     ap.add_argument("-j", dest="jobs", type=int, default=1, help="files to run concurrently (default 1)")

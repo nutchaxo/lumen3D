@@ -20,7 +20,8 @@
     "Analyze": "Analyse",
     "Tools": "Outils",
     "Window": "Fenêtre",
-    "Help": "Aide"
+    "Help": "Aide",
+    "Noise": "Bruit"
   },
   "cmd": {
     "fileOpen": "Ouvrir…",
@@ -129,7 +130,9 @@
     "radius": "Rayon",
     "value": "Valeur",
     "pixels": "pixels",
-    "scaled": "Unités calibrées ({unit})"
+    "scaled": "Unités calibrées ({unit})",
+    "previewZoomIn": "Zoomez pour prévisualiser (la région affichée est trop grande).",
+    "noDocuments": "Aucune image n'est ouverte"
   },
   "op": {
     "invert": "Inversion",
@@ -229,7 +232,8 @@
     "partial": "{n} image(s) n’ont pu être restaurées que jusqu’à la dernière étape rejouable.",
     "noBaseline": "{n} image(s) n’ont pas pu être restaurées : leur copie enregistrée est absente.",
     "discardAll": "Supprimer tout le travail enregistré",
-    "nothing": "Rien n’a pu être restauré depuis ce travail enregistré."
+    "nothing": "Rien n’a pu être restauré depuis ce travail enregistré.",
+    "held": "{n} image(s) sont conservées en l’état : un outil ou de la mémoire dont elles ont besoin n’était pas disponible, le travail enregistré n’a donc pas été rejoué en entier. La copie stockée reste intacte et les nouvelles modifications de ces images ne sont PAS enregistrées ; rechargez quand l’outil est disponible, ou enregistrez-les en TIFF."
   },
   "revert": {
     "message": "Rétablir {name} tel qu’il a été chargé ? Les modifications seront perdues."
@@ -274,12 +278,18 @@
     "needsRoi": "Tracez d’abord une sélection.",
     "badArgs": "Ces réglages sont inutilisables. Vérifiez les valeurs et réessayez.",
     "notSupported": "La vue avancée ne peut pas lire la figure affichée.",
-    "noLevel": "Aucune résolution de cette figure ne peut être ouverte."
+    "noLevel": "Aucune résolution de cette figure ne peut être ouverte.",
+    "badType": "Cette opération ne fonctionne pas sur ce type d'image. Convertissez d'abord l'image (Image > Type).",
+    "unknownOp": "Cet outil n'est pas disponible : une partie de la vue avancée n'a pas pu être chargée. Rechargez la page.",
+    "roiTooComplex": "Cette sélection est trop complexe pour être conservée (trop de points de contour). Simplifiez-la ou travaillez sur une région plus petite.",
+    "sizeMismatch": "Les images doivent avoir la même largeur et la même hauteur."
   },
   "warn": {
     "unprotected": "Votre travail n’est pas protégé : le navigateur a refusé de le stocker.",
+    "held": "Certaines images n’ont été restaurées qu’en partie : vos modifications sur elles ne sont pas enregistrées.",
     "lowStorage": "Il reste peu d’espace dans ce navigateur : enregistrez un TIFF.",
-    "budget": "La mémoire est presque pleine ({pct} %) : fermez une image ou libérez des annulations."
+    "budget": "La mémoire est presque pleine ({pct} %) : fermez une image ou libérez des annulations.",
+    "packageFailed": "Certains outils ({pkg}) n'ont pas pu être chargés et sont indisponibles."
   },
   "bc": {
     "min": "Minimum",
@@ -326,7 +336,9 @@
   },
   "hist": {
     "list": "Liste",
-    "binWidth": "Largeur de classe"
+    "binWidth": "Largeur de classe",
+    "value": "Valeur",
+    "count": "Effectif"
   },
   "part": {
     "minSize": "Taille (min)",
@@ -358,7 +370,8 @@
     "source": "Plusieurs coupes sont aplaties en une seule par la projection Z ; les données stockées sont en 8 bits : maximum et minimum restent en 8 bits, la somme est en 16 bits (exacte jusqu’à 257 coupes), la moyenne, l’écart type et la médiane sont en 32 bits.",
     "depth": "Les changements d’affichage (luminosité, contraste, tables de couleurs, surcouche de seuil) ne touchent jamais les pixels ; Appliquer, les filtres et les changements de type les modifient, et s’annulent tant que la mémoire le permet.",
     "deviations": "Différences avec ImageJ : Effacer et Effacer l’extérieur utilisent 0 (noir) et Remplir utilise la valeur maximale, car les images de fluorescence ont un fond sombre ; Convertir en masque et Appliquer le seuil créent une nouvelle image ; la projection somme est en 16 bits.",
-    "storage": "Votre travail est enregistré dans ce navigateur au fur et à mesure : un plantage ou un onglet fermé ne le perd pas. Enregistrez en TIFF pour garder un fichier."
+    "storage": "Votre travail est enregistré dans ce navigateur au fur et à mesure : un plantage ou un onglet fermé ne le perd pas. Enregistrez en TIFF pour garder un fichier.",
+    "tables": "Les fenêtres de tableau (listes, résultats de colocalisation, distributions) et de graphique ne sont pas conservées quand la page est rechargée : copiez-les ou enregistrez-les en CSV ou PNG. Les résultats restent enregistrés avec votre travail."
   },
   "view": {
     "menubar": "Barre de menus",
@@ -378,10 +391,26 @@
       "range": "Hors limites",
       "integer": "Saisissez un nombre entier",
       "choice": "Choisissez une option"
-    }
+    },
+    "unavailable": "Indisponible : cet outil n'a pas pu être chargé"
   },
   "help": {
     "space": "Maintenir pour déplacer",
     "escape": "Annuler l’opération en cours"
+  },
+  "noUndo": {
+    "title": "Pas assez de mémoire pour garder une étape d'annulation",
+    "message": "Cette étape ne tient en mémoire que sans étape d'annulation. L'exécuter quand même ? Elle ne pourra pas être annulée, et l'annuler en cours de route laisse modifiés les canaux déjà traités.",
+    "run": "Exécuter sans annulation"
+  },
+  "plot": {
+    "title": "Graphique",
+    "savePng": "Enregistrer en PNG",
+    "saveCsv": "Enregistrer en CSV",
+    "distance": "Distance",
+    "value": "Valeur"
+  },
+  "table": {
+    "title": "Tableau"
   }
 }

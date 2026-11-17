@@ -25,8 +25,23 @@
   "scripts": [
     "ij-core.js",
     "ij-analysis.js",
+    "ij-proc-shared.js",
+    "ij-proc-bg.js",
+    "ij-proc-filters.js",
+    "ij-proc-seg.js",
+    "ij-proc-multi.js",
+    "ij-proc-geom.js",
+    "ij-proc-roi.js",
+    "ij-proc-coloc.js",
     "ij-view.js",
-    "ij-app.js"
+    "ij-app.js",
+    "ij-cmds-bg.js",
+    "ij-cmds-filters.js",
+    "ij-cmds-seg.js",
+    "ij-cmds-multi.js",
+    "ij-cmds-geom.js",
+    "ij-cmds-roi.js",
+    "ij-cmds-coloc.js"
   ],
   "styles": [
     "ij-style.css"

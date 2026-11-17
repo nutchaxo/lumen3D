@@ -20,7 +20,8 @@
     "Analyze": "Analyze",
     "Tools": "Tools",
     "Window": "Window",
-    "Help": "Help"
+    "Help": "Help",
+    "Noise": "Noise"
   },
   "cmd": {
     "fileOpen": "Open…",
@@ -129,7 +130,9 @@
     "radius": "Radius",
     "value": "Value",
     "pixels": "pixels",
-    "scaled": "Scaled units ({unit})"
+    "scaled": "Scaled units ({unit})",
+    "previewZoomIn": "Zoom in to preview (the region on screen is too large).",
+    "noDocuments": "No image is open"
   },
   "op": {
     "invert": "Inverting",
@@ -229,7 +232,8 @@
     "partial": "{n} image(s) could only be restored up to the last step that could be replayed.",
     "noBaseline": "{n} image(s) could not be restored: their stored copy is missing.",
     "discardAll": "Delete all saved work",
-    "nothing": "Nothing could be restored from this saved work."
+    "nothing": "Nothing could be restored from this saved work.",
+    "held": "{n} image(s) are held as they were: a tool or memory they need was not available, so the saved work was not replayed in full. The stored copy is kept untouched and new changes to these images are NOT saved; reload when the tool is available, or save them as TIFF."
   },
   "revert": {
     "message": "Revert {name} to the image as it was loaded? Changes are lost."
@@ -274,12 +278,18 @@
     "needsRoi": "Draw a selection first.",
     "badArgs": "These settings cannot be used. Check the values and try again.",
     "notSupported": "The Advanced view cannot read the figure on screen.",
-    "noLevel": "No resolution of this figure can be opened."
+    "noLevel": "No resolution of this figure can be opened.",
+    "badType": "This operation does not work on this image type. Convert the image first (Image > Type).",
+    "unknownOp": "This tool is not available: part of the Advanced view could not be loaded. Reload the page.",
+    "roiTooComplex": "This selection is too complex to keep (too many outline points). Simplify it or work on a smaller region.",
+    "sizeMismatch": "The images must have the same width and height."
   },
   "warn": {
     "unprotected": "Your work is not protected: the browser refused to store it.",
+    "held": "Some images were only partly restored: your changes to them are not saved.",
     "lowStorage": "Little storage is left in this browser: save a TIFF.",
-    "budget": "Memory is almost full ({pct} %): close an image or free undo steps."
+    "budget": "Memory is almost full ({pct} %): close an image or free undo steps.",
+    "packageFailed": "Some tools ({pkg}) could not be loaded and are unavailable."
   },
   "bc": {
     "min": "Minimum",
@@ -326,7 +336,9 @@
   },
   "hist": {
     "list": "List",
-    "binWidth": "Bin width"
+    "binWidth": "Bin width",
+    "value": "Value",
+    "count": "Count"
   },
   "part": {
     "minSize": "Size (min)",
@@ -358,7 +370,8 @@
     "source": "Several slices are flattened into one with Z Project; the stored data is 8-bit, so Max and Min stay 8-bit, Sum is 16-bit (exact up to 257 slices), Average, Standard Deviation and Median are 32-bit.",
     "depth": "Display changes (brightness, contrast, lookup tables, threshold overlay) never touch the pixels; Apply, filters and type changes do, and can be undone while memory allows.",
     "deviations": "Differences from ImageJ: Clear and Clear Outside use 0 (black) and Fill uses the maximum value, because fluorescence images have a dark background; Convert to Mask and Threshold Apply create a new image; Sum projection is 16-bit.",
-    "storage": "Your work is saved in this browser as you go, so a crash or a closed tab does not lose it. Save as TIFF to keep a file."
+    "storage": "Your work is saved in this browser as you go, so a crash or a closed tab does not lose it. Save as TIFF to keep a file.",
+    "tables": "Table windows (lists, colocalization results, distributions) and plot windows are not kept when the page is reloaded: copy them or save them as CSV or PNG. Results stay saved with your work."
   },
   "view": {
     "menubar": "Menu bar",
@@ -378,10 +391,26 @@
       "range": "Out of range",
       "integer": "Enter a whole number",
       "choice": "Choose one of the options"
-    }
+    },
+    "unavailable": "Unavailable: this tool could not be loaded"
   },
   "help": {
     "space": "Hold to pan",
     "escape": "Cancel the running operation"
+  },
+  "noUndo": {
+    "title": "Not enough memory to keep an undo step",
+    "message": "This step fits in memory only without an undo step. Run it anyway? It cannot be undone, and cancelling midway leaves the channels already processed changed.",
+    "run": "Run without undo"
+  },
+  "plot": {
+    "title": "Plot",
+    "savePng": "Save PNG",
+    "saveCsv": "Save CSV",
+    "distance": "Distance",
+    "value": "Value"
+  },
+  "table": {
+    "title": "Table"
   }
 }

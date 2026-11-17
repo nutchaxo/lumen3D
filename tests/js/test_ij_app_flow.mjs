@@ -100,7 +100,7 @@ function boot() {
   sandbox.getComputedStyle = () => ({ getPropertyValue: () => '' });
   sandbox.requestAnimationFrame = (f) => setTimeout(f, 0);
   vm.createContext(sandbox);
-  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-engine.js']) vm.runInContext(fs.readFileSync(path.join(DIR, f), 'utf8'), sandbox, { filename: f });
+  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js']) vm.runInContext(fs.readFileSync(path.join(DIR, f), 'utf8'), sandbox, { filename: f });
 
   // A Worker whose far side is the real engine.
   const workers = [];
@@ -217,7 +217,8 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   t.IJApp.mount(t.root, { ctx: t.ctx, api: t.api });
   await until(() => t.shells[0] && t.shells[0].images.find((i) => i && i.name), 'projection loaded');
   const sh = t.shells[0];
-  assert.deepEqual(J(t.log.init.scripts), ['blob:ij-core.js', 'blob:ij-analysis.js', 'blob:ij-engine.js'], 'worker init carries the verified script URLs');
+  assert.deepEqual(J(t.log.init.scripts), ['blob:ij-core.js', 'blob:ij-analysis.js', 'blob:ij-proc-shared.js', 'blob:ij-engine.js'], 'worker init carries the verified URLs of the mandatory scripts');
+  assert.deepEqual(J(t.log.init.packages).map((p) => p.pkg), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc'], 'and the packages, each loaded on its own by the worker');
   assert.ok(t.log.init.budgetBytes >= 512 * 1048576 && t.log.init.budgetBytes <= 2 * 1024 * 1048576, 'budget within [512 MiB, 2 GiB]');
   assert.equal(t.workers[0].url, 'asset/ij-worker.js');
   await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.bitDepth === 16), 'doc shown');

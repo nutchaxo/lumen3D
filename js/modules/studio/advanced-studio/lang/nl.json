@@ -20,7 +20,8 @@
     "Analyze": "Analyseren",
     "Tools": "Hulpmiddelen",
     "Window": "Venster",
-    "Help": "Help"
+    "Help": "Help",
+    "Noise": "Ruis"
   },
   "cmd": {
     "fileOpen": "Openen…",
@@ -129,7 +130,9 @@
     "radius": "Straal",
     "value": "Waarde",
     "pixels": "pixels",
-    "scaled": "Geschaalde eenheden ({unit})"
+    "scaled": "Geschaalde eenheden ({unit})",
+    "previewZoomIn": "Zoom in om een voorbeeld te zien (het zichtbare gebied is te groot).",
+    "noDocuments": "Er is geen afbeelding geopend"
   },
   "op": {
     "invert": "Omkeren",
@@ -229,7 +232,8 @@
     "partial": "{n} afbeelding(en) konden alleen worden hersteld tot de laatste afspeelbare stap.",
     "noBaseline": "{n} afbeelding(en) konden niet worden hersteld: hun opgeslagen kopie ontbreekt.",
     "discardAll": "Al het opgeslagen werk verwijderen",
-    "nothing": "Uit dit opgeslagen werk kon niets worden hersteld."
+    "nothing": "Uit dit opgeslagen werk kon niets worden hersteld.",
+    "held": "{n} afbeelding(en) blijven zoals ze waren: een benodigd hulpmiddel of geheugen was niet beschikbaar, dus het opgeslagen werk is niet volledig afgespeeld. De opgeslagen kopie blijft ongemoeid en nieuwe wijzigingen aan deze afbeeldingen worden NIET opgeslagen; laad opnieuw wanneer het hulpmiddel beschikbaar is, of sla ze op als TIFF."
   },
   "revert": {
     "message": "{name} terugzetten naar de geladen afbeelding? Wijzigingen gaan verloren."
@@ -274,12 +278,18 @@
     "needsRoi": "Teken eerst een selectie.",
     "badArgs": "Deze instellingen zijn onbruikbaar. Controleer de waarden en probeer opnieuw.",
     "notSupported": "De geavanceerde weergave kan de getoonde figuur niet lezen.",
-    "noLevel": "Er kan geen resolutie van deze figuur worden geopend."
+    "noLevel": "Er kan geen resolutie van deze figuur worden geopend.",
+    "badType": "Deze bewerking werkt niet op dit afbeeldingstype. Converteer de afbeelding eerst (Afbeelding > Type).",
+    "unknownOp": "Dit hulpmiddel is niet beschikbaar: een deel van de geavanceerde weergave kon niet worden geladen. Laad de pagina opnieuw.",
+    "roiTooComplex": "Deze selectie is te complex om te bewaren (te veel contourpunten). Vereenvoudig haar of werk op een kleiner gebied.",
+    "sizeMismatch": "De afbeeldingen moeten dezelfde breedte en hoogte hebben."
   },
   "warn": {
     "unprotected": "Uw werk is niet beschermd: de browser weigerde het op te slaan.",
+    "held": "Sommige afbeeldingen zijn maar gedeeltelijk hersteld: uw wijzigingen eraan worden niet opgeslagen.",
     "lowStorage": "Er is weinig opslag over in deze browser: sla een TIFF op.",
-    "budget": "Het geheugen is bijna vol ({pct} %): sluit een afbeelding of maak ongedaanmaken vrij."
+    "budget": "Het geheugen is bijna vol ({pct} %): sluit een afbeelding of maak ongedaanmaken vrij.",
+    "packageFailed": "Sommige hulpmiddelen ({pkg}) konden niet worden geladen en zijn niet beschikbaar."
   },
   "bc": {
     "min": "Minimum",
@@ -326,7 +336,9 @@
   },
   "hist": {
     "list": "Lijst",
-    "binWidth": "Klassebreedte"
+    "binWidth": "Klassebreedte",
+    "value": "Waarde",
+    "count": "Aantal"
   },
   "part": {
     "minSize": "Grootte (min)",
@@ -358,7 +370,8 @@
     "source": "Meerdere plakken worden met Z-projectie samengevoegd; de opgeslagen gegevens zijn 8-bit: maximum en minimum blijven 8-bit, de som is 16-bit (exact tot 257 plakken), gemiddelde, standaarddeviatie en mediaan zijn 32-bit.",
     "depth": "Weergavewijzigingen (helderheid, contrast, kleurtabellen, drempeloverlay) raken de pixels nooit; Toepassen, filters en typewijzigingen wel, en ze kunnen ongedaan worden gemaakt zolang het geheugen het toelaat.",
     "deviations": "Verschillen met ImageJ: Wissen en Buitenkant wissen gebruiken 0 (zwart) en Vullen gebruikt de maximumwaarde, omdat fluorescentiebeelden een donkere achtergrond hebben; Naar masker omzetten en Drempel toepassen maken een nieuwe afbeelding; de somprojectie is 16-bit.",
-    "storage": "Uw werk wordt onderweg in deze browser opgeslagen, zodat een crash of gesloten tabblad het niet kwijtraakt. Sla op als TIFF om een bestand te bewaren."
+    "storage": "Uw werk wordt onderweg in deze browser opgeslagen, zodat een crash of gesloten tabblad het niet kwijtraakt. Sla op als TIFF om een bestand te bewaren.",
+    "tables": "Tabelvensters (lijsten, colocalisatieresultaten, verdelingen) en grafiekvensters blijven niet bewaard als de pagina opnieuw wordt geladen: kopieer ze of sla ze op als CSV of PNG. Resultaten blijven met uw werk opgeslagen."
   },
   "view": {
     "menubar": "Menubalk",
@@ -378,10 +391,26 @@
       "range": "Buiten bereik",
       "integer": "Voer een geheel getal in",
       "choice": "Kies een van de opties"
-    }
+    },
+    "unavailable": "Niet beschikbaar: dit hulpmiddel kon niet worden geladen"
   },
   "help": {
     "space": "Ingedrukt houden om te verschuiven",
     "escape": "De lopende bewerking annuleren"
+  },
+  "noUndo": {
+    "title": "Te weinig geheugen om een ongedaanmakingsstap te bewaren",
+    "message": "Deze stap past alleen in het geheugen zonder ongedaanmakingsstap. Toch uitvoeren? Hij kan niet ongedaan worden gemaakt, en halverwege annuleren laat de al verwerkte kanalen gewijzigd.",
+    "run": "Uitvoeren zonder ongedaan maken"
+  },
+  "plot": {
+    "title": "Grafiek",
+    "savePng": "PNG opslaan",
+    "saveCsv": "CSV opslaan",
+    "distance": "Afstand",
+    "value": "Waarde"
+  },
+  "table": {
+    "title": "Tabel"
   }
 }

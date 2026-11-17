@@ -25,6 +25,84 @@
  *   The shell owns the keyboard: it matches each command's `shortcut` (a string or an array of
  *   them) and calls onCommand; this file only declares them.
  */
+
+/* ── EXTENSION API (PLAN-wave2 §2.5) ──────────────────────────────────────────────────────────────
+ * The processing packages (ij-cmds-<pkg>.js, loaded after this file and BEFORE the first mount)
+ * add their menu commands with
+ *
+ *   IJApp.extend({ pkg, commands: [...], errors: { IJ_CODE: 'err.key' }, columns: [[key, header, afterKey]] })
+ *       throws IJ_BAD_ARGS for a malformed registration (nothing is half-registered) and IJ_EXTEND_AFTER_MOUNT
+ *       once the view was mounted. `measurements` (P6 only) is reserved and not read by W0.
+ *   pkg         one of IJApp.PACKAGE_NAMES (the ij-proc-<pkg>.js of WORKER_SCRIPTS: bg filters seg multi geom roi
+ *               coloc), once. The page disables the package's commands when its worker file failed to load.
+ *
+ *   command = { id, menu: ['Process', 'Filters'], order, labelKey?, shortcut?, keys?, separatorBefore?,
+ *               long?, enabled?(st), run(api) }
+ *     id          letters and digits only; the label is the plugin lang key `cmd.<id>` (labelKey overrides)
+ *     order       position × 10 inside its (sub)menu, from the frozen table of PLAN-wave2 §1
+ *     long        true = the command shows progress (informational: the busy state is entered by api.run /
+ *                 api.compute themselves; Cancel reaches the worker commands of LONG_COMMANDS)
+ *     enabled(st) st = { doc, docs, roi, prevRoi, busy, nDocs, canUndo, canRedo, dirty, hasResults,
+ *                 canProject, threshold, activeChannel } — default: an image is open and nothing runs;
+ *                 a package that failed to load disables its commands whatever enabled() says
+ *     run(api)    api = the object below (every member listed in IJApp.EXT_API_MEMBERS); a command makes
+ *                 its calls in any number, but only through `api`. A throw / rejection is reported to the
+ *                 operator by the app (err.<name> sentence, never err.message).
+ *   errors      extra error codes → plugin lang keys (`err.<name>`); a code another package mapped differently throws
+ *   columns     [key, header, afterKey]: a Results column; rows given to api.addResults carry `key`; the
+ *               header is what the table and the CSV show; it sits after the column `afterKey` (else at
+ *               the end); keys nobody declared are appended in first-seen order
+ *
+ * api (frozen). Every call that needs an image takes it from `docId` (default: the active one):
+ *   tr(key, params) → string                         the plugin's translation ({token} interpolation)
+ *   state() → { doc, docs, roi, busy, activeChannel, threshold, measurements, lineWidth, roiList, resultsCount }
+ *        doc = info of the active image | null; docs = [info] in opening order; roi = the active image's selection |
+ *        null; threshold = { docId, channel, lower, upper, dark } | null — what the Threshold WINDOW holds: it is null
+ *        until that window has been opened (`await api.openTool('threshold')` opens it and waits for its first
+ *        automatic range); measurements = [group] ticked in Set Measurements; roiList = [{ name, docId, roi }]
+ *   dialog(spec) → Promise<values | null>            spec: see IJWindows.dialog (ij-view.js) — field types
+ *        number slider check choice radio string textarea doc channel message; enabledIf / visibleIf;
+ *        validate(values) → { id: errKey } | null; onChange(values, set, changedId); preview:
+ *        { op, params(values), channel?, roi? } (a pixel op, drawn over the image) or
+ *        { compute, params(values), overlay(result, values) → items } (a compute op, drawn as overlay).
+ *        A `doc` field lists the open images (filter(info) narrows them), a `channel` field the channels of
+ *        the image a sibling `doc` field (docField) chose, else of the current one. `values` hold ONLY the fields
+ *        that are valid and shown (an invalid or hidden field is absent, never NaN); validate / onChange run only
+ *        while every field is valid. A `doc` field with no image to pick cannot be committed. null = cancelled.
+ *   run(op, params, { docId, channel, roi, noRoi, docIds, labelKey, noUndo }) → Promise<{ newDocIds, changed } | null>
+ *        runs a registry operation (pixel / size / newdoc) on docId, channel (a number or 'all'; default: the
+ *        active one), roi (default: its selection); new images are adopted and shown by the call itself.
+ *        null = NOTHING RAN: no image, another step is running, the operator declined, the step failed or was
+ *        cancelled (a failure is reported to the operator by the call itself — do not report it again).
+ *        A step that fits the memory only without its undo record asks the operator first.
+ *   compute(op, params, { docId, docIds, channel, roi, preview, region, labelKey }) → Promise<result | null>
+ *        a read-only operation; null = nothing ran (same cases as run, reported when it failed). preview:true does
+ *        not enter the busy state, cancels the previous preview compute, and REJECTS with the engine error
+ *        (IJ_CANCELLED when superseded) — the caller catches it.
+ *   estimate(op, params, { docId, docIds, channel, roi }) → Promise<{ needBytes, fits, fitsWithoutUndo, usedBytes, budgetBytes }>
+ *   preview(op, params, { docId, channel, roi }) → Promise<{ ok, tooLarge? }>   cancelPreview()
+ *   overlay(items) / clearOverlay()                  items: IJDisplay.setOverlay (points, polyline, grid, rect)
+ *   setRoi(roi, { docId })                           set (null clears) the selection of an image
+ *   addResults(rows, { show })                       rows = [{ key: value }] appended to Results (shown unless show:false)
+ *   openTable(name, columns, rows)                   a table window; columns = [header], rows = [[value]] | [{ header: value }]
+ *                                                    NOT kept across a reload (the About box says so); Results are
+ *   openPlot(spec)                                   a plot window (see IJPlot, ij-view.js): series lines / bars /
+ *                                                    points, an image layer, line overlays, PNG and CSV export
+ *   openTool(id) → Promise<boolean>                  opens (or raises) a tool window: bc channels threshold results
+ *                                                    roiManager summary; other ids reject. 'threshold' resolves once
+ *                                                    its first automatic range is in state().threshold
+ *   setDisplay(docId, channel, { min, max, lut, invert }) → Promise   the display of one channel (a LUT name, a range):
+ *                                                    not an undo step, never touches pixels; rejects for a bad image /
+ *                                                    channel / range
+ *   toast(key, params)                               a line in the status bar
+ *   error(err)                                       reports an error as the app does (never err.message)
+ *   rename(docId, name) → Promise                    renames an image (not an undo step)
+ *
+ * Key namespaces a package may use (the registry test scans for them): cmd. op. menu. meas. tool. res.
+ * err. dlg.<prefix>. (prefix: bg→bg filters→flt seg→seg multi→multi geom→geom roi→roi coloc→coloc), and any key
+ * the base dictionary already has (dlg.ok, …). The test also reads string literals that look like keys
+ * (validate() messages, unitsKey, option labels), so write them as plain literals.
+ */
 const IJApp = (() => {
   'use strict';
 
@@ -34,6 +112,8 @@ const IJApp = (() => {
     'Spectrum', '16 Colors', 'HiLo'];
   const AREA_TYPES = new Set(['rect', 'oval', 'polygon', 'freehand', 'mask']);
   const MEASURE_KEY = 'lumen3d.ij.measurements';
+  // owner: P6 (wave 2) — MEASURE_GROUPS, COLUMNS, PARTICLE_COLUMNS, resultColumnsOf, setMeasurements,
+  // onToolOptions and the ROI Manager window are the measurement code; no other package edits this file.
   const MEASURE_GROUPS = {
     area: ['area'],
     mean: ['mean'],
@@ -80,6 +160,10 @@ const IJApp = (() => {
     IJ_EMPTY_ROI: 'err.emptyRoi',
     IJ_NEEDS_ROI: 'err.needsRoi',
     IJ_BAD_ARGS: 'err.badArgs',
+    IJ_BAD_TYPE: 'err.badType',
+    IJ_UNKNOWN_OP: 'err.unknownOp',
+    IJ_ROI_TOO_COMPLEX: 'err.roiTooComplex',
+    IJ_SIZE_MISMATCH: 'err.sizeMismatch',
     STUDIO_NOT_SUPPORTED: 'err.notSupported',
     NO_LEVEL: 'err.noLevel',
     STUDIO_FRAME_LOST: 'err.frameLost',
@@ -97,9 +181,18 @@ const IJApp = (() => {
     { id: 'zoom', labelKey: 'tool.zoom', icon: 'zoom-in' },
     { id: 'hand', labelKey: 'tool.hand', icon: 'hand' }
   ];
+  // The worker protocol commands Cancel may target (a menu command's own `long` flag only says "shows progress").
   const LONG_COMMANDS = new Set(['doc.run', 'doc.project.add', 'doc.threshold', 'doc.particles',
-    'doc.open', 'doc.duplicate', 'doc.exportTiff']);
+    'doc.open', 'doc.duplicate', 'doc.exportTiff', 'doc.compute']);
+  // The files the worker loads, in order: the first four are mandatory, every ij-proc-<pkg>.js other than
+  // ij-proc-shared.js is a package loaded in its own try/catch (ij-worker.js).
+  const WORKER_SCRIPTS = ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js',
+    'ij-proc-bg.js', 'ij-proc-filters.js', 'ij-proc-seg.js', 'ij-proc-multi.js', 'ij-proc-geom.js', 'ij-proc-roi.js', 'ij-proc-coloc.js'];
+  const PACKAGE_FILE_RX = /^ij-proc-([a-z0-9]+)\.js$/;
+  const PACKAGE_NAMES = WORKER_SCRIPTS.map((f) => PACKAGE_FILE_RX.exec(f)).filter((m) => m && m[1] !== 'shared').map((m) => m[1]);
+  const ESTIMATE_MIN_FRACTION = 1 / 64; // an image under budget/64 never needs the estimate round trip
   const PERSIST_MS = 1200;
+  const PREVIEW_COMPUTE_PIXELS = 4e6;  // a compute preview runs at level 0 on a visible region of at most this
   const WORKER_READY_MS = 20000;
   const GIB = 1024 * 1024 * 1024;
 
@@ -211,6 +304,43 @@ const IJApp = (() => {
       cmd('helpShortcuts', ['Help'], { enabled: always, run: (a) => a.showShortcuts() })
     ]);
 
+  // Menu positions (PLAN-wave2 §1): `order` = position × 10 inside the (sub)menu, `—` = separator above.
+  // A package command uses the same scale; a submenu's own position is in GROUP_META.
+  const ORDER = {
+    fileOpen: 10, fileSaveTiff: 10, fileSavePng: 20, fileSaveResults: 30, fileRevert: 30, fileRecover: 40, fileClose: 50, fileSimple: 60, fileCloseStudio: 70,
+    editUndo: 10, editRedo: 20, editClear: 30, editClearOutside: 40, editFill: 50, editInvert: 60,
+    editSelectAll: 10, editSelectNone: 20, editRestoreSelection: 30, editMakeInverse: 110, editAddToManager: 120,
+    typeBit8: 10, typeBit16: 20, typeBit32: 30,
+    adjustBC: 10, adjustThreshold: 20,
+    imageInfo: 30, colorChannels: 40, stackProject: 10, imageCrop: 80, imageDuplicate: 90,
+    transformFlipH: 10, transformFlipV: 20, transformRotateRight: 30, transformRotateLeft: 40,
+    zoomIn: 10, zoomOut: 20, zoomOriginal: 30, zoomToSelection: 40, zoomFit: 50,
+    lutApply: 10, lutGrays: 20, lutRed: 30, lutGreen: 40, lutBlue: 50, lutCyan: 60, lutMagenta: 70, lutYellow: 80, lutFire: 90, lutIce: 100,
+    lutSpectrum: 110, lut16Colors: 120, lutHiLo: 130, lutInvert: 140,
+    binMask: 10, binErode: 20, binDilate: 30, binOpen: 40, binClose: 50, binFillHoles: 70,
+    mathAdd: 10, mathSubtract: 20, mathMultiply: 30, mathDivide: 40, mathMin: 80, mathMax: 90, mathSet: 110, mathAbs: 180,
+    filterGaussian: 20, filterMedian: 30, filterMean: 40, filterMinimum: 50, filterMaximum: 60,
+    analyzeMeasure: 10, analyzeParticles: 20, analyzeClearResults: 50, analyzeSetMeasurements: 60, analyzeHistogram: 80, analyzePlotProfile: 90,
+    toolsRoiManager: 10,
+    windowResults: 10, windowRoiManager: 20, windowNext: 30, windowPrevious: 40,
+    helpAbout: 10, helpShortcuts: 20
+  };
+  const SEPARATOR_ABOVE = new Set(['editClear', 'editAddToManager', 'imageInfo', 'imageCrop', 'colorChannels', 'binErode', 'analyzeHistogram']);
+  // Position of each submenu inside its parent list (keyed by the path of menu names).
+  const GROUP_META = {
+    'File/SaveAs': { order: 20 },
+    'Edit/Selection': { order: 70, separatorBefore: true },
+    'Image/Type': { order: 10 }, 'Image/Adjust': { order: 20 }, 'Image/Color': { order: 60 }, 'Image/Stacks': { order: 70 },
+    'Image/Transform': { order: 110 }, 'Image/Zoom': { order: 120, separatorBefore: true }, 'Image/LookupTables': { order: 130 },
+    'Process/Noise': { order: 60 }, 'Process/Binary': { order: 70, separatorBefore: true }, 'Process/Math': { order: 80 },
+    'Process/Filters': { order: 90 },
+    'Analyze/Tools': { order: 110 }
+  };
+  for (const c of COMMANDS) {
+    if (ORDER[c.id] !== undefined) c.order = ORDER[c.id];
+    if (SEPARATOR_ABOVE.has(c.id)) c.separatorBefore = true;
+  }
+
   // ───────────────────────────── pure helpers (also used by tests) ─────────────────────────────
 
   const bytesPerPixel = (bitDepth) => (bitDepth === 8 ? 1 : bitDepth === 16 ? 2 : 4);
@@ -321,12 +451,25 @@ const IJApp = (() => {
     leaving: null, figureKey: null, desc: null, enterToken: 0,
     previewSeq: 0, previewTimer: 0, pointer: null, pixelBusy: false, pixelDirty: false,
     persistTimer: 0, persistAsked: false, firstCommitDone: false,
-    visHandler: null, menuList: [], unprotected: new Set(), warnBudget: '', warnLow: false,
+    visHandler: null, menuList: [], unprotected: new Set(), held: new Set(), warnBudget: '', warnLow: false,
     summaryRows: [],          // one row per Analyze Particles run (the Summary window)
     locks: new Map(),         // session key → release() of the Web Lock held while this tab uses it
     emptyEl: null, displayPatch: new Map(), displayInflight: new Map(),
-    openCounter: 0, savedAt: 0
+    openCounter: 0, savedAt: 0,
+    engineBudget: 0,          // the budget the engine says it runs with (its 'budget' events)
+    threshold: null,          // { docId, channel, lower, upper, dark } while the Threshold window holds one
+    failedPackages: new Set(), // packages whose ij-proc file did not load in the worker
+    previewCompute: 0,        // request id of the running compute preview
+    overlayDoc: null,         // the image the overlay items belong to
+    extWindowSeq: 0,
+    lastToolReady: null       // promise of the tool window opened last (its first update)
   };
+
+  // ───────────────────────────── extension registry ─────────────────────────────
+  const EXTRA_COLUMNS = [];            // [key, header, afterKey] declared through extend({ columns })
+  const EXT = { packages: new Map(), measurements: {} };
+  let extensionsLocked = false;
+
 
   function loadMeasurements() {
     try {
@@ -436,6 +579,7 @@ const IJApp = (() => {
   function showWarning() {
     if (!S.shell) return;
     const parts = [];
+    if (S.held.size) parts.push(tr('warn.held'));
     if (S.unprotected.size) parts.push(tr('warn.unprotected'));
     if (S.warnLow) parts.push(tr('warn.lowStorage'));
     if (S.warnBudget) parts.push(S.warnBudget);
@@ -457,8 +601,20 @@ const IJApp = (() => {
     w.onerror = (ev) => { if (ev && ev.preventDefault) ev.preventDefault(); console.error('[advanced-studio] worker error', ev && ev.message); onWorkerCrash(client); };
     w.onmessageerror = () => onWorkerCrash(client);
     S.budgetBytes = budgetFromDevice();
-    w.postMessage({ init: { scripts: [p.fileUrl('ij-core.js'), p.fileUrl('ij-analysis.js'), p.fileUrl('ij-engine.js')], budgetBytes: S.budgetBytes } });
+    S.failedPackages.clear();
+    w.postMessage({ init: Object.assign(workerInit(p), { budgetBytes: S.budgetBytes }) });
     S.worker = client;
+  }
+
+  /** WORKER_SCRIPTS as the worker takes them: the mandatory scripts, then the packages (each loaded in its own try/catch). */
+  function workerInit(p) {
+    const scripts = [], packages = [];
+    for (const f of WORKER_SCRIPTS) {
+      const m = PACKAGE_FILE_RX.exec(f);
+      if (m && m[1] !== 'shared') packages.push({ pkg: m[1], url: p.fileUrl(f) });
+      else scripts.push(p.fileUrl(f));
+    }
+    return { scripts, packages };
   }
 
   function call(cmdName, args, transfer) {
@@ -483,7 +639,7 @@ const IJApp = (() => {
     if (m.ok) entry.resolve(m.result);
     else {
       const e = m.error || {};
-      entry.reject(Object.assign(new Error(e.message || e.code || 'engine error'), { code: e.code || 'IJ_ENGINE' }));
+      entry.reject(Object.assign(new Error(e.message || e.code || 'engine error'), { code: e.code || 'IJ_ENGINE', details: e.details || null }));
     }
   }
 
@@ -508,11 +664,16 @@ const IJApp = (() => {
         break;
       case 'invalidate': {
         if (m.docId !== S.activeId || !S.display) break;
-        if (m.sizeChanged) refreshInfo(m.docId).then(() => showDoc(m.docId)).catch(reportError);
+        if (m.sizeChanged) refreshInfo(m.docId).then((info) => { afterLayoutChange(m.docId, info); return showDoc(m.docId); }).catch(reportError);
+        else if (m.calibration) refreshInfo(m.docId).then(() => { if (S.shell) S.shell.updateInfo(viewInfo(m.docId)); refreshUi(); }).catch(reportError);
         else S.display.invalidate(m.channels);
         scheduleToolRefresh('pixels');
         break;
       }
+      case 'packageFailed':
+        // The package's ops are gone from the worker: its commands are disabled and say why.
+        if (m.pkg) { S.failedPackages.add(String(m.pkg)); setStatus(tr('warn.packageFailed', { pkg: String(m.pkg) })); syncWindowMenu(); }
+        break;
       case 'saved':
         S.savedAt = m.at || Date.now();
         // One document's snapshot never clears another's failure.
@@ -520,10 +681,13 @@ const IJApp = (() => {
         showWarning();
         break;
       case 'storageError':
+        // A restored image held back (its stored session could not be replayed): its own sentence, not "the browser refused".
+        if (m.code === 'IJ_REPLAY_HELD' && m.docId) { S.held.add(m.docId); showWarning(); break; }
         S.unprotected.add(m.docId !== undefined && m.docId !== null ? m.docId : '*');
         showWarning();
         break;
       case 'budget':
+        if (m.budgetBytes > 0) S.engineBudget = m.budgetBytes;
         S.warnBudget = m.budgetBytes && m.usedBytes / m.budgetBytes >= 0.9 ? tr('warn.budget', { pct: Math.round((m.usedBytes / m.budgetBytes) * 100) }) : '';
         showWarning();
         break;
@@ -548,7 +712,7 @@ const IJApp = (() => {
     client.pending.clear();
     if (S.worker !== client || !S.mounted) return;
     S.docs.clear(); S.order = []; S.activeId = null;
-    S.unprotected.clear(); showWarning();
+    S.unprotected.clear(); S.held.clear(); showWarning();
     endBusy();
     recoverAfterCrash(code).catch((err) => console.error('[advanced-studio]', err));
   }
@@ -594,7 +758,11 @@ const IJApp = (() => {
   // ───────────────────────────── documents ─────────────────────────────
 
   function activeInfo() { return S.activeId !== null ? S.docs.get(S.activeId) || null : null; }
-  function activeChannel(info) { return S.activeCh.get((info || activeInfo()).docId) || 0; }
+  function activeChannel(info) {
+    const i = info || activeInfo();
+    const n = (i.channels || []).length;
+    return Math.max(0, Math.min(Math.max(0, n - 1), S.activeCh.get(i.docId) || 0));
+  }
   const selOf = (docId) => S.sel.get(docId) || null;
 
   /** The engine knows (revision ≠ revision at the last save); the local count is the fallback. */
@@ -616,7 +784,10 @@ const IJApp = (() => {
       canRedo: info ? (info.redoDepth !== undefined ? info.redoDepth > 0 : u.redo > 0) : false,
       dirty: info ? isDirty(info.docId) : false,
       hasResults: S.results.length > 0,
-      canProject: !!(S.desc && S.desc.available)
+      canProject: !!(S.desc && S.desc.available),
+      docs: S.order.map((id) => S.docs.get(id)).filter(Boolean),
+      threshold: S.threshold,
+      activeChannel: info ? activeChannel(info) : 0
     };
   }
 
@@ -634,18 +805,33 @@ const IJApp = (() => {
     if (!S.activeCh.has(id)) S.activeCh.set(id, 0);
   }
 
-  function initDisplayState(info) {
+  /** The local display state of a document, from the engine's info (`fresh`: nothing of the old state is kept). */
+  function initDisplayState(info, fresh) {
     const id = info.docId;
-    const prev = S.dstate.get(id);
+    const prev = fresh ? null : S.dstate.get(id);
     const chans = (info.channels || []).map((c, i) => {
       const d = c.display || {};
       return { min: d.min, max: d.max, lut: d.lut, invert: !!d.invert, color: c.color };
     });
     S.dstate.set(id, {
       mode: (prev && prev.mode) || info.mode || 'composite',
-      visible: chans.map((_, i) => (prev && prev.visible && prev.visible[i] !== undefined ? prev.visible[i] : (info.channels[i].visible !== false))),
+      visible: chans.map((_, i) => (prev && prev.visible && prev.visible[i] !== undefined ? prev.visible[i]
+        : (Array.isArray(info.visible) && info.visible[i] !== undefined ? !!info.visible[i] : (info.channels[i].visible !== false)))),
       channels: chans
     });
+  }
+
+  /**
+   * The channels of a document changed (count, order, shape — an Arrange, a crop, an undo of one): the
+   * active channel is clamped, the display state is rebuilt from the engine's, and the display patches
+   * still waiting for the old indices are dropped (they would land on another channel).
+   */
+  function afterLayoutChange(docId, info) {
+    const n = (info.channels || []).length;
+    const act = Number.isInteger(info.active) ? info.active : (S.activeCh.get(docId) || 0);
+    S.activeCh.set(docId, Math.max(0, Math.min(Math.max(0, n - 1), act)));
+    initDisplayState(info, true);
+    for (const k of Array.from(S.displayPatch.keys())) if (k.startsWith(docId + ':')) S.displayPatch.delete(k);
   }
 
   async function refreshInfo(docId) {
@@ -748,6 +934,7 @@ const IJApp = (() => {
     S.shell.setImage(viewInfo(docId));
     S.display.setThresholdOverlay(null);
     S.display.setPreview(null);
+    if (S.display.setOverlay) S.display.setOverlay(null);
     S.shell.setActiveRoi(selOf(docId));
     refreshRois();
     syncWindowMenu();
@@ -755,11 +942,13 @@ const IJApp = (() => {
     scheduleToolRefresh('doc');
   }
 
-  async function adoptNewDocs(ids) {
+  /** New images made from `fromId` (default: the active one) take its provenance and session; the last is shown. */
+  async function adoptNewDocs(ids, fromId) {
     let last = null;
+    const from = fromId !== undefined && fromId !== null ? fromId : S.activeId;
     for (const id of ids || []) {
       const info = await call('doc.info', { docId: id });
-      registerDoc(info, { clean: false, provenance: S.sources.get(S.activeId) || null, sessionKey: S.sessionKeys.get(S.activeId) || null });
+      registerDoc(info, { clean: false, provenance: S.sources.get(from) || null, sessionKey: S.sessionKeys.get(from) || null });
       last = id;
     }
     if (last !== null) await showDoc(last);
@@ -767,11 +956,18 @@ const IJApp = (() => {
 
   function applyRunResult(docId, res) {
     if (!res) return;
+    const prev = S.docs.get(docId);
     if (res.info) S.docs.set(docId, res.info);
     if (res.rev !== undefined) S.revs.set(docId, res.rev);
-    const u = S.undo.get(docId) || { undo: 0, redo: 0 };
-    S.undo.set(docId, { undo: u.undo + 1, redo: 0 });
-    if (res.info) initDisplayState(res.info);
+    // A step that only made new images is no undo step of the one it read.
+    if (!(res.newDocIds && res.newDocIds.length)) {
+      const u = S.undo.get(docId) || { undo: 0, redo: 0 };
+      S.undo.set(docId, { undo: u.undo + 1, redo: 0 });
+    }
+    if (res.info) {
+      const layout = (res.changed && res.changed.sizeChanged) || (prev && (prev.channels || []).length !== (res.info.channels || []).length);
+      if (layout) afterLayoutChange(docId, res.info); else initDisplayState(res.info);
+    }
     commitHook();
   }
 
@@ -810,27 +1006,80 @@ const IJApp = (() => {
 
   // ───────────────────────────── operations on the active image ─────────────────────────────
 
+  /** The v1 entry: an operation on the active image (opts.all = every channel, opts.channel, opts.noRoi). */
   async function runOp(op, params, opts) {
     const info = activeInfo();
     if (!info) return null;
     const o = opts || {};
-    const roi = o.noRoi ? null : selOf(info.docId);
     const channel = o.channel !== undefined ? o.channel : (o.all ? 'all' : activeChannel(info));
-    return busy(tr('op.' + op), async () => {
-      const res = await call('doc.run', { docId: info.docId, op, params: params || {}, roi, channel });
-      applyRunResult(info.docId, res);
-      if (res.changed && res.changed.sizeChanged) {
-        S.sel.delete(info.docId);
-        await showDoc(info.docId);
-        if (S.display) S.display.fit();
-      } else {
-        if (S.display) S.display.invalidate(res.changed ? res.changed.channels : undefined);
+    return runExt(op, params, { docId: info.docId, noRoi: o.noRoi, channel });
+  }
+
+  /**
+   * When an operation fits the memory only without its undo record, ask once ("run without undo for
+   * this step?"). Cheap images skip the estimate. Resolves true = run with noUndo; a refusal cancels.
+   */
+  async function askNoUndo(info, op, params, roi, channel) {
+    const bytes = (info.channels || []).length * info.width * info.height * bytesPerPixel(info.bitDepth);
+    if (bytes < (S.engineBudget || S.budgetBytes) * ESTIMATE_MIN_FRACTION) return false;
+    let est = null;
+    try { est = await call('doc.estimate', { docId: info.docId, op, params, roi, channel }); } catch (_) { return false; } // the run reports the real error
+    if (!est || est.fits || !est.fitsWithoutUndo) return false;
+    const a = await ask({ title: tr('noUndo.title'), message: tr('noUndo.message'),
+      options: [{ id: 'go', label: tr('noUndo.run'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+    if (a !== 'go') throw Object.assign(new Error('cancelled'), { code: 'IJ_CANCELLED' });
+    return true;
+  }
+
+  /** Runs a registry operation and brings the page up to date. → { newDocIds, changed } | null (failed: reported). */
+  async function runExt(op, params, o) {
+    const opt = o || {};
+    const docId = opt.docId !== undefined ? opt.docId : S.activeId;
+    const info = docId !== null && docId !== undefined ? S.docs.get(docId) : null;
+    if (!info) return null;
+    const roi = opt.noRoi ? null : (opt.roi !== undefined ? opt.roi : selOf(docId));
+    const channel = opt.channel !== undefined ? opt.channel : activeChannel(info);
+    const label = opt.labelKey ? tr(opt.labelKey) : tr('op.' + op);
+    return busy(label, async () => {
+      const noUndo = opt.noUndo === true ? true : await askNoUndo(info, op, params || {}, roi, channel);
+      const args = { docId, op, params: params || {}, roi, channel };
+      if (Array.isArray(opt.docIds) && opt.docIds.length) args.docIds = opt.docIds;
+      if (noUndo) args.noUndo = true;
+      let res;
+      try { res = await call('doc.run', args); }
+      catch (err) {
+        // A run without undo that was cancelled half-way changed the channels it had finished: the engine
+        // says so with the document's info, and the page follows (its history is gone with it).
+        const d = err && err.details;
+        if (d && d.info) {
+          S.docs.set(docId, d.info);
+          if (d.info.rev !== undefined) S.revs.set(docId, d.info.rev);
+          S.undo.set(docId, { undo: 0, redo: 0 });
+          initDisplayState(d.info);
+          if (docId === S.activeId && S.display) S.display.invalidate(d.changed ? d.changed.channels : undefined);
+          commitHook();
+          refreshUi();
+        }
+        throw err;
+      }
+      applyRunResult(docId, res);
+      const ch = res.changed || {};
+      const active = docId === S.activeId;
+      if (ch.sizeChanged) {
+        S.sel.delete(docId);
+        if (active) { await showDoc(docId); if (S.display) S.display.fit(); }
+      } else if (ch.calibration) {
+        // metadata only: the selection and the view stay
+        if (active && S.shell) S.shell.updateInfo(viewInfo(docId));
+        refreshUi();
+      } else if (active) {
+        if (S.display) S.display.invalidate(ch.channels);
         pushDisplay();
         refreshRois();
         scheduleToolRefresh('pixels');
       }
-      if (res.newDocIds && res.newDocIds.length) await adoptNewDocs(res.newDocIds);
-      return res;
+      if (res.newDocIds && res.newDocIds.length) await adoptNewDocs(res.newDocIds, docId);
+      return { newDocIds: res.newDocIds || [], changed: ch };
     });
   }
 
@@ -843,8 +1092,9 @@ const IJApp = (() => {
       if (res.rev !== undefined) S.revs.set(info.docId, res.rev);
       const u = S.undo.get(info.docId) || { undo: 0, redo: 0 };
       S.undo.set(info.docId, kind === 'undo' ? { undo: Math.max(0, u.undo - 1), redo: u.redo + 1 } : { undo: u.undo + 1, redo: Math.max(0, u.redo - 1) });
-      if (res.info) initDisplayState(res.info);
+      if (res.info) { if (res.changed && res.changed.sizeChanged) afterLayoutChange(info.docId, res.info); else initDisplayState(res.info); }
       if (res.changed && res.changed.sizeChanged) { S.sel.delete(info.docId); await showDoc(info.docId); S.display.fit(); }
+      else if (res.changed && res.changed.calibration) { S.shell.updateInfo(viewInfo(info.docId)); refreshUi(); }
       else { S.display.invalidate(res.changed ? res.changed.channels : undefined); pushDisplay(); }
       scheduleToolRefresh('pixels');
       scheduleMetaPersist();
@@ -859,9 +1109,98 @@ const IJApp = (() => {
     return d && d.channels[channel] && Number.isFinite(d.channels[channel].max) ? d.channels[channel].max : 1;
   }
 
+  // ── dialogs: the field types the engine of the packages need, resolved against the open images ──
+
+  function docOptions(filter) {
+    const out = [];
+    for (const id of S.order) {
+      const info = S.docs.get(id);
+      if (!info) continue;
+      let keep = true;
+      if (typeof filter === 'function') { try { keep = !!filter(info); } catch (err) { console.error('[advanced-studio] doc filter', err); keep = false; } }
+      if (keep) out.push({ value: id, label: info.name });
+    }
+    // an empty list would be an invalid field: say so instead
+    return out.length ? out : [{ value: '', label: tr('dlg.noDocuments'), disabled: true }];
+  }
+  function channelOptions(info) {
+    return (info && info.channels || []).map((c, i) => ({ value: i, label: (i + 1) + (c.name ? ': ' + c.name : '') }));
+  }
+  function expandField(f) {
+    if (!f || typeof f !== 'object') return f;
+    if (f.type === 'doc') {
+      const options = docOptions(f.filter);
+      const value = f.value !== undefined && options.some((o) => o.value === f.value) ? f.value : (options.some((o) => o.value === S.activeId) ? S.activeId : options[0].value);
+      return Object.assign({}, f, { options, value });
+    }
+    if (f.type === 'channel') {
+      const out = Object.assign({}, f);
+      if (f.docField) {
+        out.optionsByDoc = {};
+        for (const id of S.order) if (S.docs.get(id)) out.optionsByDoc[String(id)] = channelOptions(S.docs.get(id));
+        out.options = out.optionsByDoc[String(S.activeId)] || [{ value: 0, label: '1' }];
+      } else {
+        out.options = channelOptions(activeInfo());
+        if (!out.options.length) out.options = [{ value: 0, label: '1' }];
+      }
+      if (out.value === undefined) out.value = activeInfo() ? activeChannel(activeInfo()) : 0;
+      return out;
+    }
+    return f;
+  }
+
+  function clearExtPreview() {
+    clearTimeout(S.previewTimer);
+    S.previewSeq++;
+    if (S.display) { S.display.setPreview(null); if (S.display.setOverlay) S.display.setOverlay(null); }
+    if (S.previewCompute && S.worker && !S.worker.dead) call('cancel', { targetId: S.previewCompute }).catch(() => {});
+    S.previewCompute = 0;
+  }
+
+  /** { op | compute, params(values), ... } of a dialog spec → the preview hook the view's dialog calls. */
+  function extPreviewHook(pv, info) {
+    return {
+      onChange(values, ctl) {
+        if (!values) { clearExtPreview(); if (ctl) ctl.note(null); return; }
+        clearTimeout(S.previewTimer);
+        const seq = ++S.previewSeq;
+        const note = (text) => { if (ctl && seq === S.previewSeq) ctl.note(text); };
+        let params;
+        try { params = pv.params(values); } catch (err) { console.error('[advanced-studio] preview params', err); return; }
+        const channel = typeof pv.channel === 'function' ? pv.channel(values) : (pv.channel !== undefined ? pv.channel : (values.all ? 'all' : activeChannel(info)));
+        const roi = pv.roi === false ? null : selOf(info.docId);
+        const r = visibleRect(info);
+        const region = { x0: Math.max(0, Math.floor(r.x0)), y0: Math.max(0, Math.floor(r.y0)), x1: Math.min(info.width, Math.ceil(r.x1)), y1: Math.min(info.height, Math.ceil(r.y1)) };
+        if (pv.compute) {
+          // A non-local result (Find Maxima) is only previewed at level 0 over a region of at most ~4 Mpx.
+          if ((region.x1 - region.x0) * (region.y1 - region.y0) > PREVIEW_COMPUTE_PIXELS) { if (S.display && S.display.setOverlay) S.display.setOverlay(null); note(tr('dlg.previewZoomIn')); return; }
+          note(null);
+          compute(pv.compute, params, { docId: info.docId, channel, roi, region, preview: true }).then((res) => {
+            if (seq !== S.previewSeq || res === null || res === undefined) return;
+            const items = typeof pv.overlay === 'function' ? pv.overlay(res, values) : null;
+            if (S.display && S.display.setOverlay) { S.overlayDoc = info.docId; S.display.setOverlay(items); }
+          }).catch((err) => { if (!err || (err.code !== 'IJ_CANCELLED' && err.code !== 'IJ_SUPERSEDED')) console.error('[advanced-studio] compute preview', err); });
+          return;
+        }
+        S.previewTimer = setTimeout(() => {
+          const level = S.display.getView().level || 0;
+          call('doc.preview', { docId: info.docId, seq, op: pv.op, params, roi, channel, level, x0: region.x0, y0: region.y0, x1: region.x1, y1: region.y1 })
+            .then(() => note(null))
+            .catch((err) => { if (err && err.code === 'IJ_PREVIEW_TOO_LARGE') { S.display.setPreview(null); note(tr('dlg.previewZoomIn')); } else console.error('[advanced-studio] preview', err); });
+        }, 90);
+      }
+    };
+  }
+
   async function dialog(config) {
     if (!S.shell) return null;
-    return S.shell.windows.dialog(config);
+    const spec = Object.assign({}, config);
+    if (Array.isArray(config.fields)) spec.fields = config.fields.map(expandField);
+    const info = activeInfo();
+    const ext = !!(config.preview && (config.preview.op || config.preview.compute) && !config.preview.onChange);
+    if (ext) spec.preview = info ? extPreviewHook(config.preview, info) : undefined;
+    try { return await S.shell.windows.dialog(spec); }
+    finally { if (ext) clearExtPreview(); }
   }
 
   function channelField(info, value) {
@@ -878,9 +1217,9 @@ const IJApp = (() => {
   }
   function previewHooks(op, buildParams, info, allChannels) {
     return {
-      onChange(values) {
+      onChange(values, ctl) {
         clearTimeout(S.previewTimer);
-        if (!values) { S.previewSeq++; S.display.setPreview(null); return; }
+        if (!values) { S.previewSeq++; S.display.setPreview(null); if (ctl) ctl.note(null); return; }
         S.previewTimer = setTimeout(() => {
           const seq = ++S.previewSeq;
           const r = visibleRect(info);
@@ -889,7 +1228,11 @@ const IJApp = (() => {
             channel: values.all && allChannels ? 'all' : activeChannel(info), level,
             x0: Math.max(0, Math.floor(r.x0)), y0: Math.max(0, Math.floor(r.y0)),
             x1: Math.min(info.width, Math.ceil(r.x1)), y1: Math.min(info.height, Math.ceil(r.y1)) })
-            .catch((err) => console.error('[advanced-studio] preview', err));
+            .then(() => { if (ctl && seq === S.previewSeq) ctl.note(null); })
+            .catch((err) => {
+              if (err && err.code === 'IJ_PREVIEW_TOO_LARGE' && ctl) { S.display.setPreview(null); if (seq === S.previewSeq) ctl.note(tr('dlg.previewZoomIn')); }
+              else console.error('[advanced-studio] preview', err);
+            });
         }, 90);
       }
     };
@@ -993,22 +1336,42 @@ const IJApp = (() => {
     } catch (err) { await reportError(err); }
   }
 
-  const resultColumns = () => {
-    const used = new Set();
-    for (const r of S.results) for (const k of Object.keys(r)) used.add(k);
+  /**
+   * The columns of a result set: Label, Ch, the ImageJ columns in ImageJ's order, the columns packages
+   * declared (each right after the column it names, declaration order kept), then every other key in
+   * first-seen order. A row property is the column's KEY; v1 columns use their header as key.
+   */
+  function resultColumnsOf(rows) {
+    const used = new Set(), seen = [];
+    for (const r of rows) for (const k of Object.keys(r)) if (!used.has(k)) { used.add(k); seen.push(k); }
     const cols = [];
-    if (used.has('Label')) cols.push('Label');
-    if (used.has('Ch')) cols.push('Ch');
-    for (const [, name] of COLUMNS.concat(PARTICLE_COLUMNS)) if (used.has(name) && !cols.includes(name)) cols.push(name);
+    const push = (k) => { if (used.has(k) && !cols.includes(k)) cols.push(k); };
+    push('Label'); push('Ch');
+    for (const [, name] of COLUMNS.concat(PARTICLE_COLUMNS)) push(name);
+    const lastAfter = new Map();
+    for (const [key, , after] of EXTRA_COLUMNS) {
+      if (!used.has(key) || cols.includes(key)) continue;
+      const at = after ? cols.indexOf(after) : -1;
+      if (at < 0) { cols.push(key); continue; }
+      const pos = Math.max(at, lastAfter.has(after) ? cols.indexOf(lastAfter.get(after)) : at) + 1;
+      cols.splice(pos, 0, key);
+      lastAfter.set(after, key);
+    }
+    for (const k of seen) push(k);
     return cols;
-  };
+  }
+  const resultColumns = () => resultColumnsOf(S.results);
+  function columnHeader(key) {
+    const e = EXTRA_COLUMNS.find((c) => c[0] === key);
+    return e ? e[1] : key;
+  }
   function resultsText(sep) {
     const cols = resultColumns();
     const q = (v) => {
       const s = v === undefined || v === null ? '' : String(v);
       return sep === ',' && /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
-    const lines = [[' '].concat(cols).map(q).join(sep)];
+    const lines = [[' '].concat(cols.map(columnHeader)).map(q).join(sep)];
     S.results.forEach((r, i) => lines.push([String(i + 1)].concat(cols.map((c) => q(r[c]))).join(sep)));
     return lines.join('\n') + '\n';
   }
@@ -1045,7 +1408,7 @@ const IJApp = (() => {
     if (a !== 'revert') return;
     await busy(tr('op.revert'), async () => {
       const res = await call('doc.revert', { docId: info.docId });
-      if (res.info) { S.docs.set(info.docId, res.info); initDisplayState(res.info); }
+      if (res.info) { S.docs.set(info.docId, res.info); afterLayoutChange(info.docId, res.info); }
       if (res.rev !== undefined) S.revs.set(info.docId, res.rev);
       S.undo.set(info.docId, { undo: 0, redo: 0 });
       S.sel.delete(info.docId);
@@ -1058,7 +1421,7 @@ const IJApp = (() => {
   function forgetDoc(id) {
     const key = S.sessionKeys.get(id);
     for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources]) m.delete(id);
-    S.unprotected.delete(id);
+    S.unprotected.delete(id); S.held.delete(id);
     S.order = S.order.filter((x) => x !== id);
     S.roiList = S.roiList.filter((r) => r.docId !== id);
     if (key && !Array.from(S.sessionKeys.values()).includes(key)) releaseSessionLock(key);
@@ -1144,10 +1507,12 @@ const IJApp = (() => {
       warned = res.warnings || [];
     });
     if (warned.length) {
-      const stopped = warned.filter((w) => w.code === 'IJ_REPLAY_STOPPED').length;
+      const stopped = warned.filter((w) => w.code === 'IJ_REPLAY_STOPPED' && !w.held).length;
+      const held = warned.filter((w) => w.code === 'IJ_REPLAY_STOPPED' && w.held).length;
       const lost = warned.filter((w) => w.code === 'IJ_NO_BASELINE').length;
       const lines = [];
       if (stopped) lines.push(tr('recover.partial', { n: stopped }));
+      if (held) lines.push(tr('recover.held', { n: held }));
       if (lost) lines.push(tr('recover.noBaseline', { n: lost }));
       if (lines.length) {
         setStatus(lines.join(' '));
@@ -1603,6 +1968,7 @@ const IJApp = (() => {
   }
   function clearResults() { S.results = []; scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi(); }
 
+  // owner: P6 (wave 2)
   async function setMeasurements() {
     const v = await dialog({ title: tr('cmd.analyzeSetMeasurements'), okLabel: tr('dlg.ok'),
       fields: Object.keys(MEASURE_GROUPS).map((g) => ({ type: 'check', id: g, label: tr('meas.' + g), value: S.measurements.includes(g) })) });
@@ -1721,7 +2087,7 @@ const IJApp = (() => {
   function floatingWindow(id, titleKey, build) {
     if (!S.shell) return null;
     const existing = S.wins.get(id);
-    if (existing) { existing.focus(); const u = S.winUpdaters.get(id); if (u) u('doc'); return existing; }
+    if (existing) { existing.focus(); const u = S.winUpdaters.get(id); S.lastToolReady = Promise.resolve(u ? u('doc') : undefined); return existing; }
     const view = build();
     const win = S.shell.windows.floating({ id, title: tr(titleKey), content: view.el, onClose: () => {
       S.wins.delete(id); S.winUpdaters.delete(id);
@@ -1729,7 +2095,8 @@ const IJApp = (() => {
       scheduleMetaPersist();
     } });
     S.wins.set(id, win);
-    if (view.update) { S.winUpdaters.set(id, view.update); view.update('doc'); }
+    S.lastToolReady = Promise.resolve(view.update ? view.update('doc') : undefined);
+    if (view.update) S.winUpdaters.set(id, view.update);
     scheduleMetaPersist();
     return win;
   }
@@ -1929,6 +2296,8 @@ const IJApp = (() => {
       readout.textContent = num(T.lower) + ' – ' + num(T.upper);
       drawHist(canvas, hist, { band: [T.lower, T.upper] });
       if (info && S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay({ channel: activeChannel(info), lower: T.lower, upper: T.upper, mode: T.mode });
+      // What api.state().threshold reads: the window's current range, on the image and channel it was made for.
+      S.threshold = info ? { docId: info.docId, channel: activeChannel(info), lower: T.lower, upper: T.upper, dark: T.dark } : null;
     }
     async function auto() {
       const info = activeInfo();
@@ -1956,6 +2325,7 @@ const IJApp = (() => {
       await runOp('toMask', { lower: T.lower, upper: T.upper }, { noRoi: true });
     }
     function reset() {
+      S.threshold = null;
       if (S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay(null);
       if (hist) { T.lower = hist.min; T.upper = hist.max; }
       loS.value = 0; hiS.value = R;
@@ -1976,8 +2346,9 @@ const IJApp = (() => {
     let first = true;
     return {
       el,
-      update(kind) { if (kind === 'doc' || kind === 'pixels') { refresh(first); first = false; } else if (kind === 'display') commit(); },
-      dispose() { if (S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay(null); }
+      // 'doc' answers a promise that settles once the first automatic threshold is in S.threshold.
+      update(kind) { if (kind === 'doc' || kind === 'pixels') { const p = refresh(first); first = false; return p; } else if (kind === 'display') commit(); return undefined; },
+      dispose() { S.threshold = null; if (S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay(null); }
     };
   }
   function IJThresholdMethods() {
@@ -2001,7 +2372,7 @@ const IJApp = (() => {
       const sig = cols.join('\u0001');
       if (sig !== shownCols || S.results.length < shown || (firstRef !== null && S.results[0] !== firstRef)) {
         table.textContent = '';
-        table.appendChild(h('thead', null, h('tr', null, [h('th', { text: ' ' })].concat(cols.map((c) => h('th', { text: c }))))));
+        table.appendChild(h('thead', null, h('tr', null, [h('th', { text: ' ' })].concat(cols.map((c) => h('th', { text: columnHeader(c) }))))));
         tbody = h('tbody');
         table.appendChild(tbody);
         shown = 0; shownCols = sig;
@@ -2043,6 +2414,7 @@ const IJApp = (() => {
 
   // ── ROI Manager
 
+  // owner: P6 (wave 2)
   function buildRoiManager() {
     const list = h('div', { class: 'ij-list', attrs: { role: 'listbox' } });
     function curList() { const i = activeInfo(); return i ? S.roiList.filter((r) => r.docId === i.docId) : []; }
@@ -2083,51 +2455,96 @@ const IJApp = (() => {
     S.shell.windows.floating({ id, title, content });
   }
 
+  // ── the generic windows of the extension API ────────────────────────────────────────────────────
+
+  function plotTheme(canvas) {
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(canvas) : null;
+    const v = (name, fb) => (cs && cs.getPropertyValue(name).trim()) || fb;
+    return { fg: v('--text-primary', '#ccc'), grid: 'rgba(128,128,128,0.35)', bg: '' };
+  }
+
+  function tableText(columns, rows, sep) {
+    const q = (v) => {
+      const t = v === undefined || v === null ? '' : String(v);
+      return sep === ',' && /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    };
+    return [columns.map(q).join(sep)].concat(rows.map((r) => Array.from(r, q).join(sep))).join('\n') + '\n';
+  }
+
+  /** A plot window: spec of IJPlot (ij-view.js) + optional `text` (a note under the plot). → the window | null. */
+  function openPlot(spec) {
+    if (!S.shell || !spec || typeof IJPlot === 'undefined') return null;
+    const canvas = h('canvas', { class: 'ij-plot', width: 360, height: 220 });
+    const wrap = h('div', { class: 'ij-plot-wrap' }, canvas);
+    let observer = null, drawn = false;
+    const redraw = () => {
+      const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(1, Math.min(3, window.devicePixelRatio)) : 1;
+      const w = Math.max(160, wrap.clientWidth || 360), hh = Math.max(120, wrap.clientHeight || 220);
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(hh * dpr);
+      canvas.style.width = w + 'px'; canvas.style.height = hh + 'px';
+      try {
+        IJPlot.draw(canvas, spec, Object.assign(plotTheme(canvas), { dpr, lut: (name) => { try { return IJLuts.get(name); } catch (_) { return null; } } }));
+        drawn = true;
+      } catch (err) { console.error('[advanced-studio] plot', err); }
+    };
+    const csv = () => IJPlot.csvText(spec);
+    const title = spec.title ? String(spec.title) : tr('plot.title');
+    const buttons = row(
+      btn(tr('hist.list'), () => openListWindow(title, csv().replace(/,/g, '\t'))),
+      btn(tr('res.copy'), () => copyText(csv().replace(/,/g, '\t'))),
+      btn(tr('plot.saveCsv'), async () => { try { await saveFile(safeName(title, '.csv'), 'text/csv', '.csv', 'CSV', async () => new Blob([csv()], { type: 'text/csv' })); } catch (err) { await reportError(err); } }),
+      btn(tr('plot.savePng'), async () => {
+        try {
+          await saveFile(safeName(title, '.png'), 'image/png', '.png', 'PNG', async () => new Promise((resolve, reject) =>
+            canvas.toBlob((b) => (b ? resolve(b) : reject(Object.assign(new Error('png'), { code: 'IJ_PNG_FAILED' }))), 'image/png')));
+        } catch (err) { await reportError(err); }
+      }));
+    const content = h('div', { class: 'ij-panel ij-plotwin' }, wrap, spec.text ? h('pre', { class: 'ij-info-pre', text: String(spec.text) }) : null, buttons);
+    const id = 'plot-' + (++S.openCounter);
+    const win = S.shell.windows.floating({ id, title, content, onClose: () => { if (observer) { try { observer.disconnect(); } catch (_) { /* gone */ } } } });
+    if (typeof ResizeObserver !== 'undefined') { observer = new ResizeObserver(() => { if (drawn) redraw(); }); observer.observe(wrap); }
+    requestAnimationFrame(redraw);
+    return win;
+  }
+
+  /** A table window: Copy (tab separated) and Save (CSV). Not kept across a reload. columns = [header], rows = [[value]] | [{ header: value }]. */
+  function openTable(name, columns, rows) {
+    if (!S.shell || !Array.isArray(columns)) return null;
+    const cols = columns.map(String);
+    const data = (rows || []).map((r) => (Array.isArray(r) ? r : cols.map((c) => r && r[c])));
+    const table = h('table', { class: 'ij-table' });
+    table.appendChild(h('thead', null, h('tr', null, cols.map((c) => h('th', { text: c })))));
+    const body = h('tbody');
+    const cap = Math.min(data.length, RESULTS_CAP);
+    for (let i = 0; i < cap; i++) body.appendChild(h('tr', null, data[i].map((v) => h('td', { text: typeof v === 'number' ? num(v, 4) : (v === undefined || v === null ? '' : String(v)) }))));
+    table.appendChild(body);
+    const title = String(name || tr('table.title'));
+    const content = h('div', { class: 'ij-panel ij-tablewin' }, h('div', { class: 'ij-table-wrap' }, table),
+      data.length > cap ? h('p', { class: 'ij-banner', text: tr('res.capped', { shown: cap, total: data.length }) }) : null,
+      row(btn(tr('res.copy'), () => copyText(tableText(cols, data, '\t'))),
+        btn(tr('res.save'), async () => { try { await saveFile(safeName(title, '.csv'), 'text/csv', '.csv', 'CSV', async () => new Blob([tableText(cols, data, ',')], { type: 'text/csv' })); } catch (err) { await reportError(err); } })));
+    return S.shell.windows.floating({ id: 'table-' + (++S.openCounter), title, content });
+  }
+
   function openHistogramWindow(info, ch, hist, stats) {
-    const canvas = h('canvas', { class: 'ij-hist', width: 256, height: 128 });
+    const counts = Array.from(hist.counts);
+    const xs = counts.map((c, i) => hist.min + i * hist.binWidth);
     const text = ['area', 'mean', 'stdDev', 'min', 'max', 'mode'].filter((k) => stats[k] !== undefined).map((k) => tr('meas.' + k) + ': ' + num(stats[k], 4)).join('\n')
       + '\n' + tr('hist.binWidth') + ': ' + num(hist.binWidth, 4);
-    const content = h('div', { class: 'ij-panel ij-histwin' }, canvas, h('pre', { class: 'ij-info-pre', text }),
-      row(btn(tr('hist.list'), () => openListWindow(tr('hist.list'), ['value\tcount'].concat(Array.from(hist.counts, (c, i) => num(hist.min + i * hist.binWidth, 4) + '\t' + c)).join('\n'))),
-        btn(tr('res.copy'), () => copyText(Array.from(hist.counts, (c, i) => num(hist.min + i * hist.binWidth, 4) + '\t' + c).join('\n')))));
-    openStaticWindow('histogram', tr('cmd.analyzeHistogram') + ' — ' + info.name, content);
-    requestAnimationFrame(() => drawHist(canvas, hist, {}));
+    openPlot({ title: tr('cmd.analyzeHistogram') + ' — ' + info.name, xLabel: tr('hist.value'), yLabel: tr('hist.count'),
+      series: [{ kind: 'bars', x: xs, y: counts, label: tr('hist.count') }], text,
+      csv: { columns: [tr('hist.value'), tr('hist.count')], rows: counts.map((c, i) => [num(xs[i], 4), c]) } });
   }
 
   function openProfileWindow(info, res) {
     const values = Array.from(res.values || []);
-    const canvas = h('canvas', { class: 'ij-plot', width: 360, height: 180 });
     const unit = (info.calibration && info.calibration.unit) || 'px';
     const step = res.stepUm || 1;
-    const csv = ['distance (' + unit + '),value'].concat(values.map((v, i) => num(i * step, 5) + ',' + v)).join('\n');
-    const content = h('div', { class: 'ij-panel ij-profile' }, canvas,
-      row(btn(tr('hist.list'), () => openListWindow(tr('cmd.analyzePlotProfile'), csv.replace(/,/g, '\t'))), btn(tr('res.copy'), () => copyText(csv.replace(/,/g, '\t'))),
-        btn(tr('res.save'), async () => { try { await saveFile('Profile.csv', 'text/csv', '.csv', 'CSV', async () => new Blob([csv + '\n'], { type: 'text/csv' })); } catch (err) { await reportError(err); } })));
-    openStaticWindow('profile', tr('cmd.analyzePlotProfile') + ' — ' + info.name, content);
-    requestAnimationFrame(() => drawPlot(canvas, values, step, unit));
-  }
-
-  function drawPlot(canvas, values, step, unit) {
-    const g = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height, L = 44, B = 22, T = 8, Rr = 8;
-    const cs = getComputedStyle(canvas);
-    const fg = cs.getPropertyValue('--text-primary').trim() || '#ccc';
-    g.clearRect(0, 0, W, H);
-    if (!values.length) return;
-    let lo = Infinity, hi = -Infinity;
-    for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
-    if (hi === lo) { hi = lo + 1; }
-    g.strokeStyle = fg; g.fillStyle = fg; g.lineWidth = 1; g.font = '10px sans-serif';
-    g.strokeRect(L + 0.5, T + 0.5, W - L - Rr, H - T - B);
-    g.fillText(num(hi, 2), 2, T + 8); g.fillText(num(lo, 2), 2, H - B);
-    g.fillText('0', L, H - 8); const total = (values.length - 1) * step; g.fillText(num(total, 2) + ' ' + unit, W - Rr - 60, H - 8);
-    g.beginPath();
-    values.forEach((v, i) => {
-      const x = L + (values.length > 1 ? (i / (values.length - 1)) * (W - L - Rr) : 0);
-      const y = T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-    });
-    g.stroke();
+    const xs = values.map((v, i) => i * step);
+    const dist = tr('plot.distance') + ' (' + unit + ')';
+    openPlot({ title: tr('cmd.analyzePlotProfile') + ' — ' + info.name, xLabel: dist, yLabel: tr('plot.value'),
+      series: [{ kind: 'line', x: xs, y: values, label: tr('plot.value') }],
+      csv: { columns: [dist, tr('plot.value')], rows: values.map((v, i) => [num(xs[i], 5), v]) } });
   }
 
   async function copyText(text) {
@@ -2158,7 +2575,7 @@ const IJApp = (() => {
   }
 
   function showAbout() {
-    const paras = ['about.intro', 'about.source', 'about.depth', 'about.deviations', 'about.storage'].map((k) => h('p', { text: tr(k) }));
+    const paras = ['about.intro', 'about.source', 'about.depth', 'about.deviations', 'about.storage', 'about.tables'].map((k) => h('p', { text: tr(k) }));
     openStaticWindow('about', tr('cmd.helpAbout'), h('div', { class: 'ij-panel' }, paras));
   }
 
@@ -2173,7 +2590,11 @@ const IJApp = (() => {
 
   /** The command list the shell reads: the registry (shortcuts = every key), then one entry per open image. */
   function buildMenuList() {
-    const list = COMMANDS.map((c) => Object.assign({}, c, { shortcut: c.keys.length ? c.keys.slice() : null }));
+    const list = COMMANDS.map((c) => Object.assign({}, c, {
+      shortcut: c.keys.length ? c.keys.slice() : null,
+      // a package that did not load: its commands stay in the menus, greyed, with a tooltip
+      unavailable: c.pkg ? () => S.failedPackages.has(c.pkg) : undefined
+    }));
     for (const id of S.order) {
       const info = S.docs.get(id);
       if (info) list.push({ id: 'winImg' + id, menu: ['Window'], label: info.name, separatorBefore: id === S.order[0], enabled: () => true, run: () => showDoc(id), shortcut: null });
@@ -2191,9 +2612,10 @@ const IJApp = (() => {
   /** The shell ignores the result; it is a promise so a caller (the tests) can wait for the command. */
   function onCommand(c) {
     if (!c || typeof c.run !== 'function') return undefined;
+    if (c.pkg && S.failedPackages.has(c.pkg)) return undefined;
     if (!c.enabled(snapshot())) return undefined;
     return Promise.resolve()
-      .then(() => c.run(API))
+      .then(() => c.run(c.ext ? EXT_API : API))
       .catch((err) => reportError(err));
   }
 
@@ -2205,6 +2627,7 @@ const IJApp = (() => {
     return call('doc.pixel', { docId: info.docId, x, y }).then((r) => r.values);
   }
 
+  // owner: P6 (wave 2)
   function onToolOptions(id) {
     if (id !== 'line') return;
     dialog({ title: tr('tool.lineWidth'), okLabel: tr('dlg.ok'), fields: [{ type: 'number', id: 'w', label: tr('tool.lineWidth'), value: S.lineWidth, min: 1, max: 200, integer: true, units: tr('dlg.pixels') }] })
@@ -2226,9 +2649,184 @@ const IJApp = (() => {
     convertToMask, binary, math, gaussian, rank, measure, particles, clearResults, setMeasurements, histogram, plotProfile, cycleImage, showAbout, showShortcuts
   };
 
+  // ───────────────────────────── extension API ─────────────────────────────
+
+  function stateForApi() {
+    const info = activeInfo();
+    return {
+      doc: info, docs: S.order.map((id) => S.docs.get(id)).filter(Boolean), roi: info ? selOf(info.docId) : null, busy: S.busy,
+      activeChannel: info ? activeChannel(info) : 0, threshold: S.threshold, measurements: S.measurements.slice(), lineWidth: S.lineWidth,
+      roiList: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })), resultsCount: S.results.length
+    };
+  }
+
+  function docOf(o) {
+    const id = o && o.docId !== undefined ? o.docId : S.activeId;
+    const info = id !== null && id !== undefined ? S.docs.get(id) : null;
+    return info || null;
+  }
+
+  async function compute(op, params, o) {
+    const opt = o || {};
+    const info = docOf(opt);
+    if (!info) return null;
+    const args = { docId: info.docId, op, params: params || {}, roi: opt.roi !== undefined ? opt.roi : selOf(info.docId),
+      channel: opt.channel !== undefined ? opt.channel : activeChannel(info) };
+    if (Array.isArray(opt.docIds) && opt.docIds.length) args.docIds = opt.docIds;
+    if (opt.region) args.region = opt.region;
+    if (opt.preview) {
+      // Previews queue behind each other on the document: the previous one is cancelled first.
+      if (S.previewCompute) call('cancel', { targetId: S.previewCompute }).catch(() => {});
+      const p = call('doc.compute', args);
+      S.previewCompute = p.reqId;
+      try { return await p; } finally { if (S.previewCompute === p.reqId) S.previewCompute = 0; }
+    }
+    if (S.busy) return null; // another step is running: nothing is started
+    return busy(opt.labelKey ? tr(opt.labelKey) : tr('op.' + op), () => call('doc.compute', args));
+  }
+
+  async function estimateOp(op, params, o) {
+    const opt = o || {};
+    const info = docOf(opt);
+    if (!info) return null;
+    return call('doc.estimate', { docId: info.docId, op, params: params || {}, roi: opt.roi !== undefined ? opt.roi : selOf(info.docId),
+      channel: opt.channel !== undefined ? opt.channel : activeChannel(info) });
+  }
+
+  /** The pixel preview of an operation over what is on screen: { ok:true } | { ok:false, tooLarge:true }. */
+  async function previewOp(op, params, o) {
+    const opt = o || {};
+    const info = docOf(opt);
+    if (!info || !S.display) return { ok: false };
+    const seq = ++S.previewSeq;
+    const r = visibleRect(info);
+    try {
+      await call('doc.preview', { docId: info.docId, seq, op, params: params || {}, roi: opt.roi !== undefined ? opt.roi : selOf(info.docId),
+        channel: opt.channel !== undefined ? opt.channel : activeChannel(info), level: S.display.getView().level || 0,
+        x0: Math.max(0, Math.floor(r.x0)), y0: Math.max(0, Math.floor(r.y0)), x1: Math.min(info.width, Math.ceil(r.x1)), y1: Math.min(info.height, Math.ceil(r.y1)) });
+    } catch (err) {
+      if (err && err.code === 'IJ_PREVIEW_TOO_LARGE') { S.display.setPreview(null); return { ok: false, tooLarge: true }; }
+      throw err;
+    }
+    return { ok: true };
+  }
+
+  function addResultRows(rows, o) {
+    if (!Array.isArray(rows) || !rows.length) return;
+    S.results = S.results.concat(rows.map((r) => Object.assign({}, r)));
+    scheduleToolRefresh('results');
+    scheduleMetaPersist();
+    refreshUi();
+    if (!o || o.show !== false) openTool('results');
+  }
+
+  async function renameDoc(docId, name) {
+    try {
+      const res = await call('doc.rename', { docId, name });
+      if (res && res.info) S.docs.set(docId, res.info);
+      if (docId === S.activeId && S.shell) S.shell.updateInfo(viewInfo(docId));
+      syncWindowMenu();
+      scheduleMetaPersist();
+      return res ? res.info : null;
+    } catch (err) { await reportError(err); return null; }
+  }
+
+  const TOOL_IDS = ['bc', 'channels', 'threshold', 'results', 'roiManager', 'summary'];
+
+  /** api.openTool(id): opens (or raises) a tool window; for 'threshold' it resolves once S.threshold holds the first automatic range. */
+  async function openToolExt(id) {
+    if (TOOL_IDS.indexOf(id) < 0) throw extError('openTool: ' + String(id));
+    S.lastToolReady = null;
+    openTool(id);
+    if (S.lastToolReady) { try { await S.lastToolReady; } catch (err) { console.error('[advanced-studio] tool window', err); } }
+    return S.wins.has(id);
+  }
+
+  /** api.setDisplay(docId, channel, { min, max, lut, invert }): the display of one channel (not an undo step, not a pixel change). */
+  async function setDisplayExt(docId, channel, patch) {
+    const info = docId !== undefined && docId !== null ? S.docs.get(docId) : null;
+    const d = info ? S.dstate.get(docId) : null;
+    if (!info || !d || !Number.isInteger(channel) || !d.channels[channel]) throw extError('setDisplay: image or channel');
+    const p = {};
+    for (const k of ['min', 'max']) if (patch && patch[k] !== undefined) { if (typeof patch[k] !== 'number' || !isFinite(patch[k])) throw extError('setDisplay: ' + k); p[k] = patch[k]; }
+    if (p.min !== undefined && p.max !== undefined && p.min > p.max) throw extError('setDisplay: min > max');
+    if (patch && patch.lut !== undefined) p.lut = patch.lut;
+    if (patch && patch.invert !== undefined) p.invert = !!patch.invert;
+    Object.assign(d.channels[channel], p);
+    if (docId === S.activeId) { pushDisplay(); scheduleToolRefresh('display'); }
+    await call('doc.setDisplay', Object.assign({ docId, channel }, p));
+    scheduleMetaPersist();
+  }
+
+  const EXT_API = Object.freeze({
+    tr: (key, params) => tr(key, params),
+    state: stateForApi,
+    dialog,
+    run: (op, params, o) => runExt(op, params, o),
+    compute,
+    estimate: estimateOp,
+    preview: previewOp,
+    cancelPreview: () => clearExtPreview(),
+    overlay: (items) => { if (S.display && S.display.setOverlay) { S.overlayDoc = S.activeId; S.display.setOverlay(items); } },
+    clearOverlay: () => { if (S.display && S.display.setOverlay) S.display.setOverlay(null); },
+    setRoi: (roi, o) => { const id = o && o.docId !== undefined ? o.docId : S.activeId; if (id !== null && S.docs.has(id)) setSelection(id, roi || null, true); },
+    addResults: addResultRows,
+    openTable,
+    openPlot,
+    toast: (key, params) => setStatus(tr(key, params)),
+    error: (err) => reportError(err),
+    rename: renameDoc,
+    setDisplay: setDisplayExt,
+    openTool: openToolExt
+  });
+  const EXT_API_MEMBERS = Object.keys(EXT_API);
+
+  function extError(msg) { return Object.assign(new Error(msg), { code: 'IJ_BAD_ARGS' }); }
+
+  /** IJApp.extend — see the header of this file. Throws on a malformed registration, never half-registers. */
+  function extend(spec) {
+    if (extensionsLocked) throw Object.assign(new Error('IJApp.extend after mount'), { code: 'IJ_EXTEND_AFTER_MOUNT' });
+    if (!spec || typeof spec.pkg !== 'string' || !/^[a-z][a-z0-9]*$/.test(spec.pkg)) throw extError('extend: pkg');
+    // The page disables a failed package by the name its ij-proc-<pkg>.js file reports: a pkg that names no
+    // such file could never be disabled.
+    if (PACKAGE_NAMES.indexOf(spec.pkg) < 0) throw extError('extend: ' + spec.pkg + ' is not a package of WORKER_SCRIPTS');
+    if (EXT.packages.has(spec.pkg)) throw extError('extend: package ' + spec.pkg + ' is already registered');
+    const known = new Set(COMMANDS.map((c) => c.id));
+    const built = [];
+    for (const raw of spec.commands || []) {
+      if (!raw || typeof raw.id !== 'string' || !/^[A-Za-z0-9]+$/.test(raw.id)) throw extError('extend: command id');
+      if (known.has(raw.id)) throw extError('extend: duplicate command ' + raw.id);
+      if (!Array.isArray(raw.menu) || !raw.menu.length || !raw.menu.every((x) => typeof x === 'string' && x)) throw extError('extend: menu of ' + raw.id);
+      if (typeof raw.run !== 'function') throw extError('extend: run of ' + raw.id);
+      if (!(typeof raw.order === 'number' && isFinite(raw.order))) throw extError('extend: order of ' + raw.id);
+      if (raw.enabled !== undefined && typeof raw.enabled !== 'function') throw extError('extend: enabled of ' + raw.id);
+      known.add(raw.id);
+      const keys = Array.isArray(raw.keys) && raw.keys.length ? raw.keys.slice() : (raw.shortcut ? [raw.shortcut] : []);
+      const enabled = typeof raw.enabled === 'function' ? raw.enabled : has;
+      built.push({
+        id: raw.id, menu: raw.menu.slice(), labelKey: raw.labelKey || ('cmd.' + raw.id), shortcut: raw.shortcut || keys[0] || null, keys,
+        order: raw.order, pkg: spec.pkg, long: !!raw.long, ext: true, separatorBefore: !!raw.separatorBefore,
+        enabled: (st) => !S.failedPackages.has(spec.pkg) && !!enabled(st), run: raw.run
+      });
+    }
+    const errors = spec.errors && typeof spec.errors === 'object' ? spec.errors : {};
+    for (const code of Object.keys(errors)) {
+      if (!/^[A-Z][A-Z0-9_]*$/.test(code) || typeof errors[code] !== 'string' || !/^err\.[A-Za-z0-9]+$/.test(errors[code])) throw extError('extend: error ' + code);
+      if (ERROR_KEYS[code] !== undefined && ERROR_KEYS[code] !== errors[code]) throw extError('extend: error ' + code + ' is already mapped');
+    }
+    const cols = Array.isArray(spec.columns) ? spec.columns : [];
+    for (const c of cols) if (!Array.isArray(c) || typeof c[0] !== 'string' || typeof c[1] !== 'string' || (c[2] !== undefined && typeof c[2] !== 'string')) throw extError('extend: columns');
+    for (const c of built) COMMANDS.push(c);
+    Object.assign(ERROR_KEYS, errors);
+    for (const c of cols) EXTRA_COLUMNS.push(c.slice(0, 3));
+    if (spec.measurements) EXT.measurements[spec.pkg] = spec.measurements;
+    EXT.packages.set(spec.pkg, { commands: built.map((c) => c.id) });
+  }
+
   // ───────────────────────────── public lifecycle ─────────────────────────────
 
   function mount(root, { ctx, api }) {
+    extensionsLocked = true;
     S.ctx = ctx; S.api = api; S.root = root;
     if (S.appEl && S.shell) {
       // Back from the Simple view: the DOM, the worker and the documents are still here, provided
@@ -2256,7 +2854,7 @@ const IJApp = (() => {
       startWorker();
       S.menuList = buildMenuList();
       S.shell = IJShell.create(S.appEl, {
-        commands: S.menuList, getState: snapshot, t: shellT,
+        commands: S.menuList, getState: snapshot, t: shellT, menuGroups: GROUP_META,
         tools: TOOLS.map((t) => (t.separator ? t : { id: t.id, labelKey: t.labelKey })),
         onCommand, onTool: (id) => { S.tool = id; }, onToolOptions,
         onRoi: (roi, o) => { const i = activeInfo(); if (i) setSelection(i.docId, roi, !o || o.final !== false, true); },
@@ -2376,13 +2974,15 @@ const IJApp = (() => {
     S.display = null; S.shell = null; S.windows = null; S.appEl = null; S.host = null; S.emptyEl = null; S.menuList = [];
     for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.displayPatch, S.displayInflight]) m.clear();
     S.order = []; S.activeId = null; S.roiList = []; S.roiSelected.clear(); S.results = []; S.summaryRows = []; S.figureKey = null; S.desc = null;
-    S.leaving = null; S.busy = false; S.unprotected.clear(); S.warnBudget = ''; S.warnLow = false;
+    S.threshold = null; S.previewCompute = 0;
+    S.leaving = null; S.busy = false; S.unprotected.clear(); S.held.clear(); S.warnBudget = ''; S.warnLow = false;
   }
 
   return {
     mount, unmount, release, canLeave, hasUnsavedWork,
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
+    extend, EXT_API_MEMBERS, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
-    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st
+    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit
   };
 })();

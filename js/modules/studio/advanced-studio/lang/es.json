@@ -20,7 +20,8 @@
     "Analyze": "Analizar",
     "Tools": "Herramientas",
     "Window": "Ventana",
-    "Help": "Ayuda"
+    "Help": "Ayuda",
+    "Noise": "Ruido"
   },
   "cmd": {
     "fileOpen": "Abrir…",
@@ -129,7 +130,9 @@
     "radius": "Radio",
     "value": "Valor",
     "pixels": "píxeles",
-    "scaled": "Unidades calibradas ({unit})"
+    "scaled": "Unidades calibradas ({unit})",
+    "previewZoomIn": "Acerque para previsualizar (la región en pantalla es demasiado grande).",
+    "noDocuments": "No hay ninguna imagen abierta"
   },
   "op": {
     "invert": "Invirtiendo",
@@ -229,7 +232,8 @@
     "partial": "{n} imagen(es) solo se pudieron restaurar hasta el último paso reproducible.",
     "noBaseline": "{n} imagen(es) no se pudieron restaurar: falta su copia guardada.",
     "discardAll": "Eliminar todo el trabajo guardado",
-    "nothing": "No se pudo restaurar nada de este trabajo guardado."
+    "nothing": "No se pudo restaurar nada de este trabajo guardado.",
+    "held": "{n} imagen(es) se conservan tal como estaban: una herramienta o memoria que necesitan no estaba disponible, así que el trabajo guardado no se reprodujo por completo. La copia almacenada queda intacta y los cambios nuevos en estas imágenes NO se guardan; recargue cuando la herramienta esté disponible, o guárdelas como TIFF."
   },
   "revert": {
     "message": "¿Revertir {name} a como se cargó? Se perderán los cambios."
@@ -274,12 +278,18 @@
     "needsRoi": "Trace primero una selección.",
     "badArgs": "Estos ajustes no se pueden usar. Revise los valores e inténtelo de nuevo.",
     "notSupported": "La vista avanzada no puede leer la figura en pantalla.",
-    "noLevel": "No se puede abrir ninguna resolución de esta figura."
+    "noLevel": "No se puede abrir ninguna resolución de esta figura.",
+    "badType": "Esta operación no funciona con este tipo de imagen. Convierta primero la imagen (Imagen > Tipo).",
+    "unknownOp": "Esta herramienta no está disponible: una parte de la vista avanzada no se pudo cargar. Recargue la página.",
+    "roiTooComplex": "Esta selección es demasiado compleja para conservarla (demasiados puntos de contorno). Simplifíquela o trabaje con una región más pequeña.",
+    "sizeMismatch": "Las imágenes deben tener el mismo ancho y el mismo alto."
   },
   "warn": {
     "unprotected": "Su trabajo no está protegido: el navegador se negó a guardarlo.",
+    "held": "Algunas imágenes solo se restauraron en parte: sus cambios en ellas no se guardan.",
     "lowStorage": "Queda poco espacio en este navegador: guarde un TIFF.",
-    "budget": "La memoria está casi llena ({pct} %): cierre una imagen o libere pasos de deshacer."
+    "budget": "La memoria está casi llena ({pct} %): cierre una imagen o libere pasos de deshacer.",
+    "packageFailed": "Algunas herramientas ({pkg}) no se pudieron cargar y no están disponibles."
   },
   "bc": {
     "min": "Mínimo",
@@ -326,7 +336,9 @@
   },
   "hist": {
     "list": "Lista",
-    "binWidth": "Ancho de clase"
+    "binWidth": "Ancho de clase",
+    "value": "Valor",
+    "count": "Frecuencia"
   },
   "part": {
     "minSize": "Tamaño (mín.)",
@@ -358,7 +370,8 @@
     "source": "Varios cortes se aplanan en uno con la proyección Z; los datos almacenados son de 8 bits: máximo y mínimo siguen en 8 bits, la suma es de 16 bits (exacta hasta 257 cortes), la media, la desviación estándar y la mediana son de 32 bits.",
     "depth": "Los cambios de visualización (brillo, contraste, tablas de colores, superposición de umbral) nunca tocan los píxeles; Aplicar, los filtros y los cambios de tipo sí, y se pueden deshacer mientras la memoria lo permita.",
     "deviations": "Diferencias con ImageJ: Borrar y Borrar el exterior usan 0 (negro) y Rellenar usa el valor máximo, porque las imágenes de fluorescencia tienen fondo oscuro; Convertir en máscara y Aplicar umbral crean una imagen nueva; la proyección suma es de 16 bits.",
-    "storage": "Su trabajo se guarda en este navegador sobre la marcha: un fallo o una pestaña cerrada no lo pierde. Guarde como TIFF para conservar un archivo."
+    "storage": "Su trabajo se guarda en este navegador sobre la marcha: un fallo o una pestaña cerrada no lo pierde. Guarde como TIFF para conservar un archivo.",
+    "tables": "Las ventanas de tabla (listas, resultados de colocalización, distribuciones) y de gráfico no se conservan al recargar la página: cópielas o guárdelas como CSV o PNG. Los resultados siguen guardados con su trabajo."
   },
   "view": {
     "menubar": "Barra de menús",
@@ -378,10 +391,26 @@
       "range": "Fuera de rango",
       "integer": "Introduzca un número entero",
       "choice": "Elija una de las opciones"
-    }
+    },
+    "unavailable": "No disponible: esta herramienta no se pudo cargar"
   },
   "help": {
     "space": "Mantener para desplazar",
     "escape": "Cancelar la operación en curso"
+  },
+  "noUndo": {
+    "title": "No hay memoria suficiente para guardar un paso de deshacer",
+    "message": "Este paso solo cabe en memoria sin paso de deshacer. ¿Ejecutarlo de todos modos? No se podrá deshacer, y cancelarlo a mitad deja modificados los canales ya procesados.",
+    "run": "Ejecutar sin deshacer"
+  },
+  "plot": {
+    "title": "Gráfico",
+    "savePng": "Guardar PNG",
+    "saveCsv": "Guardar CSV",
+    "distance": "Distancia",
+    "value": "Valor"
+  },
+  "table": {
+    "title": "Tabla"
   }
 }

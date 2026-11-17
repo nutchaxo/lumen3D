@@ -227,7 +227,8 @@ test('IJRoi mask ROIs: RLE, fromMask, inverse, translate', () => {
   const full = Uint8Array.from([0, 1, 1, 0, 0, 1]);
   const mr = IJRoi.fromMask(full, 3, 2);
   assert.deepEqual([mr.type, mr.x, mr.y, mr.w, mr.h], ['mask', 1, 0, 2, 2]);
-  assert.deepEqual(mr.rle, [0, 2, 1, 1]);
+  assert.ok(mr.rle instanceof Uint32Array, 'a mask ROI keeps its runs as a Uint32Array (PLAN-wave2 §2.2)');
+  assert.deepEqual(arr(mr.rle), [0, 2, 1, 1]);
   assert.equal(IJRoi.area(mr), 3);
   assert.deepEqual(arr(IJRoi.mask(mr, 3, 2).data), [1, 1, 0, 1]);
   assert.deepEqual(IJRoi.bounds(mr), { x: 1, y: 0, w: 2, h: 2 });

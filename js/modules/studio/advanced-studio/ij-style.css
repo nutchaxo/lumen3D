@@ -392,6 +392,19 @@
 .ij-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .ij-check input { margin: 0; }
 
+/* ── Dialog extras (textarea, radio group, cross-field error, preview note) ── */
+.ij-field--textarea,
+.ij-field--radio { grid-template-columns: 1fr; }
+.ij-field-control > textarea { flex: 1 1 auto; min-width: 0; resize: vertical; font: inherit; }
+.ij-field-control > textarea.ij-mono { font-family: var(--ij-mono); font-size: 11px; }
+.ij-radio-group { display: flex; flex-direction: column; gap: 4px; }
+.ij-radio { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.ij-radio input { margin: 0; }
+.ij-dialog-error { color: var(--ij-danger-text); font-size: 12px; }
+.ij-dialog-note { margin: 0; color: var(--ij-warn-text); font-size: 12px; }
+/* a dialog with a preview leaves the image usable behind it: no dimming, the box alone takes the pointer */
+.ij-dialog-backdrop--clear { background: transparent; }
+
 /* ── Tool-window content (built by ij-app.js) ───────────── */
 .ij-panel { display: grid; gap: 8px; padding: 10px; min-width: 260px; }
 .ij-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -406,6 +419,10 @@
   border-radius: 3px;
   color: var(--ij-muted);
 }
+/* the generic plot window: the wrapper is what the operator resizes, the canvas follows it */
+.ij-plot-wrap { width: 360px; height: 220px; min-width: 200px; min-height: 140px; max-width: 90vw; max-height: 80vh; resize: both; overflow: hidden; }
+.ij-plot-wrap > .ij-plot { display: block; max-width: none; }
+.ij-tablewin .ij-table-wrap { max-height: 320px; }
 .ij-lutstrip { width: 100%; height: 8px; border-radius: 2px; }
 .ij-readout { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-text); }
 .ij-info-pre {

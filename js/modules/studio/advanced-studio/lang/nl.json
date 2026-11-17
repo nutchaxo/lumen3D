@@ -509,7 +509,7 @@
   },
   "load": {
     "open": "Volume openen",
-    "status": "Laden {pct} % — band {band}/{bands}, vlakken {z0}–{z1} — {mb} MB van ≈ {total} MB"
+    "status": "Laden {pct} % — band {band}/{bands}, vlakken {z0}–{z1} — {mv} Mvoxels gelezen van {total}"
   },
   "empty": {
     "message": "Nog geen afbeelding. Voeg de plakken van de figuur samen tot één afbeelding, of open een TIFF."

@@ -130,5 +130,37 @@ async function topHatRegion(data, W, H, bd, p, reg, bands) {
   console.log('float median NaN rule 2: OK');
 }
 
+// 16-bit median at a radius whose kernel exceeds 65 535 pixels (r >= 145): the counters must not wrap.
+// Expected values are those of the Uint16-free reference (a nonzero uniform field has that value as its median).
+{
+  const F = M.IJFilters, W = 300, H = 300;
+  const reg = { x0: 0, y0: 0, x1: W, y1: H };
+  for (const [radius, v] of [[145, 40000], [150, 1000]]) {
+    const out = F.rank({ width: W, height: H, bitDepth: 16, data: new Uint16Array(W * H).fill(v) }, radius, 'median', { region: reg }).data;
+    for (let i = 0; i < out.length; i++) if (out[i] !== v) assert.fail(`16-bit median r=${radius}: constant ${v} gave ${out[i]} at ${i}`);
+  }
+  const d = new Uint16Array(W * H).fill(100);
+  for (let y = 120; y < 180; y++) for (let x = 120; x < 180; x++) d[y * W + x] = 1000;
+  const out = F.rank({ width: W, height: H, bitDepth: 16, data: d }, 150, 'median', { region: reg }).data;
+  for (let i = 0; i < out.length; i++) if (out[i] !== 100) assert.fail(`16-bit median r=150 square: ${out[i]} at ${i}`);
+  console.log('16-bit median beyond 65535 kernel pixels: OK');
+}
+
+// Unsharp Mask progress never goes backwards, whole image or band (fake clock so every tick is emitted)
+{
+  const real = M.performance; let t = 0;
+  M.performance = { now: () => (t += 50) };
+  try {
+    for (const [sigma, W, H, reg] of [[2, 300, 200, { x: 0, y: 0, w: 300, h: 200 }], [5, 300, 200, { x: 0, y: 150, w: 300, h: 50 }], [8, 300, 200, { x: 0, y: 3, w: 300, h: 60 }]]) {
+      const fr = [];
+      const prep = M.IJOpRegistry.get('unsharpMask').prepare({ bitDepth: 16, channels: [{ display: {} }] }, 0, { sigma, weight: 0.6 }, { tick: async (f) => { fr.push(f); }, check() {} });
+      await prep.region({ width: W, height: H, bitDepth: 16, data: new Uint16Array(W * H).map((_, i) => (i * 7919) % 65536) }, reg);
+      assert.ok(fr.length > 4, 'ticks were emitted');
+      for (let i = 1; i < fr.length; i++) assert.ok(fr[i] >= fr[i - 1], `unsharp progress backwards at ${i}: ${fr[i - 1]} -> ${fr[i]} (sigma ${sigma})`);
+    }
+  } finally { M.performance = real; }
+  console.log('unsharp progress monotone: OK');
+}
+
 closeAll();
 console.log('ij filters exact: OK');

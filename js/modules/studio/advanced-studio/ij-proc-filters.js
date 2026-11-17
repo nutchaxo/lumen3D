@@ -294,6 +294,19 @@
       out[p] = result;
     }
     const iEndInside = length - kRadius < writeTo ? length - kRadius : writeTo;
+    /* four neighbouring pixels per pass: the chain result -> fround(result + ...) of one pixel is latency bound, four
+     * independent chains overlap. Each pixel still runs exactly the operations of the loop below, in the same order. */
+    for (; i + 3 < iEndInside; i += 4, p += 4 * pointInc) {
+      let r0 = fround(input[i] * kern0), r1 = fround(input[i + 1] * kern0), r2 = fround(input[i + 2] * kern0), r3 = fround(input[i + 3] * kern0);
+      for (let k = 1; k < kRadius; k++) {
+        const kv = kern[k];
+        r0 = fround(r0 + fround(kv * fround(input[i - k] + input[i + k])));
+        r1 = fround(r1 + fround(kv * fround(input[i + 1 - k] + input[i + 1 + k])));
+        r2 = fround(r2 + fround(kv * fround(input[i + 2 - k] + input[i + 2 + k])));
+        r3 = fround(r3 + fround(kv * fround(input[i + 3 - k] + input[i + 3 + k])));
+      }
+      out[p] = r0; out[p + pointInc] = r1; out[p + 2 * pointInc] = r2; out[p + 3 * pointInc] = r3;
+    }
     for (; i < iEndInside; i++, p += pointInc) { // while only pixels within the line are addressed (the easy case)
       let result = fround(input[i] * kern0);
       for (let k = 1; k < kRadius; k++) result = fround(result + fround(kern[k] * fround(input[i - k] + input[i + k])));
@@ -371,13 +384,58 @@
     }
     const out = new Float32Array(rect.w * rect.h);
     const writeFromY = rect.y, writeToY = rect.y + rect.h;
-    let readFromY = Math.max(0, writeFromY - py.kRadius);
     const cy = lineCaches();
-    for (let x = rect.x; x < rect.x + rect.w; x++) {
-      const bx = x - rect.x;
-      const get = (i) => ((i >= ys0 && i < ys1) ? buf[(i - ys0) * rect.w + bx] : src[i * W + x]);
-      blurLine(py, get, out, writeFromY, writeToY, bx - rect.y * rect.w, rect.w, readFromY, cy);
-      if ((bx & 15) === 15) await tk(0.5 + 0.5 * (bx + 1) / rect.w);
+    const rw = rect.w;
+    /* Rows whose whole kernel lies inside the line AND inside the x-blurred rows (`buf`): convolveLine's "easy case",
+     *     result = fround(in[i] * kern0); for k = 1..kRadius-1: result = fround(result + fround(kern[k] * fround(in[i-k] + in[i+k])))
+     * is evaluated row by row for four neighbouring columns at once (contiguous reads, four independent chains) instead of
+     * column by column through a stride of rect.w floats. The other rows (the first / last kRadius of the image, or beyond
+     * the x-blurred rows) go through the per-column path of ImageJ. Same operations per pixel, so the same bits. */
+    const kernY = py.gauss.kernel, kRadY = kernY.length;
+    let fastFrom = 0, fastTo = 0;
+    if (!py.doDownscaling) {
+      fastFrom = Math.max(writeFromY, kRadY, ys0 + kRadY - 1);
+      fastTo = Math.min(writeToY, H - kRadY, ys1 - kRadY + 1);
+      if (fastTo <= fastFrom) fastFrom = fastTo = 0;
+    }
+    const columns = async (wf, wt) => {
+      if (wt <= wf) return;
+      const readFromY = Math.max(0, wf - py.kRadius);
+      for (let x = rect.x; x < rect.x + rw; x++) {
+        const bx = x - rect.x;
+        const get = (i) => ((i >= ys0 && i < ys1) ? buf[(i - ys0) * rw + bx] : src[i * W + x]);
+        blurLine(py, get, out, wf, wt, bx - rect.y * rw, rw, readFromY, cy);
+        // this segment covers rows wf..wt of the rect: its share of the second half grows with the columns done
+        if ((bx & 15) === 15) await tk(0.5 + 0.5 * ((wf - rect.y) + (wt - wf) * (bx + 1) / rw) / rect.h);
+      }
+    };
+    if (fastTo > fastFrom) {
+      await columns(writeFromY, fastFrom);
+      const k0 = kernY[0];
+      for (let i = fastFrom; i < fastTo; i++) {
+        const ib = (i - ys0) * rw, ob = (i - rect.y) * rw;
+        let x = 0;
+        for (; x + 3 < rw; x += 4) {
+          let r0 = fround(buf[ib + x] * k0), r1 = fround(buf[ib + x + 1] * k0), r2 = fround(buf[ib + x + 2] * k0), r3 = fround(buf[ib + x + 3] * k0);
+          for (let k = 1; k < kRadY; k++) {
+            const kv = kernY[k], up = ib + x - k * rw, dn = ib + x + k * rw;
+            r0 = fround(r0 + fround(kv * fround(buf[up] + buf[dn])));
+            r1 = fround(r1 + fround(kv * fround(buf[up + 1] + buf[dn + 1])));
+            r2 = fround(r2 + fround(kv * fround(buf[up + 2] + buf[dn + 2])));
+            r3 = fround(r3 + fround(kv * fround(buf[up + 3] + buf[dn + 3])));
+          }
+          out[ob + x] = r0; out[ob + x + 1] = r1; out[ob + x + 2] = r2; out[ob + x + 3] = r3;
+        }
+        for (; x < rw; x++) {
+          let r = fround(buf[ib + x] * k0);
+          for (let k = 1; k < kRadY; k++) r = fround(r + fround(kernY[k] * fround(buf[ib + x - k * rw] + buf[ib + x + k * rw])));
+          out[ob + x] = r;
+        }
+        await tk(0.5 + 0.5 * (i - rect.y + 1) / rect.h);
+      }
+      await columns(fastTo, writeToY);
+    } else {
+      await columns(writeFromY, writeToY);
     }
     return out;
   }
@@ -756,6 +814,131 @@
     return out;
   }
 
+  /* Minimum / Maximum of an 8 / 16-bit image (Top Hat of integer data), the same values as minMaxPass.
+   *
+   * Why not minMaxPass: its incremental maximum rescans the whole kernel area (~345 pixels at r = 10) every time the
+   * maximum leaves the window, which on real data happens for a large share of the pixels (profile: areaMaxS + leftMaxS
+   * = 80 % of Top Hat). Here the cost per pixel is independent of the data
+   * (O(kR) comparisons, no rescans). The disc is cut into COLUMNS instead of rows:
+   *     O[y][x] = max over t = -kR..kR of  C_|t|[y][x + t],     C_t[y][c] = max of column c over rows y-h(t)..y+h(t),
+   * where h(t) is the largest dy whose kernel row reaches dx >= t (the half-height of the disc at offset t from its centre;
+   * kernel rows are symmetric and their half-widths never grow away from the centre). The C_t are nested (h(t) shrinks
+   * as t grows), so each is the previous one plus the two rows it adds: every cache row is read once per output row.
+   * A maximum of integers does not depend on the order it is searched in, so the values equal minMaxPass's; the cache
+   * holds src * sign as int32 (zero stays +0 where the float path holds -0, and the result `max * sign` of the float path
+   * is +0 for a zero maximum, which `m ? m * sign : 0` reproduces). Not used for 32-bit data (NaN, -0 order). */
+  async function minMaxPassInt(src, W, H, rect, k, sign, tk, f0, f1) {
+    const kR = k.kRadius, kH = 2 * kR + 1, dxs = k.dxs;
+    const cw = rect.w + 2 * kR, rw = rect.w;
+    const cache = new Int32Array(cw * kH);
+    const xmin = rect.x - kR, xmax = rect.x + rect.w + kR;
+    const padL = xmin < 0 ? -xmin : 0, padR = xmax > W ? xmax - W : 0;
+    const xIn = xmin > 0 ? xmin : 0, wIn = Math.min(xmax, W) - xIn;
+    const out = new Float32Array(rw * rect.h);
+    // h[t] for t = 0..kR, then the distinct column maxima: slot[t] indexes C (equal h shares one array)
+    const hT = new Int32Array(kR + 1), slot = new Int32Array(kR + 1);
+    for (let t = 0; t <= kR; t++) { let h = 0; while (h < kR && dxs[kR + h + 1] >= t) h++; hT[t] = h; }
+    let nSlots = 0;
+    for (let t = kR; t >= 0; t--) slot[t] = (t < kR && hT[t] === hT[t + 1]) ? slot[t + 1] : nSlots++;
+    const C = new Int32Array(nSlots * cw);
+    const acc = new Int32Array(rw);
+    const rowOf = new Int32Array(kH); // cache offset of kernel row j (dy = j - kR)
+    function load(yy) {
+      const sl = ((yy % kH) + kH) % kH;
+      const base = sl * cw + padL, row = clampI(yy, 0, H - 1) * W + xIn;
+      if (sign === 1) for (let i = 0; i < wIn; i++) cache[base + i] = src[row + i];
+      else for (let i = 0; i < wIn; i++) cache[base + i] = -src[row + i];
+      const left = cache[base], right = cache[base + wIn - 1], b0 = sl * cw;
+      for (let i = 0; i < padL; i++) cache[b0 + i] = left;
+      for (let i = 0; i < padR; i++) cache[base + wIn + i] = right;
+    }
+    let loaded = rect.y - kR - 1;
+    for (let y = rect.y; y < rect.y + rect.h; y++) {
+      while (loaded < y + kR) load(++loaded);
+      for (let j = 0; j < kH; j++) rowOf[j] = ((((y - kR + j) % kH) + kH) % kH) * cw;
+      // C_t from the widest offset (smallest disc height) down to t = 0, over the columns O reads: c in [kR - t, kR + rw + t)
+      for (let t = kR; t >= 0; t--) {
+        if (t < kR && slot[t] === slot[t + 1]) continue;
+        const d = slot[t] * cw, c0 = kR - t, c1 = kR + rw + t, h = hT[t];
+        // the array this one extends: the centre row (t = kR) or the previous, wider-offset array, which covers a wider
+        // column range than this one and so is valid over [c0, c1)
+        let from, dy;
+        const cen = rowOf[kR];
+        if (t === kR) { from = cen; dy = 1; if (h < 1) { for (let c = c0; c < c1; c++) C[d + c] = cache[cen + c]; continue; } } else { from = slot[t + 1] * cw; dy = hT[t + 1] + 1; }
+        const src0 = t === kR ? cache : C;
+        // first extension reads `from`, the others update C[d] in place; two rows per sweep
+        let ra = rowOf[kR - dy], rb = rowOf[kR + dy];
+        for (let c = c0; c < c1; c++) {
+          let m = src0[from + c];
+          const u = cache[ra + c], v = cache[rb + c];
+          if (u > m) m = u;
+          if (v > m) m = v;
+          C[d + c] = m;
+        }
+        dy++;
+        for (; dy + 1 <= h; dy += 2) {
+          ra = rowOf[kR - dy]; rb = rowOf[kR + dy];
+          const rc = rowOf[kR - dy - 1], rd = rowOf[kR + dy + 1];
+          for (let c = c0; c < c1; c++) {
+            let m = C[d + c], u = cache[ra + c];
+            if (u > m) m = u;
+            u = cache[rb + c]; if (u > m) m = u;
+            u = cache[rc + c]; if (u > m) m = u;
+            u = cache[rd + c]; if (u > m) m = u;
+            C[d + c] = m;
+          }
+        }
+        if (dy <= h) {
+          ra = rowOf[kR - dy]; rb = rowOf[kR + dy];
+          for (let c = c0; c < c1; c++) {
+            let m = C[d + c];
+            const u = cache[ra + c], v = cache[rb + c];
+            if (u > m) m = u;
+            if (v > m) m = v;
+            C[d + c] = m;
+          }
+        }
+      }
+      const ob = (y - rect.y) * rw;
+      const d0 = slot[0] * cw + kR;
+      for (let x = 0; x < rw; x++) acc[x] = C[d0 + x];
+      let t = 1;
+      // four offsets per sweep: one read and one write of acc for eight column maxima
+      for (; t + 3 <= kR; t += 4) {
+        const l0 = slot[t] * cw + kR - t, r0 = slot[t] * cw + kR + t;
+        const l1 = slot[t + 1] * cw + kR - t - 1, r1 = slot[t + 1] * cw + kR + t + 1;
+        const l2 = slot[t + 2] * cw + kR - t - 2, r2 = slot[t + 2] * cw + kR + t + 2;
+        const l3 = slot[t + 3] * cw + kR - t - 3, r3 = slot[t + 3] * cw + kR + t + 3;
+        for (let x = 0; x < rw; x++) {
+          let m = acc[x], v = C[l0 + x];
+          if (v > m) m = v;
+          v = C[r0 + x]; if (v > m) m = v;
+          v = C[l1 + x]; if (v > m) m = v;
+          v = C[r1 + x]; if (v > m) m = v;
+          v = C[l2 + x]; if (v > m) m = v;
+          v = C[r2 + x]; if (v > m) m = v;
+          v = C[l3 + x]; if (v > m) m = v;
+          v = C[r3 + x]; if (v > m) m = v;
+          acc[x] = m;
+        }
+      }
+      for (; t <= kR; t++) {
+        const dl = slot[t] * cw + kR - t, dr = slot[t] * cw + kR + t;
+        for (let x = 0; x < rw; x++) {
+          let m = acc[x];
+          const a = C[dl + x], b = C[dr + x];
+          if (a > m) m = a;
+          if (b > m) m = b;
+          acc[x] = m;
+        }
+      }
+      if (sign === 1) for (let x = 0; x < rw; x++) out[ob + x] = acc[x];
+      else for (let x = 0; x < rw; x++) { const m = acc[x]; out[ob + x] = m ? -m : 0; }
+      await tk(f0 + (f1 - f0) * ((y - rect.y + 1) / rect.h));
+    }
+    return out;
+  }
+
   const rankKernel = (radius) => root.IJFilters.kernelOffsets(radius);
   const maxOf = (bd) => (bd === 8 ? 255 : (bd === 16 ? 65535 : NaN));
 
@@ -883,9 +1066,12 @@
         // r1 = the selection grown by kRadius, clamped to the image, then two region-sized floats (first pass out, result)
         const reg = info.region || { w: info.width, h: info.height };
         const r1w = Math.min(info.width, reg.w + 2 * k.kRadius), r1h = Math.min(info.height, reg.h + 2 * k.kRadius);
-        return r1w * r1h * 4 * 2 + reg.w * reg.h * 4 * 2;
+        // + minMaxPassInt's row cache (2kR+1 rows) and column maxima (at most kR+1 arrays), Int32, rect width + 2kR
+        return r1w * r1h * 4 * 2 + reg.w * reg.h * 4 * 2 + (3 * k.kRadius + 2) * (r1w + 2 * k.kRadius) * 4;
       }
-      return bandBytes(info, 2 * k.kRadius, 2 * k.kRadius, 2) + bandBytes(info, k.kRadius, k.kRadius, 3);
+      const regW = info.region ? info.region.w : info.width;
+      return bandBytes(info, 2 * k.kRadius, 2 * k.kRadius, 2) + bandBytes(info, k.kRadius, k.kRadius, 3) +
+        (3 * k.kRadius + 2) * (regW + 4 * k.kRadius) * 4;
     },
     prepare(view, c, p, ctx) {
       const sc = (ctx && ctx.scale) || 1;
@@ -900,9 +1086,10 @@
         const W = full.width, H = full.height;
         const r1x = Math.max(0, rect.x - kR), r1y = Math.max(0, rect.y - kR);
         const r1 = { x: r1x, y: r1y, w: Math.min(W, rect.x + rect.w + kR) - r1x, h: Math.min(H, rect.y + rect.h + kR) - r1y };
-        const st1 = await minMaxPass(full.data, W, H, r1, k, sign, tk, 0, 0.5);
+        const mm = bd === 32 ? minMaxPass : minMaxPassInt;
+        const st1 = await mm(full.data, W, H, r1, k, sign, tk, 0, 0.5);
         const r2 = { x: rect.x - r1.x, y: rect.y - r1.y, w: rect.w, h: rect.h };
-        const st2 = await minMaxPass(st1, r1.w, r1.h, r2, k, -sign, tk, 0.5, 1);
+        const st2 = await mm(st1, r1.w, r1.h, r2, k, -sign, tk, 0.5, 1);
         if (dontSubtract) return floatToTypeKeep(st2, bd);
         const offset = (sign === 1 && bd !== 32) ? (bd === 8 ? 255 : 65535) : 0;
         const s = full.data, n = rect.w * rect.h;

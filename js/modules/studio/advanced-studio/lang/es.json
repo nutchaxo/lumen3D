@@ -509,7 +509,7 @@
   },
   "load": {
     "open": "Abriendo el volumen",
-    "status": "Cargando {pct} % — banda {band}/{bands}, planos {z0}–{z1} — {mb} MB de ≈ {total} MB"
+    "status": "Cargando {pct} % — banda {band}/{bands}, planos {z0}–{z1} — {mv} Mvóxeles leídos de {total}"
   },
   "empty": {
     "message": "Todavía no hay imagen. Aplane los cortes de la figura en una imagen, o abra un TIFF."

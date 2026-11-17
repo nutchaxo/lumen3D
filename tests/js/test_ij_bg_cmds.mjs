@@ -435,7 +435,7 @@ function J(x) { return JSON.parse(JSON.stringify(x)); }
   const info = { width: 5735, height: 5735, bitDepth: 16 };
   const n = info.width * info.height;
   assert.equal(spec.scratchBytes(info, { radius: 10 }), n * 4 + n * 2 + (5735 + 5735 + 20) * 21 * 4 + 4 * 1048576, 'radius <= 10: no shrunken copy, only the line cache and the z ring');
-  assert.equal(spec.scratchBytes(info, { radius: 10, sliding: true }), n * 4 + n * 2 + 5735 * 8 + 4 * 1048576);
+  assert.equal(spec.scratchBytes(info, { radius: 10, sliding: true }), n * 4 + n * 2 + 5735 * (8 + 12 + 48) + 4 * 1048576); // line cache + nextPoint, candidate lists P / V, slope tables
   assert.ok(spec.scratchBytes(info, { radius: 50 }) > n * 4 + n * 2 + 4 * 1048576, 'radius 50 shrinks: the small arrays count');
   // saturatedRange counts the mask box of an area selection
   const sr = t.page.IJOpRegistry.get('saturatedRange');

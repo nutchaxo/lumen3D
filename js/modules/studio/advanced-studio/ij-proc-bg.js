@@ -100,9 +100,13 @@
     return shiftBy;
   }
 
-  function filter3x3(pixels, width, height, isMax) {
+  // `hooks` (optional) only adds a cancel check every `yieldEvery` rows of either pass; no value depends on it.
+  function filter3x3(pixels, width, height, isMax, hooks) {
     let shiftBy = 0;
-    for (let y = 0; y < height; y++) shiftBy += filter3(pixels, width, y * width, 1, isMax);
+    for (let y = 0; y < height; y++) {
+      if (hooks && y % yieldEvery === 0) hooks.check();
+      shiftBy += filter3(pixels, width, y * width, 1, isMax);
+    }
     // The column pass of ImageJ walks one column at a time (a cache line per pixel). Here the same per-pixel arithmetic
     // sweeps the rows, the previous ORIGINAL row kept in `prev`; the shift of a column is still summed in ascending y
     // (colShift[x], starting at 0) and the columns are added in ascending x, so every rounding of `shiftBy` is the same.
@@ -110,6 +114,7 @@
     const colShift = new Float64Array(width);
     prev.set(pixels.subarray(0, width));
     for (let y = 0, row = 0; y < height; y++, row += width) {
+      if (hooks && y % yieldEvery === 0) hooks.check();
       const next = y < height - 1 ? row + width : row; // the last row repeats itself as v3
       if (isMax) {
         for (let x = 0; x < width; x++) {
@@ -342,45 +347,25 @@
   function pow6(dx) { return fround(fround(fround(fround(fround(dx * dx) * dx) * dx) * dx) * dx); } // dx*dx*dx*dx*dx*dx
 
   /* 1/d and coeff2*d (double) for d = 0 .. length, shared by the lines of one pass (same coeff2, same or shorter length). */
-  let slopeTabCache = { coeff2: -1, inv: new Float64Array(0), ct: new Float64Array(0) };
+  let slopeTabCache = { coeff2: -1, inv: new Float64Array(0), ct: new Float64Array(0), cr: new Float64Array(0) };
   function slopeTables(coeff2, length) {
     const t = slopeTabCache;
     if (t.coeff2 === coeff2 && t.inv.length > length) return t;
     const n = m_max(length + 1, t.coeff2 === coeff2 ? 2 * t.inv.length : 0);
-    const inv = new Float64Array(n), ct = new Float64Array(n);
-    for (let d = 1; d < n; d++) { inv[d] = 1 / d; ct[d] = coeff2 * d; }
-    slopeTabCache = { coeff2, inv, ct };
+    const inv = new Float64Array(n), ct = new Float64Array(n), cr = new Float64Array(n);
+    for (let d = 1; d < n; d++) { inv[d] = 1 / d; ct[d] = coeff2 * d; cr[d] = fround(coeff2 * d); } // cr: the float product of ImageJ
+    slopeTabCache = { coeff2, inv, ct, cr };
     return slopeTabCache;
   }
 
-  /* BackgroundSubtracter.lineSlideParabola: slides a parabola along one line from below and sets the values so
-   * that every point is reachable. With `correctedEdges` (Float32Array(2)) it also returns the two edge values
-   * estimated without an edge particle. */
-  function lineSlideParabola(pixels, start, inc, length, coeff2, cache, nextPoint, correctedEdges) {
-    let minValue = FLOAT_MAX;
-    let lastpoint = 0;
+  let slideFirstCorner = 0, slideLastCorner = 0; // results of slideFrom for the edge estimate of lineSlideParabola
+
+  /* The touch-point search of lineSlideParabola from touch point i1 on, over the linked list nextPoint (the loop of
+   * BackgroundSubtracter.lineSlideParabola). cache holds the line, pixels receives the parabola segments. */
+  function slideFrom(pixels, start, inc, length, coeff2, cache, nextPoint, i1, tabs, minValue) {
+    const invTab = tabs.inv, ctTab = tabs.ct; // 1/d and coeff2*d in double
     let firstCorner = length - 1;
     let lastCorner = 0;
-    let vPrevious1 = 0;
-    let vPrevious2 = 0;
-    const curvatureTest = fround(fround(1.999) * coeff2); // not 2: numeric scatter of 2nd derivative
-    const tabs = slopeTables(coeff2, length);
-    const invTab = tabs.inv, ctTab = tabs.ct; // 1/d and coeff2*d in double
-    for (let i = 0, p = start; i < length; i++, p += inc) {
-      const v = pixels[p];
-      cache[i] = v;
-      if (v < minValue) minValue = v;
-      if (i >= 2 && fround(fround(fround(vPrevious1 + vPrevious1) - vPrevious2) - v) < curvatureTest) {
-        nextPoint[lastpoint] = i - 1; // point i-1 may be touched
-        lastpoint = i - 1;
-      }
-      vPrevious2 = vPrevious1;
-      vPrevious1 = v;
-    }
-    nextPoint[lastpoint] = length - 1;
-    nextPoint[length - 1] = INT_MAX; // breaks the search loop
-
-    let i1 = 0;
     while (i1 < length - 1) {
       const v1 = cache[i1];
       let minSlope = FLOAT_MAX;
@@ -422,6 +407,35 @@
       }
       i1 = i2; // continue from this new point
     }
+    slideFirstCorner = firstCorner; slideLastCorner = lastCorner;
+  }
+
+  /* BackgroundSubtracter.lineSlideParabola: slides a parabola along one line from below and sets the values so
+   * that every point is reachable. With `correctedEdges` (Float32Array(2)) it also returns the two edge values
+   * estimated without an edge particle. */
+  function lineSlideParabola(pixels, start, inc, length, coeff2, cache, nextPoint, correctedEdges) {
+    let minValue = FLOAT_MAX;
+    let lastpoint = 0;
+    let vPrevious1 = 0;
+    let vPrevious2 = 0;
+    const curvatureTest = fround(fround(1.999) * coeff2); // not 2: numeric scatter of 2nd derivative
+    const tabs = slopeTables(coeff2, length);
+    for (let i = 0, p = start; i < length; i++, p += inc) {
+      const v = pixels[p];
+      cache[i] = v;
+      if (v < minValue) minValue = v;
+      if (i >= 2 && fround(fround(fround(vPrevious1 + vPrevious1) - vPrevious2) - v) < curvatureTest) {
+        nextPoint[lastpoint] = i - 1; // point i-1 may be touched
+        lastpoint = i - 1;
+      }
+      vPrevious2 = vPrevious1;
+      vPrevious1 = v;
+    }
+    nextPoint[lastpoint] = length - 1;
+    nextPoint[length - 1] = INT_MAX; // breaks the search loop
+
+    slideFrom(pixels, start, inc, length, coeff2, cache, nextPoint, 0, tabs, minValue);
+    let firstCorner = slideFirstCorner, lastCorner = slideLastCorner;
     // Estimated edge values without an edge particle, allowing for vignetting described as a 6th-order polynomial
     if (correctedEdges) {
       if (4 * firstCorner >= length) firstCorner = 0; // edge particles must be < 1/4 image size
@@ -447,6 +461,108 @@
       correctedEdges[1] = fround(fround(fround(value0 + fround((length - 1) * slope)) + fround(coeff6 * fround(pow6(dx) - 1))) + fround(fround(coeff2 * tail) * tail));
     }
     return correctedEdges;
+  }
+
+  /* lineSlideParabola without the edge estimate, for the lines of the four passes. Same arithmetic, same result, faster:
+   * the candidate touch points that nextPoint links (the points of non-positive curvature) are also kept as two
+   * dense arrays, P (positions, P[0] = 0, last = length - 1, then INT_MAX) and V (their values), so the search of one
+   * touch point reads them in order instead of chasing nextPoint[j] and gathering cache[j]. For a candidate after
+   * touch point i1 the distance d = j - i1 is always >= 1 here, so the d <= 0 case of slideFrom cannot occur; the
+   * one way a touch point leaves the list (no slope below FLOAT_MAX: NaN / infinite data, the `i2 <= i1` fallback
+   * of ImageJ, which then reads whatever nextPoint holds) is handed to slideFrom with nextPoint, cache and pixels in
+   * exactly the state the reference loop would have. nextPoint is still written for that. */
+  function slideFast(pixels, start, inc, length, coeff2, cache, nextPoint, P, V) {
+    let minValue = FLOAT_MAX;
+    let lastpoint = 0;
+    let vPrevious1 = 0;
+    let vPrevious2 = 0;
+    let n = 0; // last used index of P / V
+    const curvatureTest = fround(fround(1.999) * coeff2);
+    const tabs = slopeTables(coeff2, length);
+    const invTab = tabs.inv, crTab = tabs.cr;
+    // Whether a point is a candidate is data dependent and close to a coin toss on noisy images, so a branch on it is
+    // mispredicted about every other point (measured: 7.5 vs 4.3 ns per pixel). The entries are written
+    // unconditionally and only the counters move, by the 0/1 of the comparison. The write to nextPoint[lastpoint] for a
+    // point that is not a candidate is overwritten by the next candidate or by the end of the line, so nextPoint ends
+    // up exactly as in ImageJ's loop.
+    {
+      let v = pixels[start];
+      cache[0] = v;
+      if (v < minValue) minValue = v;
+      vPrevious1 = v;
+      v = pixels[start + inc];
+      cache[1] = v;
+      if (v < minValue) minValue = v;
+      vPrevious2 = vPrevious1;
+      vPrevious1 = v;
+    }
+    for (let i = 2, p = start + 2 * inc; i < length; i++, p += inc) {
+      const v = pixels[p];
+      cache[i] = v;
+      if (v < minValue) minValue = v;
+      const c = (fround(fround(fround(vPrevious1 + vPrevious1) - vPrevious2) - v) < curvatureTest) | 0;
+      nextPoint[lastpoint] = i - 1;
+      P[n + 1] = i - 1; V[n + 1] = vPrevious1;
+      n += c;
+      lastpoint += c * (i - 1 - lastpoint);
+      vPrevious2 = vPrevious1;
+      vPrevious1 = v;
+    }
+    nextPoint[lastpoint] = length - 1;
+    nextPoint[length - 1] = INT_MAX;
+    P[0] = 0; V[0] = cache[0];
+    n++; P[n] = length - 1; V[n] = cache[length - 1];
+    P[n + 1] = INT_MAX;
+    // A subnormal quotient has a fixed grid on which x / d can be an exact midpoint (x = 2^-149 M, d even), and the
+    // product by 1 / d would then decide the tie differently from the division. A difference of two floats is below 1e-30
+    // (a quotient below 2^-126) without being zero only when the smaller of them is below ~1e-23, so a line holding a
+    // candidate of magnitude in (0, 1e-20) is left to the division loop of ImageJ (never met in image data).
+    for (let m = 0; m <= n; m++) {
+      const x = V[m];
+      if (x !== 0 && x < 1e-20 && x > -1e-20) {
+        lineSlideParabola(pixels, start, inc, length, coeff2, cache, nextPoint, null);
+        return;
+      }
+    }
+
+    let i1 = 0, m0 = 0;
+    while (i1 < length - 1) {
+      const v1 = V[m0];
+      let minSlope = FLOAT_MAX;
+      let i2 = 0, mBest = 0;
+      let searchTo = length;
+      let recalculateLimitNow = 0;
+      for (let m = m0 + 1, j = P[m]; j < searchTo; j = P[++m], recalculateLimitNow++) {
+        const v2 = V[m];
+        const d = j - i1;
+        const diff = v2 - v1;
+        // ImageJ's float arithmetic: (float)((float)(v2 - v1) / d) + (float)(coeff2 * d); crTab[d] is the second term, d >= 1.
+        // The float quotient of a float x by an integer d < 2^23 is fround(x * (1 / d)) with 1 / d in double (a division
+        // is several times slower and sits on the critical path of every visit): x / d lies exactly on a midpoint between
+        // two floats only if x had 25 significant bits, which a float has not; off a midpoint it is at least 2^-25/d
+        // (relative, so 2^-48 for d < 2^23) from one while the product errs by about 2^-52. That holds for a normal result (the lines that could
+        // produce a subnormal one never get here, see the 1e-20 scan above).
+        const slope = fround(fround(fround(diff) * invTab[d]) + crTab[d]);
+        if (slope < minSlope) {
+          minSlope = slope;
+          i2 = j; mBest = m;
+          recalculateLimitNow = -3;
+        }
+        if (recalculateLimitNow === 0) { // search limit: recalculated a little after the slope improved
+          const b = fround(fround(0.5 * minSlope) / coeff2);
+          const maxSearch = (i1 + d2i(b + m_sqrt(b * b + fround(fround(v1 - minValue) / coeff2)) + 1)) | 0;
+          if (maxSearch < searchTo && maxSearch > 0) searchTo = maxSearch;
+        }
+      }
+      if (i2 <= i1) { // ImageJ: i2 = i1 + 1 and the loop goes on over whatever nextPoint says
+        slideFrom(pixels, start, inc, length, coeff2, cache, nextPoint, i1 + 1, tabs, minValue);
+        return;
+      }
+      for (let j = i1 + 1, p = start + j * inc; j < i2; j++, p += inc) {
+        pixels[p] = fround(v1 + fround((j - i1) * fround(minSlope - fround((j - i1) * coeff2))));
+      }
+      i1 = i2; m0 = mBest;
+    }
   }
 
   /* BackgroundSubtracter.correctCorners: detect corner particles and lower the corner pixels when one is there,
@@ -480,7 +596,7 @@
   }
 
   /* BackgroundSubtracter.filter1D: all the lines of one direction (diagonals: half the image per call). */
-  async function filter1D(pixels, width, height, direction, coeff2, cache, nextPoint, hooks, f0, f1) {
+  async function filter1D(pixels, width, height, direction, coeff2, cache, nextPoint, P, V, hooks, f0, f1) {
     let startLine = 0, nLines = 0, lineInc = 0, pointInc = 0, length = 0;
     switch (direction) {
       case X_DIRECTION: nLines = height; lineInc = width; pointInc = 1; length = width; break;
@@ -502,7 +618,8 @@
         case DIAGONAL_2B: length = m_min(width, height - i); break;
         default: break;
       }
-      lineSlideParabola(pixels, startPixel, pointInc, length, coeff2, cache, nextPoint, null);
+      if (length >= 4) slideFast(pixels, startPixel, pointInc, length, coeff2, cache, nextPoint, P, V);
+      else lineSlideParabola(pixels, startPixel, pointInc, length, coeff2, cache, nextPoint, null);
     }
   }
 
@@ -510,22 +627,31 @@
   async function slidingParaboloidFloatBackground(pixels, width, height, radius, invert, doPresmooth, doCorners, hooks) {
     const cache = new Float32Array(m_max(width, height));
     const nextPoint = new Int32Array(m_max(width, height));
+    const P = new Int32Array(m_max(width, height) + 2), V = new Float64Array(m_max(width, height) + 1);
     const coeff2 = fround(0.5 / radius); // 2nd-order coefficient of the polynomial approximating the ball
     const coeff2diag = fround(1 / radius); // same for diagonal directions where step is sqrt2
     if (invert) for (let i = 0; i < pixels.length; i++) pixels[i] = -pixels[i];
     let shiftBy = 0;
     if (doPresmooth) {
-      shiftBy = fround(filter3x3(pixels, width, height, true)); // 3x3 maximum to remove dust etc.
-      await hooks.tick(0.1);
-      filter3x3(pixels, width, height, false); // smoothing to remove noise
+      shiftBy = fround(filter3x3(pixels, width, height, true, hooks)); // 3x3 maximum to remove dust etc.
+      await hooks.tick(0.05);
+      filter3x3(pixels, width, height, false, hooks); // smoothing to remove noise
     }
+    hooks.check();
     if (doCorners) correctCorners(pixels, width, height, coeff2, cache, nextPoint); // avoids subtracting corner particles
     // Slide the parabola over the image in different directions (diagonals last: faster)
     const passes = [[X_DIRECTION, coeff2], [Y_DIRECTION, coeff2], [X_DIRECTION, coeff2],
       [DIAGONAL_1A, coeff2diag], [DIAGONAL_1B, coeff2diag], [DIAGONAL_2A, coeff2diag], [DIAGONAL_2B, coeff2diag],
       [DIAGONAL_1A, coeff2diag], [DIAGONAL_1B, coeff2diag]];
+    // Progress weight of a pass = its share of the pixels slid over: a row / column pass covers the whole image, a
+    // diagonal half-pass about half of it.
+    const weights = passes.map((q) => (q[0] === X_DIRECTION || q[0] === Y_DIRECTION ? 2 : 1));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    let done = 0;
     for (let k = 0; k < passes.length; k++) {
-      await filter1D(pixels, width, height, passes[k][0], passes[k][1], cache, nextPoint, hooks, 0.1 + 0.9 * (k / passes.length), 0.1 + 0.9 * ((k + 1) / passes.length));
+      const f0 = 0.1 + 0.9 * (done / totalWeight);
+      done += weights[k];
+      await filter1D(pixels, width, height, passes[k][0], passes[k][1], cache, nextPoint, P, V, hooks, f0, 0.1 + 0.9 * (done / totalWeight));
     }
     if (invert) for (let i = 0; i < pixels.length; i++) pixels[i] = -fround(pixels[i] - shiftBy);
     else if (doPresmooth) for (let i = 0; i < pixels.length; i++) pixels[i] = fround(pixels[i] - shiftBy); // correct for shift by 3x3 maximum
@@ -784,7 +910,8 @@
       // the shrunken copies exist only when the image is shrunk (radius > 10): small + its background;
       // the paraboloid keeps a line cache + nextPoint (two arrays of the longer side)
       const small = s > 1 ? (n / (s * s)) * 4 * 2 : 0;
-      const lines = params && params.sliding ? m_max(info.width, info.height) * 8 : 0;
+      // line cache + nextPoint (4 + 4 B), the candidate lists P / V (4 + 8 B) and the slope tables (inv, ct, cr: 3 x 8 B, up to doubled by the growth rule of slopeTables)
+      const lines = params && params.sliding ? m_max(info.width, info.height) * (8 + 12 + 48) : 0;
       // rolling ball: line cache (sw * bw) and z ring ((sw + 2r) * bw) of the shrunken image, bw = 2r + 1 (upper bound)
       let ring = 0;
       if (params && !params.sliding) {

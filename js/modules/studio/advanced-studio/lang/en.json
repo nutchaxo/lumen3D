@@ -509,7 +509,7 @@
   },
   "load": {
     "open": "Opening the volume",
-    "status": "Loading {pct} % — band {band}/{bands}, planes {z0}–{z1} — {mb} MB of ≈ {total} MB"
+    "status": "Loading {pct} % — band {band}/{bands}, planes {z0}–{z1} — {mv} Mvoxels read of {total}"
   },
   "empty": {
     "message": "No image yet. Flatten the slices of the figure into one image, or open a TIFF."

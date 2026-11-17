@@ -138,7 +138,7 @@
 
     /* trueEdmHeight: "Get estimated "true" height of a maximum or saddle point of a Euclidian Distance Map."
      * Java float arithmetic throughout (sums of two floats halved, offsets added: Math.fround at each float result). */
-    const dOff = Int32Array.from(dirOffset);
+    const dOff = Int32Array.from(dirOffset), dX = Int32Array.from(DIR_X), dY = Int32Array.from(DIR_Y); // typed copies for the hot loops
     function trueEdmHeight(x, y) {
       const offset = x + y * width;
       const v = data[offset];
@@ -199,10 +199,10 @@
           const isInner = (y !== 0 && y !== ymax) && (x !== 0 && x !== xmax);
           for (let d = 0; d < 8; d++) { // compare with the 8 neighbor pixels
             if (isInner || isWithin(x, y, d)) {
-              if (data[i + dirOffset[d]] > v) { // vNeighbor > v
+              if (data[i + dOff[d]] > v) { // vNeighbor > v
                 if (!isEDM) { isMax = false; break; } // vNeighborTrue == vNeighbor, vTrue == v
                 if (!haveTrue) { vTrue = trueEdmHeight(x, y); haveTrue = true; }
-                if (trueEdmHeight(x + DIR_X[d], y + DIR_Y[d]) > vTrue) { isMax = false; break; }
+                if (trueEdmHeight(x + dX[d], y + dY[d]) > vTrue) { isMax = false; break; }
               }
             }
           }
@@ -276,15 +276,15 @@
           const x = offset - y * width;
           const isInner = (y !== 0 && y !== ymax) && (x !== 0 && x !== xmax);
           for (let d = 0; d < 8; d++) { // "analyze all neighbors (in 8 directions) at the same level"
-            const offset2 = offset + dirOffset[d];
+            const offset2 = offset + dOff[d];
             if ((isInner || isWithin(x, y, d)) && (types[offset2] & LISTED) === 0) {
               if (isEDM && edmPixels[offset2] <= 0) continue; // "ignore the background (non-particles)"
               if ((types[offset2] & PROCESSED) !== 0) {
                 maxPossible = false; // "we have reached a point processed previously, thus it is no maximum now"
                 break;
               }
-              const x2 = x + DIR_X[d];
-              const y2 = y + DIR_Y[d];
+              const x2 = x + dX[d];
+              const y2 = y + dY[d];
               const v2 = isEDM ? trueEdmHeight(x2, y2) : data[offset2];
               if (v2 > hiBound) {
                 maxPossible = false; // "we have reached a higher point, thus it is no maximum"
@@ -508,7 +508,8 @@
    * pixel is pushed to the list of every bit its fate mask gains. A pass takes its list, drops entries that are no longer
    * pending or no longer carry the bit, and sets the rest — exactly the set ImageJ's full scan finds, and the same count n,
    * so the idle/remaining control flow below is ImageJ's, verbatim. The cost falls from (passes × level size) to
-   * (level size + 8 × pixels set). `scratch` (≥ 2·size bytes, free after cleanupMaxima) holds `nb` and the pending flags. */
+   * (level size + 8 × pixels set). `scratch` (≥ 2·size bytes, free after cleanupMaxima) holds the per-pixel state word `ps` (see below). */
+  const BIT_INDEX = Uint8Array.from({ length: 129 }, (_, v) => (v === 2 ? 1 : v === 4 ? 2 : v === 8 ? 3 : v === 16 ? 4 : v === 32 ? 5 : v === 64 ? 6 : v === 128 ? 7 : 0)); // index of a single set bit
   const BIT_OF_OPPOSITE = [16, 32, 64, 128, 1, 2, 4, 8]; // the bit a pixel set in direction d is for the neighbour (index bit (d+4)%8)
   async function watershedSegment(pixels, width, height, intEncodeXMask, intEncodeShift, dirOffset, isWithin, ctl, scratch) {
     const size = width * height;
@@ -538,11 +539,14 @@
         }
       }
     }
-    const nb = new Uint8Array(scratch.buffer, scratch.byteOffset, size); // neighbourhood index of a pending pixel (event mode)
-    const pend = new Uint8Array(scratch.buffer, scratch.byteOffset + size, size); // 1 pending in the level, 2 taken by the running pass
-    pend.fill(0);
+    // One 16-bit word per pixel (one cache line per neighbour touched): bits 0-7 = the neighbourhood index of a pending pixel
+    // (event mode), bits 8-9 = 1 pending in the level / 2 taken by the running pass, bit 10 = the pixel is on the image border.
+    const ps = new Uint16Array(scratch.buffer, scratch.byteOffset, size);
+    ps.fill(0);
     const fate = Uint8Array.from(makeFateTable()); // "prevent features from merging"
     const table = makeFateTable();
+    const ADD_BITS = new Uint8Array(8 * 256); // [d][old index] -> direction bits gained when the neighbour in direction d turns 255
+    for (let d = 0; d < 8; d++) for (let old = 0; old < 256; old++) ADD_BITS[(d << 8) | old] = fate[old ^ BIT_OF_OPPOSITE[d]] & ~fate[old];
     const directionSequence = [7, 3, 1, 5, 0, 4, 2, 6]; // "diagonal directions first"
     const xmax = width - 1, ymax = height - 1;
     const yMask = ~intEncodeXMask;
@@ -588,26 +592,28 @@
       let nCh = 0;
       for (let j = 0; j < len; j++) {
         const o = A[j];
-        if (pend[o] === 1 && (fate[nb[o]] & bit) !== 0) { pend[o] = 2; changed[nCh++] = o; }
+        const st = ps[o];
+        if ((st & 0x300) === 0x100 && (fate[st & 255] & bit) !== 0) { ps[o] = st + 0x100; changed[nCh++] = o; } // keeps the border flag
       }
       bkN[pass] = 0;
       for (let j = 0; j < nCh; j++) { // "set pixels to 255", then tell the neighbours
         const o = changed[j];
         pixels[o] = 255;
-        pend[o] = 0;
+        const edge = (ps[o] & 0x400) !== 0;
+        ps[o] = 0;
         if (overflow) continue; // event mode is being abandoned: only the pixels themselves matter now
-        const y = (o / width) | 0;
-        const x = o - y * width;
-        const inner = x > 0 && x < xmax && y > 0 && y < ymax;
+        let x = 0, y = 0;
+        if (edge) { y = (o / width) | 0; x = o - y * width; }
         for (let d = 0; d < 8; d++) {
-          if (inner || isWithin(x, y, d)) {
+          if (!edge || isWithin(x, y, d)) {
             const n = o + dirOffset[d];
-            if (pend[n] === 1) {
-              const old = nb[n];
-              const nw = old ^ BIT_OF_OPPOSITE[d];
-              nb[n] = nw;
-              const add = fate[nw] & ~fate[old];
-              if (add !== 0) for (let b = 0; b < 8; b++) if ((add >> b) & 1) push(b, n);
+            const v = ps[n];
+            if ((v & 0x300) === 0x100) {
+              const old = v & 255;
+              ps[n] = v ^ BIT_OF_OPPOSITE[d];
+              // the direction bits the neighbour gains: fate[old ^ bit] & ~fate[old]
+              let add = ADD_BITS[(d << 8) | old];
+              while (add !== 0) { const low = add & -add; push(BIT_INDEX[low], n); add ^= low; }
             }
           }
         }
@@ -646,15 +652,14 @@
           if (x > 0 && pixels[o - 1] === 255) index ^= 64;
           if (x > 0 && y > 0 && pixels[o - width - 1] === 255) index ^= 128;
         }
-        nb[o] = index;
-        pend[o] = 1;
+        ps[o] = index | ((x > 0 && x < xmax && y > 0 && y < ymax) ? 0x100 : 0x500); // 0x400 = on the image border (neighbour tests need isWithin)
         const m = fate[index];
         if (m !== 0) for (let b = 0; b < 8; b++) if ((m >> b) & 1) push(b, o);
         if ((i & 0x3ffff) === 0x3ffff && ctl) await ctl.check();
       }
       if (overflow) {
         overflow = false;
-        for (let i = 0; i < nPts; i++) { const xy = coordinates[start + i]; pend[(xy & intEncodeXMask) + ((xy & yMask) >> intEncodeShift) * width] = 0; }
+        for (let i = 0; i < nPts; i++) { const xy = coordinates[start + i]; ps[(xy & intEncodeXMask) + ((xy & yMask) >> intEncodeShift) * width] = 0; }
         return false;
       }
       return true;
@@ -665,7 +670,7 @@
       for (let i = 0; i < evLen; i++) {
         const xy = coordinates[start + i];
         const o = (xy & intEncodeXMask) + ((xy & yMask) >> intEncodeShift) * width;
-        if (pend[o] === 1) { coordinates[start + k++] = xy; pend[o] = 0; }
+        if ((ps[o] & 0x300) === 0x100) { coordinates[start + k++] = xy; ps[o] = 0; }
       }
       overflow = false;
     }
@@ -1049,38 +1054,102 @@
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
-  /* BinaryProcessor.thin(pass, table): reads the image as it was (`getPixelsCopy()`), writes the new one; interior pixels only
-   * (resetRoi: xMin = 1 … xMax = width-2). An even pass removes the pixels whose code is 1 or 3, an odd one 2 or 3.
-   * `bgColor = foreground==255?0:-1` (a signed byte: -1 is 255). */
-  async function thin(cur, prev, W, H, pass, table, foreground, ctl, f) {
-    const bgColor = foreground === 255 ? 0 : 255;
-    prev.set(cur);
-    let removed = 0;
-    const odd = (pass & 1) === 1;
-    for (let y = 1; y <= H - 2; y++) {
-      if (ctl && (y & 127) === 0) await ctl.tick(f); // under a megapixel of a pass between two ticks
-      let offset = 1 + y * W;
-      for (let x = 1; x <= W - 2; x++, offset++) {
-        if (prev[offset] === bgColor) continue;
-        let index = 0;
-        if (prev[offset - W - 1] !== bgColor) index |= 1;
-        if (prev[offset - W] !== bgColor) index |= 2;
-        if (prev[offset - W + 1] !== bgColor) index |= 4;
-        if (prev[offset + 1] !== bgColor) index |= 8;
-        if (prev[offset + W + 1] !== bgColor) index |= 16;
-        if (prev[offset + W] !== bgColor) index |= 32;
-        if (prev[offset + W - 1] !== bgColor) index |= 64;
-        if (prev[offset - 1] !== bgColor) index |= 128;
-        const code = table[index];
-        if (odd) { if (code === 2 || code === 3) { cur[offset] = bgColor; removed++; } }
-        else if (code === 1 || code === 3) { cur[offset] = bgColor; removed++; }
+  /* BinaryProcessor.thin(pass, table) of ImageJ: every sub-pass decides each interior foreground pixel from the image AS IT WAS
+   * (`getPixelsCopy()`), then writes. An even pass removes the pixels whose table code is 1 or 3, an odd one 2 or 3.
+   * `bgColor = foreground==255?0:-1` (a signed byte: -1 is 255). A pixel's code is a function of its 8 neighbours alone.
+   *
+   * Event-driven form (same result, cost O(frontier) instead of O(image) per sub-pass). Let S_k be the image before sub-pass k,
+   * N_k(p) the 8-neighbourhood of p in S_k and d(N, parity) the table decision. A foreground pixel p that is not removed at
+   * sub-pass k-2 and has N_k(p) = N_{k-2}(p) is not removed at sub-pass k either: k and k-2 have the SAME parity, so
+   * d(N_k, parity k) = d(N_{k-2}, parity k-2) = "keep". N_k(p) differs from N_{k-2}(p) only if a pixel next to p was removed
+   * by sub-pass k-2 or k-1 (the only writes are removals, so S_k = S_{k-2} minus R_{k-2} minus R_{k-1}). So the pixels to
+   * evaluate at sub-pass k are exactly the foreground pixels in A_{k-2} u A_{k-1}, A_j = the pixels 8-adjacent to R_j; the
+   * first two sub-passes with a table (nothing is known about k-2, k-1) evaluate every foreground pixel. Because the decisions
+   * are read from the unmodified image, the removals are collected first and applied after: no snapshot copy either.
+   * Removed counts, and therefore the number of passes of the two loops, are those of the full scan.
+   * Marks (bits of the working image beside the foreground bit 1): value 4 de-duplicates A_j while it is built, value 2 marks the
+   * candidates already decided in one sub-pass; both are cleared by walking the lists. Every walk over a list checks for
+   * cancellation every 0x4000 entries (`report`), so no stretch of work lasts more than a few ms of a worker. */
+  const grow = (list, need) => { if (need > list.buf.length) { const nb = new Int32Array(Math.max(need, Math.ceil(list.buf.length * 1.25), 1024)); nb.set(list.buf.subarray(0, list.n)); list.buf = nb; } };
+  const newList = () => ({ buf: new Int32Array(1024), n: 0 });
+  // The working image holds 1 for a foreground pixel, 0 for the background (bits 1 and 2 are the marks of the phase below), so a
+  // pixel's marks live in the cache line its neighbours are read from.
+  function skelCode(img, o, W) {
+    return (img[o - W - 1] & 1) | ((img[o - W] & 1) << 1) | ((img[o - W + 1] & 1) << 2) | ((img[o + 1] & 1) << 3) |
+      ((img[o + W + 1] & 1) << 4) | ((img[o + W] & 1) << 5) | ((img[o + W - 1] & 1) << 6) | ((img[o - 1] & 1) << 7);
+  }
+
+  /* One phase = one lookup table, run to convergence. `st` carries the working image, the mark array and the progress. */
+  async function skeletonPhase(st, table, ctl) {
+    const { cur, W, H, nbr } = st, mark = cur;
+    const evens = new Uint8Array(256), odds = new Uint8Array(256); // pass parity -> does code `table[index]` remove the pixel
+    for (let i = 0; i < 256; i++) { const c = table[i]; evens[i] = c === 1 || c === 3 ? 1 : 0; odds[i] = c === 2 || c === 3 ? 1 : 0; }
+    const rem = newList(); // R_k, the removals of the sub-pass in progress
+    let aNew = newList(), aOld = newList(); // A_{k-1}, A_{k-2}
+    let full = 2, pixelsRemoved;
+    const report = async () => { if (ctl) await ctl.tick(Math.min(0.99, st.removed / st.fgCount)); };
+    do {
+      pixelsRemoved = 0;
+      for (let half = 0; half < 2; half++, st.pass++) {
+        const remove = (st.pass & 1) === 1 ? odds : evens;
+        rem.n = 0;
+        if (full > 0) {
+          full--;
+          for (let y = 1; y <= H - 2; y++) {
+            if ((y & 127) === 0) await report();
+            let o = 1 + y * W;
+            for (let x = 1; x <= W - 2; x++, o++) {
+              if ((cur[o] & 1) === 0) continue;
+              if (remove[skelCode(cur, o, W)] === 1) { grow(rem, rem.n + 1); rem.buf[rem.n++] = o; }
+            }
+          }
+        } else {
+          let steps = 0; // counted before any `continue`, so a run of skipped entries cannot starve the check
+          for (let w2 = 0; w2 < 2; w2++) { // decide each candidate once (value 2), then clear the marks
+            const b = w2 === 0 ? aNew.buf : aOld.buf, n = w2 === 0 ? aNew.n : aOld.n;
+            for (let i = 0; i < n; i++) {
+              if ((++steps & 0x3FFF) === 0) await report();
+              const o = b[i];
+              if ((cur[o] & 3) !== 1) continue; // removed since A_j was built, or already decided
+              mark[o] |= 2;
+              if (remove[skelCode(cur, o, W)] === 1) { grow(rem, rem.n + 1); rem.buf[rem.n++] = o; }
+            }
+          }
+          for (let w2 = 0; w2 < 2; w2++) {
+            const b = w2 === 0 ? aNew.buf : aOld.buf, n = w2 === 0 ? aNew.n : aOld.n;
+            for (let i = 0; i < n; i++) { mark[b[i]] &= 5; if ((i & 0x3FFF) === 0x3FFF) await report(); }
+          }
+        }
+        for (let i = 0, n = rem.n; i < n; i++) { cur[rem.buf[i]] = 0; if ((i & 0x3FFF) === 0x3FFF) await report(); } // apply after every decision was read
+        pixelsRemoved += rem.n;
+        st.removed += rem.n;
+        // A_k: the foreground left next to this sub-pass's removals; it replaces A_{k-2}
+        const t = aOld; aOld = aNew; aNew = t; aNew.n = 0;
+        {
+          const rb = rem.buf, rn = rem.n;
+          let ab = aNew.buf, an = 0;
+          for (let i = 0; i < rn; i++) {
+            if ((i & 0x3FFF) === 0x3FFF) { aNew.n = an; await report(); }
+            const o = rb[i];
+            if (an + 8 > ab.length) { aNew.n = an; grow(aNew, an + 8); ab = aNew.buf; }
+            for (let d = 0; d < 8; d++) {
+              const q = o + nbr[d];
+              if ((cur[q] & 5) === 1) { cur[q] |= 4; ab[an++] = q; }
+            }
+          }
+          aNew.n = an;
+        }
+        for (let i = 0, n = aNew.n; i < n; i++) { mark[aNew.buf[i]] &= 3; if ((i & 0x3FFF) === 0x3FFF) await report(); }
       }
-    }
-    return removed;
+      await report();
+    } while (pixelsRemoved > 0);
   }
 
   /* BinaryProcessor.skeletonize(foreground): "boolean edgePixels = hasEdgePixels(); BinaryProcessor ip2 = expand(edgePixels);
-   * ip2.skeletonize2(foreground); shrink(ip2, edgePixels);" */
+   * ip2.skeletonize2(foreground); shrink(ip2, edgePixels);"
+   * Progress: the share of the foreground removed so far, which never goes back. It is a fair proxy of the work (the
+   * frontier cost is about the sum of the |A_k|) but it ends below 1 by the share the skeleton keeps: near 0.9-0.99 on blobs
+   * and cells, 0.2-0.7 on a noisy or thin mask, where the bar then jumps to done; the number of passes is not known in advance. */
   async function skeletonize(src, w, h, foreground, ctl) {
     let edge = false;
     for (let x = 0; x < w && !edge; x++) if (src[x] === foreground || src[(h - 1) * w + x] === foreground) edge = true;
@@ -1097,19 +1166,15 @@
     //  moveTo(width-1,0); lineTo(width-1,height-1); moveTo(0,height-1); lineTo(width,height-1);"
     for (let x = 0; x < W; x++) { cur[x] = background; cur[(H - 1) * W + x] = background; }
     for (let y = 0; y < H; y++) { cur[y * W] = background; cur[y * W + W - 1] = background; }
-    const prev = new Uint8Array(W * H);
-    let pass = 0;
-    let pixelsRemoved;
-    do {
-      pixelsRemoved = await thin(cur, prev, W, H, pass++, SKEL_TABLE, foreground, ctl, pass / (pass + 40));
-      pixelsRemoved += await thin(cur, prev, W, H, pass++, SKEL_TABLE, foreground, ctl, pass / (pass + 40));
-      await tick(ctl, pass / (pass + 40));
-    } while (pixelsRemoved > 0);
-    do { // "use a second table to remove "stuck" pixels"
-      pixelsRemoved = await thin(cur, prev, W, H, pass++, SKEL_TABLE2, foreground, ctl, pass / (pass + 40));
-      pixelsRemoved += await thin(cur, prev, W, H, pass++, SKEL_TABLE2, foreground, ctl, pass / (pass + 40));
-      await tick(ctl, pass / (pass + 40));
-    } while (pixelsRemoved > 0);
+    let fgCount = 0;
+    for (let i = 0; i < cur.length; i++) { const f = cur[i] !== background ? 1 : 0; cur[i] = f; fgCount += f; } // any non-background value is foreground, as `!= bgColor` in thin()
+    const st = {
+      cur, W, H, pass: 0, removed: 0, fgCount: Math.max(1, fgCount),
+      nbr: Int32Array.from([-W - 1, -W, -W + 1, 1, W + 1, W, W - 1, -1])
+    };
+    await skeletonPhase(st, SKEL_TABLE, ctl);
+    await skeletonPhase(st, SKEL_TABLE2, ctl); // "use a second table to remove "stuck" pixels"
+    for (let i = 0; i < cur.length; i++) cur[i] = (cur[i] & 1) === 1 ? foreground : background;
     if (!edge) return cur;
     const out = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) out.set(cur.subarray((y + 1) * W + 1, (y + 1) * W + 1 + w), y * w);
@@ -1166,7 +1231,7 @@
     kind: 'pixel', version: 1, bitDepths: [8], roi: 'ignore', preview: false,
     validate(params) { checkOverwrite(params); validateInvert(params); },
     resolve: resolveInvert,
-    scratchBytes: (info) => px(info) * 4 + 65536, // the working image (padded when an object touches the edge) + the previous pass
+    scratchBytes: (info) => px(info) * 12 + 65536, // working image (padded when an object touches the edge, its mark bits inline) + the removal / adjacent-pixel lists (three lists of 4 B entries, R, A_{k-1}, A_{k-2}; each keeps the largest capacity it ever reached, possibly in different sub-passes, grown by 1.25 with the old buffer alive while copying: at most about 1.25 * 4 * (max|R| + 2 * max|A|) = 15 B/px in theory, 4.5 B/px measured at worst)
     prepare(view, c, params, ctx) {
       checkBinary(view.channels[c].data);
       const fg = invertedOf(view, c, params) ? 0 : 255;

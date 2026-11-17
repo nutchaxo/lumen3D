@@ -406,7 +406,9 @@ function testImage(bd, W, H, seed, nans) {
   const us = M.IJOpRegistry.get('unsharpMask').scratchBytes(info, { sigma: 1000, weight: 0.6 });
   assert.ok(us <= 5735 * 5735 * 4 + 5735 * 5735 * 8 + 1e6, `unsharp sigma 1000 declares ${us}`);
   const th = M.IJOpRegistry.get('topHat').scratchBytes(info, { radius: 1000 });
-  assert.ok(th <= 5735 * 5735 * 4 * 4 + 1, `top hat radius 1000 declares ${th}`);
+  // + the integer min / max pass's row cache and column maxima: (3kR+2) rows of (width + 2kR) Int32
+  const kR1000 = M.IJFilters.kernelOffsets(1000).kRadius;
+  assert.ok(th <= 5735 * 5735 * 4 * 4 + (3 * kR1000 + 2) * (5735 + 2 * kR1000) * 4 + 1, `top hat radius 1000 declares ${th}`);
   console.log('review probes: OK (' + n + ' ImageJ recordings)');
 }
 

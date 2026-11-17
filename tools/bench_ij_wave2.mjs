@@ -98,6 +98,54 @@ function fillChannel(field, size, bitDepth, shift, seed) {
   return out;
 }
 
+
+// ── dense cases (a sparse blob mask hides every algorithm whose cost follows the foreground / the pass count) ──
+// A "cells" mask: a Voronoi tessellation of ~SIZE^2/100000 jittered seeds (one per grid cell, so the nearest seed is always
+// within the 5 x 5 neighbouring grid cells and the tessellation is exact), the cells white (255), a 1-px black line wherever
+// the right or lower neighbour belongs to another cell. Deterministic.
+function makeCellsMask(size) {
+  const rnd = lcg(777);
+  const g = Math.max(2, Math.round(Math.sqrt(size * size / 100000))); // 18 x 18 = 324 seeds at 5735
+  const cell = size / g;
+  const sx = new Float64Array(g * g), sy = new Float64Array(g * g);
+  for (let j = 0; j < g; j++) for (let i = 0; i < g; i++) { sx[j * g + i] = (i + rnd()) * cell; sy[j * g + i] = (j + rnd()) * cell; }
+  const id = new Uint16Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const gj = Math.min(g - 1, Math.floor(y / cell));
+    for (let x = 0; x < size; x++) {
+      const gi = Math.min(g - 1, Math.floor(x / cell));
+      let best = 1e30, bi = 0;
+      for (let j = Math.max(0, gj - 2); j <= Math.min(g - 1, gj + 2); j++) for (let i = Math.max(0, gi - 2); i <= Math.min(g - 1, gi + 2); i++) {
+        const k = j * g + i, dx = sx[k] - x, dy = sy[k] - y, d = dx * dx + dy * dy;
+        if (d < best) { best = d; bi = k; }
+      }
+      id[y * size + x] = bi;
+    }
+  }
+  const out = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const o = y * size + x;
+    out[o] = (x + 1 < size && id[o + 1] !== id[o]) || (y + 1 < size && id[o + size] !== id[o]) ? 0 : 255;
+  }
+  return out;
+}
+// A smooth grey image of a few hundred LARGE blobs (radius 40-120 px): Find Maxima / segmented has long, gently sloping flanks to flood.
+function makeBigBlobs(size) {
+  const rnd = lcg(4242);
+  const acc = new Float32Array(size * size);
+  const nBlobs = Math.round(size * size / 100000);
+  for (let b = 0; b < nBlobs; b++) {
+    const cx = rnd() * size, cy = rnd() * size, r = 40 + rnd() * 80, amp = 60 + rnd() * 150;
+    const x0 = Math.max(0, Math.floor(cx - 2 * r)), x1 = Math.min(size - 1, Math.ceil(cx + 2 * r));
+    const y0 = Math.max(0, Math.floor(cy - 2 * r)), y1 = Math.min(size - 1, Math.ceil(cy + 2 * r));
+    const inv = 1 / (2 * r * r / 4);
+    for (let y = y0; y <= y1; y++) { const dy = y - cy, row = y * size; for (let x = x0; x <= x1; x++) { const dx = x - cx; acc[row + x] += amp * Math.exp(-(dx * dx + dy * dy) * inv); } }
+  }
+  const out = new Uint8Array(size * size);
+  for (let i = 0; i < out.length; i++) { const v = acc[i] + 3; out[i] = v > 255 ? 255 : v; }
+  return out;
+}
+
 // ── timing ──
 const fmt = (ms) => (ms < 1000 ? ms.toFixed(0) + ' ms' : (ms / 1000).toFixed(2) + ' s');
 const results = new Map(); // op -> { 8: ms|string, 16: ms|string }
@@ -163,6 +211,26 @@ async function benchDepth(bitDepth) {
     await timed('Skeletonize', bitDepth, () => bin('skeletonize', {}));
     await timed('Outline', bitDepth, () => bin('segOutline', {}));
     await timed('Erode (binary)', bitDepth, () => bin('binary', { op: 'erode' }));
+
+    // dense cases: the 'cells' mask (white cells, 1-px black borders) and a smooth large-blob grey image
+    const cm = w.IJImage.create({ name: 'cells', width: SIZE, height: SIZE, bitDepth: 8, channels: [{ name: 'M', color: '#ffffff' }] });
+    cm.channels[0].data.set(makeCellsMask(SIZE));
+    const cells = await request('doc.open', { bytes: w.IJTiff.write(cm), name: 'cells' });
+    const dbin = async (op, params) => { const r = await request('doc.run', { docId: cells.docId, op, params: params || {}, roi: null, channel: 0 }); await request('doc.undo', { docId: cells.docId }); return r; };
+    await timed('Distance Map (EDM) [dense]', bitDepth, () => dbin('edm', { output: 'overwrite' }));
+    await timed('Ultimate Points [dense]', bitDepth, () => dbin('ultimatePoints', { output: 'overwrite' }));
+    await timed('Watershed [dense]', bitDepth, () => dbin('watershed', { output: 'overwrite' }));
+    await timed('Voronoi [dense]', bitDepth, () => dbin('voronoi', { output: 'overwrite' }));
+    await timed('Skeletonize [dense]', bitDepth, () => dbin('skeletonize', {}));
+    await timed('Outline [dense]', bitDepth, () => dbin('segOutline', {}));
+    await timed('Erode (binary) [dense]', bitDepth, () => dbin('binary', { op: 'erode' }));
+    const bb = w.IJImage.create({ name: 'bigblobs', width: SIZE, height: SIZE, bitDepth: 8, channels: [{ name: 'A', color: '#00ff00' }] });
+    bb.channels[0].data.set(makeBigBlobs(SIZE));
+    const big = await request('doc.open', { bytes: w.IJTiff.write(bb), name: 'bigblobs' });
+    await timed('Find Maxima segmented [big blobs]', bitDepth, async () => {
+      const r = await request('doc.run', { docId: big.docId, op: 'findMaximaImage', params: { output: 'segmented', prominence: 10, strict: false, excludeEdges: false, light: false, aboveLower: null }, roi: null, channel: 0, noRoi: true });
+      for (const id of (r.newDocIds || [])) await request('doc.close', { docId: id });
+    });
   }
 }
 

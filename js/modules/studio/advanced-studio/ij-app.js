@@ -556,6 +556,26 @@ const IJApp = (() => {
   const num = (v, d = 2) => (Number.isFinite(v) ? String(Math.round(v * 10 ** d) / 10 ** d) : String(v));
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const mb = (bytes) => Math.max(1, Math.round(bytes / 1048576));
+  // Millions of voxels for the projection's progress label: one decimal below 10 M (a 0.26 M
+  // plane must not read "1"), whole numbers above, grouped digits in the active language.
+  function mvox(voxels, lang) {
+    const m = voxels / 1e6;
+    const small = m < 10;
+    const v = small ? Math.round(m * 10) / 10 : Math.round(m);
+    try {
+      return v.toLocaleString(lang || undefined, small ? { minimumFractionDigits: 1, maximumFractionDigits: 1 } : { maximumFractionDigits: 0 });
+    } catch (_) { return String(v); }
+  }
+
+  /** Label parameters + real fraction of one projection step. `loaded` counts bytes = channel values
+   *  (one per channel per voxel), so voxels = loaded / channels; the fraction is weighted by the
+   *  values read, so the last, shorter band agrees with the voxel count and ends at exactly 1. */
+  function projectionProgress(o) {
+    const est = o.width * o.height * o.depth * o.channels;
+    const fraction = est ? Math.min(1, o.loaded / est) : o.donePlanes / o.totalPlanes;
+    return { fraction, pct: Math.round(fraction * 100),
+      mv: mvox(o.loaded / o.channels, o.lang), total: est ? mvox(est / o.channels, o.lang) : '?' };
+  }
 
   function transferable(u8) {
     if (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) return u8;
@@ -1773,13 +1793,13 @@ const IJApp = (() => {
         hideEmpty();
       }
       // Progress counts the lossless voxels delivered, so its total is the voxels the read
-      // delivers (w·h·planes·channels bytes) — not session.estimateBytes(), which counts the
-      // compressed bytes fetched and is smaller.
-      const est = session.width * session.height * depth * channels.length;
+      // delivers — not session.estimateBytes(), which counts the compressed bytes fetched and is
+      // smaller. See projectionProgress.
       const bands = Math.ceil(session.height / bandRows);
       const zChunk = Math.max(1, session.zChunk || 1);
       const chIdx = channels.map((c) => c.index);
       const totalPlanes = depth * bands;
+      const lang = (S.ctx && S.ctx.i18n && typeof S.ctx.i18n.getLanguage === 'function') ? S.ctx.i18n.getLanguage() : undefined;
       let donePlanes = 0, loadedBytes = 0, inflight = null;
       for (let bi = 0, y0 = 0; y0 < session.height; bi++, y0 += bandRows) {
         const y1 = Math.min(session.height, y0 + bandRows);
@@ -1797,10 +1817,10 @@ const IJApp = (() => {
           }
           inflight = Promise.all(adds);
           donePlanes += z1 - z0;
-          const fraction = donePlanes / totalPlanes;
+          const pg = projectionProgress({ width: session.width, height: session.height, depth, channels: channels.length, loaded: loadedBytes, donePlanes, totalPlanes, lang });
           if (S.shell) {
-            S.shell.setProgress({ fraction, cancellable: true, label: tr('load.status', { pct: Math.round(fraction * 100), band: bi + 1, bands,
-              z0: lvDesc.indices[z0], z1: lvDesc.indices[z1 - 1], mb: mb(loadedBytes), total: est ? mb(est) : '?' }) });
+            S.shell.setProgress({ fraction: pg.fraction, cancellable: true, label: tr('load.status', { pct: pg.pct, band: bi + 1, bands,
+              z0: lvDesc.indices[z0], z1: lvDesc.indices[z1 - 1], mv: pg.mv, total: pg.total }) });
           }
         }
       }
@@ -3270,6 +3290,6 @@ const IJApp = (() => {
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
     extend, EXT_API_MEMBERS, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
-    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
+    planLevels, mapRange, mvox, projectionProgress, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
   };
 })();

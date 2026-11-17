@@ -509,7 +509,7 @@
   },
   "load": {
     "open": "Ouverture du volume",
-    "status": "Chargement {pct} % — bande {band}/{bands}, plans {z0}–{z1} — {mb} Mo sur ≈ {total} Mo"
+    "status": "Chargement {pct} % — bande {band}/{bands}, plans {z0}–{z1} — {mv} Mvoxels lus sur {total}"
   },
   "empty": {
     "message": "Pas encore d’image. Aplatissez les coupes de la figure en une image, ou ouvrez un TIFF."

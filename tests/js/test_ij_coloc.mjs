@@ -476,4 +476,17 @@ function classicalScan(a, b, slope, intercept) {
   assert.throws(() => spec.validate(P({ ch1: 1, ch2: 1 }), { width: W, height: H, bitDepth: 8, channels: 2, docs: [] }), (e) => e.code === 'IJ_BAD_ARGS');
 }
 
+// Regression: a 32-bit channel constant at |v| >= 2^53 has a zero bin width (amin + 1 === amin), every q is NaN and the
+// old separate histogram pass left every pixel out of the plot (hist all zero); stats are unaffected.
+{
+  for (const [a, b] of [[new Float32Array(7).fill(1e30), Float32Array.from([1e20, 1.1e20, 1.3e20, 1.2e20, 1.5e20, 1.7e20, 1.9e20])],
+                        [Float32Array.from([1e20, 1.1e20, 1.3e20, 1.2e20, 1.5e20, 1.7e20, 1.9e20]), new Float32Array(7).fill(2 ** 60)]]) {
+    const r = IJColoc.analyze({ a, b, width: 7, height: 1, bitDepth: 32, mask: null, params: P({}) });
+    assert.equal(r.n, 7);
+    let sum = 0; for (let i = 0; i < r.hist.length; i++) sum += r.hist[i];
+    assert.equal(sum, 0, 'zero bin width: no pixel enters the plot');
+    assert.equal(r.hist[0], 0);
+  }
+}
+
 console.log('ij coloc: OK');

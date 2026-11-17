@@ -1,0 +1,11 @@
+{
+  "find maxima segmented, checkerboard 0/1": "348fac5:160000",
+  "find maxima segmented, 8-bit noise, tolerance 5": "834b2ee6:160000",
+  "find maxima segmented, 16-bit ramp with noise (long levels)": "1cd091c5:160000",
+  "watershed of speckle": "1daffcd8:250000",
+  "voronoi of speckle": "bba6f5df:1000000",
+  "watershed of blobs": "9ca3857f:250000",
+  "voronoi of blobs": "f7e88a8d:1000000",
+  "find maxima segmented, 4 grey levels (event mode to the end)": "12a04a91:160000",
+  "find maxima segmented, sparse peaks (event lists overflow mid-pass)": "f435598:160000"
+}

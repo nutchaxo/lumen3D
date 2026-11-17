@@ -26,6 +26,8 @@
  */
 (function (root) {
   'use strict';
+  // Local aliases: in a vm context (tests, bench) every `Math.x` is a lookup through the contextified global, ~50x slower than a closure variable in a hot loop.
+  const { abs: M_abs, ceil: M_ceil, cos: M_cos, floor: M_floor, fround: M_fround, max: M_max, min: M_min, round: M_round, sin: M_sin, sqrt: M_sqrt, trunc: M_trunc, atan2: M_atan2 } = Math;
   const R = root.IJOpRegistry;
   if (!R) return;
 
@@ -113,7 +115,7 @@
    * same). The value leaves through RES[0]: a function that returns a double boxes it, which cost this kernel 6x. */
   const RES = new Float64Array(1);
   function bicubic(p, W, H, x0, y0, isF) {
-    const u0 = Math.floor(x0), v0 = Math.floor(y0);
+    const u0 = M_floor(x0), v0 = M_floor(y0);
     if (u0 <= 0 || u0 >= W - 2 || v0 <= 0 || v0 >= H - 2) { RES[0] = bilEdge(p, W, H, x0, y0, isF); return; }
     const w0 = cubic(x0 - (u0 - 1)), w1 = cubic(x0 - u0), w2 = cubic(x0 - (u0 + 1)), w3 = cubic(x0 - (u0 + 2));
     const z0 = cubic(y0 - (v0 - 1)), z1 = cubic(y0 - v0), z2 = cubic(y0 - (v0 + 1)), z3 = cubic(y0 - (v0 + 2));
@@ -135,7 +137,7 @@
 
   // Result of a bicubic read as a stored value: `int value = (int)(q+0.5); if (value<0) value = 0; if (value>MAX) ...`
   function bicubicInt(q, maxV) {
-    let v = Math.trunc(q + 0.5);
+    let v = M_trunc(q + 0.5);
     if (v < 0) v = 0;
     if (v > maxV) v = maxV;
     return v;
@@ -168,7 +170,7 @@
     const isF = bd === 32, maxV = bd === 8 ? 255 : 65535;
     const centerX = rr.x + (rr.w - 1) / 2.0, centerY = rr.y + (rr.h - 1) / 2.0;
     const rad = -angle / (180.0 / Math.PI);
-    const ca = Math.cos(rad), sa = Math.sin(rad);
+    const ca = M_cos(rad), sa = M_sin(rad);
     const tmp1 = centerY * sa - centerX * ca, tmp2 = -centerX * sa - centerY * ca;
     const xlimit = W - 1.0, xlimit2 = W - 1.001, ylimit = H - 1.0, ylimit2 = H - 1.001;
     for (let y = by; y < by + bh; y++) {
@@ -188,7 +190,7 @@
             if (ys >= ylimit) ys = ylimit2;
             out[o] = isF ? bilF(src, W, xs, ys) : bilI(src, W, xs, ys) + 0.5;
           } else {
-            let ixs = Math.trunc(xs + 0.5), iys = Math.trunc(ys + 0.5);
+            let ixs = M_trunc(xs + 0.5), iys = M_trunc(ys + 0.5);
             if (ixs >= W) ixs = W - 1;
             if (iys >= H) iys = H - 1;
             out[o] = src[W * iys + ixs];
@@ -202,13 +204,13 @@
   /* Rotator.enlargeCanvas():
    *   IJ.run(imp, "Select All", ""); IJ.run(imp, "Rotate...", "angle="+angle);    → RoiRotator.rotate(Roi(0,0,w,h), angle)
    *   Rectangle2D.Double fb = roi.getFloatBounds();
-   *   Rectangle r = new Rectangle((int)Math.round(fb.x),(int)Math.round(fb.y),(int)Math.round(fb.width),(int)Math.round(fb.height));
+   *   Rectangle r = new Rectangle((int)M_round(fb.x),(int)M_round(fb.y),(int)M_round(fb.width),(int)M_round(fb.height));
    *   if (r.width<imp.getWidth()) r.width = imp.getWidth();
    *   if (r.height<imp.getHeight()) r.height = imp.getHeight();
    *   IJ.run(imp, "Canvas Size...", "width="+r.width+" height="+r.height+" position=Center zero");
    * RoiRotator.rotate(roi, angle, xcenter, ycenter): theta = -angle*Math.PI/180.0; per corner of the (float) polygon
-   *   dx = x-xcenter; dy = ycenter-y; radius = Math.sqrt(dx*dx+dy*dy); a = Math.atan2(dy, dx);
-   *   x' = (float)(xcenter+radius*Math.cos(a+theta)); y' = (float)(ycenter-radius*Math.sin(a+theta));
+   *   dx = x-xcenter; dy = ycenter-y; radius = M_sqrt(dx*dx+dy*dy); a = M_atan2(dy, dx);
+   *   x' = (float)(xcenter+radius*M_cos(a+theta)); y' = (float)(ycenter-radius*M_sin(a+theta));
    * the rotation centre of a Roi is the middle of its bounds; FloatPolygon.getFloatBounds is
    * (minX, minY, maxX-minX, maxY-minY) in float. */
   function enlargedSize(W, H, angle) {
@@ -218,20 +220,20 @@
     let minX = FLT_MAX, minY = FLT_MAX, maxX = 1.401298464324817e-45, maxY = 1.401298464324817e-45;
     for (const c of corners) {
       const dx = c[0] - xc, dy = yc - c[1];
-      const radius = Math.sqrt(dx * dx + dy * dy);
-      const a = Math.atan2(dy, dx);
-      const x = Math.fround(xc + radius * Math.cos(a + theta));
-      const y = Math.fround(yc - radius * Math.sin(a + theta));
+      const radius = M_sqrt(dx * dx + dy * dy);
+      const a = M_atan2(dy, dx);
+      const x = M_fround(xc + radius * M_cos(a + theta));
+      const y = M_fround(yc - radius * M_sin(a + theta));
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
-    // (int)Math.round(double) = floor(x + 0.5)
-    let w = Math.floor(Math.fround(maxX - minX) + 0.5), h = Math.floor(Math.fround(maxY - minY) + 0.5);
+    // (int)M_round(double) = floor(x + 0.5)
+    let w = M_floor(M_fround(maxX - minX) + 0.5), h = M_floor(M_fround(maxY - minY) + 0.5);
     if (w < W) w = W;
     if (h < H) h = H;
-    return { w, h, xOff: Math.trunc((w - W) / 2), yOff: Math.trunc((h - H) / 2) };
+    return { w, h, xOff: M_trunc((w - W) / 2), yOff: M_trunc((h - H) / 2) };
   }
 
   // ─────────────────────────── Scale in place ───────────────────────────
@@ -259,13 +261,13 @@
     const xCenter = rr.x + rr.w / 2.0, yCenter = rr.y + rr.h / 2.0;
     let xmin, xmax, ymin, ymax;
     if (xScale > 1.0 && yScale > 1.0) {
-      xmin = Math.trunc(xCenter - (xCenter - rr.x) * xScale);
+      xmin = M_trunc(xCenter - (xCenter - rr.x) * xScale);
       if (xmin < 0) xmin = 0;
-      xmax = xmin + Math.trunc(rr.w * xScale) - 1;
+      xmax = xmin + M_trunc(rr.w * xScale) - 1;
       if (xmax >= W) xmax = W - 1;
-      ymin = Math.trunc(yCenter - (yCenter - rr.y) * yScale);
+      ymin = M_trunc(yCenter - (yCenter - rr.y) * yScale);
       if (ymin < 0) ymin = 0;
-      ymax = ymin + Math.trunc(rr.h * yScale) - 1;
+      ymax = ymin + M_trunc(rr.h * yScale) - 1;
       if (ymax >= H) ymax = H - 1;
     } else {
       xmin = rr.x; xmax = rr.x + rr.w - 1; ymin = rr.y; ymax = rr.y + rr.h - 1;
@@ -288,10 +290,10 @@
       let ys = (y - g.yCenter) / yScale + g.yCenter;
       let ysi = 0, index2 = 0;
       if (method !== BICUBIC) {
-        ysi = Math.trunc(ys);
+        ysi = M_trunc(ys);
         if (ys < 0.0) ys = 0.0;
         if (ys >= ylimit) ys = ylimit2;
-        index2 = W * Math.trunc(ys);
+        index2 = W * M_trunc(ys);
       }
       for (let x = bx; x < bx + bw; x++) {
         const o = o0 + (x - bx);
@@ -302,7 +304,7 @@
           const q = RES[0];
           out[o] = isF ? q : bicubicInt(q, maxV);
         } else {
-          const xsi = Math.trunc(xs);
+          const xsi = M_trunc(xs);
           if (checkCoordinates && (xsi < g.xmin || xsi > g.xmax || ysi < g.ymin || ysi > g.ymax)) out[o] = fill;
           else if (method === BILINEAR) {
             if (xs < 0.0) xs = 0.0;
@@ -319,9 +321,9 @@
   function scaleFill(bd, displayMin) {
     const m = isNum(displayMin) ? displayMin : 0;
     if (bd === 8) return 0;
-    // ShortProcessor.setMinAndMax: `min = (int)Math.round(minimum)`, then fill = (short)getMin(): the ROUNDED minimum, a negative one as its 16-bit pattern
-    if (bd === 16) return Math.floor(m + 0.5) & 0xFFFF;
-    return Math.fround(m);
+    // ShortProcessor.setMinAndMax: `min = (int)M_round(minimum)`, then fill = (short)getMin(): the ROUNDED minimum, a negative one as its 16-bit pattern
+    if (bd === 16) return M_floor(m + 0.5) & 0xFFFF;
+    return M_fround(m);
   }
 
   // ─────────────────────────── Translate ───────────────────────────
@@ -332,13 +334,13 @@
    *   if (integerOffsets || interpolationMethod==NONE) putPixel(x, y, ip2.getPixel(x-(int)xOffset, y-(int)yOffset));
    *   else putPixel(x, y, ip2.getPixelInterpolated(x-xOffset, y-yOffset));
    * getPixel is 0 outside the image; getPixelInterpolated (Byte/Short):
-   *   BILINEAR: if (x<0.0 || y<0.0 || x>=width-1 || y>=height-1) return 0; else (int)Math.round(getInterpolatedPixel(x, y, pixels))
+   *   BILINEAR: if (x<0.0 || y<0.0 || x>=width-1 || y>=height-1) return 0; else (int)M_round(getInterpolatedPixel(x, y, pixels))
    *   BICUBIC:  (int)(getBicubicInterpolatedPixel(x, y, this)+0.5) clamped to the type;  Float: (float) of the value
    * (the last row and column of a bilinear translation therefore become 0). */
   function translateBand(src, W, H, bd, dx, dy, method, bx, by, bw, bh) {
     const out = new src.constructor(bw * bh);
     const isF = bd === 32, maxV = bd === 8 ? 255 : 65535;
-    const tdx = Math.trunc(dx), tdy = Math.trunc(dy);
+    const tdx = M_trunc(dx), tdy = M_trunc(dy);
     const integerOffsets = dx === tdx && dy === tdy;
     if (integerOffsets || method === NONE) {
       for (let y = by; y < by + bh; y++) {
@@ -364,7 +366,7 @@
           const xb = xx | 0, xf = xx - xb, i = row + xb;
           const ll = src[i], lr = src[i + 1], ur = src[i + W + 1], ul = src[i + W];
           const ua = ul + xf * (ur - ul), la = ll + xf * (lr - ll);
-          out[o] = Math.floor(la + yf * (ua - la) + 0.5);   // (int)Math.round(...)
+          out[o] = M_floor(la + yf * (ua - la) + 0.5);   // (int)M_round(...)
         }
       }
     } else {
@@ -404,7 +406,7 @@
     for (let i = 0; i < width1; i++) data1[i] = rotate ? src[i * W] : src[i];
     const data2 = new Float32Array(width2);
     const scale = (width1 - 1) / (width2 - 1);
-    const d2i = (v) => (v !== v ? 0 : Math.trunc(v));
+    const d2i = (v) => (v !== v ? 0 : M_trunc(v));
     for (let x = 0; x < width2; x++) {
       const x1 = d2i(x * scale);
       let x2 = x1 + 1;
@@ -415,7 +417,7 @@
     const maxV = bd === 8 ? 255 : 65535;
     const conv = (v) => {
       if (bd === 32) return v;
-      let t = Math.fround(v + 0.5);
+      let t = M_fround(v + 0.5);
       if (t < 0) t = 0;
       if (t > maxV) t = maxV;
       return t;
@@ -456,7 +458,7 @@
         if (ys < 0.0) ys = 0.0;
         if (ys >= ylimit) ys = ylimit2;
       }
-      const index1 = W * Math.trunc(ys);
+      const index1 = W * M_trunc(ys);
       let o = y * dstW;
       for (let x = 0; x < dstW; x++, o++) {
         let xs = (x - dstCenterX) / xScale + srcCenterX;
@@ -468,7 +470,7 @@
           if (xs < 0.0) xs = 0.0;
           if (xs >= xlimit) xs = xlimit2;
           out[o] = isF ? bilF(src, W, xs, ys) : bilI(src, W, xs, ys) + 0.5;
-        } else out[o] = src[index1 + Math.trunc(xs)];
+        } else out[o] = src[index1 + M_trunc(xs)];
       }
       acc += dstW;
       if (hook && acc >= TICK_PIXELS) { acc = 0; await hook((y + 1) / dstH); }
@@ -477,7 +479,7 @@
   }
 
   /* ij.process.DownsizeTable (1.54p, Michael Schmid): the convolution table of a 1-D downsizing. Left edges of the first
-   * pixel coincide; kernel: NONE 1f, BILINEAR 1f - (float)Math.abs(x), BICUBIC (float)ImageProcessor.cubic(x); kernel
+   * pixel coincide; kernel: NONE 1f, BILINEAR 1f - (float)M_abs(x), BICUBIC (float)ImageProcessor.cubic(x); kernel
    * sizes 1 / 2 / 4; out-of-bounds sources count as the edge pixel; the weights of a destination pixel are normalised
    * ((float)(weights[i]/sum)); unused entries point to destination 0 with weight 0. */
   function downsizeTable(srcSize, srcOrigin, srcLength, dstSize, method) {
@@ -485,18 +487,18 @@
     const kernelSize = method === NONE ? 1 : method === BILINEAR ? 2 : 4;
     const srcIndex = (di) => srcOrigin - 0.5 + (di + 0.5) * scale;
     const dstIndex = (si) => (si - srcOrigin + 0.5) / scale - 0.5;
-    const kernel = (x) => (method === NONE ? 1 : method === BILINEAR ? Math.fround(1 - Math.fround(Math.abs(x))) : Math.fround(cubic(x)));
-    const srcStartUncorr = Math.ceil(1e-8 + srcIndex(-0.5 * kernelSize));
+    const kernel = (x) => (method === NONE ? 1 : method === BILINEAR ? M_fround(1 - M_fround(M_abs(x))) : M_fround(cubic(x)));
+    const srcStartUncorr = M_ceil(1e-8 + srcIndex(-0.5 * kernelSize));
     const srcStart = srcStartUncorr < 0 ? 0 : srcStartUncorr;
-    const srcEndUncorr = Math.floor(1e-8 + srcIndex(dstSize - 1 + 0.5 * kernelSize));
+    const srcEndUncorr = M_floor(1e-8 + srcIndex(dstSize - 1 + 0.5 * kernelSize));
     const srcEnd = srcEndUncorr >= srcSize ? srcSize - 1 : srcEndUncorr;
     const arraySize = (srcEnd - srcStart + 1) * kernelSize;
     const indices = new Int32Array(arraySize).fill(-1);
     const weights = new Float32Array(arraySize);
     for (let dst = 0; dst < dstSize; dst++) {
       let sum = 0;
-      const lowestS = Math.ceil(1e-8 + srcIndex(dst - 0.5 * kernelSize));
-      const highestS = Math.floor(-1e-8 + srcIndex(dst + 0.5 * kernelSize));
+      const lowestS = M_ceil(1e-8 + srcIndex(dst - 0.5 * kernelSize));
+      const highestS = M_floor(-1e-8 + srcIndex(dst + 0.5 * kernelSize));
       for (let src = lowestS; src <= highestS; src++) {
         const s = src < 0 ? 0 : (src >= srcSize ? srcSize - 1 : src);
         let p = (s - srcStart) * kernelSize;
@@ -527,8 +529,23 @@
     const dt = xDirection ? downsizeTable(W, roi.x, roi.w, dstW, method) : downsizeTable(H, roi.y, roi.h, dstH, method);
     const out = new Float32Array(dstW * dstH);
     const indices = dt.indices, weights = dt.weights, ks = dt.kernelSize, srcStart = dt.srcStart, srcEnd = dt.srcEnd;
-    const per = Math.max(1, srcEnd - srcStart + 1) * ks;
+    const per = M_max(1, srcEnd - srcStart + 1) * ks;
     let acc = 0;
+    if (!xDirection) {
+      // Column pass, row-major: each output pixel still receives its contributions in the same order (source rows
+      // ascending, table entries in order), so every float sum is bit-identical to the column-by-column loop, but the
+      // reads and writes are sequential instead of a stride of W.
+      for (let srcPoint = srcStart, tp = 0; srcPoint <= srcEnd; srcPoint++) {
+        const rowBase = srcPoint * W + srcLine0;
+        for (let i = 0; i < ks; i++, tp++) {
+          const wgt = weights[tp], ob = indices[tp] * dstW;
+          for (let x = 0; x < dstW; x++) out[ob + x] = out[ob + x] + M_fround(pix[rowBase + x] * wgt);
+        }
+        acc += dstW * ks;
+        if (hook && acc >= TICK_PIXELS) { acc = 0; await hook(h0 + (h1 - h0) * ((srcPoint - srcStart + 1) / (srcEnd - srcStart + 1))); }
+      }
+      return out;
+    }
     for (let srcLine = srcLine0, dstLine = 0; dstLine < dstLines; srcLine++, dstLine++) {
       const dstLineOffset = dstLine * dstLineInc;
       let tp = 0;
@@ -536,7 +553,7 @@
         const v = pix[p];
         for (let i = 0; i < ks; i++, tp++) {
           const idx = dstLineOffset + indices[tp] * dstPointInc;
-          out[idx] = out[idx] + Math.fround(v * weights[tp]);   // pixels2[...] += v * dt.weights[tablePointer] (float · float, float + float)
+          out[idx] = out[idx] + M_fround(v * weights[tp]);   // pixels2[...] += v * dt.weights[tablePointer] (float · float, float + float)
         }
       }
       acc += per;
@@ -551,7 +568,7 @@
     const maxV = bd === 8 ? 255 : 65535;
     const out = bd === 8 ? new Uint8Array(fp.length) : new Uint16Array(fp.length);
     for (let i = 0; i < fp.length; i++) {
-      let v = Math.fround(fp[i] + 0.5);
+      let v = M_fround(fp[i] + 0.5);
       if (v < 0) v = 0;
       if (v > maxV) v = maxV;
       out[i] = v;
@@ -604,47 +621,96 @@
    *     SMALLEST of the four, and a value <= 0 is never found by `pixel>max` (max starts at 0f).
    * `inv` (an inverting LUT): Binner.shrink(ImagePlus): if (ip.isInvertedLut()) ip.invert(); ip2 = shrink(ip, method);
    * if (ip.isInvertedLut()) ip2.invert();  — see invertPixels. */
+  /* Fast paths of binImage, one monomorphic loop per method (a single loop testing the method per block ran at ~1.5 us
+   * per output in V8: the polymorphic body never optimised). Each fills output rows y0..y1 and gives the same values:
+   *   average / sum of an integer image: the float running sum of getAverage/getSum is EXACT while n * maxValue <= 2^24
+   *   (every partial sum is an integer of at most 2^24, which float32 holds exactly), so an integer sum equals the Math.fround chain; otherwise (32-bit, big
+   *   blocks) the float chain is kept. The result is stored through ip2.setf: (value + 0.5f) for Byte / Short. */
+  function binRowsSum(src, W, out, w, xs, ys, n, y0, y1, isAvg, exact, maxValue, isF, col) {
+    if (exact) {
+      // Streaming form of the exact integer sum: the ys source rows of an output row are added into one line of column
+      // sums (sequential reads), then xs neighbours of that line make a block sum. Integer adds, same value.
+      for (let y = y0; y < y1; y++) {
+        const r0 = y * ys * W;
+        const lim = w * xs;
+        for (let x = 0; x < lim; x++) col[x] = src[r0 + x];
+        for (let y2 = 1; y2 < ys; y2++) { const r = r0 + y2 * W; for (let x = 0; x < lim; x++) col[x] += src[r + x]; }
+        let o = y * w;
+        for (let x = 0, c = 0; x < w; x++, o++) {
+          let sum = 0;
+          for (let x2 = 0; x2 < xs; x2++) sum += col[c++];
+          let v;
+          if (isAvg) v = M_fround(sum / n);
+          else { if (maxValue > 0 && sum > maxValue) sum = maxValue; v = sum; }
+          out[o] = M_fround(v + 0.5);
+        }
+      }
+      return;
+    }
+    for (let y = y0; y < y1; y++) {
+      const base0 = y * ys * W;
+      let o = y * w;
+      for (let x = 0; x < w; x++, o++) {
+        const base = base0 + x * xs;
+        let sum = 0;
+        for (let y2 = 0, r = base; y2 < ys; y2++, r += W) for (let x2 = 0; x2 < xs; x2++) sum = M_fround(sum + src[r + x2]);
+        let v;
+        if (isAvg) v = M_fround(sum / n);
+        else { if (maxValue > 0 && sum > maxValue) sum = maxValue; v = sum; }
+        out[o] = isF ? v : M_fround(v + 0.5);
+      }
+    }
+  }
+  function binRowsMinMax(src, W, out, w, xs, ys, y0, y1, isMin, isF) {
+    for (let y = y0; y < y1; y++) {
+      const base0 = y * ys * W;
+      let o = y * w;
+      for (let x = 0; x < w; x++, o++) {
+        const base = base0 + x * xs;
+        let v = isMin ? FLT_MAX : -FLT_MAX;
+        if (isMin) { for (let y2 = 0, r = base; y2 < ys; y2++, r += W) for (let x2 = 0; x2 < xs; x2++) { const q = src[r + x2]; if (q < v) v = q; } }
+        else { for (let y2 = 0, r = base; y2 < ys; y2++, r += W) for (let x2 = 0; x2 < xs; x2++) { const q = src[r + x2]; if (q > v) v = q; } }
+        out[o] = isF ? v : M_fround(v + 0.5);
+      }
+    }
+  }
+  function binRowsMedian(src, W, out, w, xs, ys, n, px, y0, y1, isF) {
+    const half = n >> 1;
+    for (let y = y0; y < y1; y++) {
+      let o = y * w;
+      for (let x = 0; x < w; x++, o++) {
+        const base = y * ys * W + x * xs;
+        let p = 0;
+        for (let y2 = 0; y2 < ys; y2++) { const r = base + y2 * W; for (let x2 = 0; x2 < xs; x2++) px[p++] = src[r + x2]; }
+        for (let i = 0; i <= half; i++) {
+          let max = 0, mj = 0;
+          for (let j = 0; j < n; j++) if (px[j] > max) { max = px[j]; mj = j; }
+          px[mj] = 0;
+        }
+        let max = -FLT_MAX;
+        for (let j = 0; j < n; j++) if (px[j] > max) max = px[j];
+        out[o] = isF ? max : M_fround(max + 0.5);
+      }
+    }
+  }
+
   async function binImage(src, W, H, bd, xs, ys, method, hook) {
-    const w = Math.floor(W / xs), h = Math.floor(H / ys);
+    const w = M_floor(W / xs), h = M_floor(H / ys);
     const out = new src.constructor(w * h);
     const maxValue = method === 'sum' ? (bd === 8 ? 255 : bd === 16 ? 65535 : 0) : 0;
     const n = xs * ys;
     const px = new Float32Array(n);
-    const half = n >> 1;
-    const isAvg = method === 'average', isSum = method === 'sum', isMin = method === 'min', isMax = method === 'max';
     const isF = bd === 32;
-    let acc = 0;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const base = y * ys * W + x * xs;
-        let v;
-        if (isAvg || isSum) {
-          let sum = 0;
-          for (let y2 = 0; y2 < ys; y2++) { const r = base + y2 * W; for (let x2 = 0; x2 < xs; x2++) sum = Math.fround(sum + src[r + x2]); }
-          if (isAvg) v = Math.fround(sum / n);
-          else { if (maxValue > 0 && sum > maxValue) sum = maxValue; v = sum; }
-        } else if (isMin) {
-          v = FLT_MAX;
-          for (let y2 = 0; y2 < ys; y2++) { const r = base + y2 * W; for (let x2 = 0; x2 < xs; x2++) { const q = src[r + x2]; if (q < v) v = q; } }
-        } else if (isMax) {
-          v = -FLT_MAX;
-          for (let y2 = 0; y2 < ys; y2++) { const r = base + y2 * W; for (let x2 = 0; x2 < xs; x2++) { const q = src[r + x2]; if (q > v) v = q; } }
-        } else { // median
-          let p = 0;
-          for (let y2 = 0; y2 < ys; y2++) { const r = base + y2 * W; for (let x2 = 0; x2 < xs; x2++) px[p++] = src[r + x2]; }
-          for (let i = 0; i <= half; i++) {
-            let max = 0, mj = 0;
-            for (let j = 0; j < n; j++) if (px[j] > max) { max = px[j]; mj = j; }
-            px[mj] = 0;
-          }
-          let max = -FLT_MAX;
-          for (let j = 0; j < n; j++) if (px[j] > max) max = px[j];
-          v = max;
-        }
-        out[y * w + x] = isF ? v : Math.fround(v + 0.5);
-      }
-      acc += w * n;
-      if (hook && acc >= TICK_PIXELS) { acc = 0; await hook((y + 1) / h); }
+    const col = new Int32Array(w * xs); // one line of column sums, reused by every slice (binRowsSum, exact path)
+    const exact = !isF && n * (bd === 8 ? 255 : 65535) <= 16777216;
+    // rows per slice so a progress / cancel check comes at least every ~TICK_PIXELS source pixels
+    const rowsPer = M_max(1, M_floor(TICK_PIXELS / M_max(1, w * n)));
+    for (let y0 = 0; y0 < h; y0 += rowsPer) {
+      const y1 = M_min(h, y0 + rowsPer);
+      if (method === 'average' || method === 'sum') binRowsSum(src, W, out, w, xs, ys, n, y0, y1, method === 'average', exact, maxValue, isF, col);
+      else if (method === 'min' || method === 'max') binRowsMinMax(src, W, out, w, xs, ys, y0, y1, method === 'min', isF);
+      else binRowsMedian(src, W, out, w, xs, ys, n, px, y0, y1, isF);
+      if (hook) await hook(y1 / h);
     }
     return { w, h, data: out };
   }
@@ -657,7 +723,7 @@
     if (bd === 8) { for (let i = 0; i < data.length; i++) out[i] = 255 - data[i]; return out; }
     for (let i = 0; i < data.length; i++) {
       // FloatProcessor.process(INVERT): float min2/max2 and float arithmetic (`v2 = max2 - (v1 - min2)`)
-      let v = bd === 32 ? Math.fround(Math.fround(mx) - Math.fround(data[i] - Math.fround(mn))) : mx - (data[i] - mn);
+      let v = bd === 32 ? M_fround(M_fround(mx) - M_fround(data[i] - M_fround(mn))) : mx - (data[i] - mn);
       if (bd === 16) { if (v < 0) v = 0; if (v > 65535) v = 65535; out[i] = v + 0.5; } else out[i] = v;
     }
     return out;
@@ -674,7 +740,7 @@
   /* CanvasResizer.run:  xC = (wNew - wOld)/2; xR = (wNew - wOld); yC = (hNew - hOld)/2; yB = (hNew - hOld);   (int division)
    *   TL (0,0)  TC (xC,0)  TR (xR,0)  CL (0,yC)  C (xC,yC)  CR (xR,yC)  BL (0,yB)  BC (xC,yB)  BR (xR,yB) */
   function canvasOffsets(wOld, hOld, wNew, hNew, position) {
-    const xC = Math.trunc((wNew - wOld) / 2), xR = wNew - wOld, yC = Math.trunc((hNew - hOld) / 2), yB = hNew - hOld;
+    const xC = M_trunc((wNew - wOld) / 2), xR = wNew - wOld, yC = M_trunc((hNew - hOld) / 2), yB = hNew - hOld;
     const i = POSITIONS.indexOf(position);
     switch (i) {
       case 0: return { x: 0, y: 0 };
@@ -691,7 +757,7 @@
   // CanvasResizer.expandImage: createProcessor(wNew, hNew); fill 0 (zero fill); insert(ipOld, xOff, yOff) — clipped to the new canvas.
   function canvasChannel(src, W, H, wNew, hNew, xOff, yOff) {
     const out = new src.constructor(wNew * hNew);
-    const x0 = Math.max(0, xOff), x1 = Math.min(wNew, xOff + W), y0 = Math.max(0, yOff), y1 = Math.min(hNew, yOff + H);
+    const x0 = M_max(0, xOff), x1 = M_min(wNew, xOff + W), y0 = M_max(0, yOff), y1 = M_min(hNew, yOff + H);
     if (x1 <= x0 || y1 <= y0) return out;
     for (let y = y0; y < y1; y++) {
       const so = (y - yOff) * W + (x0 - xOff);
@@ -742,9 +808,9 @@
   function levelRect(rect, W0, H0, sc, W, H) {
     if (!rect) return { x: 0, y: 0, w: W, h: H };
     if (sc === 1 && W === W0 && H === H0) return rect;
-    const x0 = Math.max(0, Math.floor(rect.x / sc)), y0 = Math.max(0, Math.floor(rect.y / sc));
-    const x1 = Math.min(W, Math.ceil((rect.x + rect.w) / sc)), y1 = Math.min(H, Math.ceil((rect.y + rect.h) / sc));
-    return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+    const x0 = M_max(0, M_floor(rect.x / sc)), y0 = M_max(0, M_floor(rect.y / sc));
+    const x1 = M_min(W, M_ceil((rect.x + rect.w) / sc)), y1 = M_min(H, M_ceil((rect.y + rect.h) / sc));
+    return { x: x0, y: y0, w: M_max(1, x1 - x0), h: M_max(1, y1 - y0) };
   }
   // The area selection a size / newdoc op works on: its bounds clipped to the image (a line / point selection = the image).
   function areaRect(roi, W, H) {
@@ -752,7 +818,7 @@
     root.IJRoi.validate(roi);
     if (!root.IJRoi.isArea(roi)) return { x: 0, y: 0, w: W, h: H };
     const b = root.IJRoi.bounds(roi);
-    const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y), x1 = Math.min(W, b.x + b.w), y1 = Math.min(H, b.y + b.h);
+    const x0 = M_max(0, b.x), y0 = M_max(0, b.y), x1 = M_min(W, b.x + b.w), y1 = M_min(H, b.y + b.h);
     if (!(x1 > x0) || !(y1 > y0)) throw fail('IJ_EMPTY_ROI', 'the selection is outside the image');
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
@@ -765,7 +831,7 @@
   R.define('rotate', {
     kind: 'pixel', version: 1, roi: 'mask', preview: 'reduced',
     validate(p, info) {
-      if (!isNum(p.angle) || Math.abs(p.angle) > 36000) throw bad('angle');
+      if (!isNum(p.angle) || M_abs(p.angle) > 36000) throw bad('angle');
       methodOf(p);
       if (p.rect !== undefined && p.rect !== null) checkRect(p.rect, info.width, info.height, 'rotate');
     },
@@ -783,7 +849,7 @@
   R.define('rotateEnlarge', {
     kind: 'size', version: 1,
     validate(p) {
-      if (!isNum(p.angle) || Math.abs(p.angle) > 36000) throw bad('angle');
+      if (!isNum(p.angle) || M_abs(p.angle) > 36000) throw bad('angle');
       methodOf(p);
     },
     scratchBytes(info, p) {
@@ -798,7 +864,7 @@
       const e = enlargedSize(W, H, p.angle);
       io.reserve(e.w * e.h * bppOf(bd) * (view.channels.length + 1));
       const n = view.channels.length;
-      const rows = Math.max(1, Math.floor(TICK_PIXELS / e.w));
+      const rows = M_max(1, M_floor(TICK_PIXELS / e.w));
       const rr = { x: 0, y: 0, w: e.w, h: e.h };
       const channels = [];
       for (let i = 0; i < n; i++) {
@@ -806,7 +872,7 @@
         const canvas = canvasChannel(ch.data, W, H, e.w, e.h, e.xOff, e.yOff);
         const out = new canvas.constructor(e.w * e.h);
         for (let y = 0; y < e.h; y += rows) {
-          const bh = Math.min(rows, e.h - y);
+          const bh = M_min(rows, e.h - y);
           out.set(rotateBand(canvas, e.w, e.h, bd, rr, p.angle, method, 0, y, e.w, bh), y * e.w);
           await io.tick((i + (y + bh) / e.h) / n, 'op.rotateEnlarge');
         }
@@ -846,14 +912,14 @@
   R.define('translate', {
     kind: 'pixel', version: 1, roi: 'bounds', preview: 'reduced',
     validate(p) {
-      if (!isNum(p.dx) || !isNum(p.dy) || Math.abs(p.dx) > 1e6 || Math.abs(p.dy) > 1e6) throw bad('offset');
+      if (!isNum(p.dx) || !isNum(p.dy) || M_abs(p.dx) > 1e6 || M_abs(p.dy) > 1e6) throw bad('offset');
       methodOf(p);
     },
     prepare(view, c, p, ctx) {
       const method = methodOf(p), bd = view.bitDepth, sc = (ctx && ctx.scale) || 1;
       const dx = p.dx / sc, dy = p.dy / sc;
       return {
-        apron: { x: Math.min(view.width, Math.ceil(Math.abs(dx)) + 3), y: Math.min(view.height, Math.ceil(Math.abs(dy)) + 3) },
+        apron: { x: M_min(view.width, M_ceil(M_abs(dx)) + 3), y: M_min(view.height, M_ceil(M_abs(dy)) + 3) },
         region: (full, rect) => translateBand(full.data, full.width, full.height, bd, dx, dy, method, rect.x, rect.y, rect.w, rect.h)
       };
     }
@@ -973,12 +1039,12 @@
     validate(p, info) {
       if (!isInt(p.xshrink) || !isInt(p.yshrink) || p.xshrink < 1 || p.yshrink < 1) throw bad('shrink factor');
       if (BIN_METHODS.indexOf(p.method) < 0) throw bad('bin method');
-      if (info && (Math.floor(info.width / p.xshrink) < 1 || Math.floor(info.height / p.yshrink) < 1)) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the image');
+      if (info && (M_floor(info.width / p.xshrink) < 1 || M_floor(info.height / p.yshrink) < 1)) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the image');
     },
-    scratchBytes: (info, p) => info.channels * Math.floor(info.width / p.xshrink) * Math.floor(info.height / p.yshrink) * bppOf(info.bitDepth) + info.width * info.height * bppOf(info.bitDepth),
+    scratchBytes: (info, p) => info.channels * M_floor(info.width / p.xshrink) * M_floor(info.height / p.yshrink) * bppOf(info.bitDepth) + info.width * info.height * bppOf(info.bitDepth),
     async run(view, p, roi, io) {
       const W = view.width, H = view.height, bd = view.bitDepth, n = view.channels.length;
-      const w = Math.floor(W / p.xshrink), h = Math.floor(H / p.yshrink);
+      const w = M_floor(W / p.xshrink), h = M_floor(H / p.yshrink);
       if (w < 1 || h < 1) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the image');
       io.reserve(n * w * h * bppOf(bd) + W * H * bppOf(bd));
       const channels = [];
@@ -998,7 +1064,7 @@
         }
         let display = displayOf(ch);
         // Binner.shrink: if (method==SUM && imp2.getBitDepth()>8) ip.setMinAndMax(ip.getMin(), ip.getMax()*xshrink*yshrink*zshrink);
-        if (p.method === 'sum' && bd > 8 && display) display.max = bd === 16 ? Math.min(65535, d.max * p.xshrink * p.yshrink) : d.max * p.xshrink * p.yshrink;
+        if (p.method === 'sum' && bd > 8 && display) display.max = bd === 16 ? M_min(65535, d.max * p.xshrink * p.yshrink) : d.max * p.xshrink * p.yshrink;
         channels.push({ data, name: ch.name, color: ch.color, display });
         await io.tick((i + 1) / n, 'op.bin');
       }

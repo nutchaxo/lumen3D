@@ -3,8 +3,8 @@
 //
 //   node --max-old-space-size=4096 tools/bench_ij_wave2.mjs [--size 5735] [--only 8|16] [--ops regex]
 //
-// It runs the REAL worker code (ij-core, ij-analysis, ij-proc-shared, ij-engine and every ij-proc-<pkg>.js) in a
-// vm context that stands in for the Web Worker, drives the engine through its own request protocol
+// It runs the REAL worker code (ij-core, ij-analysis, ij-proc-shared, ij-engine and every ij-proc-<pkg>.js) inside a
+// worker_threads Worker that stands in for the Web Worker (own global scope, no vm context), drives the engine through its own request protocol
 // ({ id, cmd, args } -> { id, ok, result }) and times each request wall-clock, selection-free, one channel at a time
 // (the "per channel" figure of PLAN-wave2 §5). Each step is undone (or its new images closed) before the next, so every
 // operation starts from the same pixels. The engine runs with its production settings (adaptive bands, undo kept).
@@ -19,6 +19,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
+
+// A real Web Worker looks names up in an ordinary global scope. Under vm.runInContext every `Math.*` / global lookup
+// goes through the interceptor-backed global of the context, which inflates some timings 10-30x. So the whole bench
+// (engine, request protocol, timing) runs in a worker_threads Worker, the scripts evaluated in that worker's own
+// global with vm.runInThisContext; the main thread only launches the workers and prints the table.
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIR = path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio');
@@ -35,8 +41,9 @@ const read = (f) => fs.readFileSync(path.join(DIR, f), 'utf8');
 function startEngine() {
   const events = [];
   const pending = new Map();
-  const w = { console, setTimeout, clearTimeout, MessageChannel, performance, TextEncoder, TextDecoder, Blob, queueMicrotask, navigator: {} };
+  const w = globalThis;
   w.self = w;
+  if (!w.navigator) w.navigator = {};
   w.postMessage = (m) => {
     if (m && !m.event && m.id !== undefined && pending.has(m.id)) {
       if (!m.ok && process.env.BENCH_DEBUG) console.error(JSON.stringify(m).slice(0, 400));
@@ -45,9 +52,9 @@ function startEngine() {
       if (m.ok) p.resolve(m.result); else p.reject(Object.assign(new Error('engine ' + p.cmd + ': ' + (m.error && (m.error.code || m.error.message))), m.error || {}));
     } else if (m && m.event) events.push(m);
   };
-  vm.createContext(w);
-  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js']) vm.runInContext(read(f), w, { filename: f });
-  for (const p of PACKAGES) vm.runInContext(read(`ij-proc-${p}.js`), w, { filename: `ij-proc-${p}.js` });
+  const run = (f) => vm.runInThisContext(read(f), { filename: f });
+  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js']) run(f);
+  for (const p of PACKAGES) run(`ij-proc-${p}.js`);
   w.IJEngine.start(w, { storage: 'memory', budgetBytes: 12 * 1024 ** 3, idleMs: 3600000 });
   let seq = 0;
   const request = (cmd, args) => new Promise((resolve, reject) => {
@@ -169,6 +176,20 @@ function printTable() {
   console.log(lines.join('\n'));
 }
 
-for (const bd of [8, 16]) if (!ONLY || Number(ONLY) === bd) await benchDepth(bd);
-printTable();
-process.exit(0); // the engine's timers and message channels would keep the process alive
+if (isMainThread) {
+  for (const bd of [8, 16]) {
+    if (ONLY && Number(ONLY) !== bd) continue;
+    await new Promise((resolve) => {
+      const w = new Worker(fileURLToPath(import.meta.url), { argv: process.argv.slice(2), workerData: { depth: bd }, resourceLimits: { maxOldGenerationSizeMb: 12288, stackSizeMb: 8 } });
+      w.on('message', (rows) => { for (const [k, v] of rows) results.set(k, Object.assign(results.get(k) || {}, v)); });
+      w.on('error', (e) => { console.error(e); process.exitCode = 1; });
+      w.on('exit', resolve);
+    });
+  }
+  printTable();
+  process.exit(process.exitCode || 0);
+} else {
+  await benchDepth(workerData.depth);
+  parentPort.postMessage(Array.from(results));
+  setTimeout(() => process.exit(0), 50); // the engine's timers and message channels would keep the worker alive
+}

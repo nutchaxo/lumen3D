@@ -3,7 +3,7 @@
  * Runs on the page only, before IJApp.mount. Every call goes through the documented extension API (ij-app.js).
  *
  *   Process > Subtract Background…   BackgroundSubtracter.showDialog: Rolling ball radius [50, pixels], Light
- *        background [on: Prefs "bs.background" defaults to true], Create background (don't subtract), Sliding
+ *        background [off here, on in ImageJ (Prefs "bs.background"): see `last` below], Create background (don't subtract), Sliding
  *        paraboloid, Disable smoothing, Preview. "Separate colors" is for RGB images (not offered). A selection is
  *        ignored (the plugin has no SUPPORTS_MASKING flag).
  *   Process > Enhance Contrast…      ContrastEnhancer.showDialog: Saturated pixels [0.35 %], Normalize (not on a
@@ -20,7 +20,8 @@
   if (typeof IJApp === 'undefined' || typeof IJApp.extend !== 'function') return;
 
   const AREA = { rect: 1, oval: 1, polygon: 1, freehand: 1, mask: 1 };
-  const last = { radius: 50, light: true, create: false, sliding: false, noSmooth: false, saturated: 0.35, equalize: false };
+  // Deliberate departure from ImageJ (Prefs bs.background = true): this platform shows fluorescence, a dark background, and the default inverted such images.
+  const last = { radius: 50, light: false, create: false, sliding: false, noSmooth: false, saturated: 0.35, equalize: false };
 
   function codeError(code) { return Object.assign(new Error(code), { code }); }
 

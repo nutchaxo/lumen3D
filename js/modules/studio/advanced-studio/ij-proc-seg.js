@@ -33,6 +33,8 @@
   const R = root.IJOpRegistry;
   const S = root.IJShared;
   const fr = Math.fround;
+  const mtrunc = Math.trunc;
+  const mround = Math.round; // a local: a global lookup is slow in a sandboxed realm
 
   function fail(code, message) {
     const e = new Error(message || code);
@@ -222,7 +224,7 @@
             // "int iValue = (int)((fValue-globalMin)*vFactor); //32-bit int, linear function of float value" — float
             // subtraction, float product, then the saturating float→int cast.
             const f = fr(fr(fValue - globalMin) * vFactor);
-            let iValue = f >= 2147483647 ? 2147483647 : f <= -2147483648 ? -2147483648 : f !== f ? 0 : Math.trunc(f);
+            let iValue = f >= 2147483647 ? 2147483647 : f <= -2147483648 ? -2147483648 : f !== f ? 0 : mtrunc(f);
             keys[iMax] = (iValue ^ 0x80000000) >>> 0; // signed order == unsigned order of the biased key
             offs[iMax] = p;
             iMax++;
@@ -270,8 +272,8 @@
         let loBound = fr(v0 - tolF); // `v0-(float)tolerance`
         do { // "while neigbor list is not fully processed (to listLen)"
           const offset = pList[listI];
-          const x = offset % width;
           const y = (offset / width) | 0;
+          const x = offset - y * width;
           const isInner = (y !== 0 && y !== ymax) && (x !== 0 && x !== xmax);
           for (let d = 0; d < 8; d++) { // "analyze all neighbors (in 8 directions) at the same level"
             const offset2 = offset + dirOffset[d];
@@ -326,8 +328,8 @@
           let nearestI = 0;
           for (listI = 0; listI < listLen; listI++) {
             const offset = pList[listI];
-            const x = offset % width;
             const y = (offset / width) | 0;
+            const x = offset - y * width;
             types[offset] &= resetMask; // "reset attributes no longer needed"
             types[offset] |= PROCESSED; // "mark as processed"
             if (maxPossible) {
@@ -346,8 +348,8 @@
             types[offset] |= MAX_POINT;
             // `this.excludeOnEdges` is the dialog's static field: the same flag as the `excludeOnEdges` argument
             if (displayOrCount && !(excludeOnEdges && isEdgeMaximum)) {
-              const x = offset % width;
               const y = (offset / width) | 0;
+              const x = offset - y * width;
               if (!contains || contains(x, y)) {
                 if (nPoints + 2 > points.length) { const g = new Int32Array(points.length * 2); g.set(points); points = g; }
                 points[nPoints++] = x; points[nPoints++] = y;
@@ -367,7 +369,7 @@
        * slope). outIp has background 0, maximum areas 255" */
       outPixels = await make8bit(data, types, width, height, isEDM, globalMin, globalMax, threshold, sub(ctl, 0.65, 0.67));
       await cleanupMaxima(outPixels, types, maxOffs, pList, width, height, dirOffset, isWithin, sub(ctl, 0.67, 0.72));
-      const ok = await watershedSegment(outPixels, width, height, intEncodeXMask, intEncodeShift, dirOffset, isWithin, sub(ctl, 0.72, 0.95));
+      const ok = await watershedSegment(outPixels, width, height, intEncodeXMask, intEncodeShift, dirOffset, isWithin, sub(ctl, 0.72, 0.95), pList);
       if (!ok) return null;
       if (!isEDM) await cleanupExtraLines(outPixels, width, height, dirOffset, isWithin, sub(ctl, 0.95, 0.99)); // "eliminate lines due to local minima (none in EDM)"
       for (let i = 0; i < size; i++) if (outPixels[i] < 255) outPixels[i] = 0; // watershedPostProcess: "levels to binary image"
@@ -401,18 +403,23 @@
     if (isEDM && factor > 1) factor = 1; // "with EDM, no better resolution"
     const size = width * height;
     const pixels = new Uint8Array(size);
-    for (let i = 0; i < size; i++) {
-      if ((i & 0xfffff) === 0 && i) await tick(ctl, i / size);
-      const rawValue = data[i];
-      if (threshold !== NO_THRESHOLD && rawValue < threshold) pixels[i] = 0;
-      else if ((types[i] & MAX_AREA) !== 0) pixels[i] = 255; // "prepare watershed by setting "true" maxima+surroundings to 255"
-      else {
-        const r = Math.round((rawValue - offset) * factor); // Math.round(double): floor(x + 0.5), as JS (NaN → 0 as Java's long cast)
-        const v = 1 + (r !== r ? 0 : r);
-        if (v < 1) pixels[i] = 1;
-        else if (v <= 254) pixels[i] = v & 255;
-        else pixels[i] = 254;
+    const hasThreshold = threshold !== NO_THRESHOLD;
+    // the per-pixel loop lives in a plain function over a chunk (it optimises as one tight loop); the chunks tick between them
+    function chunk(from, to) {
+      for (let i = from; i < to; i++) {
+        const rawValue = data[i];
+        if (hasThreshold && rawValue < threshold) pixels[i] = 0;
+        else if ((types[i] & MAX_AREA) !== 0) pixels[i] = 255; // "prepare watershed by setting "true" maxima+surroundings to 255"
+        else {
+          const r = mround((rawValue - offset) * factor); // Math.round(double): floor(x + 0.5), as JS (NaN → 0 as Java's long cast)
+          const v = 1 + (r !== r ? 0 : r);
+          pixels[i] = v < 1 ? 1 : v <= 254 ? v : 254;
+        }
       }
+    }
+    for (let from = 0; from < size; from += 0x100000) {
+      if (from) await tick(ctl, from / size);
+      chunk(from, Math.min(size, from + 0x100000));
     }
     return pixels;
   }
@@ -440,8 +447,8 @@
         listI = 0; // "in each level, start analyzing the neighbors of all pixels"
         do { // "for all pixels listed so far"
           const offset = pList[listI];
-          const x = offset % width;
           const y = (offset / width) | 0;
+          const x = offset - y * width;
           const isInner = (y !== 0 && y !== height - 1) && (x !== 0 && x !== width - 1);
           for (let d = 0; d < 8; d++) {
             const offset2 = offset + dirOffset[d];
@@ -490,14 +497,26 @@
   }
 
   /* watershedSegment: "Do watershed segmentation on a byte image, with the start points (maxima) set to 255 and the
-   * background set to 0. ... On output, all particles will be set to 255, segmentation lines remain at their old value." */
-  async function watershedSegment(pixels, width, height, intEncodeXMask, intEncodeShift, dirOffset, isWithin, ctl) {
+   * background set to 0. ... On output, all particles will be set to 255, segmentation lines remain at their old value."
+   *
+   * Same result as ImageJ's loop (processLevel called once per direction pass, each pass scanning every pixel of the level
+   * that is still unset), but event driven. A pixel of the level changes in a pass iff fateTable[index] has the bit of the
+   * pass's direction, where `index` is its 8-neighbour occupation (neighbour === 255). Within a pass the changes are all
+   * decided on the pixels as they were before the pass (they are written afterwards), so a pass is a pure function of
+   * (index, direction) and the order of the list is irrelevant. We therefore keep `index` per pending pixel (`nb`), update
+   * it only when a neighbour turns 255 (at most 8 updates per pixel set), and keep one candidate list per direction bit: a
+   * pixel is pushed to the list of every bit its fate mask gains. A pass takes its list, drops entries that are no longer
+   * pending or no longer carry the bit, and sets the rest — exactly the set ImageJ's full scan finds, and the same count n,
+   * so the idle/remaining control flow below is ImageJ's, verbatim. The cost falls from (passes × level size) to
+   * (level size + 8 × pixels set). `scratch` (≥ 2·size bytes, free after cleanupMaxima) holds `nb` and the pending flags. */
+  const BIT_OF_OPPOSITE = [16, 32, 64, 128, 1, 2, 4, 8]; // the bit a pixel set in direction d is for the neighbour (index bit (d+4)%8)
+  async function watershedSegment(pixels, width, height, intEncodeXMask, intEncodeShift, dirOffset, isWithin, ctl, scratch) {
     const size = width * height;
     // "Create an array with the coordinates of all points between value 1 and 254"
     const histogram = new Int32Array(256);
     for (let i = 0; i < size; i++) histogram[pixels[i]]++;
     const arraySize = size - histogram[0] - histogram[255];
-    let coordinates = new Int32Array(arraySize); // "from pixel coordinates, low bits x, high bits y"
+    const coordinates = new Int32Array(arraySize); // "from pixel coordinates, low bits x, high bits y"
     let highestValue = 0;
     let maxBinSize = 0;
     let offset = 0;
@@ -519,30 +538,173 @@
         }
       }
     }
-    // "Create an array of the points (pixel offsets) that we set to 255 in one pass. If we remember this list we need not
-    // create a snapshot of the ImageProcessor." The Java array is min(maxBinSize, (w*h+2)/3) long; a level that received
-    // the border points of the one above can be longer, so this one grows.
-    const holder = { list: new Int32Array(Math.max(1, Math.min(maxBinSize, Math.floor((size + 2) / 3)))) };
-    // "now do the segmentation, starting at the highest level and working down. At each level, dilate the particle (set
-    // pixels to 255), constrained to pixels whose values are at that level and also constrained (by the fateTable) to
-    // prevent features from merging."
+    const nb = new Uint8Array(scratch.buffer, scratch.byteOffset, size); // neighbourhood index of a pending pixel (event mode)
+    const pend = new Uint8Array(scratch.buffer, scratch.byteOffset + size, size); // 1 pending in the level, 2 taken by the running pass
+    pend.fill(0);
+    const fate = Uint8Array.from(makeFateTable()); // "prevent features from merging"
     const table = makeFateTable();
     const directionSequence = [7, 3, 1, 5, 0, 4, 2, 6]; // "diagonal directions first"
-    const width1 = width;
+    const xmax = width - 1, ymax = height - 1;
+    const yMask = ~intEncodeXMask;
+    // ImageJ's own list of the pixels set in one pass (min(maxBinSize, (w*h+2)/3) ints; a level that took the border
+    // points of the one above can need more, so processLevel grows it).
+    const holder = { list: new Int32Array(Math.max(1, Math.min(maxBinSize, Math.floor((size + 2) / 3)))) };
+    if (ctl && ctl.reserve) ctl.reserve(4 * holder.list.length);
+    // Event mode memory: the direction lists and `changed` together never exceed 2 * LIST_CAP ints (about 1.33 B per
+    // pixel, what ImageJ's list of set pixels costs); a list that would grow past it abandons event mode for the rest of
+    // the level (the scan pass has no such lists). Every growth is reserved before it is allocated.
+    const LIST_CAP = Math.floor(size / 6) + 4096;
+    const bkA = []; const bkN = new Int32Array(8); // candidate lists per direction bit
+    let capTotal = 0;
+    let overflow = false;
+    for (let b = 0; b < 8; b++) bkA.push(null);
+    let changed = null;
+    function push(b, o) {
+      let a = bkA[b];
+      const n = bkN[b];
+      if (a === null || n === a.length) {
+        const cap = a === null ? 1024 : n * 2;
+        if (capTotal + cap - (a === null ? 0 : n) > LIST_CAP) { overflow = true; return; }
+        if (ctl && ctl.reserve) ctl.reserve(4 * cap);
+        const g = new Int32Array(cap);
+        if (a !== null) { g.set(a); capTotal -= a.length; }
+        capTotal += cap;
+        bkA[b] = a = g;
+      }
+      a[n] = o; bkN[b] = n + 1;
+    }
+    let work = 0;
+
+    // one pass in direction `pass` (event mode): returns the number of pixels set (processLevel's return value)
+    function runPass(pass) {
+      const bit = 1 << pass;
+      const A = bkA[pass], len = bkN[pass];
+      if (len === 0) return 0;
+      if (changed === null || changed.length < len) {
+        const cap = Math.max(len, changed === null ? 1024 : Math.min(changed.length * 2, LIST_CAP));
+        if (ctl && ctl.reserve) ctl.reserve(4 * cap);
+        changed = new Int32Array(cap);
+      }
+      let nCh = 0;
+      for (let j = 0; j < len; j++) {
+        const o = A[j];
+        if (pend[o] === 1 && (fate[nb[o]] & bit) !== 0) { pend[o] = 2; changed[nCh++] = o; }
+      }
+      bkN[pass] = 0;
+      for (let j = 0; j < nCh; j++) { // "set pixels to 255", then tell the neighbours
+        const o = changed[j];
+        pixels[o] = 255;
+        pend[o] = 0;
+        if (overflow) continue; // event mode is being abandoned: only the pixels themselves matter now
+        const y = (o / width) | 0;
+        const x = o - y * width;
+        const inner = x > 0 && x < xmax && y > 0 && y < ymax;
+        for (let d = 0; d < 8; d++) {
+          if (inner || isWithin(x, y, d)) {
+            const n = o + dirOffset[d];
+            if (pend[n] === 1) {
+              const old = nb[n];
+              const nw = old ^ BIT_OF_OPPOSITE[d];
+              nb[n] = nw;
+              const add = fate[nw] & ~fate[old];
+              if (add !== 0) for (let b = 0; b < 8; b++) if ((add >> b) & 1) push(b, n);
+            }
+          }
+        }
+      }
+      work += nCh + len;
+      return nCh;
+    }
+
+    // Switch a level to event mode: `nPts` unprocessed points sit at coordinates[start ...], in ImageJ's order. false (and
+    // nothing changed) when the lists would outgrow LIST_CAP.
+    async function enterEvent(start, nPts) {
+      for (let b = 0; b < 8; b++) bkN[b] = 0;
+      overflow = false;
+      for (let i = 0; i < nPts && !overflow; i++) { // occupation index of every point
+        const xy = coordinates[start + i];
+        const x = xy & intEncodeXMask;
+        const y = (xy & yMask) >> intEncodeShift;
+        const o = x + y * width;
+        let index = 0;
+        if (x > 0 && x < xmax && y > 0 && y < ymax) {
+          if (pixels[o - width] === 255) index ^= 1;
+          if (pixels[o - width + 1] === 255) index ^= 2;
+          if (pixels[o + 1] === 255) index ^= 4;
+          if (pixels[o + width + 1] === 255) index ^= 8;
+          if (pixels[o + width] === 255) index ^= 16;
+          if (pixels[o + width - 1] === 255) index ^= 32;
+          if (pixels[o - 1] === 255) index ^= 64;
+          if (pixels[o - width - 1] === 255) index ^= 128;
+        } else {
+          if (y > 0 && pixels[o - width] === 255) index ^= 1;
+          if (x < xmax && y > 0 && pixels[o - width + 1] === 255) index ^= 2;
+          if (x < xmax && pixels[o + 1] === 255) index ^= 4;
+          if (x < xmax && y < ymax && pixels[o + width + 1] === 255) index ^= 8;
+          if (y < ymax && pixels[o + width] === 255) index ^= 16;
+          if (x > 0 && y < ymax && pixels[o + width - 1] === 255) index ^= 32;
+          if (x > 0 && pixels[o - 1] === 255) index ^= 64;
+          if (x > 0 && y > 0 && pixels[o - width - 1] === 255) index ^= 128;
+        }
+        nb[o] = index;
+        pend[o] = 1;
+        const m = fate[index];
+        if (m !== 0) for (let b = 0; b < 8; b++) if ((m >> b) & 1) push(b, o);
+        if ((i & 0x3ffff) === 0x3ffff && ctl) await ctl.check();
+      }
+      if (overflow) {
+        overflow = false;
+        for (let i = 0; i < nPts; i++) { const xy = coordinates[start + i]; pend[(xy & intEncodeXMask) + ((xy & yMask) >> intEncodeShift) * width] = 0; }
+        return false;
+      }
+      return true;
+    }
+    // Leave event mode: compact the entry list to the points still pending, in order (what processLevel leaves).
+    function leaveEvent(start, evLen) {
+      let k = 0;
+      for (let i = 0; i < evLen; i++) {
+        const xy = coordinates[start + i];
+        const o = (xy & intEncodeXMask) + ((xy & yMask) >> intEncodeShift) * width;
+        if (pend[o] === 1) { coordinates[start + k++] = xy; pend[o] = 0; }
+      }
+      overflow = false;
+    }
+
+    // ImageJ's scan pass costs the size of the level's unprocessed list per pass; the event mode costs one setup scan plus
+    // at most 8 neighbour updates per pixel set. A level that settles in a few passes (the rings of a Voronoi) is cheaper
+    // by scan, one that needs many (a checkerboard of maxima) by events: scan first, switch after SCAN_PASSES passes (measured: 4 keeps a Voronoi ring level on the scan, 2 loses it).
+    // Both give the same pixels, so the mode may change between any two passes.
+    const SCAN_PASSES = 4;
+    const EVENT_MIN_POINTS = 2048;
     for (let level = highestValue; level >= 1; level--) {
-      let remaining = histogram[level]; // "number of points in the level that have not been processed"
+      const start = levelStart[level];
+      const count = histogram[level];
+      let remaining = count; // "number of points in the level that have not been processed"
+      let evMode = false, noEvent = false, passes = 0, evLen = 0;
       let idle = 0;
       while (remaining > 0 && idle < 8) {
         let dIndex = 0;
         do { // "expand each level in 8 directions"
-          const n = processLevel(directionSequence[dIndex % 8], pixels, width, height, table, levelStart[level], remaining, coordinates, holder, intEncodeXMask, intEncodeShift);
+          let n;
+          if (evMode) {
+            n = runPass(directionSequence[dIndex % 8]);
+            if (overflow) { leaveEvent(start, evLen); evMode = false; noEvent = true; }
+          } else {
+            work += remaining;
+            n = processLevel(directionSequence[dIndex % 8], pixels, width, height, table, start, remaining, coordinates, holder, intEncodeXMask, intEncodeShift);
+            passes++;
+          }
           remaining -= n; // "number of points processed"
           if (n > 0) idle = 0; // "nothing processed in this direction?"
           dIndex++;
-          // a level can take hundreds of passes over millions of points: tick after each one (the result is unchanged)
-          if (ctl) await ctl.tick((highestValue - level + (histogram[level] > 0 ? 1 - remaining / histogram[level] : 1)) / (highestValue + 1));
+          if (!evMode && !noEvent && passes >= SCAN_PASSES && remaining >= EVENT_MIN_POINTS) {
+            if (await enterEvent(start, remaining)) { evMode = true; evLen = remaining; } else noEvent = true;
+          }
+          if (work > 0x40000 && ctl) { work = 0; await ctl.tick((highestValue - level + (count > 0 ? 1 - remaining / count : 1)) / (highestValue + 1)); }
         } while (remaining > 0 && idle++ < 8); // Java `idle++<8`: post-increment, as written
       }
+      if (evMode && remaining > 0) leaveEvent(start, evLen); // the unreached points, in their order, where ImageJ's compaction leaves them
+      if (ctl) await ctl.tick((highestValue - level + 1) / (highestValue + 1));
       if (remaining > 0 && level > 1) { // "any pixels that we have not reached?"
         let nextLevel = level; // "find the next level to process"
         do nextLevel--; while (nextLevel > 1 && histogram[nextLevel] === 0);
@@ -551,11 +713,11 @@
          * or a thresholded area) and correct unprocessed pixels at the very end by CleanupExtraLines" */
         if (nextLevel > 0) {
           let newNextLevelEnd = levelStart[nextLevel] + histogram[nextLevel];
-          for (let i = 0, p = levelStart[level]; i < remaining; i++, p++) {
+          for (let i = 0, p = start; i < remaining; i++, p++) {
             const xy = coordinates[p];
             const x = xy & intEncodeXMask;
-            const y = (xy & ~intEncodeXMask) >> intEncodeShift; // intEncodeYMask = ~intEncodeXMask
-            const pOffset = x + y * width1;
+            const y = (xy & yMask) >> intEncodeShift;
+            const pOffset = x + y * width;
             let addToNext = false;
             if (x === 0 || y === 0 || x === width - 1 || y === height - 1) addToNext = true; // "image border"
             else {
@@ -776,13 +938,16 @@
 
   const MAXFINDER_TOLERANCE = 0.5; // "reasonable values are 0.3 ... 0.8; segmentation is more aggressive with smaller values"
 
-  function floatEdm(mask, w, h, backgroundValue) { return S.makeFloatEDM(mask, w, h, { backgroundValue, edgesAreBackground: false }); }
+  // The transform is cooperative: it ticks (progress, and the cancel check of the engine) every ~0.5 M pixels, `ctl` being the
+  // sub-range of the caller's progress it may use.
+  function floatEdm(mask, w, h, backgroundValue, ctl) {
+    return S.makeFloatEDMAsync(mask, w, h, { backgroundValue, edgesAreBackground: false, tick: ctl ? (f) => ctl.tick(f) : null, check: ctl && ctl.check ? () => ctl.check() : null });
+  }
 
   /* EDM.run for processType EDM: "FloatProcessor floatEdm = makeFloatEDM(ip, backgroundValue, false)" with
    * "(background255 ? (byte)255 : 0)" as the background value. */
   async function edmFloat(mask, w, h, bg255, ctl) {
-    await tick(ctl, 0);
-    const f = floatEdm(mask, w, h, bg255 ? 255 : 0);
+    const f = await floatEdm(mask, w, h, bg255 ? 255 : 0, ctl);
     await tick(ctl, 1);
     return f;
   }
@@ -790,7 +955,7 @@
   /* Ultimate eroded points: findMaxima(floatEdm, 0.5, NO_THRESHOLD, SINGLE_POINTS, false, true) then
    * resetMasked(floatEdm, maxIp, 0): the EDM value stays where the output has a point, 0 elsewhere. */
   async function uepFloat(mask, w, h, bg255, ctl) {
-    const f = floatEdm(mask, w, h, bg255 ? 255 : 0);
+    const f = await floatEdm(mask, w, h, bg255 ? 255 : 0, sub(ctl, 0, 0.2));
     await tick(ctl, 0.2);
     const r = await findMaxima({ data: f, width: w, height: h }, { tolerance: MAXFINDER_TOLERANCE, strict: false, threshold: NO_THRESHOLD, outputType: SINGLE_POINTS, excludeOnEdges: false, isEDM: true }, sub(ctl, 0.2, 1));
     const m = r.out;
@@ -801,7 +966,7 @@
   /* Watershed: maxIp = findMaxima(floatEdm, 0.5, NO_THRESHOLD, SEGMENTED, false, true); "if (background255) maxIp.invert();
    * ip.copyBits(maxIp, 0, 0, Blitter.COPY);". */
   async function watershedBinary(mask, w, h, bg255, ctl) {
-    const f = floatEdm(mask, w, h, bg255 ? 255 : 0);
+    const f = await floatEdm(mask, w, h, bg255 ? 255 : 0, sub(ctl, 0, 0.1));
     await tick(ctl, 0.1);
     const r = await findMaxima({ data: f, width: w, height: h }, { tolerance: MAXFINDER_TOLERANCE, strict: false, threshold: NO_THRESHOLD, outputType: SEGMENTED, excludeOnEdges: false, isEDM: true }, sub(ctl, 0.1, 1));
     const out = r.out;
@@ -813,7 +978,7 @@
    * minima of EDM" (floatEdm.multiply(-1)); SEGMENTED, isEDM false; multiply(-1) again; resetMasked(floatEdm, maxIp, -1):
    * the value is cleared inside the segmented particles, so only the dividing lines keep their EDM value. */
   async function voronoiFloat(mask, w, h, bg255, ctl) {
-    const f = floatEdm(mask, w, h, bg255 ? 0 : 255);
+    const f = await floatEdm(mask, w, h, bg255 ? 0 : 255, sub(ctl, 0, 0.1));
     await tick(ctl, 0.1);
     for (let i = 0; i < f.length; i++) f[i] = fr(f[i] * -1);
     const r = await findMaxima({ data: f, width: w, height: h }, { tolerance: MAXFINDER_TOLERANCE, strict: false, threshold: NO_THRESHOLD, outputType: SEGMENTED, excludeOnEdges: false, isEDM: false }, sub(ctl, 0.1, 1));
@@ -842,7 +1007,7 @@
     for (let i = 0; i < f.length; i++) {
       let value = f[i] - 0;
       if (value < 0) value = 0;
-      let iv = Math.trunc(value * 1 + 0.5);
+      let iv = mtrunc(value * 1 + 0.5);
       if (iv > 255 || iv !== iv) iv = value !== value ? 0 : 255;
       out[i] = iv;
     }

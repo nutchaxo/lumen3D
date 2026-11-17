@@ -25,6 +25,9 @@
   'use strict';
 
   const fround = Math.fround;
+  // Math functions held in locals: a global lookup (`Math.`) inside a hot loop is slow wherever the global object is
+  // an interceptor-backed one (a vm context, as in the test harness) and costs nothing to avoid.
+  const m_trunc = Math.trunc, m_sqrt = Math.sqrt, m_floor = Math.floor, m_min = Math.min, m_max = Math.max;
   const FLOAT_MAX = 3.4028234663852886e38; // Float.MAX_VALUE
   const INT_MAX = 2147483647;
   const C_THIRD = fround(0.33333333); // the float literal 0.33333333f of filter3()
@@ -36,7 +39,7 @@
     if (x !== x) return 0;
     if (x >= 2147483647) return 2147483647;
     if (x <= -2147483648) return -2147483648;
-    return Math.trunc(x);
+    return m_trunc(x);
   }
 
   const noHooks = { tick: async () => {}, check: () => {} };
@@ -62,8 +65,8 @@
     let smallballradius = radius / shrinkFactor;
     if (smallballradius < 1) smallballradius = 1;
     const rsquare = smallballradius * smallballradius;
-    const xtrim = Math.trunc(Math.trunc(arcTrimPer * smallballradius) / 100); // (int)(arcTrimPer*smallballradius)/100
-    const halfWidth = Math.floor((smallballradius - xtrim) + 0.5);              // (int)Math.round(...)
+    const xtrim = m_trunc(m_trunc(arcTrimPer * smallballradius) / 100); // (int)(arcTrimPer*smallballradius)/100
+    const halfWidth = m_floor((smallballradius - xtrim) + 0.5);              // (int)Math.round(...)
     const width = 2 * halfWidth + 1;
     const data = new Float32Array(width * width);
     for (let y = 0, p = 0; y < width; y++) {
@@ -71,7 +74,7 @@
         const xval = x - halfWidth, yval = y - halfWidth;
         const temp = rsquare - xval * xval - yval * yval;
         // "-Float.MAX_VALUE might be better than 0f, but gives different results than earlier versions"
-        data[p] = temp > 0 ? Math.sqrt(temp) : 0;
+        data[p] = temp > 0 ? m_sqrt(temp) : 0;
       }
     }
     return { data, width, shrinkFactor };
@@ -100,14 +103,39 @@
   function filter3x3(pixels, width, height, isMax) {
     let shiftBy = 0;
     for (let y = 0; y < height; y++) shiftBy += filter3(pixels, width, y * width, 1, isMax);
-    for (let x = 0; x < width; x++) shiftBy += filter3(pixels, height, x, width, isMax);
+    // The column pass of ImageJ walks one column at a time (a cache line per pixel). Here the same per-pixel arithmetic
+    // sweeps the rows, the previous ORIGINAL row kept in `prev`; the shift of a column is still summed in ascending y
+    // (colShift[x], starting at 0) and the columns are added in ascending x, so every rounding of `shiftBy` is the same.
+    const prev = new Float32Array(width);
+    const colShift = new Float64Array(width);
+    prev.set(pixels.subarray(0, width));
+    for (let y = 0, row = 0; y < height; y++, row += width) {
+      const next = y < height - 1 ? row + width : row; // the last row repeats itself as v3
+      if (isMax) {
+        for (let x = 0; x < width; x++) {
+          const v1 = prev[x], v2 = pixels[row + x], v3 = pixels[next + x];
+          let max = v1 > v3 ? v1 : v3;
+          if (v2 > max) max = v2;
+          colShift[x] += fround(max - v2);
+          prev[x] = v2;
+          pixels[row + x] = max;
+        }
+      } else {
+        for (let x = 0; x < width; x++) {
+          const v1 = prev[x], v2 = pixels[row + x], v3 = pixels[next + x];
+          prev[x] = v2;
+          pixels[row + x] = fround(fround(fround(v1 + v2) + v3) * C_THIRD);
+        }
+      }
+    }
+    if (isMax) for (let x = 0; x < width; x++) shiftBy += colShift[x];
     return shiftBy / width / height;
   }
 
   /* BackgroundSubtracter.shrinkImage: each point of the small image is the minimum of its neighbourhood. */
   function shrinkImage(pixels, width, height, shrinkFactor) {
-    const sWidth = Math.trunc((width + shrinkFactor - 1) / shrinkFactor);
-    const sHeight = Math.trunc((height + shrinkFactor - 1) / shrinkFactor);
+    const sWidth = m_trunc((width + shrinkFactor - 1) / shrinkFactor);
+    const sHeight = m_trunc((height + shrinkFactor - 1) / shrinkFactor);
     const sPixels = new Float32Array(sWidth * sHeight);
     for (let ySmall = 0; ySmall < sHeight; ySmall++) {
       for (let xSmall = 0; xSmall < sWidth; xSmall++) {
@@ -124,63 +152,136 @@
     return { pixels: sPixels, width: sWidth, height: sHeight };
   }
 
-  /* BackgroundSubtracter.rollBall: the ball is rolled under the (shrunken) image; `pixels` becomes the background. */
+  /* BackgroundSubtracter.rollBall: the ball is rolled under the (shrunken) image; `pixels` becomes the background.
+   *
+   * ImageJ scatters: for every ball position (x,y) it takes z = min(cache - zBall) over the footprint (pass 1, an
+   * erosion) and then raises every pixel of the footprint to at least z + zBall (pass 2, a dilation). Pass 2 is
+   * rewritten here as the equivalent GATHER: pixel (x,y) = max over the ball positions that cover it of
+   * z(x',y') + zBall[(y-y')+r][(x-x')+r] (the same set of terms, since the ball is addressed by the offset between
+   * the two positions). A max of unrounded sums rounded once equals the sequence of rounded conditional stores
+   * (rounding is monotonic), and the accumulator stays in a register instead of a read-modify-write per tap.
+   * z rows (the whole width + one ball radius either side) live in a ring of `ballWidth` rows; the output row
+   * y - r is final as soon as z row y exists, and its input row is long since copied into `cache`.
+   * Both passes compute four neighbouring outputs per ball tap, so a ball value is loaded once for four taps. */
   async function rollBall(ball, pixels, width, height, hooks, p0, p1) {
     const zBall = ball.data;
-    const ballWidth = ball.width;
-    const radius = Math.trunc(ballWidth / 2);
-    const cache = new Float32Array(width * ballWidth);
+    const bw = ball.width;
+    const radius = m_trunc(bw / 2);
+    const cache = new Float32Array(width * bw);
+    const zw = width + 2 * radius;
+    const zring = new Float32Array(zw * bw);
+    const rowBase = new Int32Array(bw); // cache offset of the footprint row j
+    const ballRow = new Int32Array(bw); // zBall offset of the footprint row j
     const yTotal = height + 2 * radius;
     // a row costs (width + ballWidth) * ballWidth^2 operations: a big ball is checked every row (and inside it)
-    const checkMask = ballWidth > 32 ? 0 : 7;
+    const checkMask = bw > 32 ? 0 : 7;
+    const xInteriorLo = 2 * radius;       // zring index of the first x whose whole footprint is inside the image
+    const xInteriorHi = width - 1;        // ... and of the last one
     for (let y = -radius; y < height + radius; y++) {
       if (((y + radius) & checkMask) === 0) { hooks.check(); await hooks.tick(p0 + (p1 - p0) * ((y + radius) / yTotal)); }
-      const nextLineToWriteInCache = (y + radius) % ballWidth;
       const nextLineToRead = y + radius;
       if (nextLineToRead < height) {
-        cache.set(pixels.subarray(nextLineToRead * width, nextLineToRead * width + width), nextLineToWriteInCache * width);
-        pixels.fill(-FLOAT_MAX, nextLineToRead * width, nextLineToRead * width + width); // unprocessed pixels start at minus infinity
+        const o = (nextLineToRead % bw) * width;
+        cache.set(pixels.subarray(nextLineToRead * width, nextLineToRead * width + width), o);
       }
       let y0 = y - radius;
       if (y0 < 0) y0 = 0;
       const yBall0 = y0 - y + radius;
       let yend = y + radius;
       if (yend >= height) yend = height - 1;
-      for (let x = -radius; x < width + radius; x++) {
-        let z = FLOAT_MAX; // the height of the ball (ball is in position x,y); unrounded differences while it is the minimum
+      const nRows = yend - y0 + 1;
+      for (let j = 0; j < nRows; j++) { rowBase[j] = ((y0 + j) % bw) * width; ballRow[j] = (yBall0 + j) * bw; }
+      // pass 1: z of every ball position of this row, into its ring slot
+      const zo = ((y + radius) % bw) * zw;
+      let xi = 0;
+      for (; xi < zw && xi < xInteriorLo; xi++) { if (checkMask === 0 && (xi & 15) === 0) hooks.check(); zring[zo + xi] = zBorder(cache, zBall, rowBase, ballRow, nRows, xi - radius, radius, width, bw); }
+      let lastInterior = m_min(xInteriorHi, zw - 1);
+      for (; xi + 3 <= lastInterior; xi += 4) {
+        if (checkMask === 0 && (xi & 15) === 0) hooks.check(); // every 16 positions (4 iterations)
+        const xs = xi - 2 * radius; // x - radius of the first of the four outputs
+        let z0 = FLOAT_MAX, z1 = FLOAT_MAX, z2 = FLOAT_MAX, z3 = FLOAT_MAX;
+        for (let j = 0; j < nRows; j++) {
+          const cb = rowBase[j] + xs, bb = ballRow[j];
+          for (let k = 0; k < bw; k++) {
+            const b = zBall[bb + k], c = cb + k;
+            const d0 = cache[c] - b, d1 = cache[c + 1] - b, d2 = cache[c + 2] - b, d3 = cache[c + 3] - b;
+            if (d0 < z0) z0 = d0;
+            if (d1 < z1) z1 = d1;
+            if (d2 < z2) z2 = d2;
+            if (d3 < z3) z3 = d3;
+          }
+        }
+        zring[zo + xi] = z0; zring[zo + xi + 1] = z1; zring[zo + xi + 2] = z2; zring[zo + xi + 3] = z3;
+      }
+      for (; xi <= lastInterior; xi++) {
+        const xs = xi - 2 * radius;
+        let z = FLOAT_MAX;
+        for (let j = 0; j < nRows; j++) {
+          const cb = rowBase[j] + xs, bb = ballRow[j];
+          for (let k = 0; k < bw; k++) { const d = cache[cb + k] - zBall[bb + k]; if (d < z) z = d; }
+        }
+        zring[zo + xi] = z;
+      }
+      for (; xi < zw; xi++) { if (checkMask === 0 && (xi & 15) === 0) hooks.check(); zring[zo + xi] = zBorder(cache, zBall, rowBase, ballRow, nRows, xi - radius, radius, width, bw); }
+      if (checkMask === 0) hooks.check();
+      // pass 2: output row r = y - radius
+      const r = y - radius;
+      if (r < 0) continue;
+      let lo = r - radius; if (lo < -radius) lo = -radius;
+      const out = r * width;
+      const nz = y - lo + 1; // footprint rows y' = lo .. y
+      for (let j = 0; j < nz; j++) { rowBase[j] = ((lo + j + radius) % bw) * zw; ballRow[j] = (r - (lo + j) + radius) * bw; }
+      let x = 0;
+      for (; x + 3 < width; x += 4) {
         if (checkMask === 0 && (x & 15) === 0) hooks.check();
-        let x0 = x - radius;
-        if (x0 < 0) x0 = 0;
-        const xBall0 = x0 - x + radius;
-        let xend = x + radius;
-        if (xend >= width) xend = width - 1;
-        // Java: float zReduced = cache[..] - zBall[..]; if (z > zReduced) z = zReduced. Rounding to float is monotonic, so
-        // the minimum of the unrounded differences, rounded once, is the minimum of the rounded ones (same value).
-        for (let yp = y0, yBall = yBall0; yp <= yend; yp++, yBall++) {
-          let cachePointer = (yp % ballWidth) * width + x0;
-          for (let xp = x0, bp = xBall0 + yBall * ballWidth; xp <= xend; xp++, cachePointer++, bp++) {
-            const zReduced = cache[cachePointer] - zBall[bp];
-            if (z > zReduced) z = zReduced;
+        let m0 = -FLOAT_MAX, m1 = -FLOAT_MAX, m2 = -FLOAT_MAX, m3 = -FLOAT_MAX;
+        for (let j = 0; j < nz; j++) {
+          const zb = rowBase[j] + x, bb = ballRow[j];
+          for (let k = 0; k < bw; k++) {
+            // zBall[bb + k] is column k = x' - x + r of the ball, where the ImageJ formula reads column (x - x') + r = 2r - k:
+            // the same value because buildBall is exactly symmetric in x.
+            const b = zBall[bb + k], c = zb + k;
+            const v0 = zring[c] + b, v1 = zring[c + 1] + b, v2 = zring[c + 2] + b, v3 = zring[c + 3] + b;
+            if (v0 > m0) m0 = v0;
+            if (v1 > m1) m1 = v1;
+            if (v2 > m2) m2 = v2;
+            if (v3 > m3) m3 = v3;
           }
         }
-        z = fround(z);
-        // Java: float zMin = z + zBall[bp]; if (pixels[p] < zMin) pixels[p] = zMin. The store into the Float32Array
-        // rounds the sum; comparing against the unrounded sum writes the same value (a write of a value that rounds
-        // to the pixel's own value changes nothing).
-        for (let yp = y0, yBall = yBall0; yp <= yend; yp++, yBall++) {
-          for (let xp = x0, p = xp + yp * width, bp = xBall0 + yBall * ballWidth; xp <= xend; xp++, p++, bp++) {
-            const zMin = z + zBall[bp];
-            if (pixels[p] < zMin) pixels[p] = zMin;
-          }
+        pixels[out + x] = m0; pixels[out + x + 1] = m1; pixels[out + x + 2] = m2; pixels[out + x + 3] = m3;
+      }
+      for (; x < width; x++) {
+        let m = -FLOAT_MAX;
+        for (let j = 0; j < nz; j++) {
+          const zb = rowBase[j] + x, bb = ballRow[j];
+          for (let k = 0; k < bw; k++) { const v = zring[zb + k] + zBall[bb + k]; if (v > m) m = v; }
         }
+        pixels[out + x] = m;
       }
     }
+  }
+
+  /* z of the ball at x (possibly outside the image) where the footprint is clipped to the image: the border case of pass 1. */
+  function zBorder(cache, zBall, rowBase, ballRow, nRows, x, radius, width, bw) {
+    let x0 = x - radius;
+    if (x0 < 0) x0 = 0;
+    const xBall0 = x0 - x + radius;
+    let xend = x + radius;
+    if (xend >= width) xend = width - 1;
+    let z = FLOAT_MAX;
+    for (let j = 0; j < nRows; j++) {
+      for (let xp = x0, c = rowBase[j] + x0, bp = ballRow[j] + xBall0; xp <= xend; xp++, c++, bp++) {
+        const d = cache[c] - zBall[bp];
+        if (d < z) z = d;
+      }
+    }
+    return z;
   }
 
   /* BackgroundSubtracter.makeInterpolationArrays */
   function makeInterpolationArrays(smallIndices, weights, length, smallLength, shrinkFactor) {
     for (let i = 0; i < length; i++) {
-      let smallIndex = Math.trunc((i - Math.trunc(shrinkFactor / 2)) / shrinkFactor); // Java int division
+      let smallIndex = m_trunc((i - m_trunc(shrinkFactor / 2)) / shrinkFactor); // Java int division
       if (smallIndex >= smallLength - 1) smallIndex = smallLength - 2;
       smallIndices[i] = smallIndex;
       const distance = fround(fround(fround(i + 0.5) / shrinkFactor) - fround(smallIndex + 0.5)); // distance of pixel centers
@@ -240,6 +341,18 @@
 
   function pow6(dx) { return fround(fround(fround(fround(fround(dx * dx) * dx) * dx) * dx) * dx); } // dx*dx*dx*dx*dx*dx
 
+  /* 1/d and coeff2*d (double) for d = 0 .. length, shared by the lines of one pass (same coeff2, same or shorter length). */
+  let slopeTabCache = { coeff2: -1, inv: new Float64Array(0), ct: new Float64Array(0) };
+  function slopeTables(coeff2, length) {
+    const t = slopeTabCache;
+    if (t.coeff2 === coeff2 && t.inv.length > length) return t;
+    const n = m_max(length + 1, t.coeff2 === coeff2 ? 2 * t.inv.length : 0);
+    const inv = new Float64Array(n), ct = new Float64Array(n);
+    for (let d = 1; d < n; d++) { inv[d] = 1 / d; ct[d] = coeff2 * d; }
+    slopeTabCache = { coeff2, inv, ct };
+    return slopeTabCache;
+  }
+
   /* BackgroundSubtracter.lineSlideParabola: slides a parabola along one line from below and sets the values so
    * that every point is reachable. With `correctedEdges` (Float32Array(2)) it also returns the two edge values
    * estimated without an edge particle. */
@@ -251,6 +364,8 @@
     let vPrevious1 = 0;
     let vPrevious2 = 0;
     const curvatureTest = fround(fround(1.999) * coeff2); // not 2: numeric scatter of 2nd derivative
+    const tabs = slopeTables(coeff2, length);
+    const invTab = tabs.inv, ctTab = tabs.ct; // 1/d and coeff2*d in double
     for (let i = 0, p = start; i < length; i++, p += inc) {
       const v = pixels[p];
       cache[i] = v;
@@ -274,15 +389,27 @@
       let recalculateLimitNow = 0; // when 0, limits for searching will be recalculated
       for (let j = nextPoint[i1]; j < searchTo; j = nextPoint[j], recalculateLimitNow++) {
         const v2 = cache[j];
-        const slope = fround(fround(fround(v2 - v1) / (j - i1)) + fround(coeff2 * (j - i1)));
-        if (slope < minSlope) {
-          minSlope = slope;
-          i2 = j;
-          recalculateLimitNow = -3;
+        const d = j - i1;
+        // Almost every candidate loses against minSlope. A division-free estimate a + b (a = (v2-v1)/d, b = coeff2*d,
+        // from the tables) settles those: the float slope of ImageJ differs from the exact a + b by at most four
+        // float roundings, i.e. 4 * 2^-24 * (|a| + b) < 1e-6 * (|a| + b); a candidate whose estimate exceeds
+        // minSlope by more than that cannot satisfy `slope < minSlope`, so only the others compute the float slope.
+        const a = (v2 - v1) * invTab[d];
+        const approx = a + ctTab[d];
+        // Two cases always go to the exact float path: d <= 0 (nextPoint jumped back or stayed after the i2 <= i1
+        // fallback, so the tables have no entry and a is NaN) and v2 - v1 < -FLOAT_MAX (fround gives -Infinity, which
+        // the finite double estimate cannot see).
+        if (d <= 0 || v2 - v1 < -FLOAT_MAX || approx - (a < 0 ? -a + ctTab[d] : approx) * 1e-6 < minSlope) {
+          const slope = fround(fround(fround(v2 - v1) / d) + fround(coeff2 * d));
+          if (slope < minSlope) {
+            minSlope = slope;
+            i2 = j;
+            recalculateLimitNow = -3;
+          }
         }
         if (recalculateLimitNow === 0) { // time-consuming recalculation of search limit: wait a bit after slope is updated
           const b = fround(fround(0.5 * minSlope) / coeff2);
-          const maxSearch = (i1 + d2i(b + Math.sqrt(b * b + fround(fround(v1 - minValue) / coeff2)) + 1)) | 0; // (numeric overflow may make this negative)
+          const maxSearch = (i1 + d2i(b + m_sqrt(b * b + fround(fround(v1 - minValue) / coeff2)) + 1)) | 0; // (numeric overflow may make this negative)
           if (maxSearch < searchTo && maxSearch > 0) searchTo = maxSearch;
         }
       }
@@ -305,7 +432,7 @@
       const value0 = fround(v1 - fround(slope * firstCorner)); // offset of this line
       let coeff6 = 0; // coefficient of 6th order polynomial
       const mid = fround(0.5 * (lastCorner + firstCorner));
-      for (let i = Math.trunc((length + 2) / 3); i <= Math.trunc((2 * length) / 3); i++) { // compare with mid-image pixels to detect vignetting
+      for (let i = m_trunc((length + 2) / 3); i <= m_trunc((2 * length) / 3); i++) { // compare with mid-image pixels to detect vignetting
         const dx = fround(fround(fround(i - mid) * 2) / (lastCorner - firstCorner));
         const poly6 = fround(pow6(dx) - 1); // the 6th order polynomial, zero at firstCorner and lastCorner
         const lineAt = fround(value0 + fround(slope * i));
@@ -335,7 +462,7 @@
     corners[0] += ce[0]; corners[2] += ce[1];
     lineSlideParabola(pixels, width - 1, width, height, coeff2, cache, nextPoint, ce);
     corners[1] += ce[0]; corners[3] += ce[1];
-    const diagLength = Math.min(width, height); // length of a 45-degree line from a corner
+    const diagLength = m_min(width, height); // length of a 45-degree line from a corner
     const coeff2diag = fround(2 * coeff2);
     lineSlideParabola(pixels, 0, 1 + width, diagLength, coeff2diag, cache, nextPoint, ce);
     corners[0] += ce[0];
@@ -369,10 +496,10 @@
       let startPixel = i * lineInc;
       if (direction === DIAGONAL_2B) startPixel += width - 1;
       switch (direction) {
-        case DIAGONAL_1A: length = Math.min(height, width - i); break;
-        case DIAGONAL_1B: length = Math.min(width, height - i); break;
-        case DIAGONAL_2A: length = Math.min(height, i + 1); break;
-        case DIAGONAL_2B: length = Math.min(width, height - i); break;
+        case DIAGONAL_1A: length = m_min(height, width - i); break;
+        case DIAGONAL_1B: length = m_min(width, height - i); break;
+        case DIAGONAL_2A: length = m_min(height, i + 1); break;
+        case DIAGONAL_2B: length = m_min(width, height - i); break;
         default: break;
       }
       lineSlideParabola(pixels, startPixel, pointInc, length, coeff2, cache, nextPoint, null);
@@ -381,8 +508,8 @@
 
   /* BackgroundSubtracter.slidingParaboloidFloatBackground: `pixels` becomes the background. */
   async function slidingParaboloidFloatBackground(pixels, width, height, radius, invert, doPresmooth, doCorners, hooks) {
-    const cache = new Float32Array(Math.max(width, height));
-    const nextPoint = new Int32Array(Math.max(width, height));
+    const cache = new Float32Array(m_max(width, height));
+    const nextPoint = new Int32Array(m_max(width, height));
     const coeff2 = fround(0.5 / radius); // 2nd-order coefficient of the polynomial approximating the ball
     const coeff2diag = fround(1 / radius); // same for diagonal directions where step is sqrt2
     if (invert) for (let i = 0; i < pixels.length; i++) pixels[i] = -pixels[i];
@@ -417,7 +544,7 @@
     else {
       const ball = buildBall(opts.radius);
       if (ball.shrinkFactor > 1) {
-        const sw = Math.trunc((width + ball.shrinkFactor - 1) / ball.shrinkFactor), sh = Math.trunc((height + ball.shrinkFactor - 1) / ball.shrinkFactor);
+        const sw = m_trunc((width + ball.shrinkFactor - 1) / ball.shrinkFactor), sh = m_trunc((height + ball.shrinkFactor - 1) / ball.shrinkFactor);
         // enlargeImage reads sPixels[xSmallIndices[x]] with index -1 only when the shrunken width is 1 (ArrayIndexOutOfBounds);
         // a shrunken height of 1 leaves line0 at zero and ImageJ returns a result: reproduced.
         if (sw < 2) throw fail('IJ_BG_TOO_SMALL', 'image too small for this radius');
@@ -448,14 +575,14 @@
           let value = fround(bg[p] + 0.5);
           if (value < 0) value = 0;
           if (value > top) value = top;
-          out[o + x] = Math.trunc(value);
+          out[o + x] = m_trunc(value);
         }
       } else {
         for (let x = 0; x < rw; x++, p++) {
           let value = fround(fround(data[p] - bg[p]) + offset);
           if (value < 0) value = 0;
           if (value > top) value = top;
-          out[o + x] = Math.trunc(value);
+          out[o + x] = m_trunc(value);
         }
       }
     }
@@ -546,7 +673,7 @@
     let min = stats.histMin + hmin * stats.binSize;
     let max = stats.histMin + hmax * stats.binSize;
     if (stats.hist16) { min = hmin; max = hmax; }
-    const rounded = (v) => (stats.bitDepth === 32 ? fround(v) : Math.floor(v + 0.5));
+    const rounded = (v) => (stats.bitDepth === 32 ? fround(v) : m_floor(v + 0.5));
     return { valid: true, min, max, displayMin: rounded(min), displayMax: rounded(max), pixelCount: stats.pixelCount };
   }
 
@@ -559,7 +686,7 @@
     for (let i = 0; i < range; i++) {
       if (i <= min) lut[i] = 0;
       else if (i >= max) lut[i] = max2;
-      else lut[i] = Math.trunc(((i - min) / (max - min)) * max2);
+      else lut[i] = m_trunc(((i - min) / (max - min)) * max2);
     }
     return lut;
   }
@@ -584,7 +711,7 @@
   function equalizeTable(histogram, bitDepth, classic) {
     const max = bitDepth === 16 ? 65535 : 255;
     const range = max;
-    const w = (i) => { const h = histogram[i]; return (h < 2 || classic) ? h : Math.sqrt(h); };
+    const w = (i) => { const h = histogram[i]; return (h < 2 || classic) ? h : m_sqrt(h); };
     let sum = w(0);
     for (let i = 1; i < max; i++) sum += 2 * w(i);
     sum += w(max);
@@ -595,7 +722,7 @@
     for (let i = 1; i < max; i++) {
       const delta = w(i);
       sum += delta;
-      lut[i] = Math.floor(sum * scale + 0.5); // (int)Math.round
+      lut[i] = m_floor(sum * scale + 0.5); // (int)Math.round
       sum += delta;
     }
     lut[max] = max;
@@ -639,7 +766,7 @@
       if (p.correctCorners !== undefined && typeof p.correctCorners !== 'boolean') throw fail('IJ_BAD_ARGS', 'correctCorners');
       if (!p.sliding && info && shrinkFactorOf(p.radius) > 1) {
         const s = shrinkFactorOf(p.radius);
-        if (Math.trunc((info.width + s - 1) / s) < 2) throw fail('IJ_BG_TOO_SMALL', 'image too small for this radius');
+        if (m_trunc((info.width + s - 1) / s) < 2) throw fail('IJ_BG_TOO_SMALL', 'image too small for this radius');
       }
     },
     // Whether a channel shows with an inverting LUT is display state, not journaled: copied into the params.
@@ -657,8 +784,14 @@
       // the shrunken copies exist only when the image is shrunk (radius > 10): small + its background;
       // the paraboloid keeps a line cache + nextPoint (two arrays of the longer side)
       const small = s > 1 ? (n / (s * s)) * 4 * 2 : 0;
-      const lines = params && params.sliding ? Math.max(info.width, info.height) * 8 : 0;
-      return n * 4 + n * bytesOf(info.bitDepth) + small + lines + 4 * 1048576;
+      const lines = params && params.sliding ? m_max(info.width, info.height) * 8 : 0;
+      // rolling ball: line cache (sw * bw) and z ring ((sw + 2r) * bw) of the shrunken image, bw = 2r + 1 (upper bound)
+      let ring = 0;
+      if (params && !params.sliding) {
+        const sw = Math.ceil(info.width / s), br = Math.ceil(params.radius / s), bwid = 2 * br + 1;
+        ring = (sw + (sw + 2 * br)) * bwid * 4;
+      }
+      return n * 4 + n * bytesOf(info.bitDepth) + small + lines + ring + 4 * 1048576;
     },
     prepare(view, c, p, ctx) {
       const scale = (ctx && ctx.scale) || 1;
@@ -691,7 +824,7 @@
       // histogram + the selection's mask box (up to the bounding rectangle, a byte per pixel)
       const r = info && info.roi;
       let box = 0;
-      if (r) { try { const b = root.IJRoi.bounds(r); box = Math.min(info.width, Math.max(0, b.w)) * Math.min(info.height, Math.max(0, b.h)); } catch (e) { box = info.width * info.height; } }
+      if (r) { try { const b = root.IJRoi.bounds(r); box = m_min(info.width, m_max(0, b.w)) * m_min(info.height, m_max(0, b.h)); } catch (e) { box = info.width * info.height; } }
       return 65536 * 4 + box + 1048576;
     },
     async run(view, params, roi, io) {
@@ -707,19 +840,19 @@
           let b;
           if (roi.type === 'line') {
             // Roi.setIntBounds of a line: x = floor(bx+0.5); width = floor(bx+bw+1.5) - x (both axes)
-            const bx = Math.min(roi.x1, roi.x2), by = Math.min(roi.y1, roi.y2);
+            const bx = m_min(roi.x1, roi.x2), by = m_min(roi.y1, roi.y2);
             const bw = Math.abs(roi.x2 - roi.x1), bh = Math.abs(roi.y2 - roi.y1);
-            const x = Math.floor(bx + 0.5), y = Math.floor(by + 0.5);
-            b = { x, y, w: Math.floor(bx + bw + 1.5) - x, h: Math.floor(by + bh + 1.5) - y };
+            const x = m_floor(bx + 0.5), y = m_floor(by + 0.5);
+            b = { x, y, w: m_floor(bx + bw + 1.5) - x, h: m_floor(by + bh + 1.5) - y };
           } else b = IJRoi.bounds(roi);
-          const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y), x1 = Math.min(W, b.x + b.w), y1 = Math.min(H, b.y + b.h);
+          const x0 = m_max(0, b.x), y0 = m_max(0, b.y), x1 = m_min(W, b.x + b.w), y1 = m_min(H, b.y + b.h);
           if (!(x1 > x0 && y1 > y0)) return { valid: false, pixelCount: 0, bitDepth: view.bitDepth }; // empty roi: nothing counted
           rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
           if (roi.type === 'point') {
             // PointRoi.getMask: only the pixels of the points
             const data = new Uint8Array(rect.w * rect.h);
             for (const p of roi.points) {
-              const i = Math.floor(p[0]) - rect.x, j = Math.floor(p[1]) - rect.y;
+              const i = m_floor(p[0]) - rect.x, j = m_floor(p[1]) - rect.y;
               if (i >= 0 && j >= 0 && i < rect.w && j < rect.h) data[j * rect.w + i] = 1;
             }
             maskBox = { x: rect.x, y: rect.y, w: rect.w, h: rect.h, data };

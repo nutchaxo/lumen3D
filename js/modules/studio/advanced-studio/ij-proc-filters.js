@@ -583,11 +583,10 @@
     return guess;
   }
 
-  const MODE_MINMAX = 0, MODE_VARIANCE = 1, MODE_OUTLIERS = 2, MODE_NAN = 3;
+  const MODE_VARIANCE = 1, MODE_OUTLIERS = 2, MODE_NAN = 3;
 
   /* One RankFilters pass over `rect` of the W x H image `src` (any typed array). Returns the float values of the
-   * rect. mode: MODE_MINMAX (sign -1 = Minimum, +1 = Maximum), MODE_VARIANCE, MODE_OUTLIERS (sign, thr),
-   * MODE_NAN. `maxValue` = (float)ip.maxValue() for 8 / 16 bits, NaN for float. */
+   * rect. mode: MODE_VARIANCE, MODE_OUTLIERS (sign, thr), MODE_NAN; Minimum / Maximum live in minMaxPass. `maxValue` = (float)ip.maxValue() for 8 / 16 bits, NaN for float. */
   async function rankPass(src, W, H, rect, k, mode, sign, thr, maxValue, tk, f0, f1) {
     const kR = k.kRadius, kH = 2 * kR + 1, dxs = k.dxs, kN = k.nPixels;
     const cw = rect.w + 2 * kR;
@@ -601,8 +600,7 @@
     const above = medianMode ? new Float32Array(kN) : null, below = medianMode ? new Float32Array(kN) : null;
     const sums = [0, 0];
     const smallKernel = kR < 2;
-    const minOrMax = mode === MODE_MINMAX;
-    const maxOrOut = minOrMax || mode === MODE_OUTLIERS;
+    const maxOrOut = mode === MODE_OUTLIERS;
     const sumFilter = mode === MODE_VARIANCE;
     // RankFilters.readLineToCache: nearest edge pixel in x, rows outside the image are copies of row 0 / H-1
     function load(yy) {
@@ -631,7 +629,6 @@
         if (full) {
           full = smallKernel; // for a small kernel always the full area, never the incremental algorithm
           if (maxOrOut) max = getAreaMax(cache, x, ptr, 0, -FLT_MAX, sign);
-          if (minOrMax) { out[ob + x] = max * sign; continue; }
           if (sumFilter) getAreaSums(cache, x, ptr, sums);
         } else if (maxOrOut) {
           const newMax = getSideMax(cache, x, ptr, true, sign);
@@ -640,7 +637,6 @@
             const removedMax = getSideMax(cache, x, ptr, false, sign);
             if (removedMax >= max) max = getAreaMax(cache, x, ptr, 1, newMax, sign);
           }
-          if (minOrMax) { out[ob + x] = max * sign; continue; }
         } else if (sumFilter) {
           addSideSums(cache, x, ptr, sums);
           if (sums[0] !== sums[0]) full = true; // avoid perpetuating NaNs into the remaining line
@@ -670,8 +666,129 @@
     return out;
   }
 
+  /* Minimum / Maximum of RankFilters (the two passes of Top Hat): RankFilters.doFiltering for MIN / MAX, with the same
+   * incremental maximum along a line (new right-hand edge, left-hand edge only when the maximum may have left, a full
+   * kernel area only when it did). Bit-identical to ImageJ's RankFilters, which computes
+   * `max = max(cache[p] * sign)` and stores `max * sign`; here the line cache is filled with `src * sign` (the very
+   * same double product, rounded to the float the cache holds) so the inner loops are plain maximum searches without
+   * a multiplication, and `max * sign` is the same final product. Ties (+0 / -0) keep the first value met, as before,
+   * because the scan order and the strict `<` are those of ImageJ. */
+  function areaMaxS(cache, x0, ptr, ignoreRight, max) {
+    for (let kk = 0; kk < ptr.length; kk += 2) {
+      const end = ptr[kk + 1] + x0 - ignoreRight;
+      for (let p = ptr[kk] + x0; p <= end; p++) { const v = cache[p]; if (max < v) max = v; }
+    }
+    return max;
+  }
+  /* The right-hand edge maximum of EVERY x of a line at once: R[x] = max over the kernel rows j (top to bottom, the
+   * order rightMax of ImageJ scans them) of cache[ptr[2j+1] + x]. Row-major, so each pass reads one cache row
+   * sequentially instead of striding over 2 * kRadius + 1 rows per pixel; same values, same first-wins ties. */
+  function rightMaxLine(cache, ptr, R, n) {
+    R.fill(-FLT_MAX);
+    let kk = 1;
+    // four kernel rows per sweep (kept in the same order), one store of R[x] per sweep instead of one per row
+    for (; kk + 6 < ptr.length; kk += 8) {
+      const o0 = ptr[kk], o1 = ptr[kk + 2], o2 = ptr[kk + 4], o3 = ptr[kk + 6];
+      for (let x = 0; x < n; x++) {
+        let m = R[x], v = cache[o0 + x];
+        if (m < v) m = v;
+        v = cache[o1 + x]; if (m < v) m = v;
+        v = cache[o2 + x]; if (m < v) m = v;
+        v = cache[o3 + x]; if (m < v) m = v;
+        R[x] = m;
+      }
+    }
+    for (; kk < ptr.length; kk += 2) {
+      const o = ptr[kk];
+      for (let x = 0; x < n; x++) { const v = cache[o + x]; if (R[x] < v) R[x] = v; }
+    }
+  }
+  function leftMaxS(cache, x0, ptr) {
+    let max = -FLT_MAX;
+    x0--;
+    for (let kk = 0; kk < ptr.length; kk += 2) { const v = cache[x0 + ptr[kk]]; if (max < v) max = v; }
+    return max;
+  }
+  async function minMaxPass(src, W, H, rect, k, sign, tk, f0, f1) {
+    const kR = k.kRadius, kH = 2 * kR + 1, dxs = k.dxs;
+    const cw = rect.w + 2 * kR;
+    const cache = new Float32Array(cw * kH);
+    const xmin = rect.x - kR, xmax = rect.x + rect.w + kR;
+    const padL = xmin < 0 ? -xmin : 0, padR = xmax > W ? xmax - W : 0;
+    const xIn = xmin > 0 ? xmin : 0, wIn = Math.min(xmax, W) - xIn;
+    const out = new Float32Array(rect.w * rect.h);
+    const ptr = new Int32Array(2 * kH);
+    const R = new Float32Array(rect.w);
+    const smallKernel = kR < 2;
+    function load(yy) {
+      const slot = ((yy % kH) + kH) % kH;
+      const base = slot * cw + padL, row = clampI(yy, 0, H - 1) * W + xIn;
+      if (sign === 1) for (let i = 0; i < wIn; i++) cache[base + i] = src[row + i];
+      else for (let i = 0; i < wIn; i++) cache[base + i] = src[row + i] * -1;
+      const left = cache[base], right = cache[base + wIn - 1], b0 = slot * cw;
+      for (let i = 0; i < padL; i++) cache[b0 + i] = left;
+      for (let i = 0; i < padR; i++) cache[base + wIn + i] = right;
+    }
+    let loaded = rect.y - kR - 1;
+    for (let y = rect.y; y < rect.y + rect.h; y++) {
+      while (loaded < y + kR) load(++loaded);
+      for (let j = 0; j < kH; j++) {
+        const slot = (((y - kR + j) % kH) + kH) % kH;
+        ptr[2 * j] = slot * cw + kR - dxs[j];
+        ptr[2 * j + 1] = slot * cw + kR + dxs[j];
+      }
+      const ob = (y - rect.y) * rect.w;
+      rightMaxLine(cache, ptr, R, rect.w);
+      let max = 0, full = true;
+      for (let x = 0; x < rect.w; x++) {
+        if (full) {
+          full = smallKernel; // for a small kernel always the full area, never the incremental algorithm
+          max = areaMaxS(cache, x, ptr, 0, -FLT_MAX);
+        } else {
+          const newMax = R[x];
+          if (newMax >= max) max = newMax; // compare with the previous maximum
+          else if (leftMaxS(cache, x, ptr) >= max) max = areaMaxS(cache, x, ptr, 1, newMax);
+        }
+        out[ob + x] = max * sign;
+      }
+      await tk(f0 + (f1 - f0) * ((y - rect.y + 1) / rect.h));
+    }
+    return out;
+  }
+
   const rankKernel = (radius) => root.IJFilters.kernelOffsets(radius);
   const maxOf = (bd) => (bd === 8 ? 255 : (bd === 16 ? 65535 : NaN));
+
+  /* The engine hands a band-wise op rows in slices of a few milliseconds, which for Top Hat can shrink to a single
+   * row; each call would then redo the 2 * kRadius rows of apron of both passes (21 x the work for r = 10).
+   * Every output row depends only on the source (the result is band independent), so once the engine asks
+   * for the rows that follow the previous call, a block that doubles up to MAX_BAND pixels is computed at once and the
+   * next calls are served from it. The first call computes exactly what was asked, so a selection that fits one band
+   * costs nothing extra; a block never reaches past the image; a whole-image op is never grown. Cancel and progress
+   * go through the pass' own ticker as before. A block is not capped by the selection's bottom (the engine does not tell it),
+ * so the last block of a tall selection ending mid-image may compute up to 2 * lastH rows nobody asks for (output unaffected). `compute(full, rect)` returns the rect's typed result. */
+  function growingRegion(compute, whole) {
+    let blk = null, lastEnd = -1, lastH = 0, lastKey = null;
+    return async (full, rect) => {
+      const key = full.data;
+      if (blk && blk.key === key && blk.x === rect.x && blk.w === rect.w && rect.y >= blk.y0 && rect.y + rect.h <= blk.y1) {
+        lastEnd = rect.y + rect.h;
+        const part = blk.data.subarray((rect.y - blk.y0) * rect.w, (rect.y - blk.y0 + rect.h) * rect.w);
+        if (rect.y + rect.h >= blk.y1) blk = null; // consumed: a finished channel keeps no block alive
+        return part;
+      }
+      let h = rect.h;
+      if (!whole && lastKey === key && rect.y === lastEnd) {
+        const cap = Math.max(rect.h, Math.floor(MAX_BAND / Math.max(1, rect.w)));
+        h = Math.min(full.height - rect.y, Math.max(rect.h, Math.min(cap, 2 * lastH)));
+      }
+      const data = await compute(full, { x: rect.x, y: rect.y, w: rect.w, h });
+      blk = { key, x: rect.x, w: rect.w, y0: rect.y, y1: rect.y + h, data };
+      lastKey = key; lastEnd = rect.y + rect.h; lastH = h;
+      if (h === rect.h) blk = null;
+      return h === rect.h ? data : data.subarray(0, rect.w * rect.h);
+    };
+  }
 
   /* RankFilters: the dialog accepts radius 0..100 for outliers / remove NaNs and 0..1000 for the others
    * (dialogItemChanged: int maxRadius = (filterType==MEDIAN || filterType==OUTLIERS || filterType==REMOVE_NAN) ? 100 : 1000;
@@ -768,7 +885,7 @@
         const r1w = Math.min(info.width, reg.w + 2 * k.kRadius), r1h = Math.min(info.height, reg.h + 2 * k.kRadius);
         return r1w * r1h * 4 * 2 + reg.w * reg.h * 4 * 2;
       }
-      return bandBytes(info, 2 * k.kRadius, 2 * k.kRadius, 2) + bandBytes(info, k.kRadius, k.kRadius, 1);
+      return bandBytes(info, 2 * k.kRadius, 2 * k.kRadius, 2) + bandBytes(info, k.kRadius, k.kRadius, 3);
     },
     prepare(view, c, p, ctx) {
       const sc = (ctx && ctx.scale) || 1;
@@ -779,26 +896,27 @@
       const invert = (inverted && !light) || (!inverted && light);
       const sign = invert ? 1 : -1;
       const dontSubtract = !!p.dontSubtract;
+      const compute = async (full, rect) => {
+        const W = full.width, H = full.height;
+        const r1x = Math.max(0, rect.x - kR), r1y = Math.max(0, rect.y - kR);
+        const r1 = { x: r1x, y: r1y, w: Math.min(W, rect.x + rect.w + kR) - r1x, h: Math.min(H, rect.y + rect.h + kR) - r1y };
+        const st1 = await minMaxPass(full.data, W, H, r1, k, sign, tk, 0, 0.5);
+        const r2 = { x: rect.x - r1.x, y: rect.y - r1.y, w: rect.w, h: rect.h };
+        const st2 = await minMaxPass(st1, r1.w, r1.h, r2, k, -sign, tk, 0.5, 1);
+        if (dontSubtract) return floatToTypeKeep(st2, bd);
+        const offset = (sign === 1 && bd !== 32) ? (bd === 8 ? 255 : 65535) : 0;
+        const s = full.data, n = rect.w * rect.h;
+        const res = new Float32Array(n);
+        for (let y = 0; y < rect.h; y++) {
+          const sb = (rect.y + y) * W + rect.x, ob = y * rect.w;
+          for (let x = 0; x < rect.w; x++) res[ob + x] = fround(fround(s[sb + x] - st2[ob + x]) + offset);
+        }
+        return floatToType(res, bd);
+      };
       return {
         whole: kR >= WHOLE_APRON,
         apron: { x: 2 * kR, y: 2 * kR },
-        region: async (full, rect) => {
-          const W = full.width, H = full.height;
-          const r1x = Math.max(0, rect.x - kR), r1y = Math.max(0, rect.y - kR);
-          const r1 = { x: r1x, y: r1y, w: Math.min(W, rect.x + rect.w + kR) - r1x, h: Math.min(H, rect.y + rect.h + kR) - r1y };
-          const st1 = await rankPass(full.data, W, H, r1, k, MODE_MINMAX, sign, 0, 0, tk, 0, 0.5);
-          const r2 = { x: rect.x - r1.x, y: rect.y - r1.y, w: rect.w, h: rect.h };
-          const st2 = await rankPass(st1, r1.w, r1.h, r2, k, MODE_MINMAX, -sign, 0, 0, tk, 0.5, 1);
-          if (dontSubtract) return floatToTypeKeep(st2, bd);
-          const offset = (sign === 1 && bd !== 32) ? (bd === 8 ? 255 : 65535) : 0;
-          const s = full.data, n = rect.w * rect.h;
-          const res = new Float32Array(n);
-          for (let y = 0; y < rect.h; y++) {
-            const sb = (rect.y + y) * W + rect.x, ob = y * rect.w;
-            for (let x = 0; x < rect.w; x++) res[ob + x] = fround(fround(s[sb + x] - st2[ob + x]) + offset);
-          }
-          return floatToType(res, bd);
-        }
+        region: growingRegion(compute, kR >= WHOLE_APRON)
       };
     }
   });

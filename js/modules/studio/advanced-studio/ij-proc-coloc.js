@@ -170,8 +170,36 @@
   }
 
   // Raw moments of S, the numerators of Manders' M1 / M2 and the extremes of both channels.
+  // One entry per pixel (w === null) is the same sum with weight 1: 1·x is exact, so the unweighted loops below add the
+  // very same doubles in the very same order as the weighted ones, minus the multiplications and the branch.
+  function momentsChunk1(a, b, s, e, m) {
+    let sa = m.sa, sb = m.sb, saa = m.saa, sbb = m.sbb, sab = m.sab, num1 = m.num1, num2 = m.num2;
+    let amin = m.amin, amax = m.amax, bmin = m.bmin, bmax = m.bmax;
+    for (let i = s; i < e; i++) {
+      const va = a[i], vb = b[i];
+      sa += va; sb += vb; saa += va * va; sbb += vb * vb; sab += va * vb;
+      if (vb > 0) num1 += va;
+      if (va > 0) num2 += vb;
+      if (va < amin) amin = va;
+      if (va > amax) amax = va;
+      if (vb < bmin) bmin = vb;
+      if (vb > bmax) bmax = vb;
+    }
+    m.sa = sa; m.sb = sb; m.saa = saa; m.sbb = sbb; m.sab = sab; m.num1 = num1; m.num2 = num2;
+    m.amin = amin; m.amax = amax; m.bmin = bmin; m.bmax = bmax;
+  }
+
   function moments(T, hooks, ph) {
     const a = T.a, b = T.b, w = T.w, hw = w !== null, len = T.len;
+    if (!hw) {
+      const m = { sa: 0, sb: 0, saa: 0, sbb: 0, sab: 0, num1: 0, num2: 0, amin: Infinity, amax: -Infinity, bmin: Infinity, bmax: -Infinity };
+      for (let s = 0; s < len; s += CHUNK) {
+        const e = Math.min(len, s + CHUNK);
+        momentsChunk1(a, b, s, e, m);
+        hooks.check(); ph(e / len);
+      }
+      return m;
+    }
     let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, num1 = 0, num2 = 0;
     let amin = Infinity, amax = -Infinity, bmin = Infinity, bmax = -Infinity;
     for (let s = 0; s < len; s += CHUNK) {
@@ -192,6 +220,33 @@
   }
 
   // Centred second moments of S and the number of pixels whose product of differences is positive.
+  // Unweighted pass: the centred moments AND the plot's histogram in one sweep (the plot only needs the channel extremes,
+  // known after `moments`); the two sets of accumulators are independent, so each is the sum the separate passes made.
+  function centredChunk1(a, b, s, e, c, hs) {
+    let Saa = c.Saa, Sbb = c.Sbb, Sab = c.Sab, pos = c.pos;
+    const hist = hs.hist, ax0 = hs.ax[0], bx0 = hs.bx[0], wa = hs.wa, wb = hs.wb, top = BINS - 1, ma = c.ma, mb = c.mb;
+    for (let i = s; i < e; i++) {
+      const va = a[i], vb = b[i], dx = va - ma, dy = vb - mb, p = dx * dy;
+      Saa += dx * dx; Sbb += dy * dy; Sab += p;
+      if (p > 0) pos++;
+      const qx = (va - ax0) / wa, qy = (vb - bx0) / wb;
+      const xb = qx >= top ? top : (qx < 0 ? 0 : qx | 0);
+      const yb = qy >= top ? top : (qy < 0 ? 0 : qy | 0);
+      hist[(yb << 8) + xb]++;
+    }
+    c.Saa = Saa; c.Sbb = Sbb; c.Sab = Sab; c.pos = pos;
+  }
+
+  function centredFused(T, ma, mb, hs, hooks, ph) {
+    const c = { Saa: 0, Sbb: 0, Sab: 0, pos: 0, ma, mb }, len = T.len;
+    for (let s = 0; s < len; s += CHUNK) {
+      const e = Math.min(len, s + CHUNK);
+      centredChunk1(T.a, T.b, s, e, c, hs);
+      hooks.check(); ph(e / len);
+    }
+    return c;
+  }
+
   function centred(T, ma, mb, hooks, ph) {
     const a = T.a, b = T.b, w = T.w, hw = w !== null, len = T.len;
     let Saa = 0, Sbb = 0, Sab = 0, pos = 0;
@@ -209,8 +264,44 @@
 
   // The two sets of a threshold pair, with the sums Pearson needs (shifted by the channel means of S).
   // incl: "above" means >= (manual / Costes) or > (none).
+  // Unweighted chunk (weight 1 is exact, same sums in the same order); r holds the accumulators between chunks.
+  function regionChunk1(a, b, s, e, T1, T2, incl, ma, mb, r) {
+    let nA = r.nA, sxA = r.sxA, syA = r.syA, sxxA = r.sxxA, syyA = r.syyA, sxyA = r.sxyA;
+    let nB = r.nB, sxB = r.sxB, syB = r.syB, sxxB = r.sxxB, syyB = r.syyB, sxyB = r.sxyB;
+    let aboveA = r.aboveA, aboveB = r.aboveB, gtA = r.gtA, gtB = r.gtB;
+    for (let i = s; i < e; i++) {
+      const va = a[i], vb = b[i];
+      const gx = incl ? va >= T1 : va > T1, gy = incl ? vb >= T2 : vb > T2;
+      if (gx) gtA += va;
+      if (gy) gtB += vb;
+      const dx = va - ma, dy = vb - mb;
+      if (gx && gy) {
+        nA++; sxA += dx; syA += dy; sxxA += dx * dx; syyA += dy * dy; sxyA += dx * dy;
+        aboveA += va; aboveB += vb;
+      } else {
+        nB++; sxB += dx; syB += dy; sxxB += dx * dx; syyB += dy * dy; sxyB += dx * dy;
+      }
+    }
+    r.nA = nA; r.sxA = sxA; r.syA = syA; r.sxxA = sxxA; r.syyA = syyA; r.sxyA = sxyA;
+    r.nB = nB; r.sxB = sxB; r.syB = syB; r.sxxB = sxxB; r.syyB = syyB; r.sxyB = sxyB;
+    r.aboveA = aboveA; r.aboveB = aboveB; r.gtA = gtA; r.gtB = gtB;
+  }
+
   function region(T, T1, T2, incl, ma, mb, hooks, ph) {
     const a = T.a, b = T.b, w = T.w, hw = w !== null, len = T.len;
+    if (!hw) {
+      const r = { nA: 0, sxA: 0, syA: 0, sxxA: 0, syyA: 0, sxyA: 0, nB: 0, sxB: 0, syB: 0, sxxB: 0, syyB: 0, sxyB: 0, aboveA: 0, aboveB: 0, gtA: 0, gtB: 0 };
+      for (let s = 0; s < len; s += CHUNK) {
+        const e = Math.min(len, s + CHUNK);
+        regionChunk1(a, b, s, e, T1, T2, incl, ma, mb, r);
+        hooks.check(); ph(e / len);
+      }
+      return {
+        nA: r.nA, nB: r.nB, aboveA: r.aboveA, aboveB: r.aboveB, gtA: r.gtA, gtB: r.gtB,
+        rAbove: pearson(r.nA, r.sxA, r.syA, r.sxxA, r.syyA, r.sxyA),
+        rBelow: pearson(r.nB, r.sxB, r.syB, r.sxxB, r.syyB, r.sxyB)
+      };
+    }
     let nA = 0, sxA = 0, syA = 0, sxxA = 0, syyA = 0, sxyA = 0;
     let nB = 0, sxB = 0, syB = 0, sxxB = 0, syyB = 0, sxyB = 0;
     let aboveA = 0, aboveB = 0, gtA = 0, gtB = 0;
@@ -269,7 +360,21 @@
       while (kb >= 0 && !(vb >= m * edge(kb) + c)) kb--;
       return ka < kb ? ka : kb;
     };
-    return { edge, entry, NB };
+    // Integer channels (8/16-bit): the level that channel 2 allows depends on vb alone, so it is tabulated once per value
+    // (65536 calls of the very `entry` formula's channel-2 half; precondition: channel 2 holds integers in [0, 65535], which
+    // the engine guarantees for 8/16-bit) and the per-pixel work is a table read and a min.
+    let kbTable = null;
+    if (isInt) {
+      kbTable = new Int32Array(65536);
+      for (let vb = 0; vb < 65536; vb++) {
+        let kb = Math.floor((vb - c) / m);
+        if (kb > NB) kb = NB; else if (!(kb >= -1)) kb = -1;
+        while (kb < NB && vb >= m * (kb + 1) + c) kb++;
+        while (kb >= 0 && !(vb >= m * kb + c)) kb--;
+        kbTable[vb] = kb;
+      }
+    }
+    return { edge, entry, NB, kbTable };
   }
 
   // The hot loop of ladderSweep, one chunk at a time (a separate function keeps V8 from leaving and re-entering an
@@ -280,6 +385,25 @@
       const va = a[i], vb = b[i];
       if (oEntry !== null && oEntry(va, vb) !== oK) continue;
       const j = 6 * (entry(va, vb) + 1), wi = hw ? w[i] : 1, dx = va - ma, dy = vb - mb;
+      acc[j] += wi; acc[j + 1] += wi * dx; acc[j + 2] += wi * dy;
+      acc[j + 3] += wi * dx * dx; acc[j + 4] += wi * dy * dy; acc[j + 5] += wi * dx * dy;
+    }
+  }
+
+  // ladderChunk for an integer ladder: entry = min(va, kbTable[vb]) (-1 when va < 0), the same level as lad.entry.
+  function ladderChunkInt(a, b, w, s, e, acc, kbTable, ma, mb) {
+    if (w === null) {
+      for (let i = s; i < e; i++) {
+        const va = a[i], vb = b[i], kb = kbTable[vb];
+        const j = 6 * ((va < 0 ? -1 : (va < kb ? va : kb)) + 1), dx = va - ma, dy = vb - mb;
+        acc[j] += 1; acc[j + 1] += dx; acc[j + 2] += dy;
+        acc[j + 3] += dx * dx; acc[j + 4] += dy * dy; acc[j + 5] += dx * dy;
+      }
+      return;
+    }
+    for (let i = s; i < e; i++) {
+      const va = a[i], vb = b[i], kb = kbTable[vb];
+      const j = 6 * ((va < 0 ? -1 : (va < kb ? va : kb)) + 1), wi = w[i], dx = va - ma, dy = vb - mb;
       acc[j] += wi; acc[j + 1] += wi * dx; acc[j + 2] += wi * dy;
       acc[j + 3] += wi * dx * dx; acc[j + 4] += wi * dy * dy; acc[j + 5] += wi * dx * dy;
     }
@@ -296,7 +420,8 @@
     const oEntry = only ? only.lad.entry : null, oK = only ? only.k : 0;
     for (let s = 0; s < len; s += CHUNK) {
       const e = Math.min(len, s + CHUNK);
-      ladderChunk(a, b, w, s, e, acc, entry, oEntry, oK, ma, mb);
+      if (lad.kbTable !== null && only === null) ladderChunkInt(a, b, w, s, e, acc, lad.kbTable, ma, mb);
+      else ladderChunk(a, b, w, s, e, acc, entry, oEntry, oK, ma, mb);
       hooks.check(); ph(0.9 * e / len);
     }
     let n = base[0], sx = base[1], sy = base[2], sxx = base[3], syy = base[4], sxy = base[5];
@@ -335,32 +460,40 @@
     return { status: 'ok', t1, t2: slope * t1 + intercept, slope, intercept };
   }
 
+  // The bin is clamped on the double BEFORE the integer conversion: floor(q) > top <=> q >= top + 1 and floor(q) = top for
+  // q in [top, top + 1), so `q >= top ? top : q < 0 ? 0 : q | 0` is the same bin as clamp(floor(q)) while the index stays a
+  // small integer (a floor() result is a double, which sends the typed-array store down V8's slow keyed path: 8 s at 5735²).
+  // A NaN q (zero bin width) is never filled by the callers: the pixel is left out of the plot, as before.
   function histChunk(A, B, w, s, e, hist, ax0, bx0, wa, wb) {
     const hw = w !== null, top = BINS - 1;
     for (let i = s; i < e; i++) {
-      let xb = Math.floor((A[i] - ax0) / wa), yb = Math.floor((B[i] - bx0) / wb);
-      if (xb > top) xb = top; else if (xb < 0) xb = 0;
-      if (yb > top) yb = top; else if (yb < 0) yb = 0;
-      hist[yb * BINS + xb] += hw ? w[i] : 1;
+      const qx = (A[i] - ax0) / wa, qy = (B[i] - bx0) / wb;
+      const xb = qx >= top ? top : (qx < 0 ? 0 : qx | 0);
+      const yb = qy >= top ? top : (qy < 0 ? 0 : qy | 0);
+      hist[(yb << 8) + xb] += hw ? w[i] : 1;
     }
   }
 
   // The 2D histogram of the measured pixels, BINS x BINS, row 0 = the lowest channel-2 values.
-  function histogram2d(T, bitDepth, mo, hooks, ph) {
+  function histSetup(bitDepth, mo) {
     const amin = mo.amin, amax = mo.amax, bmin = mo.bmin, bmax = mo.bmax;
     let ax, bx;
     if (bitDepth === 8) { ax = [-0.5, 255.5]; bx = [-0.5, 255.5]; }
     else if (bitDepth === 16) { ax = [amin - 0.5, amax + 0.5]; bx = [bmin - 0.5, bmax + 0.5]; }
     else { ax = [amin, amax > amin ? amax : amin + 1]; bx = [bmin, bmax > bmin ? bmax : bmin + 1]; }
     const wa = (ax[1] - ax[0]) / BINS, wb = (bx[1] - bx[0]) / BINS;
-    const hist = new Uint32Array(BINS * BINS);
+    return { hist: new Uint32Array(BINS * BINS), ax, bx, wa, wb };
+  }
+
+  function histogram2d(T, hs, hooks, ph) {
+    const hist = hs.hist, ax = hs.ax, bx = hs.bx, wa = hs.wa, wb = hs.wb;
     const A = T.a, B = T.b, w = T.w, len = T.len;
     for (let s = 0; s < len; s += CHUNK) {
       const e = Math.min(len, s + CHUNK);
       histChunk(A, B, w, s, e, hist, ax[0], bx[0], wa, wb);
       hooks.check(); ph(e / len);
     }
-    return { hist, xRange: ax, yRange: bx };
+    return hs;
   }
 
   // ───────────────────────────── analyze ─────────────────────────────
@@ -390,7 +523,10 @@
     const isInt = bd !== 32;
     const mo = moments(T, hooks, prog(0.16, 0.22));
     const ma = mo.sa / n, mb = mo.sb / n;
-    const ce = centred(T, ma, mb, hooks, prog(0.22, 0.28));
+    const hs = histSetup(bd, mo);
+    // A zero bin width (a 32-bit channel constant at |v| >= 2^53) makes every q NaN: the plot is then left empty, as the separate pass did.
+    const fused = T.w === null && hs.wa > 0 && hs.wb > 0;
+    const ce = fused ? centredFused(T, ma, mb, hs, hooks, prog(0.22, 0.28)) : centred(T, ma, mb, hooks, prog(0.22, 0.28));
     const negative = mo.amin < 0 || mo.bmin < 0;
     const pearsonAll = ce.Saa > 0 && ce.Sbb > 0 ? Math.max(-1, Math.min(1, ce.Sab / Math.sqrt(ce.Saa * ce.Sbb))) : NaN;
     const overlap = !negative && mo.saa > 0 && mo.sbb > 0 ? mo.sab / Math.sqrt(mo.saa * mo.sbb) : NaN;
@@ -410,7 +546,7 @@
     const rg = failedSearch ? null : region(T, t1, t2, p.mode !== 'none', ma, mb, hooks, prog(0.8, 0.9));
     const d1 = rg ? (p.denominator === 'above' ? rg.gtA : mo.sa) : 0;
     const d2 = rg ? (p.denominator === 'above' ? rg.gtB : mo.sb) : 0;
-    const h = histogram2d(T, bd, mo, hooks, prog(0.9, 1));
+    const h = fused || !(hs.wa > 0 && hs.wb > 0) ? hs : histogram2d(T, hs, hooks, prog(0.9, 1));
     return {
       version: 1, bitDepth: bd, n, nAbove: rg ? rg.nA : null, nBelow: rg ? rg.nB : null, mode: p.mode, costes: status, denominator: p.denominator, excludeZero: !!p.excludeZero,
       negative,
@@ -420,7 +556,7 @@
       m1: fin(!negative && mo.sa > 0 ? mo.num1 / mo.sa : NaN), m2: fin(!negative && mo.sb > 0 ? mo.num2 / mo.sb : NaN),
       tm1: fin(rg && !negative && d1 > 0 ? rg.aboveA / d1 : NaN), tm2: fin(rg && !negative && d2 > 0 ? rg.aboveB / d2 : NaN),
       overlap: fin(overlap), icq: fin(icq), icqPositive: ce.pos,
-      hist: h.hist, histBins: BINS, xRange: h.xRange, yRange: h.yRange
+      hist: h.hist, histBins: BINS, xRange: h.ax, yRange: h.bx
     };
   }
 
@@ -449,7 +585,7 @@
       },
 
       // What exists whatever the data: the Costes ladder's accumulators (6 x 65538 doubles), the plot's histogram, the
-      // 8-bit joint histogram and the selection mask the engine builds (one byte per pixel). The two lists a selection
+      // integer-ladder table kbTable (65536 x 4 bytes), the 8-bit joint histogram and the selection mask the engine builds (one byte per pixel). The two lists a selection
       // or an excluded value needs (4 / 8 bytes per MEASURED pixel) are reserved through io.reserve once the count is known.
       scratchBytes(info) {
         const n = info.width * info.height, mask = info.roi ? n : 0, fixed = 6 << 20;

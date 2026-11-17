@@ -50,7 +50,8 @@ const quiet = async (fn) => { const e = console.error; console.error = () => {};
   const spec = lastSpec(t);
   assert.deepEqual(fieldIds(spec), ['radius', 'light', 'create', 'sliding', 'noSmooth', 'all'], 'ImageJ: radius, Light background, Create background, Sliding paraboloid, Disable smoothing (+ all channels on a multi-channel image)');
   const dflt = Object.fromEntries(spec.fields.map((f) => [f.id, f.value]));
-  assert.deepEqual(J(dflt), { radius: 50, light: true, create: false, sliding: false, noSmooth: false, all: false }, "ImageJ's defaults: 50 pixels, Light background on (Prefs bs.background), the rest off");
+  assert.deepEqual(J(dflt), { radius: 50, light: false, create: false, sliding: false, noSmooth: false, all: false }, "defaults: 50 pixels, Light background OFF (deliberate departure from ImageJ's Prefs bs.background: fluorescence has a dark background), the rest off");
+  assert.equal(dflt.light, false, 'the dialog opens with Light background off on first use');
   assert.ok(spec.preview && typeof spec.preview.onChange === 'function', 'the dialog has a Preview');
   assert.ok(t.log.previews.length > 0, 'the harness ran the preview through the engine');
   assert.equal(spec.fields[0].unitsKey, 'dlg.pixels');
@@ -433,7 +434,7 @@ function J(x) { return JSON.parse(JSON.stringify(x)); }
   const spec = t.page.IJOpRegistry.get('subtractBackground');
   const info = { width: 5735, height: 5735, bitDepth: 16 };
   const n = info.width * info.height;
-  assert.equal(spec.scratchBytes(info, { radius: 10 }), n * 4 + n * 2 + 4 * 1048576, 'radius <= 10: no shrunken copy');
+  assert.equal(spec.scratchBytes(info, { radius: 10 }), n * 4 + n * 2 + (5735 + 5735 + 20) * 21 * 4 + 4 * 1048576, 'radius <= 10: no shrunken copy, only the line cache and the z ring');
   assert.equal(spec.scratchBytes(info, { radius: 10, sliding: true }), n * 4 + n * 2 + 5735 * 8 + 4 * 1048576);
   assert.ok(spec.scratchBytes(info, { radius: 50 }) > n * 4 + n * 2 + 4 * 1048576, 'radius 50 shrinks: the small arrays count');
   // saturatedRange counts the mask box of an area selection

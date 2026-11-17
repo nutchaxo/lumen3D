@@ -575,6 +575,25 @@ const IJViewPure = (() => {
     return f.options || [];
   }
 
+  /**
+   * Whether a DOM event of a dialog control must reach spec.onChange. A user change fires `input` then `change` on a
+   * checkbox / radio / select, and `input` per keystroke then `change` on commit for text-like controls; a handler that
+   * applies a toggle delta (Centered, Pixel units...) must run once per change. Discrete controls report on `change`
+   * only; text-like ones on `input`, and on `change` only when the value differs from the last one reported.
+   * `memo` is a Map/WeakMap element -> last reported value.
+   */
+  function dialogEventDecision(evType, el, memo) {
+    if (!el) return false;
+    const tag = String(el.tagName || '').toUpperCase(), type = String(el.type || '').toLowerCase();
+    const discrete = tag === 'SELECT' || type === 'checkbox' || type === 'radio' || type === 'select-one' || type === 'select-multiple';
+    if (discrete) return evType === 'change';
+    if (evType === 'input') { memo.set(el, el.value); return true; }
+    if (evType !== 'change') return false;
+    if (memo.get(el) === el.value) return false;
+    memo.set(el, el.value);
+    return true;
+  }
+
   /** Values of a dialog: raw = { [id]: string | boolean } as read from the controls.
    *  opts.hidden = ids of hidden fields: not validated, they keep their initial value. */
   function collectFields(fields, raw, opts) {
@@ -910,7 +929,7 @@ const IJViewPure = (() => {
     visibleTiles, parentTile, createLru, tileBudgetBytes, wheelSteps,
     shortcutFromEvent, normalizeShortcut, shortcutLabel,
     TOP_ORDER, buildMenuTree, menuKey, menuListAt, nextSelectable, firstSelectable, lastSelectable,
-    parseNumber, formatNumber, collectFields, clampWindowPos, FIELD_TYPES, fieldProblems, effectiveOptions,
+    parseNumber, formatNumber, collectFields, dialogEventDecision, clampWindowPos, FIELD_TYPES, fieldProblems, effectiveOptions,
     numberStep, clampPopupX, clampPopupY, submenuX, centreX,
     roiBounds, translateRoi, isAreaRoi, roiFromDrag, lineFromDrag, roiHandles, handleAt, hitRoi, moveHandle, handleCursor,
     formatZoomPct, formatSize, formatSubtitle, formatStatus, describeRoi
@@ -2342,8 +2361,10 @@ const IJWindows = (() => {
         if (controls[f.id]) idOfEl.set(controls[f.id], f.id);
         for (const rb of radios[f.id] || []) idOfEl.set(rb, f.id);
       }
+      const reported = new WeakMap();
       const onInput = (ev) => {
-        if (!inSet && typeof spec.onChange === 'function') {
+        const fresh = !!ev && P.dialogEventDecision(ev.type, ev.target, reported);
+        if (fresh && !inSet && typeof spec.onChange === 'function') {
           syncChannelOptions();
           const r = P.collectFields(fields, readRaw(), { hidden: hiddenIds });
           const changed = ev && ev.target ? idOfEl.get(ev.target) : undefined;

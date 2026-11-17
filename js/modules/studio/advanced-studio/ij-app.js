@@ -2090,13 +2090,19 @@ const IJApp = (() => {
     return { counts, nBins, histMin, histMax, binSize, count, mean: ave, sd, min, max };
   }
 
+  // ij.plugin.Distribution: `static String parameter = "Area"`; else the first measurement column that is not Ch / Label.
+  function distributionDefaultColumn(cols) {
+    if (cols.includes('Area')) return 'Area';
+    return cols.find((c) => c !== 'Ch' && c !== 'Label') || cols[0];
+  }
+
   async function distribution() {
     const cols = resultColumns().filter((c) => c !== 'Label' && S.results.some((r) => typeof r[c] === 'number'));
     if (!S.results.length || !cols.length) return;
     const last = S.distribution || {};
     const v = await dialog({ title: tr('cmd.analyzeDistribution'), okLabel: tr('dlg.ok'),
       fields: [
-        { type: 'choice', id: 'parameter', label: tr('dlg.roi.distParameter'), options: cols.map((c) => ({ value: c, label: columnHeader(c) })), value: cols.includes(last.parameter) ? last.parameter : cols[0] },
+        { type: 'choice', id: 'parameter', label: tr('dlg.roi.distParameter'), options: cols.map((c) => ({ value: c, label: columnHeader(c) })), value: cols.includes(last.parameter) ? last.parameter : distributionDefaultColumn(cols) },
         { type: 'message', id: 'points', value: tr('dlg.roi.distPoints', { n: S.results.length }) },
         { type: 'check', id: 'auto', labelKey: 'dlg.roi.distAuto', value: last.auto !== false },
         { type: 'number', id: 'bins', labelKey: 'dlg.roi.distBins', value: last.bins || 10, min: 1, max: 100000, integer: true, enabledIf: (x) => !x.auto },
@@ -3264,6 +3270,6 @@ const IJApp = (() => {
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
     extend, EXT_API_MEMBERS, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
-    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, COLUMNS, PARTICLE_COLUMNS
+    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
   };
 })();

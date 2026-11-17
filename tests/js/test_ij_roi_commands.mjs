@@ -349,6 +349,9 @@ function IR_mask(t, roi, W, H) {
   assert.equal(floats(t).length, before + 1);
   const fl = [...t.shell.windows.floats.values()].pop();
   assert.ok(/Area/.test(fl.spec.title), fl.spec.title);
+  assert.equal(t.IJApp.distributionDefaultColumn(['Ch', 'Area', 'Mean']), 'Area');
+  assert.equal(t.IJApp.distributionDefaultColumn(['Ch', 'Mean', 'Min']), 'Mean');
+  assert.equal(t.IJApp.distributionDefaultColumn(['Ch']), 'Ch');
   const h = t.IJApp.distributionHistogram(Float32Array.from([1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 9]), true, 10, null);
   assert.equal(h.counts.reduce((s, v) => s + v, 0), 13);
   assert.ok(h.nBins >= 2);

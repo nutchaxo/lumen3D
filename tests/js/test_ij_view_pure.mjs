@@ -1135,3 +1135,18 @@ function makeGl() {
 }
 
 console.log('ij-view (pure helpers, IJDisplay on a fake WebGL2, IJShell + IJWindows on a fake DOM): OK');
+
+// ── dialog events: onChange exactly once per user change ──────────────────────
+{
+  const run = (el, seq) => { const memo = new Map(); let n = 0; for (const e of seq) if (P.dialogEventDecision(e, el, memo)) n++; return n; };
+  assert.equal(run({ tagName: 'INPUT', type: 'checkbox', value: 'on' }, ['input', 'change']), 1);
+  assert.equal(run({ tagName: 'INPUT', type: 'radio', value: 'a' }, ['input', 'change']), 1);
+  assert.equal(run({ tagName: 'SELECT', type: 'select-one', value: 'a' }, ['input', 'change']), 1);
+  const text = { tagName: 'INPUT', type: 'text', value: '' };
+  const memo = new Map(); let n = 0;
+  for (const [e, v] of [['input', '1'], ['input', '12'], ['change', '12']]) { text.value = v; if (P.dialogEventDecision(e, text, memo)) n++; }
+  assert.equal(n, 2);
+  text.value = '13';                                    // a commit with no preceding input (autofill)
+  assert.equal(P.dialogEventDecision('change', text, memo), true);
+  assert.equal(P.dialogEventDecision('change', text, memo), false);
+}

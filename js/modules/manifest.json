@@ -144,6 +144,11 @@
       "path": "shaders/structure-dvr",
       "placement": "shaders",
       "id": "structure-dvr"
+    },
+    {
+      "path": "studio/advanced-studio",
+      "placement": "studio",
+      "id": "advanced-studio"
     }
   ]
 }

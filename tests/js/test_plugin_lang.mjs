@@ -15,7 +15,7 @@ import path from 'node:path';
 import { ROOT } from './harness.mjs';
 
 const MOD = path.join(ROOT, 'js', 'modules');
-const PLACEMENTS = ['tools', 'channels', 'shaders'];
+const PLACEMENTS = ['tools', 'channels', 'shaders', 'studio'];
 const LANG_RE = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));

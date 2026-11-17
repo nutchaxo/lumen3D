@@ -1,0 +1,34 @@
+{
+  "id": "advanced-studio",
+  "name": "Advanced Studio",
+  "version": "1.0.0",
+  "platformCompat": ">=1.83.0",
+  "dataTypes": [
+    "3d",
+    "live"
+  ],
+  "contexts": [
+    "page"
+  ],
+  "creator": "IRIBHM",
+  "placement": "studio",
+  "icon": "microscope",
+  "order": 10,
+  "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then adjust brightness and contrast, pick lookup tables, draw selections, measure, threshold, analyse particles and filter, on the full-precision voxels.",
+  "i18nTitle": "mode",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ],
+  "scripts": [
+    "ij-core.js",
+    "ij-analysis.js",
+    "ij-view.js",
+    "ij-app.js"
+  ],
+  "styles": [
+    "ij-style.css"
+  ]
+}

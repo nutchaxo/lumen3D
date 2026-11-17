@@ -493,6 +493,9 @@ const ViewerApp = (() => {
       // The native lossless voxels and the coordinate frames (SPEC §14.8): a plugin that
       // reports a number reads here, never the displayed (possibly compressed) volume.
       data: typeof DataAccess !== 'undefined' ? DataAccess : null,
+      // The Studio, for the plugins of the `studio` placement: modes + the lossless source
+      // of the figure on screen (_studioSourceDescribe / _studioSourceOpen).
+      studio: _studioFacade(),
       viewer: {
         getRenderer: () => VolumeViewer.getRenderer(),
         getMaterial: () => VolumeViewer.getMaterial(),
@@ -2635,6 +2638,8 @@ const ViewerApp = (() => {
       const opening = preview || getCurrentSliceResult();
       if (!opening) return;
       token = StudioEditor.open(opening);
+      // An open Studio mode with work in it is asked first: the answer is a Promise.
+      if (token && typeof token.then === 'function') token = await token;
     } finally {
       _studioOpening = false;
     }
@@ -2669,6 +2674,467 @@ const ViewerApp = (() => {
     _studioUpgradePromise = _upgradeStudioSliceToNative(_studioPreview, token, _isV6BrickManifest() ? { lod } : {});
     try { await _studioUpgradePromise; } catch (err) { return false; } finally { _studioUpgradePromise = null; }
     return isNative();
+  }
+
+  // ── The Studio's data source (ctx.studio, for the plugins of the `studio` placement) ──
+  // What the Studio figure is made of, as the lossless voxels a mode edits: describe()
+  // says which planes of which levels the figure shows; open() holds the figure's frame on
+  // screen and returns a session that reads those planes block by block. The reads never
+  // touch the GPU atlas: planes/ (XY, level 0), the XZ / YZ cut rows of a format-5/6 tree,
+  // else the bricks (DataAccess.readRegion on the one pin taken at open).
+
+  function _studioError(code, message) {
+    return Object.assign(new Error(message), { code });
+  }
+
+  function _fnv1a(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
+  }
+
+  const _studioTreeSignatures = new WeakMap();
+
+  /**
+   * A key for the brick tree on screen: its path (dataset + timepoint folder) and the
+   * sha256 of its index (v3+ trees), else a hash of the manifest's channels and level
+   * dimensions (a v2 tree has no index). Stable across reloads of the same data — the
+   * key a recovered session is matched with.
+   */
+  function _studioTreeKey(tree) {
+    const manifest = tree?.manifest;
+    if (!manifest || typeof manifest !== 'object') return null;
+    let signature = _studioTreeSignatures.get(manifest);
+    if (!signature) {
+      const index = manifest.index;
+      signature = index?.columns?.ll?.sha256 || index?.sha256
+        || _fnv1a(JSON.stringify([manifest.schema || null, manifest.channels || null, (manifest.levels || []).map(l => (l ? (l.dimensions || l.dims || null) : null))]));
+      _studioTreeSignatures.set(manifest, signature);
+    }
+    return `${_fnv1a(String(tree.path || ''))}-${String(signature).slice(0, 16)}`;
+  }
+
+  /**
+   * The voxel indices, along the plane's normal `axis`, of the planes a figure shows in a
+   * level of `dim` voxels there — contiguous, ascending (the first to the last sample
+   * rounded outward, so a coarser level never drops a plane the figure covers).
+   *   A single plane: exactly one index, floor(t·dim) with t the plane's texture
+   *   coordinate (the shader's voxel, clamped to the volume). A slab: its N samples
+   *     t_i = center_k + (−H + i·δ)·step_k,  H = (N − 1)·δ / 2   (VolumeSlicer.planeGeometry),
+   *   the ones inside the volume (the shader's inBox), each at voxel floor(t_i·dim).
+   * `geom` is StudioPlaneOps.plainGeometry of the figure's plane with the projection
+   * forced to the maximum, so an average slab covers the same planes as its MIP.
+   */
+  function _studioFigureIndices(geom, axis, dim) {
+    const centre = Number(geom.center?.[axis]);
+    const positions = [];
+    if (!geom.projected) {
+      positions.push(centre);
+    } else {
+      const half = (geom.steps - 1) * geom.delta * 0.5;
+      for (let i = 0; i < geom.steps; i++) positions.push(centre + (-half + i * geom.delta) * Number(geom.step?.[axis]));
+    }
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const u of positions) {
+      const t = u * dim;
+      if (!Number.isFinite(t)) continue;
+      if (geom.projected && (t < 0 || t > dim)) continue;
+      const v = Math.min(dim - 1, Math.max(0, Math.floor(t)));
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (!(hi >= lo)) return [];
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  }
+
+  /** The voxel size (µm) of a level: the tree's own, else the physical size over the level's dimensions. */
+  function _studioLevelVoxelUm(level, dims) {
+    try {
+      const own = typeof DataAccess !== 'undefined' ? DataAccess.voxelSize?.(level) : null;
+      if (own && own.x > 0 && own.y > 0 && own.z > 0) return { x: own.x, y: own.y, z: own.z };
+    } catch (err) { /* the physical size below */ }
+    const phys = VolumeViewer.getPhysicalSize?.();
+    if (phys && phys.x > 0 && phys.y > 0 && phys.z > 0) return { x: phys.x / dims.x, y: phys.y / dims.y, z: phys.z / dims.z };
+    return { x: 1, y: 1, z: 1 };
+  }
+
+  /**
+   * What the open Studio figure is, for an editing mode — see PLAN §3.2. Synchronous.
+   * → { available: false, reasonKey } or { available: true, datasetId, datasetName,
+   *   formatVersion, treeKey, timepoint, channels, axis, uAxis, vAxis, levels, displayedLevel,
+   *   figureProjection, orientation }. `levels[i].indices` are the figure's planes AT THAT
+   *   LEVEL (see _studioFigureIndices), image x = uAxis, image y = vAxis (voxel frame).
+   */
+  function _studioSourceDescribe() {
+    const unavailable = (reasonKey) => ({ available: false, reasonKey });
+    if (_isIframe || typeof StudioEditor === 'undefined' || !StudioEditor.isOpen?.()) return unavailable('studioAdvanced.notSupported');
+    const doc = StudioEditor.getDocument?.();
+    if (!doc || (Array.isArray(doc.layoutMaps) && doc.layoutMaps.length)) return unavailable('studioAdvanced.notSupported');
+    if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.() || typeof VolumeViewer === 'undefined'
+      || typeof VolumeSlicer === 'undefined' || typeof StudioPlaneOps === 'undefined') return unavailable('studioAdvanced.noDataset');
+    const dims0 = BrickLoader.getDimensions(0);
+    const tree = VolumeViewer.getDisplayedTree?.() || null;
+    if (!dims0 || !tree || !tree.manifest) return unavailable('studioAdvanced.noDataset');
+
+    // The plane the figure was opened on (the Z-stack browser's slab included).
+    const spec = doc.planeSpec && doc.planeSpec.mode ? doc.planeSpec : (_zstackActive ? _zstackStudioSpec() : VolumeSlicer.getPlaneSpec?.());
+    if (!spec) return unavailable('studioAdvanced.needAxisPlane');
+    const slab = Number(spec.slabThickness) > 1 && (spec.projection === 'mip' || spec.projection === 'average');
+    const forced = { ...spec, projection: slab ? 'mip' : 'single' };
+    const { geom } = _studioGeometry(forced);
+    if (!geom || geom.warped) return unavailable('studioAdvanced.notSupported');
+    const axis = StudioPlaneOps.axisOf(geom.normal, 1e-6);
+    if (!axis) return unavailable('studioAdvanced.needAxisPlane');
+    const [uAxis, vAxis] = StudioPlaneOps.PLANE_AXES[axis];
+
+    const levels = [];
+    for (let k = 0; ; k++) {
+      const dims = BrickLoader.getDimensions(k);
+      if (!dims) break;
+      const indices = _studioFigureIndices(geom, axis, dims[axis]);
+      if (!indices.length) continue;
+      levels.push({
+        level: k,
+        dims: { x: dims.x, y: dims.y, z: dims.z },
+        voxelUm: _studioLevelVoxelUm(k, dims),
+        width: dims[uAxis],
+        height: dims[vAxis],
+        indices
+      });
+    }
+    if (!levels.length || levels[0].level !== 0) return unavailable('studioAdvanced.notSupported');
+
+    const state = _currentChannelState();
+    const channelCount = Math.max(1, Number(dims0.channels) || Number(datasetMeta?.dimensions?.c) || 1);
+    const channels = Array.from({ length: channelCount }, (_, c) => {
+      const entry = Array.isArray(state) ? state[c] : null;
+      return {
+        index: c,
+        name: entry?.name || datasetMeta?.channels?.[c]?.name || `Channel ${c + 1}`,
+        color: entry?.color || datasetMeta?.channels?.[c]?.color || null,
+        window: { min: Number.isFinite(Number(entry?.min)) ? Number(entry.min) : 0, max: Number.isFinite(Number(entry?.max)) ? Number(entry.max) : 255 }
+      };
+    });
+
+    // The figure's screen-right in the (u, v) basis: the in-plane turn of the figure,
+    // and which face of the volume it looks at. The slicer's right vector carries the
+    // anisotropy factor max(p)/p_k of each axis, so the angle is read in the physical
+    // frame: atan2(right_v·p_v, right_u·p_u) (the common factor max(p) cancels).
+    const right = geom.right || { x: 1, y: 0, z: 0 };
+    const phys = VolumeViewer.getPhysicalSize?.();
+    const pu = phys && phys[uAxis] > 0 ? phys[uAxis] : 1;
+    const pv = phys && phys[vAxis] > 0 ? phys[vAxis] : 1;
+    let rollDeg = (Math.atan2((Number(right[vAxis]) || 0) * pv, (Number(right[uAxis]) || 0) * pu) * 180) / Math.PI;
+    if (Object.is(rollDeg, -0) || Math.abs(rollDeg) < 1e-9) rollDeg = 0;
+    const timepoint = isLive ? (Number.isInteger(doc.timepoint) ? doc.timepoint : _displayedTimepoint()) : null;
+    return {
+      available: true,
+      datasetId: datasetMeta?.id || doc.dataset?.id || null,
+      datasetName: datasetMeta?.name || doc.dataset?.name || null,
+      formatVersion: Number(datasetMeta?.formatVersion) || 1,
+      treeKey: _studioTreeKey(tree),
+      timepoint,
+      channels,
+      axis,
+      uAxis,
+      vAxis,
+      levels,
+      displayedLevel: Math.max(0, Number(VolumeViewer.getActiveLevel?.()?.level) || 0),
+      figureProjection: slab ? (spec.projection === 'average' ? 'mean' : 'max') : 'single',
+      orientation: { rollDeg, back: Number(geom.normal[axis]) < 0 }
+    };
+  }
+
+  /** An AbortSignal that aborts when any of `signals` does; dispose() detaches the listeners. */
+  function _linkSignals(signals) {
+    const controller = new AbortController();
+    const cleanups = [];
+    const abort = () => controller.abort();
+    for (const signal of signals) {
+      if (!signal) continue;
+      if (signal.aborted) { controller.abort(); break; }
+      signal.addEventListener('abort', abort, { once: true });
+      cleanups.push(() => signal.removeEventListener('abort', abort));
+    }
+    return { signal: controller.signal, dispose: () => cleanups.forEach(fn => fn()) };
+  }
+
+  /** Compressed bytes of the bricks holding planes first..last along `axis` of a level (every channel). */
+  function _studioBrickBytes(level, axis, first, last, channelCount) {
+    const dims = BrickLoader.getDimensions(level);
+    if (!dims) return 0;
+    const bs = dims.brickSize || 64;
+    const range = { x: [0, Math.ceil(dims.x / bs) - 1], y: [0, Math.ceil(dims.y / bs) - 1], z: [0, Math.ceil(dims.z / bs) - 1] };
+    range[axis] = [Math.floor(first / bs), Math.floor(last / bs)];
+    let total = 0;
+    for (let bz = range.z[0]; bz <= range.z[1]; bz++) {
+      for (let by = range.y[0]; by <= range.y[1]; by++) {
+        for (let bx = range.x[0]; bx <= range.x[1]; bx++) {
+          if (BrickLoader.hasBrick && !BrickLoader.hasBrick(bx, by, bz, level)) continue;
+          for (let c = 0; c < channelCount; c++) total += BrickLoader.taskBytes?.({ lod: level, channel: c, bx, by, bz, column: 'll' }) || 0;
+        }
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Reorders a region read by DataAccess.readRegion (z-major, then y, then x) into the
+   * session's block layout [plane along the normal][image row][image column].
+   *   axis z  the region already is (z = plane, y = row, x = column);
+   *   axis y  image rows are z, planes are y:  out[(d·R + r)·W + c] = src[(r·D + d)·W + c];
+   *   axis x  image rows are z, columns y, planes x:  out[(d·R + r)·C + c] = src[(r·C + c)·D + d].
+   */
+  function _studioRegionToBlock(src, axis, width, rows, depth) {
+    if (axis === 'z') return src;
+    const out = new Uint8Array(src.length);
+    if (axis === 'y') {
+      for (let d = 0; d < depth; d++) {
+        for (let r = 0; r < rows; r++) {
+          const from = (r * depth + d) * width;
+          out.set(src.subarray(from, from + width), (d * rows + r) * width);
+        }
+      }
+      return out;
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < width; c++) {
+        const from = (r * width + c) * depth;
+        for (let d = 0; d < depth; d++) out[(d * rows + r) * width + c] = src[from + d];
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Opens a read session on the Studio figure's planes at `options.level` (default 0): the
+   * figure's frame is held on screen (the timeline paused, a load of another frame dropped,
+   * the prefetch stopped), its tree mounted and pinned ONCE, and the returned session reads
+   * any block of the planes from that pin until release(). Rejects with err.code
+   * STUDIO_FRAME_LOST (the figure's frame could not be, or left, the screen), NO_DATASET,
+   * NO_LEVEL, STUDIO_NOT_SUPPORTED, or an AbortError when `options.signal` aborts.
+   *   session = { level, width, height, depth, bandRows, zChunk, readBlock, estimateBytes,
+   *               assertFrame, release, backend }
+   *   readBlock({ y0, y1, z0, z1, channels, signal }) → { width, rows, depth, data }: image
+   *   rows y0..y1 (half-open) of planes z0..z1 (positions in the level's `indices`), one
+   *   Uint8Array per requested channel, ordered [plane][row][column].
+   */
+  async function _studioSourceOpen(options = {}) {
+    const info = _studioSourceDescribe();
+    if (!info.available) {
+      throw _studioError(info.reasonKey === 'studioAdvanced.noDataset' ? 'NO_DATASET' : 'STUDIO_NOT_SUPPORTED', 'The Studio figure cannot be edited in the advanced view.');
+    }
+    const level = Number.isInteger(options.level) ? options.level : 0;
+    const lv = info.levels.find(l => l.level === level);
+    if (!lv) throw _studioError('NO_LEVEL', `The figure has no plane at level ${level}.`);
+    const outer = options.signal || null;
+    const throwIfAborted = () => {
+      if (outer?.aborted) throw new DOMException('Studio source open aborted', 'AbortError');
+    };
+    throwIfAborted();
+
+    const frame = info.timepoint;
+    const docToken = StudioEditor.documentToken?.();
+    const scoped = { token: docToken };
+    const frameShown = () => frame === null || (_currentTimepoint === frame && _shownTimepoint() === frame);
+    const frameLost = () => _studioError('STUDIO_FRAME_LOST', 'The figure\'s frame is no longer on screen.');
+    // The figure's frame stays on screen while the session reads it: playback paused, a
+    // load of another frame dropped, the frame put back when something else took its place.
+    if (frame !== null) {
+      if (typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
+      if (!_holdStudioFrame(frame)) {
+        const back = await _returnToStudioFrame(frame, scoped);
+        throwIfAborted();
+        if (!back) throw frameLost();
+      }
+    }
+    const generation = _timepointGeneration;
+    let holding = true;
+    _nativePassHolds++;
+    _stopPrefetch();
+    const releaseHold = () => {
+      if (!holding) return;
+      holding = false;
+      _nativePassHolds = Math.max(0, _nativePassHolds - 1);
+      if (_nativePassHolds === 0 && isLive) _kickPrefetch();
+    };
+    let manifest = null;
+    let handle = null;
+    try {
+      manifest = await _mountTreeOnScreen();
+      throwIfAborted();
+      if (frame !== null && (_timepointGeneration !== generation || !frameShown())) throw frameLost();
+      if (!manifest) throw _studioError('NO_DATASET', 'The brick tree on screen could not be mounted.');
+      // One pin for the whole session: every block reads this tree whatever is mounted meanwhile.
+      handle = typeof DataAccess !== 'undefined' ? await DataAccess.pinDisplayed({ signal: outer || undefined }) : null;
+      throwIfAborted();
+      if (frame !== null && (_timepointGeneration !== generation || !frameShown())) throw frameLost();
+    } catch (err) {
+      releaseHold();
+      throw err;
+    }
+
+    const { axis, uAxis, vAxis } = info;
+    const indices = lv.indices;
+    const width = lv.width;
+    const height = lv.height;
+    const depth = indices.length;
+    const channelCount = info.channels.length;
+    const allChannels = Array.from({ length: channelCount }, (_, c) => c);
+    const roundUp64 = (n) => Math.ceil(n / 64) * 64;
+    const sessionAbort = new AbortController();
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      sessionAbort.abort();
+      outer?.removeEventListener?.('abort', release);
+      releaseHold();
+    };
+    outer?.addEventListener?.('abort', release, { once: true });
+
+    // Where the voxels come from, finest-grained first; a backend that fails is dropped for the session.
+    let planesTree = null;
+    let cutTree = null;
+    try {
+      if (level === 0 && axis === 'z') planesTree = await _planesTreeOnScreen(BrickLoader.getDimensions(0));
+      if (planesTree && !(planesTree.dimensions?.x === width && planesTree.dimensions?.y === height)) planesTree = null;
+      if (axis !== 'z') cutTree = _cutTreeOnScreen();
+    } catch (err) {
+      console.warn('[ViewerApp] The Studio source falls back to the bricks.', err?.message || err);
+    }
+    const cutKind = axis === 'y' ? 'xz' : 'yz';
+    let planesOk = Boolean(planesTree);
+    let cutOk = Boolean(cutTree);
+    const backendName = () => (planesOk ? 'planes' : (cutOk ? cutKind : 'bricks'));
+
+    const assertFrame = () => {
+      const shown = typeof VolumeViewer.getDisplayedTree === 'function' ? VolumeViewer.getDisplayedTree() : null;
+      if (released || (frame !== null && (_timepointGeneration !== generation || !frameShown()))
+        || (shown && shown.manifest !== manifest)
+        || (typeof VolumeViewer.getDisplayedTree === 'function' && !shown)
+        || (docToken !== undefined && StudioEditor.documentToken?.() !== docToken)
+        || !StudioEditor.isOpen?.()) {
+        throw frameLost();
+      }
+    };
+
+    const estimateBrickPath = () => {
+      const run = () => _studioBrickBytes(level, axis, indices[0], indices[depth - 1], channelCount);
+      try { return handle && BrickLoader.withMount ? BrickLoader.withMount(handle, run) : run(); } catch (err) { return 0; }
+    };
+    let bytes = estimateBrickPath();
+    if (planesOk) {
+      try {
+        const est = await planesTree.estimate(indices, allChannels, { x0: 0, y0: 0, x1: width, y1: height }, { sample: 16, signal: outer || undefined });
+        if (est && Number.isFinite(est.bytes)) bytes = est.bytes;
+      } catch (err) { /* the brick estimate stands */ }
+    }
+
+    const readPlanes = async (y0, y1, z0, z1, chans, signal) => {
+      const rows = y1 - y0;
+      const out = chans.map(() => new Uint8Array(width * rows * (z1 - z0)));
+      const rect = { x0: 0, y0, x1: width, y1 };
+      await Promise.all(Array.from({ length: z1 - z0 }, async (_, i) => {
+        const part = await planesTree.loadRegion(indices[z0 + i], chans, rect, { signal });
+        if (part.width !== width || part.height !== rows) throw new Error(`plane ${indices[z0 + i]}: ${part.width}×${part.height}, expected ${width}×${rows}`);
+        chans.forEach((_c, k) => out[k].set(part.data[k], i * width * rows));
+      }));
+      return out;
+    };
+
+    const readCuts = async (y0, y1, z0, z1, chans, signal) => {
+      const rows = y1 - y0;
+      const out = chans.map(() => new Uint8Array(width * rows * (z1 - z0)));
+      const jobs = [];
+      for (let i = 0; i < z1 - z0; i++) chans.forEach((c, k) => jobs.push({ i, c, k }));
+      let next = 0;
+      const lane = async () => {
+        while (next < jobs.length) {
+          const { i, c, k } = jobs[next++];
+          const row = await cutTree.orthRow(cutKind, level, c, indices[z0 + i], { signal });
+          if (row.width !== width || row.height !== height) throw new Error(`${cutKind} row ${indices[z0 + i]}: ${row.width}×${row.height}, expected ${width}×${height}`);
+          out[k].set(row.data.subarray(y0 * width, y1 * width), i * width * rows);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, lane));
+      return out;
+    };
+
+    const readBricks = async (y0, y1, z0, z1, chans, signal) => {
+      const rows = y1 - y0;
+      const count = z1 - z0;
+      const first = indices[z0];
+      const end = indices[z1 - 1] + 1;
+      const box = axis === 'z' ? { x0: 0, x1: width, y0, y1, z0: first, z1: end }
+        : axis === 'y' ? { x0: 0, x1: width, y0: first, y1: end, z0: y0, z1: y1 }
+          : { x0: first, x1: end, y0: 0, y1: width, z0: y0, z1: y1 };
+      const region = await DataAccess.readRegion(box, chans, { level, signal, handle });
+      return region.data.map(src => _studioRegionToBlock(src, axis, width, rows, count));
+    };
+
+    const readBlock = async (request = {}) => {
+      const { y0, y1, z0, z1 } = request;
+      if (released) throw _studioError('STUDIO_SESSION_RELEASED', 'The Studio source session was released.');
+      if (!(Number.isInteger(y0) && Number.isInteger(y1) && y0 >= 0 && y1 > y0 && y1 <= height)) throw new RangeError(`rows ${y0}..${y1} outside 0..${height}`);
+      if (!(Number.isInteger(z0) && Number.isInteger(z1) && z0 >= 0 && z1 > z0 && z1 <= depth)) throw new RangeError(`planes ${z0}..${z1} outside 0..${depth}`);
+      const chans = Array.isArray(request.channels) && request.channels.length ? request.channels.map(Number) : allChannels;
+      for (const c of chans) if (!Number.isInteger(c) || c < 0 || c >= channelCount) throw new RangeError(`channel ${c} outside 0..${channelCount - 1}`);
+      assertFrame();
+      const link = _linkSignals([outer, sessionAbort.signal, request.signal]);
+      try {
+        const isAbort = () => link.signal.aborted;
+        let data = null;
+        if (planesOk) {
+          try { data = await readPlanes(y0, y1, z0, z1, chans, link.signal); } catch (err) {
+            if (isAbort()) throw err;
+            planesOk = false;
+            console.warn('[ViewerApp] The planes tree failed; the Studio source reads the bricks.', err?.message || err);
+          }
+        } else if (cutOk) {
+          try { data = await readCuts(y0, y1, z0, z1, chans, link.signal); } catch (err) {
+            if (isAbort()) throw err;
+            cutOk = false;
+            console.warn('[ViewerApp] The cut store failed; the Studio source reads the bricks.', err?.message || err);
+          }
+        }
+        if (!data) data = await readBricks(y0, y1, z0, z1, chans, link.signal);
+        // A frame that left the screen during the read may have mixed two trees' voxels.
+        assertFrame();
+        return { width, rows: y1 - y0, depth: z1 - z0, data };
+      } finally {
+        link.dispose();
+      }
+    };
+
+    return {
+      level,
+      width,
+      height,
+      depth,
+      bandRows: planesTree ? roundUp64(Number(planesTree.tileSize) || 512) : (cutTree ? roundUp64(height) : 64),
+      zChunk: planesTree || cutTree ? 8 : 64,
+      readBlock,
+      estimateBytes: () => bytes,
+      assertFrame,
+      release,
+      backend: backendName
+    };
+  }
+
+  /** `ctx.studio`: what a plugin of the `studio` placement sees of the Studio. */
+  function _studioFacade() {
+    const none = typeof StudioEditor === 'undefined';
+    return {
+      registerMode: (mode) => (none ? () => {} : StudioEditor.registerMode(mode)),
+      isOpen: () => (none ? false : StudioEditor.isOpen()),
+      getDocument: () => (none ? null : StudioEditor.getDocument()),
+      source: { describe: () => _studioSourceDescribe(), open: (options) => _studioSourceOpen(options) }
+    };
   }
 
   /**

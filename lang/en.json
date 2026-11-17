@@ -67,6 +67,7 @@
     "resetConfirm": "Restore the default translated names for every type?"
   },
   "toast": {
+    "studioModeFailed": "This view could not be opened.",
     "figureUnavailable": "Figure export is not available on this page",
     "graphUnavailable": "Graph export is not available on this page",
     "workspaceSaved": "Workspace saved",
@@ -696,7 +697,15 @@
     "losslessChosen": "Lossless at the resolution shown ({x} × {y} × {z}).",
     "losslessInterrupted": "The lossless level could not be put on screen for the export. Try again once the volume has finished loading."
   },
+  "studioAdvanced": {
+    "needAxisPlane": "The Advanced view needs an axis-aligned plane (inspector XY, XZ or YZ, or the Z-stack browser).",
+    "noDataset": "The Advanced view needs a volume on screen.",
+    "notSupported": "The Advanced view is not available for this figure.",
+    "unsavedLeave": "The Advanced view holds unsaved work."
+  },
   "studio": {
+    "modeSimple": "Simple",
+    "modeSwitch": "Studio view",
     "importOtherFigure": "This Studio file was saved for another figure: its annotations were imported, but its channel settings were applied only where the figure matches.",
     "importChannelsKept": "The annotations were imported. This picture has no raw channel values to recolour, so it keeps its channel settings.",
     "exportJsonFailed": "The Studio JSON could not be written.",
@@ -989,6 +998,7 @@
     "placementTools": "Tools (toolbar)",
     "placementChannels": "Channels (per-channel)",
     "placementShaders": "Render modes (shaders)",
+    "placementStudio": "Studio views",
     "protectedPlugin": "protected",
     "lastShaderWarn": "At least one render mode must stay active.",
     "pluginsTitle": "Plugins",
@@ -2145,6 +2155,7 @@
     "plShaders": "Rendering",
     "plChannels": "Channels",
     "plTools": "Tools",
+    "plStudio": "Studio",
     "installing2": "Installing plugins…",
     "installedN": "{n} plugin(s) installed.",
     "failed": "failed",

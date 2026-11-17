@@ -202,12 +202,16 @@ const DataAccess = (() => {
    * level `level` (0 = native) for `channels`: { dims: {x, y, z}, data: [Uint8Array] one per
    * channel (z-major, then y, then x) }. Refused above 512 MiB (code REGION_TOO_LARGE).
    * `onProgress(f)`: the fraction of the region's bricks settled, 0..1, ending at 1.
+   * `handle`: a BrickLoader pin the caller already holds (`pinDisplayed()` / `BrickLoader.pinTree`):
+   * the read uses it as it is instead of pinning the tree on screen again, which is what a caller
+   * reading many regions of one frame (the Studio's advanced view) needs — one pin, any number of
+   * reads, all of one tree.
    */
-  async function readRegion(box, channels = [0], { level = 0, signal, onProgress } = {}) {
+  async function readRegion(box, channels = [0], { level = 0, signal, onProgress, handle: givenHandle } = {}) {
     _ready();
     // The occupancy and the reads below are the tree on screen's, pinned now: another
     // timepoint mounted meanwhile (the prefetch of the next frames) changes nothing.
-    const handle = await pinDisplayed({ signal });
+    const handle = givenHandle || await pinDisplayed({ signal });
     const onTree = (fn) => (handle ? BrickLoader.withMount(handle, fn) : fn());
     const L = onTree(() => _level(level));
     const d = L.dims;

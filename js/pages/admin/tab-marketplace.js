@@ -18,7 +18,7 @@ let _data = { configured: false, signed: false, plugins: [] };
 let _busy = false;
 
 // A plugin's on-install trust posture: only toolbar action/toggle plugins are
-// sandboxable; shaders/channels run with full in-page trust (higher bar).
+// sandboxable; shaders/channels/studio run with full in-page trust (higher bar).
 
 /** The catalog error as the operator should read it. A rollback is not an outage:
  *  the server refused a catalog older than one it already accepted (signed
@@ -37,7 +37,7 @@ function _trustBadge(p) {
   const sandboxable = p.placement === 'tools';
   return sandboxable
     ? `<span class="adm-badge adm-badge-ok" title="${escHtml(t('mkt.sandboxHint', 'Exécuté isolé (bac à sable)'))}">${escHtml(t('mkt.sandboxed', 'bac à sable'))}</span>`
-    : `<span class="adm-badge adm-badge-warn" title="${escHtml(t('mkt.trustedHint', 'Confiance totale en page (shaders/canaux)'))}">${escHtml(t('mkt.fullTrust', 'confiance totale'))}</span>`;
+    : `<span class="adm-badge adm-badge-warn" title="${escHtml(t('mkt.trustedHint', 'Confiance totale en page (shaders/canaux/studio)'))}">${escHtml(t('mkt.fullTrust', 'confiance totale'))}</span>`;
 }
 
 function _card(p) {

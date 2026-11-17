@@ -1808,7 +1808,7 @@ function lumen_count_download(string $rel, string $method, bool $hasRange): ?str
 // ── Plugins ─────────────────────────────────────────────────────────────────
 function admin_list_plugins(): array {
     $plugins = [];
-    foreach (['tools', 'channels', 'shaders'] as $placement) {
+    foreach (['tools', 'channels', 'shaders', 'studio'] as $placement) {
         $base = modules_dir() . '/' . $placement;
         if (!is_dir($base)) continue;
         foreach (scandir($base) as $name) {
@@ -2930,7 +2930,7 @@ function mkt_list(): array {
         if (!is_array($e)) continue;
         $pid = (string)($e['id'] ?? '');
         $placement = $e['placement'] ?? null;
-        $path = in_array($placement, ['tools', 'channels', 'shaders'], true) ? "$placement/$pid" : null;
+        $path = in_array($placement, ['tools', 'channels', 'shaders', 'studio'], true) ? "$placement/$pid" : null;
         [$c, $cr] = admin_compat_satisfies($ver, $e['platformCompat'] ?? null);
         $local = ($path !== null && isset($installed[$path])) ? $installed[$path] : null;
         $cur = ($local && !empty($local['version'])) ? (string)$local['version'] : null;
@@ -3010,7 +3010,7 @@ function mkt_install(string $catalogId, string $password, bool $upgrade = false)
     foreach ($res as $e) { if (is_array($e) && (string)($e['id'] ?? '') === $catalogId) { $entry = $e; break; } }
     if (!$entry) return [404, ['error' => 'unknown_catalog_id']];
     $placement = $entry['placement'] ?? ''; $pid = (string)($entry['id'] ?? '');
-    if (!in_array($placement, ['tools', 'channels', 'shaders'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $pid)) return [400, ['error' => 'bad_plugin_id']];
+    if (!in_array($placement, ['tools', 'channels', 'shaders', 'studio'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $pid)) return [400, ['error' => 'bad_plugin_id']];
     $path = "$placement/$pid"; $targetDir = modules_dir() . "/$placement/$pid";
     if (is_dir($targetDir) && !$upgrade) return [409, ['error' => 'already_installed']];
     if ($upgrade && !is_dir($targetDir)) return [404, ['error' => 'not_installed']];
@@ -3072,7 +3072,8 @@ function mkt_install(string $catalogId, string $password, bool $upgrade = false)
     mkt_rmrf($tmp);                                        // takes the parked previous version with it
     $serverHash = admin_plugin_hash(admin_plugin_file_hashes($targetDir));
     $declared = admin_plugin_declared_caps($targetDir);
-    $wantsSandbox = (($meta['sandbox'] ?? null) === true) || ($placement === 'tools' && !empty($declared));
+    // A studio plugin draws its own full-page UI inside the page: in-page trust only.
+    $wantsSandbox = $placement !== 'studio' && ((($meta['sandbox'] ?? null) === true) || ($placement === 'tools' && !empty($declared)));
     $mode = $wantsSandbox ? 'sandboxed' : 'trusted';
     $approvals = array_values(array_filter(admin_load_trust(), fn($a) => ($a['path'] ?? '') !== $path));
     $approvals[] = ['path' => $path, 'sha256' => $serverHash, 'mode' => $mode, 'caps' => array_values($declared), 'at' => date('c'), 'by' => $rec['username'] ?? 'admin'];
@@ -3083,7 +3084,7 @@ function mkt_install(string $catalogId, string $password, bool $upgrade = false)
 
 /** @return array{0:int,1:array} */
 function mkt_uninstall(string $path): array {
-    if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#D', $path)) return [400, ['error' => 'bad_path']];
+    if (!preg_match('#^(tools|channels|shaders|studio)/[A-Za-z0-9_][A-Za-z0-9._-]*$#D', $path)) return [400, ['error' => 'bad_path']];
     $target = modules_dir() . '/' . $path;
     if (!is_dir($target)) return [404, ['error' => 'not_installed']];
     if (strpos($path, 'shaders/') === 0) {

@@ -67,6 +67,7 @@
     "resetConfirm": "De vertaalde standaardnamen voor alle soorten herstellen?"
   },
   "toast": {
+    "studioModeFailed": "Deze weergave kon niet worden geopend.",
     "figureUnavailable": "Figuren exporteren kan niet op deze pagina",
     "graphUnavailable": "Grafieken exporteren kan niet op deze pagina",
     "workspaceSaved": "Werkomgeving opgeslagen",
@@ -696,7 +697,15 @@
     "losslessChosen": "Verliesvrij op de getoonde resolutie ({x} × {y} × {z}).",
     "losslessInterrupted": "Het verliesvrije niveau kon niet worden weergegeven voor de export. Probeer het opnieuw zodra het volume volledig is geladen."
   },
+  "studioAdvanced": {
+    "needAxisPlane": "De geavanceerde weergave heeft een vlak nodig dat langs een as ligt (inspector XY, XZ of YZ, of de Z-stackbrowser).",
+    "noDataset": "De geavanceerde weergave heeft een volume op het scherm nodig.",
+    "notSupported": "De geavanceerde weergave is niet beschikbaar voor deze figuur.",
+    "unsavedLeave": "De geavanceerde weergave bevat niet-opgeslagen werk."
+  },
   "studio": {
+    "modeSimple": "Eenvoudig",
+    "modeSwitch": "Studio-weergave",
     "importOtherFigure": "Dit Studio-bestand is opgeslagen voor een andere figuur: de annotaties zijn geïmporteerd, maar de kanaalinstellingen zijn alleen toegepast waar de figuur overeenkomt.",
     "importChannelsKept": "De annotaties zijn geïmporteerd. Deze afbeelding heeft geen ruwe kanaalwaarden om opnieuw in te kleuren, dus ze behoudt haar kanaalinstellingen.",
     "exportJsonFailed": "De Studio-JSON kon niet worden geschreven.",
@@ -977,6 +986,7 @@
     "placementTools": "Gereedschap (werkbalk)",
     "placementChannels": "Kanalen (per kanaal)",
     "placementShaders": "Weergavemodi (shaders)",
+    "placementStudio": "Studio-weergaven",
     "protectedPlugin": "beschermd",
     "lastShaderWarn": "Er moet minstens één weergavemodus actief blijven.",
     "pluginsTitle": "Plug-ins",
@@ -2145,6 +2155,7 @@
     "plShaders": "Weergave",
     "plChannels": "Kanalen",
     "plTools": "Gereedschap",
+    "plStudio": "Studio",
     "installing2": "Plug-ins installeren…",
     "installedN": "{n} plug-in(s) geïnstalleerd.",
     "failed": "mislukt",

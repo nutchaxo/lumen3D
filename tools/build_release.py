@@ -138,7 +138,7 @@ def is_excluded(rel_path):
     # itself stays (installs land there); every plugin folder + the stale discovery
     # manifest are dropped so a fresh install starts plugin-less.
     parts = rel_path.parts
-    if len(parts) >= 4 and parts[0] == "js" and parts[1] == "modules" and parts[2] in ("tools", "channels", "shaders"):
+    if len(parts) >= 4 and parts[0] == "js" and parts[1] == "modules" and parts[2] in ("tools", "channels", "shaders", "studio"):
         return True
     if parts[:2] == ("js", "modules") and rel_path.name == "manifest.json":
         return True

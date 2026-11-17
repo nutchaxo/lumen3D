@@ -1618,6 +1618,74 @@ body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
   min-height: 0;
 }
 
+/* A registered Studio mode (registerMode) takes the whole layout: header and body
+   are hidden, the mode draws its own chrome inside this root. */
+.studio-mode-root {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-body);
+}
+
+.studio-mode-root.hidden {
+  display: none !important;
+}
+
+/* Simple | mode segmented control of the Studio header. */
+.studio-mode-switch {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 6px);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.studio-mode-switch.hidden {
+  display: none !important;
+}
+
+.studio-mode-switch .studio-mode-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  padding: 4px var(--space-3, 12px);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary, inherit);
+  font: inherit;
+  font-size: var(--text-sm, 0.85rem);
+  cursor: pointer;
+}
+
+.studio-mode-switch .studio-mode-button + .studio-mode-button {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.studio-mode-switch .studio-mode-button:hover:not(:disabled):not(.active) {
+  background: var(--bg-hover, color-mix(in srgb, var(--bg-surface) 85%, var(--text-primary, #fff)));
+}
+
+.studio-mode-switch .studio-mode-button.active {
+  background: var(--color-primary);
+  color: var(--color-on-primary, #fff);
+}
+
+.studio-mode-switch .studio-mode-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.studio-mode-switch .studio-mode-button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
 .studio-sidebar-left {
   width: 240px;
   border-right: 1px solid var(--border-subtle);

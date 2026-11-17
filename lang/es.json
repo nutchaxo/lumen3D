@@ -67,6 +67,7 @@
     "resetConfirm": "¿Restaurar los nombres traducidos por defecto para todos los tipos?"
   },
   "toast": {
+    "studioModeFailed": "No se pudo abrir esta vista.",
     "figureUnavailable": "La exportación de figura no está disponible en esta página",
     "graphUnavailable": "La exportación de gráfico no está disponible en esta página",
     "workspaceSaved": "Espacio de trabajo guardado",
@@ -696,7 +697,15 @@
     "losslessChosen": "Sin pérdidas, en la resolución mostrada ({x} × {y} × {z}).",
     "losslessInterrupted": "No se pudo mostrar el nivel sin pérdidas para la exportación. Inténtelo de nuevo cuando el volumen haya terminado de cargarse."
   },
+  "studioAdvanced": {
+    "needAxisPlane": "La vista Avanzada necesita un plano alineado con un eje (inspector XY, XZ o YZ, o el explorador de pila Z).",
+    "noDataset": "La vista Avanzada necesita un volumen en pantalla.",
+    "notSupported": "La vista Avanzada no está disponible para esta figura.",
+    "unsavedLeave": "La vista Avanzada contiene trabajo sin guardar."
+  },
   "studio": {
+    "modeSimple": "Simple",
+    "modeSwitch": "Vista del Studio",
     "importOtherFigure": "Este archivo de Studio se guardó para otra figura: sus anotaciones se importaron, pero sus ajustes de canales solo se aplicaron donde la figura coincide.",
     "importChannelsKept": "Las anotaciones se importaron. Esta imagen no tiene valores brutos de canales para recolorear, así que conserva sus ajustes de canales.",
     "exportJsonFailed": "No se pudo escribir el JSON del Studio.",
@@ -750,12 +759,12 @@
     "nativeReady": "Corte nativo listo ({n} bloques).",
     "nativeReadyMissing": "Corte nativo listo ({n} bloques; {missing} a la resolución anterior).",
     "nativeReturnFrame": "Cargando de nuevo la imagen {frame} de la serie para su versión nativa…",
+    "nativeWaitFrame": "Esperando a que termine de cargarse la imagen {frame} de la serie para su versión nativa…",
     "uncalibrated": "sin calibrar",
     "bigPassMessagePlanes": "Esta figura proyecta {n} cortes: su imagen nativa lee {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
     "bigPassMessageMips": "Esta figura proyecta {n} cortes: su imagen nativa lee {layers} proyecciones de capas almacenadas y {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
     "noLayers": "Todavía no hay capas.",
     "exportQualityTitle": "Calidad de la exportación",
-    "exportQualityNativeMsg": "Esta imagen ya es la nativa sin pérdidas.",
     "exportQualityPreviewMsg": "Esta imagen es la vista previa sacada del volumen en pantalla. La imagen nativa sin pérdidas se lee de los vóxeles guardados; sus capas conservan su lugar.",
     "exportNative": "Nativa sin pérdidas",
     "exportCurrent": "Esta imagen",
@@ -989,6 +998,7 @@
     "placementTools": "Herramientas (barra de herramientas)",
     "placementChannels": "Canales (por canal)",
     "placementShaders": "Modos de renderizado (shaders)",
+    "placementStudio": "Vistas del Studio",
     "protectedPlugin": "protegido",
     "lastShaderWarn": "Al menos un modo de renderizado debe permanecer activo.",
     "pluginsTitle": "Plugins",
@@ -2145,6 +2155,7 @@
     "plShaders": "Renderizado",
     "plChannels": "Canales",
     "plTools": "Herramientas",
+    "plStudio": "Studio",
     "installing2": "Instalando plugins…",
     "installedN": "{n} plugin(s) instalado(s).",
     "failed": "fallido(s)",

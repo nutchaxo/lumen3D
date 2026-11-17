@@ -27,7 +27,7 @@ from pathlib import Path
 # tools/ sits at the repo root; ROOT is its parent.
 ROOT = Path(__file__).resolve().parent.parent
 MODULES_DIR = ROOT / "js" / "modules"
-PLUGIN_PLACEMENTS = ("tools", "channels", "shaders")
+PLUGIN_PLACEMENTS = ("tools", "channels", "shaders", "studio")
 # Same guard as dev_server.py: a single safe path component, no traversal.
 _SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 

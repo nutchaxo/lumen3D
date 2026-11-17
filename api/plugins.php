@@ -26,7 +26,7 @@ header('Access-Control-Allow-Origin: *');
 
 $ROOT        = dirname(__DIR__);                                   // WebPlatform root
 $MODULES_DIR = $ROOT . DIRECTORY_SEPARATOR . 'js' . DIRECTORY_SEPARATOR . 'modules';
-$PLACEMENTS  = ['tools', 'channels', 'shaders'];
+$PLACEMENTS  = ['tools', 'channels', 'shaders', 'studio'];
 // Same guard as dev_server.py _SAFE_FOLDER_RE: one safe path component, no traversal.
 $SAFE_FOLDER = '/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D';
 

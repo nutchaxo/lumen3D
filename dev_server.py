@@ -97,7 +97,7 @@ LOGS_DIR = ROOT / "logs"
 CHANGELOG_DIR = ROOT / "changelog"
 GITHUB_REPO = "nutchaxo/lumen3D"
 MODULES_DIR = ROOT / "js" / "modules"
-PLUGIN_PLACEMENTS = ("tools", "channels", "shaders")
+PLUGIN_PLACEMENTS = ("tools", "channels", "shaders", "studio")
 LANG_DIR = ROOT / "lang"
 # A bare locale code (BCP-47-ish): two/three letters with an optional region.
 _LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$")
@@ -2178,6 +2178,9 @@ def _approve_plugin(path: str, sha256: str, mode: str, caps, current_pw: str):
     safe = _safe_plugin_path(path)
     if not safe:
         return False, 400, {"error": "bad_path"}
+    if safe[0] == "studio" and mode == "sandboxed":
+        # A studio plugin draws its own full-page UI inside the page: in-page trust only.
+        return False, 400, {"error": "not_sandboxable"}
     mod_dir = MODULES_DIR / path
     if not (mod_dir / "plugin.json").exists():
         return False, 404, {"error": "unknown_plugin"}
@@ -3822,7 +3825,8 @@ def _install_marketplace_plugin(catalog_id: str, password: str, upgrade: bool = 
     # Operator approval PINNED to the on-disk bytes (server recomputes the hash — INV-4).
     server_hash = _plugin_hash(_plugin_file_hashes(target_dir))
     declared = sorted(_plugin_declared_caps(target_dir))
-    wants_sandbox = bool(meta.get("sandbox")) or (placement == "tools" and bool(declared))
+    # A studio plugin mounts its own full-page UI in the page: in-page trust only.
+    wants_sandbox = placement != "studio" and (bool(meta.get("sandbox")) or (placement == "tools" and bool(declared)))
     mode = "sandboxed" if wants_sandbox else "trusted"
     ok_a, st_a, pl_a = _approve_plugin(path, server_hash, mode, declared, password)
     if not ok_a:

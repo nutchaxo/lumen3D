@@ -22,6 +22,7 @@ const PLACEMENTS = [
   { key: 'tools',    icon: 'wrench',  labelKey: 'admin.placementTools',    labelDef: 'Outils (barre d\'outils)' },
   { key: 'channels', icon: 'sliders-horizontal', labelKey: 'admin.placementChannels', labelDef: 'Canaux (par-canal)' },
   { key: 'shaders',  icon: 'layers',  labelKey: 'admin.placementShaders',  labelDef: 'Modes de rendu (shaders)' },
+  { key: 'studio',   icon: 'app-window', labelKey: 'admin.placementStudio', labelDef: 'Studio (vues avancées)' },
 ];
 
 // tier → [css class, i18n key, French default]

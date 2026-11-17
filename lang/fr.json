@@ -67,6 +67,7 @@
     "resetConfirm": "Rétablir les noms traduits par défaut pour tous les types ?"
   },
   "toast": {
+    "studioModeFailed": "Cette vue n’a pas pu être ouverte.",
     "figureUnavailable": "L’export de figure n’est pas disponible sur cette page",
     "graphUnavailable": "L’export de graphique n’est pas disponible sur cette page",
     "workspaceSaved": "Espace de travail sauvegardé",
@@ -696,7 +697,15 @@
     "losslessChosen": "Sans perte, à la résolution affichée ({x} × {y} × {z}).",
     "losslessInterrupted": "Le niveau sans perte n’a pas pu être affiché pour l’export. Réessayez une fois le chargement du volume terminé."
   },
+  "studioAdvanced": {
+    "needAxisPlane": "La vue Avancée nécessite un plan aligné sur un axe (inspecteur XY, XZ ou YZ, ou navigateur de pile Z).",
+    "noDataset": "La vue Avancée nécessite un volume affiché.",
+    "notSupported": "La vue Avancée n’est pas disponible pour cette figure.",
+    "unsavedLeave": "La vue Avancée contient du travail non enregistré."
+  },
   "studio": {
+    "modeSimple": "Simple",
+    "modeSwitch": "Vue du Studio",
     "importOtherFigure": "Ce fichier Studio a été enregistré pour une autre figure : ses annotations ont été importées, mais ses réglages de canaux n’ont été appliqués que là où la figure correspond.",
     "importChannelsKept": "Les annotations ont été importées. Cette image n’a pas de valeurs brutes de canaux à recolorer : elle garde ses réglages de canaux.",
     "exportJsonFailed": "Le JSON du Studio n’a pas pu être écrit.",
@@ -750,12 +759,12 @@
     "nativeReady": "Coupe native prête ({n} blocs).",
     "nativeReadyMissing": "Coupe native prête ({n} blocs ; {missing} gardés à la résolution précédente).",
     "nativeReturnFrame": "Rechargement de l’image {frame} de la série pour sa version native…",
+    "nativeWaitFrame": "Attente de la fin du chargement de l’image {frame} de la série pour sa version native…",
     "uncalibrated": "non calibrée",
     "bigPassMessagePlanes": "Cette figure projette {n} coupes : son image native lit {planes} plans stockés, environ {mb} Mo ({tiles} tuiles d’image).",
     "bigPassMessageMips": "Cette figure projette {n} coupes : son image native lit {layers} projections de couches stockées et {planes} plans stockés, environ {mb} Mo ({tiles} tuiles d’image).",
     "noLayers": "Aucun calque pour l’instant.",
     "exportQualityTitle": "Qualité de l’export",
-    "exportQualityNativeMsg": "Cette image est déjà l’image native sans perte.",
     "exportQualityPreviewMsg": "Cette image est l’aperçu tiré du volume affiché. L’image native sans perte est lue dans les voxels stockés ; vos calques gardent leur place.",
     "exportNative": "Native sans perte",
     "exportCurrent": "Cette image",
@@ -989,6 +998,7 @@
     "placementTools": "Outils (barre d’outils)",
     "placementChannels": "Canaux (par-canal)",
     "placementShaders": "Modes de rendu (shaders)",
+    "placementStudio": "Vues du Studio",
     "protectedPlugin": "protégé",
     "lastShaderWarn": "Au moins un mode de rendu doit rester actif.",
     "pluginsTitle": "Plugins",
@@ -2145,6 +2155,7 @@
     "plShaders": "Rendu",
     "plChannels": "Canaux",
     "plTools": "Outils",
+    "plStudio": "Studio",
     "installing2": "Installation des plugins…",
     "installedN": "{n} plugin(s) installé(s).",
     "failed": "échoué(s)",

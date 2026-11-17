@@ -510,6 +510,7 @@
         <span class="text-xs text-muted" id="studio-subtitle" data-i18n="viewer.studioSubtitle">Edit and Annotate</span>
       </div>
       <div class="studio-header-right">
+        <div id="studio-mode-switch" class="studio-mode-switch hidden" role="group" data-i18n-aria="studio.modeSwitch" aria-label="Studio view"></div>
         <input type="file" id="studio-import-file" accept=".json" class="hidden" aria-label="Import JSON" data-i18n-aria="viewer.importJson">
         <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i><span data-i18n="viewer.importJson">Import JSON</span></button>
         <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i><span data-i18n="viewer.saveJson">Save JSON</span></button>
@@ -562,6 +563,7 @@
         </div>
       </div>
     </div>
+    <div id="studio-mode-root" class="studio-mode-root hidden"></div>
   </div>
   <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
   <script src="js/vendor/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>

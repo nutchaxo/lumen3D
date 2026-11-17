@@ -70,6 +70,31 @@ def version_problem(version) -> str | None:
     return None
 
 
+_ASSET_REL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*\Z", re.ASCII)
+
+
+def asset_lists_problem(meta: dict, plugin_dir: Path) -> str | None:
+    """Why plugin.json ``scripts`` / ``styles`` cannot be honoured, or None.
+
+    Twin of the registry's check (js/core/plugin-registry.js): relative paths inside
+    the plugin folder, ``.js`` / ``.css``, each naming a file the package contains.
+    """
+    for field, ext in (("scripts", ".js"), ("styles", ".css")):
+        lst = meta.get(field)
+        if lst is None:
+            continue
+        if not isinstance(lst, list):
+            return f'"{field}" must be an array of relative file paths'
+        for rel in lst:
+            if (not isinstance(rel, str) or not _ASSET_REL_RE.match(rel)
+                    or any(set(seg) == {"."} for seg in rel.split("/"))
+                    or not rel.lower().endswith(ext)):
+                return f'"{field}" entry {rel!r} is not a relative {ext} path inside the plugin folder'
+            if not (plugin_dir / rel).is_file():
+                return f'"{field}" entry {rel!r} is not a file of the plugin'
+    return None
+
+
 def _sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
@@ -90,6 +115,9 @@ def build(plugin_dir: Path, out_dir: Path, seed_hex: str | None) -> dict:
     placement = meta.get("placement") or plugin_dir.parent.name
     version = meta.get("version") or "0.0.0"
     problem = id_problem(pid) or version_problem(version)
+    if problem:
+        raise SystemExit(f"ERROR: {problem} ({meta_path})")
+    problem = asset_lists_problem(meta, plugin_dir)
     if problem:
         raise SystemExit(f"ERROR: {problem} ({meta_path})")
     out_dir.mkdir(parents=True, exist_ok=True)

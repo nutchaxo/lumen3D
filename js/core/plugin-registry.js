@@ -12,6 +12,8 @@
      'tools'    → toolbar buttons (tools, export, visuals, layouts, help)
      'channels' → per-channel sidebar controls (histogram, gaussian filter, …)
      'shaders'  → render mode entries (populate render-mode selector)
+     'studio'   → modes of the Studio editor (e.g. an Advanced view); in-page trust
+                  only, no toolbar button, mounted by the Studio through ctx.studio
 
    Loading Flow:
      1. viewer.js calls PluginRegistry.loadModules(basePath, listOfPaths)
@@ -328,6 +330,14 @@ const PluginRegistry = (() => {
           }
         }
 
+        // `scripts` / `styles`: extra files a plugin runs lazily through
+        // ctx.plugin.execScripts(). Paths are checked here, before anything runs.
+        const assetsProblem = _assetListsProblem(meta);
+        if (assetsProblem) {
+          _quarantine(modPath, 'invalid-meta', assetsProblem);
+          return;
+        }
+
         // Data-type gate. A page hosting one dataset type keeps only the plugins
         // that cover it: those DECLARING it in plugin.json `dataTypes`, plus — when
         // the host opts in — those declaring nothing (legacy volume-viewer plugins).
@@ -393,6 +403,8 @@ const PluginRegistry = (() => {
               //   schema + channel-effect capabilities that no plugin yet consumes.
               const why = expectedPlacement === 'shaders'
                 ? 'shader plugins run GLSL on the GPU synchronously and cannot be sandboxed (in-page trust required)'
+                : expectedPlacement === 'studio'
+                  ? 'studio plugins run in the page (in-page trust only)'
                 : expectedPlacement === 'channels'
                   ? 'sandboxed channel UI is not yet supported (declarative-schema path deferred — see SPEC.md)'
                   : `sandboxed plugins support only tools action/toggle (got ${expectedPlacement}/${meta.subtype})`;
@@ -416,7 +428,13 @@ const PluginRegistry = (() => {
             return;
           }
           // Trusted in-page: register + execute the exact hashed bytes (no re-fetch).
-          _modules.set(meta.id, { meta, impl: null, instance: null, state: 'registered' });
+          const entryFiles = _declaresAssets(meta) ? verdict.files : null;
+          const missing = entryFiles ? _missingAssetFile(meta, entryFiles) : null;
+          if (missing) {
+            _quarantine(modPath, 'invalid-meta', `declares "${missing}" in scripts/styles but the file is not part of the verified plugin`);
+            return;
+          }
+          _modules.set(meta.id, { meta, impl: null, instance: null, state: 'registered', files: entryFiles });
           const [, execOk] = await Promise.all([_grafti18n(meta, verdict.files), _execTrustedInPage(meta, verdict.bytes)]);
           if (!execOk) {
             _modules.delete(meta.id);
@@ -437,6 +455,127 @@ const PluginRegistry = (() => {
       }
     });
     await Promise.all(loadPromises);
+  }
+
+  // ─── Plugin scripts / styles (plugin.json `scripts`, `styles`) ──────
+  // A plugin may keep heavy code out of index.js and run it on first use. The files
+  // are named in plugin.json, live inside the plugin folder, and are executed from
+  // the SAME bytes the trust pass hashed (no second fetch): scripts through the
+  // blob + nonce path of _execTrustedInPage, styles as <style> elements this
+  // registry creates (style-src-elem admits only nonced elements).
+  const _ASSET_PATH_RX = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+
+  /** A relative path that stays inside the plugin folder, or null. `exts` = allowed suffixes. */
+  function _safeRel(rel, exts) {
+    if (typeof rel !== 'string' || !rel || rel.length > 200) return null;
+    if (!_ASSET_PATH_RX.test(rel)) return null;
+    if (rel.split('/').some(seg => /^\.+$/.test(seg))) return null;
+    if (exts && !exts.some(e => rel.toLowerCase().endsWith(e))) return null;
+    return rel;
+  }
+
+  function _declaresAssets(meta) {
+    return (Array.isArray(meta.scripts) && meta.scripts.length > 0)
+        || (Array.isArray(meta.styles) && meta.styles.length > 0);
+  }
+
+  /** @returns {string|null} why plugin.json `scripts`/`styles` are unusable, null when fine/absent */
+  function _assetListsProblem(meta) {
+    for (const [field, exts] of [['scripts', ['.js']], ['styles', ['.css']]]) {
+      const list = meta[field];
+      if (list === undefined || list === null) continue;
+      if (!Array.isArray(list)) return `"${field}" must be an array of relative file paths`;
+      const seen = new Set();
+      for (const rel of list) {
+        if (!_safeRel(rel, exts)) {
+          return `"${field}" entry ${JSON.stringify(rel)} is not a relative ${exts[0]} path inside the plugin folder`;
+        }
+        if (seen.has(rel)) return `"${field}" lists ${JSON.stringify(rel)} twice`;
+        seen.add(rel);
+      }
+    }
+    return null;
+  }
+
+  function _missingAssetFile(meta, files) {
+    for (const rel of [].concat(meta.scripts || [], meta.styles || [])) {
+      if (!files || !files[rel]) return rel;
+    }
+    return null;
+  }
+
+  function _pluginError(code, message) {
+    return Object.assign(new Error(message), { code });
+  }
+
+  /**
+   * The `ctx.plugin` object of one plugin: identity, the lazy script runner and
+   * URL helpers over the verified bytes it was loaded from.
+   */
+  function _pluginApi(entry) {
+    const meta = entry.meta;
+    const blobUrls = new Map();
+    let execPromise = null;
+
+    const verifiedBytes = (rel) => {
+      const safe = _safeRel(rel, null);
+      const bytes = safe && entry.files && entry.files[safe];
+      if (!bytes) throw _pluginError('PLUGIN_FILE_MISSING', `"${rel}" is not a verified file of plugin ${meta.id}`);
+      return bytes;
+    };
+
+    function injectStyle(rel, bytes) {
+      const style = document.createElement('style');
+      style.setAttribute('data-plugin-style', `${meta.id}/${rel}`);
+      if (_pageNonce) style.setAttribute('nonce', _pageNonce);
+      style.appendChild(document.createTextNode(new TextDecoder('utf-8').decode(bytes)));
+      document.head.appendChild(style);
+    }
+
+    async function run() {
+      for (const rel of meta.styles || []) {
+        try { injectStyle(rel, verifiedBytes(rel)); }
+        catch (err) {
+          console.error(`[PluginRegistry] style ${meta._modPath}/${rel} failed:`, err);
+          throw _pluginError('PLUGIN_SCRIPT_FAILED', rel);
+        }
+      }
+      for (const rel of meta.scripts || []) {
+        let ok = false;
+        try { ok = await _execTrustedInPage({ _modPath: `${meta._modPath}/${rel}` }, verifiedBytes(rel)); }
+        catch (err) { console.error(`[PluginRegistry] script ${meta._modPath}/${rel} failed:`, err); }
+        if (!ok) throw _pluginError('PLUGIN_SCRIPT_FAILED', rel);
+      }
+    }
+
+    return Object.freeze({
+      id: meta.id,
+      base: meta._path,
+      /** Inject `styles`, then run `scripts` in order; once per plugin (same promise). */
+      execScripts() { return (execPromise ||= run()); },
+      /** A blob: URL of a verified file's bytes (cached) — e.g. for a worker's importScripts. */
+      fileUrl(rel) {
+        const safe = _safeRel(rel, null);
+        let url = safe ? blobUrls.get(safe) : null;
+        if (!url) {
+          const bytes = verifiedBytes(rel);
+          const type = /\.css$/i.test(safe) ? 'text/css' : /\.json$/i.test(safe) ? 'application/json' : 'text/javascript';
+          url = URL.createObjectURL(new Blob([bytes], { type }));
+          blobUrls.set(safe, url);
+        }
+        return url;
+      },
+      /** The plain same-origin URL of a plugin file — for `new Worker(url)`. */
+      assetUrl(rel) {
+        const safe = _safeRel(rel, null);
+        if (!safe) throw _pluginError('PLUGIN_BAD_PATH', `"${rel}" is not a path inside plugin ${meta.id}`);
+        return `${meta._path}/${safe}`;
+      },
+      releaseUrls() {
+        for (const url of blobUrls.values()) { try { URL.revokeObjectURL(url); } catch (_) {} }
+        blobUrls.clear();
+      }
+    });
   }
 
   /**
@@ -635,6 +774,7 @@ const PluginRegistry = (() => {
     pctx.i18n = (typeof I18n !== 'undefined' && I18n.forPlugin)
       ? I18n.forPlugin(id)
       : { t: (k) => k, getLanguage: () => 'en', onLanguageChange: () => {} };
+    pctx.plugin = _pluginApi(entry);
     entry.ctx = pctx;
     return pctx;
   }
@@ -765,7 +905,7 @@ const PluginRegistry = (() => {
 
   /**
    * List all modules matching a placement.
-   * @param {'tools'|'channels'|'shaders'} placement
+   * @param {'tools'|'channels'|'shaders'|'studio'} placement
    * @returns {Array<Object>} Array of meta objects
    */
   function listByPlacement(placement) {
@@ -1176,6 +1316,7 @@ const PluginRegistry = (() => {
         }
       }
       entry.state = 'disposed';
+      if (entry.ctx && entry.ctx.plugin) entry.ctx.plugin.releaseUrls();
     }
     _emit('modules-disposed');
   }

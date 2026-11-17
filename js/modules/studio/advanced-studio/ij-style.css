@@ -1,0 +1,452 @@
+/* Advanced Studio — ij-style.css
+ *
+ * A compact ImageJ-like chrome built from the platform's theme tokens (css/variables.css,
+ * css/themes.css), so it follows the light and dark themes without a rule of its own.
+ * Every class is prefixed ij-. The chrome classes are the ones ij-view.js lists in its header
+ * (ij-shell, ij-menu-*, ij-tool, ij-image-window, ij-stage, ij-statusbar, ij-window,
+ * ij-dialog-backdrop, ij-field…); the tool-window content classes are listed at the top of
+ * ij-app.js (ij-panel, ij-row, ij-hist, ij-table…). Selectors stay generic so an extra wrapper
+ * around a part does not unstyle it.
+ */
+
+/* ij-view.js shows and hides with [hidden] only. */
+.ij-shell [hidden],
+.ij-dialog-backdrop [hidden],
+.ij-window [hidden],
+.ij-shell[hidden],
+.ij-dialog-backdrop[hidden],
+.ij-window[hidden] { display: none !important; }
+
+.ij-root {
+  --ij-bar-h: 26px;
+  --ij-font: 12px/1.3 var(--font-sans, system-ui, sans-serif);
+  --ij-mono: var(--font-mono, ui-monospace, monospace);
+  --ij-bg: var(--bg-body);
+  --ij-chrome: var(--bg-surface-2, var(--bg-surface));
+  --ij-panel: var(--bg-surface);
+  --ij-border: var(--border-default);
+  --ij-text: var(--text-primary);
+  --ij-muted: var(--text-secondary);
+  --ij-accent: var(--color-accent, #00d2ff);
+  --ij-accent-text: var(--color-accent-text, var(--color-accent, #0e6d8c));
+  --ij-danger: var(--color-error, #ff6b6b);
+  --ij-warn: var(--color-warning, #feca57);
+  /* Text on the panel surface: the bright warning / error colours are for fills and borders. */
+  --ij-warn-text: var(--ij-warn);
+  --ij-danger-text: var(--ij-danger);
+  position: relative;
+  color: var(--ij-text);
+  font: var(--ij-font);
+}
+
+/* Light theme: both bright tokens fall below 3:1 as text on white (pale yellow 1.5:1, coral 2.8:1). */
+[data-theme="light"] .ij-root {
+  --ij-warn-text: #8a5a00;
+  --ij-danger-text: #b3261e;
+}
+
+.ij-app {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ij-bg);
+  color: var(--ij-text);
+  font: var(--ij-font);
+  overflow: hidden;
+}
+
+.ij-shell { background: var(--ij-bg); color: var(--ij-text); font: var(--ij-font); min-width: 0; overflow: hidden; }
+.ij-app *,
+.ij-window *,
+.ij-dialog-backdrop * { box-sizing: border-box; }
+
+/* ── Menu bar ───────────────────────────────────────────── */
+.ij-menubar {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 var(--ij-bar-h);
+  min-height: var(--ij-bar-h);
+  background: var(--ij-chrome);
+  border-bottom: 1px solid var(--ij-border);
+  user-select: none;
+}
+.ij-menu-title {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  background: transparent;
+  border: 0;
+  color: var(--ij-text);
+  font: inherit;
+  cursor: default;
+}
+.ij-menu-title:hover,
+.ij-menu-title.is-active,
+.ij-menu-title.is-open { background: var(--bg-active); }
+.ij-menu-title:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
+
+.ij-menu-panel {
+  min-width: 200px;
+  padding: 3px 0;
+  background: var(--bg-elevated, var(--ij-panel));
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: var(--shadow-md, 0 6px 18px rgba(0, 0, 0, 0.3));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  user-select: none;
+}
+.ij-submenu { margin-left: -2px; }
+
+.ij-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 22px;
+  padding: 2px 12px 2px 22px;
+  color: var(--ij-text);
+  white-space: nowrap;
+  cursor: default;
+}
+.ij-menu-item.has-children { padding-right: 8px; }
+.ij-menu-item:hover,
+.ij-menu-item.is-active { background: var(--bg-active); }
+.ij-menu-item.is-disabled { color: var(--text-muted); opacity: 0.55; }
+.ij-menu-label { flex: 1 1 auto; }
+.ij-menu-shortcut { flex: 0 0 auto; margin-left: 24px; color: var(--ij-muted); font-family: var(--ij-mono); font-size: 11px; }
+.ij-menu-arrow { flex: 0 0 auto; color: var(--ij-muted); }
+.ij-menu-sep { height: 1px; margin: 3px 0; background: var(--border-default); }
+
+/* ── Tool bar ───────────────────────────────────────────── */
+.ij-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  background: var(--ij-chrome);
+  border-bottom: 1px solid var(--ij-border);
+  user-select: none;
+}
+.ij-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--ij-text);
+  cursor: pointer;
+}
+.ij-tool-icon { width: 18px; height: 18px; }
+.ij-tool:hover { background: var(--bg-hover); border-color: var(--border-default); }
+.ij-tool.is-active { background: var(--color-accent-subtle, var(--bg-active)); border-color: var(--ij-accent); }
+.ij-tool:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-tool-sep { width: 1px; height: 18px; margin: 0 5px; background: var(--border-strong); }
+
+/* ── Image window ───────────────────────────────────────── */
+.ij-image-window { background: var(--ij-panel); min-width: 0; }
+.ij-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--ij-chrome);
+  border-bottom: 1px solid var(--ij-border);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ij-title-name { overflow: hidden; text-overflow: ellipsis; }
+.ij-title-zoom { color: var(--ij-muted); font-weight: 400; }
+.ij-title-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--color-warning-subtle, rgba(254, 202, 87, 0.15));
+  color: var(--ij-warn-text);
+  font-size: 10px;
+  font-weight: 500;
+}
+.ij-subtitle {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  color: var(--ij-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ij-stage {
+  background: #000;
+  min-width: 0;
+  overflow: hidden;
+  touch-action: none;
+  outline: none;
+}
+.ij-stage:focus-visible { box-shadow: inset 0 0 0 2px var(--ij-accent); }
+.ij-channel-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px;
+  background: var(--ij-chrome);
+  border-top: 1px solid var(--ij-border);
+}
+.ij-channel-label { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); }
+.ij-channel-slider { flex: 1 1 auto; accent-color: var(--ij-accent); }
+
+.ij-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: var(--ij-bg);
+}
+.ij-banner {
+  margin: 0;
+  max-width: 460px;
+  color: var(--ij-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Status bar ─────────────────────────────────────────── */
+.ij-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 10px;
+  background: var(--ij-chrome);
+  border-top: 1px solid var(--ij-border);
+  color: var(--ij-muted);
+  font-size: 11px;
+  user-select: none;
+}
+.ij-status-pos { flex: 0 0 auto; min-width: 12ch; font-family: var(--ij-mono); color: var(--ij-text); }
+.ij-status-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ij-progress {
+  position: relative;
+  flex: 0 0 120px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.ij-progress-fill { height: 100%; width: 0; background: var(--ij-accent); transition: width 0.15s linear; }
+.ij-progress.is-indeterminate .ij-progress-fill {
+  width: 35%;
+  animation: ij-indeterminate 1.1s ease-in-out infinite alternate;
+}
+@keyframes ij-indeterminate { from { transform: translateX(0); } to { transform: translateX(185%); } }
+.ij-progress-label { flex: 0 1 40%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ij-text); }
+.ij-warning { flex: 0 1 36%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ij-warn-text); }
+
+/* ── Buttons, inputs ────────────────────────────────────── */
+.ij-btn,
+.ij-cancel {
+  min-height: 24px;
+  padding: 2px 12px;
+  background: var(--bg-surface-3, var(--bg-active));
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--ij-text);
+  font: inherit;
+  cursor: pointer;
+}
+.ij-btn:hover,
+.ij-cancel:hover { background: var(--bg-active); border-color: var(--ij-accent); }
+.ij-btn:focus-visible,
+.ij-cancel:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-btn[disabled] { opacity: 0.5; cursor: default; }
+.ij-btn--primary { background: var(--color-primary-strong, #00803f); border-color: var(--color-primary-strong, #00803f); color: #fff; }
+.ij-btn--primary:hover { background: var(--color-primary-strong-hover, #006b35); border-color: var(--color-primary-strong-hover, #006b35); }
+.ij-btn--danger { border-color: var(--ij-danger); color: var(--ij-danger-text); }
+.ij-btn--danger:hover { background: var(--color-error-subtle, rgba(255, 107, 107, 0.12)); border-color: var(--ij-danger); }
+
+.ij-app input[type='number'],
+.ij-app input[type='text'],
+.ij-app select,
+.ij-window input[type='number'],
+.ij-window input[type='text'],
+.ij-window select,
+.ij-dialog input[type='number'],
+.ij-dialog input[type='text'],
+.ij-dialog select {
+  min-height: 24px;
+  padding: 1px 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--ij-text);
+  font: inherit;
+  min-width: 0;
+}
+.ij-app input:focus-visible,
+.ij-app select:focus-visible,
+.ij-window input:focus-visible,
+.ij-window select:focus-visible,
+.ij-dialog input:focus-visible,
+.ij-dialog select:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 0; }
+.ij-app input[type='range'],
+.ij-window input[type='range'],
+.ij-dialog input[type='range'] { accent-color: var(--ij-accent); }
+.ij-slider { width: 100%; }
+
+/* ── Floating tool windows ──────────────────────────────── */
+.ij-window {
+  min-width: 220px;
+  max-width: calc(100% - 12px);
+  max-height: calc(100% - 12px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated, var(--ij-panel));
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.35));
+  color: var(--ij-text);
+  font: var(--ij-font);
+  outline: none;
+}
+.ij-window-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  background: var(--ij-chrome);
+  border-bottom: 1px solid var(--ij-border);
+  border-radius: 6px 6px 0 0;
+  font-weight: 600;
+  cursor: move;
+  user-select: none;
+}
+.ij-window-close {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--ij-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ij-window-close:hover { background: var(--bg-active); color: var(--ij-text); }
+.ij-window-content { overflow: auto; min-height: 0; }
+.ij-window.is-dragging,
+.ij-dialog.is-dragging { opacity: 0.9; }
+
+/* ── Modal dialogs (IJWindows.dialog; the script sets their position) ── */
+.ij-dialog-backdrop { background: var(--overlay); }
+.ij-dialog {
+  width: min(440px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated, var(--ij-panel));
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-xl, 0 20px 50px rgba(0, 0, 0, 0.4));
+  color: var(--ij-text);
+  font: var(--ij-font);
+  outline: none;
+}
+.ij-dialog-title { padding: 10px 14px; border-bottom: 1px solid var(--ij-border); font-weight: 600; font-size: 13px; cursor: move; user-select: none; }
+.ij-dialog-body { display: grid; gap: 8px; padding: 12px 14px; overflow: auto; }
+.ij-dialog-message { margin: 0; color: var(--ij-muted); line-height: 1.45; }
+.ij-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--ij-border); }
+
+/* ── Field rows ─────────────────────────────────────────── */
+.ij-field {
+  display: grid;
+  grid-template-columns: minmax(80px, 38%) 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.ij-field--message,
+.ij-field--check { grid-template-columns: 1fr; }
+.ij-field--check .ij-field-label { color: var(--ij-text); }
+.ij-field-label { color: var(--ij-muted); }
+.ij-field-control { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ij-field-control > input[type='number'],
+.ij-field-control > input[type='text'],
+.ij-field-control > select { flex: 1 1 auto; }
+.ij-field-units { color: var(--ij-muted); font-size: 11px; }
+.ij-field-value { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-text); min-width: 4ch; text-align: right; }
+.ij-invalid { border-color: var(--ij-danger) !important; }
+.ij-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.ij-check input { margin: 0; }
+
+/* ── Tool-window content (built by ij-app.js) ───────────── */
+.ij-panel { display: grid; gap: 8px; padding: 10px; min-width: 260px; }
+.ij-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-panel .ij-field { grid-template-columns: 84px 1fr; }
+.ij-hist,
+.ij-plot {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  color: var(--ij-muted);
+}
+.ij-lutstrip { width: 100%; height: 8px; border-radius: 2px; }
+.ij-readout { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-text); }
+.ij-info-pre {
+  margin: 0;
+  max-width: 520px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--ij-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: var(--ij-text);
+}
+.ij-panel p { margin: 0; max-width: 440px; line-height: 1.5; }
+
+.ij-table-wrap { max-height: 280px; max-width: 70vw; overflow: auto; border: 1px solid var(--border-default); border-radius: 3px; }
+.ij-table { border-collapse: collapse; width: 100%; font-family: var(--ij-mono); font-size: 11px; }
+.ij-table th,
+.ij-table td { padding: 2px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border-subtle); }
+.ij-table th { position: sticky; top: 0; background: var(--ij-chrome); font-weight: 600; }
+.ij-table td:first-child,
+.ij-table th:first-child { color: var(--ij-muted); }
+
+.ij-list {
+  min-height: 90px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+}
+.ij-list-item { padding: 2px 8px; font-family: var(--ij-mono); font-size: 11px; cursor: default; }
+.ij-list-item:hover { background: var(--bg-hover); }
+.ij-list-item.is-selected { background: var(--color-accent-subtle, var(--bg-active)); }
+.ij-list-item input { width: 100%; }
+
+@media (max-width: 640px) {
+  .ij-menu-title { padding: 0 7px; }
+  .ij-field { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ij-progress-fill { transition: none; }
+  .ij-progress.is-indeterminate .ij-progress-fill { animation: none; }
+}

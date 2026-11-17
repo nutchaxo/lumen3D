@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "serial": 20,
-  "issuedAt": "2026-11-07T18:52:32Z",
+  "serial": 21,
+  "issuedAt": "2026-11-17T12:45:57Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -86,6 +86,23 @@
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/structure-dvr/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/structure-dvr/SHA256SUMS.sig",
       "sha256": "17370dfc0deb57db619d806d77bdfc14e53f8fa01dc2af038a6c95aef0331d02",
+      "recommended": true
+    },
+    {
+      "id": "advanced-studio",
+      "name": "Advanced Studio",
+      "placement": "studio",
+      "subtype": null,
+      "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then adjust brightness and contrast, pick lookup tables, draw selections, measure, threshold, analyse particles and filter, on the full-precision voxels.",
+      "creator": "IRIBHM",
+      "icon": "microscope",
+      "platformCompat": ">=1.83.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/plugin-advanced-studio-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/SHA256SUMS.sig",
+      "sha256": "edee7cec0c8fd80c6a5c59e55f915f1371243155d4be19239bf02aeda91df82a",
       "recommended": true
     },
     {

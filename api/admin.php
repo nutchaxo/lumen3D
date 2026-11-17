@@ -108,7 +108,8 @@ switch ($action) {
         if (!admin_reauth($body['password'] ?? null)) admin_json_out(['error' => 'bad_password'], 401);
         $path = lumen_str($body['path'] ?? null) ?? ''; $mode = lumen_str($body['mode'] ?? null) ?? '';
         if (!in_array($mode, ['trusted', 'sandboxed'], true)) admin_json_out(['error' => 'bad_mode'], 400);
-        if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#D', $path)) admin_json_out(['error' => 'bad_path'], 400);
+        if (!preg_match('#^(tools|channels|shaders|studio)/[A-Za-z0-9_][A-Za-z0-9._-]*$#D', $path)) admin_json_out(['error' => 'bad_path'], 400);
+        if (strpos($path, 'studio/') === 0 && $mode === 'sandboxed') admin_json_out(['error' => 'not_sandboxable'], 400);
         $modDir = modules_dir() . '/' . $path;
         if (!is_file($modDir . '/plugin.json')) admin_json_out(['error' => 'unknown_plugin'], 404);
         $serverHash = admin_plugin_hash(admin_plugin_file_hashes($modDir));

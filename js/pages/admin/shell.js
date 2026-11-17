@@ -288,6 +288,7 @@ async function finishWizard() {
 // ── First-run plugin picker (installs the selected first-party plugins) ─────────
 const _PLACEMENT_LABEL = () => ({
   shaders: t('wizard.plShaders', 'Rendu'), channels: t('wizard.plChannels', 'Canaux'), tools: t('wizard.plTools', 'Outils'),
+  studio: t('wizard.plStudio', 'Studio'),
 });
 
 async function _loadWizardPlugins() {
@@ -303,7 +304,7 @@ async function _loadWizardPlugins() {
   const labels = _PLACEMENT_LABEL();
   const byPlace = {};
   plugins.forEach((p) => { (byPlace[p.placement] = byPlace[p.placement] || []).push(p); });
-  host.innerHTML = ['shaders', 'channels', 'tools'].filter((pl) => byPlace[pl]).map((pl) => `
+  host.innerHTML = ['shaders', 'channels', 'tools', 'studio'].filter((pl) => byPlace[pl]).map((pl) => `
     <div style="margin-bottom:10px">
       <div style="font-size:11px;text-transform:uppercase;opacity:.6;margin:4px 0 3px">${escHtml(labels[pl] || pl)}</div>
       ${byPlace[pl].map((p) => {

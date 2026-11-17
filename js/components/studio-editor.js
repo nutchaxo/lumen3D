@@ -146,10 +146,21 @@ const StudioEditor = (() => {
    * setSliceResult / setLoadProgress `options.token`), or null when nothing opened.
    */
   function open(sliceResult) {
+    // A mode with work in it must agree to be replaced (canLeave('replace')): the answer is
+    // asynchronous, so the call then returns a Promise of the token (null when refused).
+    if (_isOpen && (_activeMode || _modesWithWork().length)) return _guardedReplace(() => _openNow(sliceResult));
+    return _openNow(sliceResult);
+  }
+
+  function _openNow(sliceResult) {
     if (!sliceResult?.canvas && !_hasRaw(sliceResult)) {
       _toast(_t('toast.renderSliceFirst', 'Render a slice before opening Studio.'));
       return null;
     }
+    // The document a mode was working on is replaced: back to the Simple view.
+    if (_activeMode) _deactivateMode();
+    // Only a document being REPLACED frees the modes' state; the first open has none.
+    if (_isOpen) _releaseAllModes();
     // A new document: the previous one's raw values and GPU textures go with it.
     _cancelChannelRecompose();
     _cancelDrawRequest();
@@ -194,7 +205,17 @@ const StudioEditor = (() => {
     _ensureDefaultScaleBarLayer();
     _pushHistory('Open Studio');
     _renderAll();
+    _refreshModeSwitch();
     return _docToken;
+  }
+
+  /**
+   * The raw atlas values (RGBA = channels 0..3) of the open single slice, or null: what
+   * a mode paints a loading placeholder from. getDocument() is a JSON clone and never
+   * carries them. The reference is the Studio's own, to be read, not kept or changed.
+   */
+  function getSliceRaw() {
+    return _isOpen && _sliceResult && _sliceResult.raw ? _sliceResult.raw : null;
   }
 
   /** The token of the open document (0 before the first open). */
@@ -218,8 +239,8 @@ const StudioEditor = (() => {
   function setSliceResult(sliceResult, options = {}) {
     if (!sliceResult?.canvas && !_hasRaw(sliceResult)) return;
     if (options.reopen) {
-      open(sliceResult);
-      return;
+      const reopened = open(sliceResult);
+      return reopened && typeof reopened.then === 'function' ? reopened.then(() => undefined) : undefined;
     }
     if (!_doc || !_isOpen || _staleToken(options)) return;
     // Coloured with the DOCUMENT's channel state, never the slice's own: a refresh of
@@ -365,6 +386,8 @@ const StudioEditor = (() => {
    */
   function close() {
     if (!_isOpen) return;
+    if (_activeMode) _deactivateMode();
+    _releaseAllModes();
     _isOpen = false;
     // A native slice may still be streaming for a document nobody is looking at.
     const pendingCancel = _progressOnCancel;
@@ -400,6 +423,7 @@ const StudioEditor = (() => {
     _channelsShown = null;
     if (_doc) _doc = _portableDocument(_doc);
     _container.classList.add('hidden');
+    _refreshModeSwitch();
     // If we're in the standalone viewer, we need to show the viewer elements again
     document.getElementById('webgl-canvas')?.classList.remove('hidden');
     document.getElementById('toolbar')?.classList.remove('hidden');
@@ -408,6 +432,297 @@ const StudioEditor = (() => {
     document.querySelector('.compare-layout')?.classList.remove('hidden');
     
     // Stop recording if active
+  }
+
+  // ── Studio modes (registerMode) ─────────────────────────────────────────────
+  // A plugin of the `studio` placement registers a mode — a whole other interface on
+  // the open document (the Advanced view). The Simple Studio stays the default: a mode
+  // is entered from the header's segmented control, takes the whole layout (header and
+  // body hidden, #studio-mode-root shown) and answers canLeave(reason) before the Studio
+  // closes, is replaced by another document, or the page unloads. Nothing of this runs
+  // while no mode is registered.
+  const _modes = new Map();
+  let _activeMode = null;
+  let _modeBusy = false;
+  let _closeRequest = null;
+  let _modeSwitchSignature = '';
+
+  /**
+   * mode = { id, label: string | () => string, icon, mount(rootEl, api) → void | Promise,
+   *   unmount() → void, canLeave?(reason: 'simple'|'close'|'replace'|'unload') → Promise<boolean>,
+   *   eligible?(document) → { ok, reasonKey? }, hasUnsavedWork?() → boolean }
+   * api = { getDocument(), exit() → Promise<boolean>, close() → Promise<boolean>, token() }
+   * → a function that unregisters the mode.
+   */
+  function registerMode(mode) {
+    if (!mode || typeof mode.id !== 'string' || !mode.id || mode.id === 'simple') {
+      throw new TypeError('StudioEditor.registerMode: a mode needs an id other than "simple"');
+    }
+    if (typeof mode.mount !== 'function' || typeof mode.unmount !== 'function') {
+      throw new TypeError('StudioEditor.registerMode: a mode needs mount() and unmount()');
+    }
+    const previous = _modes.get(mode.id);
+    if (previous && previous === _activeMode) _deactivateMode();
+    _modes.set(mode.id, mode);
+    _refreshModeSwitch();
+    return () => {
+      if (_modes.get(mode.id) !== mode) return;
+      if (_activeMode === mode) _deactivateMode();
+      _releaseMode(mode);
+      _modes.delete(mode.id);
+      _refreshModeSwitch();
+    };
+  }
+
+  /**
+   * A mode left through the Simple view keeps its worker, GPU context and documents alive
+   * (unmount() hides, it does not free). When the document they belong to goes away
+   * (close, replacement) every mode is asked to free them: mode.release(), optional,
+   * idempotent, safe when the mode is not mounted.
+   */
+  function _releaseMode(mode) {
+    if (!mode || typeof mode.release !== 'function') return;
+    try { mode.release(); } catch (err) { console.error('[StudioEditor] a mode release failed:', err); }
+  }
+
+  function _releaseAllModes() {
+    for (const mode of _modes.values()) _releaseMode(mode);
+  }
+
+  /** The registered mode with this id (undefined when none). */
+  function _registeredMode(id) {
+    return _modes.get(id);
+  }
+
+  /** The active mode's id, 'simple' when no mode is active. */
+  function getMode() {
+    return _activeMode ? _activeMode.id : 'simple';
+  }
+
+  function _modeLabel(mode) {
+    try {
+      const label = typeof mode.label === 'function' ? mode.label() : mode.label;
+      return String(label || mode.id);
+    } catch (err) {
+      console.error('[StudioEditor] a mode label failed:', err);
+      return mode.id;
+    }
+  }
+
+  /** → { ok, reasonKey }: may this mode work on the open document. */
+  function _modeEligibility(mode) {
+    if (!_isOpen || !_doc) return { ok: false, reasonKey: null };
+    if (typeof mode.eligible !== 'function') return { ok: true, reasonKey: null };
+    try {
+      const answer = mode.eligible(getDocument());
+      if (answer && typeof answer === 'object') return { ok: answer.ok !== false, reasonKey: answer.reasonKey || null };
+      return { ok: answer !== false, reasonKey: null };
+    } catch (err) {
+      console.error('[StudioEditor] a mode eligibility check failed:', err);
+      return { ok: false, reasonKey: null };
+    }
+  }
+
+  /** The segmented control: Simple + one button per registered mode (rebuilt only when it changed). */
+  function _refreshModeSwitch() {
+    const el = document.getElementById('studio-mode-switch');
+    if (!el) return;
+    const visible = _modes.size > 0 && _isOpen;
+    el.classList.toggle('hidden', !visible);
+    if (!visible) { _modeSwitchSignature = ''; return; }
+    const entries = [{ id: 'simple', label: _t('studio.modeSimple', 'Simple'), icon: null, ok: true, reason: '' }];
+    for (const mode of _modes.values()) {
+      const eligibility = _modeEligibility(mode);
+      entries.push({
+        id: mode.id,
+        label: _modeLabel(mode),
+        icon: typeof mode.icon === 'string' ? mode.icon : null,
+        ok: eligibility.ok,
+        reason: !eligibility.ok && eligibility.reasonKey ? _t(eligibility.reasonKey, '') : ''
+      });
+    }
+    const active = getMode();
+    const signature = JSON.stringify([active, entries]);
+    if (signature === _modeSwitchSignature) return;
+    _modeSwitchSignature = signature;
+    el.replaceChildren();
+    for (const entry of entries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `studio-mode-button${entry.id === active ? ' active' : ''}`;
+      button.dataset.studioMode = entry.id;
+      button.setAttribute('aria-pressed', entry.id === active ? 'true' : 'false');
+      if (!entry.ok) {
+        button.disabled = true;
+        if (entry.reason) {
+          button.title = entry.reason;
+          // A disabled button takes no focus and its title is not read: the reason
+          // is also a visually hidden description the button points at.
+          const hint = document.createElement('span');
+          hint.id = `studio-mode-reason-${entry.id}`;
+          hint.className = 'sr-only';
+          hint.textContent = entry.reason;
+          button.setAttribute('aria-describedby', hint.id);
+          button.appendChild(hint);
+        }
+      }
+      if (entry.icon) {
+        const icon = document.createElement('i');
+        icon.setAttribute('data-lucide', entry.icon);
+        button.appendChild(icon);
+      }
+      const text = document.createElement('span');
+      text.textContent = entry.label;
+      button.appendChild(text);
+      el.appendChild(button);
+    }
+    try { if (typeof window !== 'undefined' && window.lucide?.createIcons) window.lucide.createIcons(); } catch (err) { /* icons are cosmetic */ }
+  }
+
+  /** The registered modes, other than the active one, whose documents hold unsaved work. */
+  function _modesWithWork() {
+    const out = [];
+    for (const mode of _modes.values()) {
+      if (mode === _activeMode || typeof mode.hasUnsavedWork !== 'function') continue;
+      try { if (mode.hasUnsavedWork()) out.push(mode); } catch (err) { console.error('[StudioEditor] hasUnsavedWork failed:', err); }
+    }
+    return out;
+  }
+
+  /** A mode that cannot answer keeps the work where it is: a throw means "do not leave". */
+  async function _askLeave(mode, reason) {
+    if (typeof mode.canLeave !== 'function') return true;
+    try {
+      return (await mode.canLeave(reason)) !== false;
+    } catch (err) {
+      console.error('[StudioEditor] a mode canLeave failed; staying:', err);
+      return false;
+    }
+  }
+
+  /** Every mode that may hold work (the active one, then the others with unsaved work) agrees to `reason`. */
+  async function _askAllLeave(reason) {
+    const asked = [];
+    if (_activeMode) asked.push(_activeMode);
+    asked.push(..._modesWithWork());
+    for (const mode of asked) {
+      if (!(await _askLeave(mode, reason))) return false;
+    }
+    return true;
+  }
+
+  async function _guardedReplace(proceed) {
+    if (!(await _askAllLeave('replace'))) return null;
+    return proceed();
+  }
+
+  /**
+   * Closes the Studio once every mode with work agrees (canLeave('close')); the Studio's
+   * own close button goes through here. → Promise<boolean>: true when it closed. The
+   * synchronous close() stays for internal paths (it unmounts the active mode without asking).
+   */
+  function requestClose() {
+    if (!_isOpen) return Promise.resolve(true);
+    if (!_activeMode && !_modesWithWork().length) {
+      close();
+      return Promise.resolve(true);
+    }
+    if (_closeRequest) return _closeRequest;
+    _closeRequest = (async () => {
+      try {
+        if (!(await _askAllLeave('close'))) return false;
+        close();
+        return true;
+      } finally {
+        _closeRequest = null;
+      }
+    })();
+    return _closeRequest;
+  }
+
+  /** Leaves the active mode at once (no question): the Simple view comes back. */
+  function _deactivateMode() {
+    const mode = _activeMode;
+    if (!mode) return;
+    _activeMode = null;
+    try { mode.unmount(); } catch (err) { console.error('[StudioEditor] a mode unmount failed:', err); }
+    document.getElementById('studio-mode-root')?.classList.add('hidden');
+    _container?.querySelector('.studio-header')?.classList.remove('hidden');
+    _container?.querySelector('.studio-body')?.classList.remove('hidden');
+    _refreshModeSwitch();
+    // The canvas had no size while its panel was hidden.
+    if (_isOpen) { try { _resizeCanvas(); } catch (err) { /* resized on the next resize event */ } }
+  }
+
+  /**
+   * Switches the view: 'simple' or a registered mode's id. Leaving a mode asks it
+   * canLeave('simple') (the Advanced view keeps its work alive and always agrees).
+   * → Promise<boolean>: whether the requested view is now the one shown.
+   */
+  async function setMode(id) {
+    if (_modeBusy) return false;
+    const target = id === undefined || id === null || id === 'simple' ? null : _registeredMode(id);
+    if (target === undefined) return false;
+    if (target === _activeMode) return true;
+    _modeBusy = true;
+    try {
+      if (target && !_modeEligibility(target).ok) return false;
+      if (_activeMode) {
+        if (!(await _askLeave(_activeMode, 'simple'))) return false;
+        _deactivateMode();
+      }
+      if (!target) return true;
+      if (!_isOpen) return false;
+      return await _activateMode(target);
+    } finally {
+      _modeBusy = false;
+      _refreshModeSwitch();
+    }
+  }
+
+  async function _activateMode(mode) {
+    const root = document.getElementById('studio-mode-root');
+    if (!root) return false;
+    const token = _docToken;
+    _container.querySelector('.studio-header')?.classList.add('hidden');
+    _container.querySelector('.studio-body')?.classList.add('hidden');
+    root.classList.remove('hidden');
+    _activeMode = mode;
+    const live = () => _activeMode === mode && _docToken === token;
+    const api = {
+      getDocument: () => getDocument(),
+      exit: () => (live() ? _exitMode() : Promise.resolve(false)),
+      close: () => (live() ? requestClose() : Promise.resolve(false)),
+      token: () => token
+    };
+    try {
+      await mode.mount(root, api);
+    } catch (err) {
+      console.error('[StudioEditor] a mode failed to mount; back to the Simple view:', err);
+      if (_activeMode === mode) _deactivateMode();
+      _toast(_t('toast.studioModeFailed', 'This view could not be opened.'));
+      return false;
+    }
+    return _activeMode === mode;
+  }
+
+  // exit() is called by the mode, usually from a click while no transition runs; one
+  // issued from inside mount() (the busy flag still set) waits for the mount to settle.
+  async function _exitMode() {
+    for (let i = 0; i < 150 && _modeBusy; i++) await new Promise(resolve => setTimeout(resolve, 20));
+    return setMode('simple');
+  }
+
+  function _onBeforeUnload(event) {
+    for (const mode of _modes.values()) {
+      if (typeof mode.hasUnsavedWork !== 'function') continue;
+      let work = false;
+      try { work = Boolean(mode.hasUnsavedWork()); } catch (err) { console.error('[StudioEditor] hasUnsavedWork failed:', err); }
+      if (!work) continue;
+      event.preventDefault();
+      event.returnValue = '';
+      return;
+    }
   }
 
   function getDocument() {
@@ -469,7 +784,17 @@ const StudioEditor = (() => {
   function _bindEvents() {
     if (_eventsBound) return;
     _eventsBound = true;
-    document.getElementById('btn-close-studio')?.addEventListener('click', close);
+    document.getElementById('btn-close-studio')?.addEventListener('click', () => { requestClose(); });
+    // The switch's labels are translated text: a language change rebuilds it.
+    try {
+      if (typeof I18n !== 'undefined' && typeof I18n.onLanguageChange === 'function') {
+        I18n.onLanguageChange(() => { _modeSwitchSignature = ''; _refreshModeSwitch(); });
+      }
+    } catch (err) { /* the labels refresh on the next open */ }
+    document.getElementById('studio-mode-switch')?.addEventListener('click', (event) => {
+      const button = event.target.closest?.('[data-studio-mode]');
+      if (button && !button.disabled) setMode(button.dataset.studioMode);
+    });
     document.getElementById('btn-studio-open')?.addEventListener('click', () => {
       if (typeof ViewerApp !== 'undefined' && typeof ViewerApp.openStudio === 'function') {
         ViewerApp.openStudio();
@@ -509,6 +834,7 @@ const StudioEditor = (() => {
       if (_isOpen) _resizeCanvas();
     });
     window.addEventListener('keydown', _onKeyDown);
+    window.addEventListener('beforeunload', _onBeforeUnload);
     window.addEventListener('keyup', _onKeyUp);
   }
 
@@ -1499,7 +1825,7 @@ const StudioEditor = (() => {
   }
 
   function _onWheel(event) {
-    if (!_doc) return;
+    if (!_doc || _activeMode) return;
     event.preventDefault();
     // The image point under the cursor P stays under it. With
     //   screen = pan + R(rot)·zoom·(image − centre),
@@ -1595,7 +1921,7 @@ const StudioEditor = (() => {
   }
 
   function _onKeyDown(event) {
-    if (!_isOpen || event.target?.matches('input, textarea, select')) return;
+    if (!_isOpen || _activeMode || event.target?.matches('input, textarea, select')) return;
     if (event.key === ' ') {
       _spaceDown = true;
       event.preventDefault();
@@ -3291,7 +3617,7 @@ const StudioEditor = (() => {
   }
 
   /**
-   * Every PNG export offers the picture as it is or the native lossless one (SPEC §14.7):
+   * A PNG export of a preview offers the picture as it is or the native lossless one (SPEC §14.7):
    * the latter waits for (or re-runs) the native pass; the layers, stored in the
    * picture's pixels, are rescaled with it (setSliceResult) and land on the same voxels.
    */
@@ -3306,16 +3632,15 @@ const StudioEditor = (() => {
       _exportPng();
       return;
     }
-    if (!_nativeProvider || _doc.layoutMaps?.length > 0 || typeof Dialog === 'undefined' || !Dialog.ask) {
+    // A picture that is already the native lossless one has nothing to choose between.
+    if (isNative || !_nativeProvider || _doc.layoutMaps?.length > 0 || typeof Dialog === 'undefined' || !Dialog.ask) {
       _exportPng();
       return;
     }
     const choice = await Dialog.ask({
       icon: 'image',
       title: _t('studio.exportQualityTitle', 'Export quality'),
-      message: isNative
-        ? _t('studio.exportQualityNativeMsg', 'This picture is already the native lossless one.')
-        : _t('studio.exportQualityPreviewMsg', 'This picture is the preview drawn from the volume on screen. The native lossless picture is read from the stored voxels; your layers keep their place.'),
+      message: _t('studio.exportQualityPreviewMsg', 'This picture is the preview drawn from the volume on screen. The native lossless picture is read from the stored voxels; your layers keep their place.'),
       dismissId: 'cancel',
       options: [
         { id: 'native', primary: true, variant: 'primary', label: _t('studio.exportNative', 'Native lossless') },
@@ -3325,11 +3650,9 @@ const StudioEditor = (() => {
     });
     if (choice === 'current') { _exportPng(); return; }
     if (choice !== 'native') return;
-    if (!isNative) {
-      _toast(_t('studio.loadingNativeExport', 'Loading the native lossless picture…'));
-      const ok = await _nativeProvider();
-      if (!ok) { _toast(_t('studio.nativeExportFailed', 'The native picture could not be loaded; nothing was exported.')); return; }
-    }
+    _toast(_t('studio.loadingNativeExport', 'Loading the native lossless picture…'));
+    const ok = await _nativeProvider();
+    if (!ok) { _toast(_t('studio.nativeExportFailed', 'The native picture could not be loaded; nothing was exported.')); return; }
     _exportPng();
   }
 
@@ -4411,7 +4734,12 @@ const StudioEditor = (() => {
     setLoadProgress,
     isOpen: () => _isOpen,
     close,
+    requestClose,
+    registerMode,
+    getMode,
+    setMode,
     getDocument,
+    getSliceRaw,
     documentToken,
     setNativeProvider,
     getSliceQuality

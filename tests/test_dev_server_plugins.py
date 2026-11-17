@@ -33,9 +33,9 @@ class TestRealTree(unittest.TestCase):
         # Floor rather than exact count: the platform is meant to gain plugins by
         # folder presence, so a new folder must not break discovery's own test.
         self.assertGreaterEqual(len(plugins), 15, "all built-in plugins discovered from js/modules/")
-        self.assertEqual(
-            {p["placement"] for p in plugins}, {"tools", "channels", "shaders"}
-        )
+        placements = {p["placement"] for p in plugins}
+        # 'studio' plugins (the Studio's modes) are optional: marketplace-only in a release.
+        self.assertTrue({"tools", "channels", "shaders"} <= placements <= set(dev_server.PLUGIN_PLACEMENTS))
         for must in ("screenshot", "histogram", "fluorescence", "measure-distance"):
             self.assertIn(must, ids)
 
@@ -49,6 +49,7 @@ class TestIsolatedTree(unittest.TestCase):
         (self.mods / "tools").mkdir(parents=True)
         (self.mods / "channels").mkdir(parents=True)
         (self.mods / "shaders").mkdir(parents=True)
+        (self.mods / "studio").mkdir(parents=True)
         self._orig = dev_server.MODULES_DIR
         dev_server.MODULES_DIR = self.mods
 
@@ -110,6 +111,28 @@ class TestIsolatedTree(unittest.TestCase):
             self.assertEqual(set(entry.keys()), {"path", "placement", "id"})
         paths = {e["path"] for e in manifest["plugins"]}
         self.assertEqual(paths, {"tools/alpha", "shaders/beam"})
+
+    def test_studio_placement(self):
+        self.assertIn("studio", dev_server.PLUGIN_PLACEMENTS)
+        self._write("studio", "adv", {"id": "adv", "placement": "studio", "scripts": ["a.js"]})
+        self._write("tools", "liar", {"id": "liar", "placement": "studio"})   # directory wins
+        found = {p["path"]: p for p in dev_server._list_plugins()}
+        self.assertIn("studio/adv", found)
+        self.assertEqual(found["studio/adv"]["placement"], "studio")
+        self.assertNotIn("tools/liar", found)
+        self.assertEqual(dev_server._safe_plugin_path("studio/adv"), ("studio", "adv"))
+        self.assertIsNone(dev_server._safe_plugin_path("studio/../x"))
+
+    def test_studio_plugin_is_never_approved_sandboxed(self):
+        self._write("studio", "adv", {"id": "adv", "placement": "studio"})
+        orig_verify = dev_server._verify_password
+        dev_server._verify_password = lambda *_a, **_k: True
+        try:
+            ok, status, payload = dev_server._approve_plugin("studio/adv", "x" * 64, "sandboxed", [], "pw")
+        finally:
+            dev_server._verify_password = orig_verify
+        self.assertFalse(ok)
+        self.assertEqual((status, payload.get("error")), (400, "not_sandboxable"))
 
 
 if __name__ == "__main__":

@@ -33,13 +33,14 @@ class TestPluginManifestAtomicWrite(unittest.TestCase):
         plugins = [
             {"path": "tools/screenshot", "placement": "tools", "id": "screenshot"},
             {"path": "shaders/fluorescence", "placement": "shaders", "id": "fluorescence"},
+            {"path": "studio/advanced-studio", "placement": "studio", "id": "advanced-studio"},
         ]
         dev_server._write_plugins_manifest(plugins)
         mpath = dev_server.MODULES_DIR / "manifest.json"
         self.assertTrue(mpath.exists(), "manifest.json written")
         data = json.loads(mpath.read_text(encoding="utf-8"))
         self.assertEqual([p["path"] for p in data["plugins"]],
-                         ["tools/screenshot", "shaders/fluorescence"], "content correct")
+                         ["tools/screenshot", "shaders/fluorescence", "studio/advanced-studio"], "content correct")
         leftovers = [f for f in dev_server.MODULES_DIR.iterdir() if f.name.startswith(".tmp-")]
         self.assertEqual(leftovers, [], "#4: no temp file left behind (atomic os.replace)")
 

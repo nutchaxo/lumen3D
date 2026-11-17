@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"convexhull_rect","op":"convexHull","call":"Selection.convexHull: roi.getFloatConvexHull() -> new PolygonRoi(p, Roi.POLYGON)","roi":{"type":"rect","x":6,"y":5,"w":17,"h":11},"result":{"pts":[6,5,6,16,23,16,23,5],"perimeter":53.65685424949238}}

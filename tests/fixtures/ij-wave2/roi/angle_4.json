@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"angle_4","op":"angle","call":"new PolygonRoi(xs, ys, 3, Roi.ANGLE).getAngle() [degrees between the arms at vertex 2, 0..180; Prefs.reflexAngle=false]; Analyzer.measureAngle -> rt \"Angle\"","params":{"pts":[10.5,12.5,22.25,5.5,34.75,20.25]},"result":{"angle":99.49571654262999,"measureAngle":99.49571654262999}}

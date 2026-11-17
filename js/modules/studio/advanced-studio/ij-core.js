@@ -189,11 +189,17 @@
           return t;
         }
         case '16 Colors': {
-          // Sixteen flat bands of 16 grey levels (entries 16k … 16k+15 share colour k).
-          const pal = [[0, 0, 0], [0, 0, 170], [0, 170, 0], [0, 170, 170], [170, 0, 0], [170, 0, 170], [170, 85, 0], [170, 170, 170],
-            [85, 85, 85], [85, 85, 255], [85, 255, 85], [85, 255, 255], [255, 85, 85], [255, 85, 255], [255, 255, 85], [255, 255, 255]];
+          // Fiji luts/16_colors.lut, read byte for byte: band k = entries 16k..16k+15;
+          // all bands are flat except band 13, a blue ramp at r=245, g=0.
+          const pal = [[0, 0, 0], [1, 1, 171], [1, 1, 224], [0, 110, 255], [1, 171, 254], [1, 224, 254], [1, 254, 1], [190, 255, 0],
+            [255, 255, 0], [255, 224, 0], [255, 141, 0], [250, 94, 0], [245, 0, 0], null, [222, 180, 222], [255, 255, 255]];
+          const ramp = [135, 141, 147, 153, 160, 166, 172, 178, 185, 191, 197, 203, 210, 216, 222, 228];
           const t = new Uint8Array(768);
-          for (let i = 0; i < 256; i++) { const c = pal[i >> 4]; t[i * 3] = c[0]; t[i * 3 + 1] = c[1]; t[i * 3 + 2] = c[2]; }
+          for (let i = 0; i < 256; i++) {
+            const k = i >> 4;
+            const c = k === 13 ? [245, 0, ramp[i & 15]] : pal[k];
+            t[i * 3] = c[0]; t[i * 3 + 1] = c[1]; t[i * 3 + 2] = c[2];
+          }
           return t;
         }
         case 'HiLo': {
@@ -215,17 +221,18 @@
     }
     function toHex(c) { return '#' + c.map((v) => (v < 16 ? '0' : '') + v.toString(16)).join(''); }
 
-    /* A linear ramp from black to the colour. ImageJ's LUT.createLutFromColor
-     * divides by 256; here the ramp is exact (round(i·c/255)) so a white
-     * channel equals Grays and level 255 reaches the colour. */
+    /* A linear ramp from black to the colour, as ImageJ's LUT.createLutFromColor:
+     * increment = channel/255, entry = (int)(i · increment), i.e. truncated, so
+     * level 255 reaches the colour and a white channel equals Grays. */
     function fromColor(hex) {
       const c = parseHex(hex);
       if (!c) throw fail('IJ_BAD_COLOR', 'colour');
       const t = new Uint8Array(768);
+      const inc = [c[0] / 255, c[1] / 255, c[2] / 255];
       for (let i = 0; i < 256; i++) {
-        t[i * 3] = Math.floor(i * c[0] / 255 + 0.5);
-        t[i * 3 + 1] = Math.floor(i * c[1] / 255 + 0.5);
-        t[i * 3 + 2] = Math.floor(i * c[2] / 255 + 0.5);
+        t[i * 3] = Math.floor(i * inc[0]);
+        t[i * 3 + 1] = Math.floor(i * inc[1]);
+        t[i * 3 + 2] = Math.floor(i * inc[2]);
       }
       return t;
     }
@@ -478,10 +485,13 @@
       return s;
     }
 
-    /* ImageJ Roi.getTracedPerimeter: Σ|dx| + Σ|dy| − nCorners·(2 − √2) over a
-     * closed outline made of horizontal / vertical unit-grid steps. */
-    function tracedPerimeter(pts) {
+    /* ImageJ PolygonRoi.getTracedPerimeter: Σ|dx|·w + Σ|dy|·h − nCorners·((w + h) − √(w² + h²))
+     * over a closed outline made of horizontal / vertical grid steps (pw, ph =
+     * pixel size, 1 here); fewer than 4 vertices → 0. */
+    function tracedPerimeter(pts, pw, ph) {
       const n = pts.length;
+      if (n < 4) return 0;
+      pw = pw || 1; ph = ph || 1;
       let sumdx = 0, sumdy = 0, nCorners = 0;
       let dx1 = pts[0][0] - pts[n - 1][0], dy1 = pts[0][1] - pts[n - 1][1];
       let side1 = Math.abs(dx1) + Math.abs(dy1);
@@ -494,20 +504,34 @@
         if (side1 > 1 || !corner) { corner = true; nCorners++; } else corner = false;
         dx1 = dx2; dy1 = dy2; side1 = side2;
       }
-      return sumdx + sumdy - nCorners * (2 - Math.SQRT2);
+      return sumdx * pw + sumdy * ph - nCorners * ((pw + ph) - Math.sqrt(pw * pw + ph * ph));
     }
 
-    /* ImageJ Roi.getSmoothedPerimeter (freehand): length of the closed outline
-     * of the 3-point running average of the vertices. */
+    /* PolygonRoi.isTraced(): a polygon whose vertices are integers and whose
+     * edges (the closing one included) are all horizontal or vertical. */
+    function isRectilinearInt(pts) {
+      const n = pts.length;
+      if (n < 4) return false;
+      for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        if (!Number.isInteger(a[0]) || !Number.isInteger(a[1])) return false;
+        if (a[0] !== b[0] && a[1] !== b[1]) return false;
+      }
+      return true;
+    }
+
+    /* ImageJ PolygonRoi.getSmoothedPerimeter = getSmoothedLineLength (an OPEN
+     * line: first segment p0 → mean(p0..p2), middle segments |p[i+2] − p[i−1]|/3,
+     * last segment mean(p[n−3..n−1]) → p[n−1]) plus the raw closing segment
+     * p[n−1] → p0. Fewer than 3 points: the plain polygon length. */
     function smoothedPerimeter(pts) {
       const n = pts.length;
-      const sx = [], sy = [];
-      for (let i = 0; i < n; i++) {
-        const a = pts[(i + n - 1) % n], b = pts[i], c = pts[(i + 1) % n];
-        sx.push((a[0] + b[0] + c[0]) / 3); sy.push((a[1] + b[1] + c[1]) / 3);
-      }
-      let len = 0;
-      for (let i = 0; i < n; i++) { const j = (i + 1) % n; len += Math.hypot(sx[j] - sx[i], sy[j] - sy[i]); }
+      if (n < 3) return polygonPerimeter(pts);
+      const X = (i) => pts[i][0], Y = (i) => pts[i][1];
+      let len = Math.hypot((X(0) + X(1) + X(2)) / 3 - X(0), (Y(0) + Y(1) + Y(2)) / 3 - Y(0));
+      for (let i = 1; i <= n - 3; i++) len += Math.hypot((X(i + 2) - X(i - 1)) / 3, (Y(i + 2) - Y(i - 1)) / 3);
+      len += Math.hypot(X(n - 1) - (X(n - 3) + X(n - 2) + X(n - 1)) / 3, Y(n - 1) - (Y(n - 3) + Y(n - 2) + Y(n - 1)) / 3);
+      len += Math.hypot(X(n - 1) - X(0), Y(n - 1) - Y(0));
       return len;
     }
 
@@ -524,8 +548,9 @@
 
     /* Perimeter in pixels. rect 2(w+h); oval Ramanujan's first approximation
      * π(3(a+b) − √((3a+b)(a+3b))) with semi-axes a, b; polygon the edge sum
-     * (traced polygons — `traced: true`, e.g. particle outlines — get ImageJ's
-     * corner correction); freehand ImageJ's smoothed length; line its length;
+     * (traced polygons — `traced: true`, e.g. particle outlines, and any polygon
+     * of integer vertices with only horizontal / vertical edges, as ImageJ's
+     * Roi.isTraced — get the corner correction); freehand ImageJ's smoothed length; line its length;
      * point / mask 0. */
     function perimeter(roi) {
       switch (roi.type) {
@@ -534,7 +559,7 @@
           const a = roi.w / 2, b = roi.h / 2;
           return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
         }
-        case 'polygon': return roi.traced ? tracedPerimeter(roi.points) : polygonPerimeter(roi.points);
+        case 'polygon': return roi.traced || isRectilinearInt(roi.points) ? tracedPerimeter(roi.points) : polygonPerimeter(roi.points);
         case 'freehand': return smoothedPerimeter(roi.points);
         case 'line': return lineLength(roi);
         default: return 0;
@@ -616,8 +641,9 @@
 
     /* Measurements of the pixels inside the mask (ImageJ ImageStatistics).
      *   stdDev     sample standard deviation, n − 1
-     *   median     value at sorted index ⌊n/2⌋ — ImageJ's cumulative-histogram
-     *              rule (first value whose running count exceeds n/2)
+     *   median     8/16-bit: first value whose running count exceeds n/2 (ImageJ's
+     *              cumulative-histogram rule); 32-bit: sorted middle, the mean of
+     *              the two middle values for an even count (FloatStatistics)
      *   mode       most frequent value (lowest on ties); 32-bit: centre of the
      *              fullest of 256 bins over [min, max]
      *   intDen     calibrated area × mean;  rawIntDen  Σ value
@@ -655,7 +681,7 @@
       let median, mode;
       if (f32) {
         vals.sort();
-        median = vals[Math.floor(n / 2)];
+        { const m = n >> 1; median = (n & 1) ? vals[m] : Math.fround((vals[m - 1] + vals[m]) / 2); } // FloatStatistics.getMedian
         if (max === min) mode = min;
         else {
           const c = new Uint32Array(256), bw = (max - min) / 256;
@@ -751,23 +777,20 @@
       return { min, max, nextAutoThreshold: t };
     }
 
-    /* Apply the display range to the pixel data (ImageJ Apply on B&C).
-     * 8-bit:  v' = clamp(⌊(v − min)·256 / (max − min + 1)⌋, 0, 255), v < min → 0
-     * 16-bit: v ≤ min → 0; v ≥ max → 65535; else ⌊(v − min)/(max − min)·65536⌋ capped at 65535 */
+    /* Apply the display range to the pixel data (ImageJ ContrastAdjuster.apply,
+     * one table for 8 and 16 bit). min / max are truncated to integers first
+     * ((int)getDisplayRangeMin/Max); range = 256 (8-bit) or 65536 (16-bit):
+     *   v ≤ min → 0;  v ≥ max → range − 1;  else (int)((v − min)/(max − min) · range). */
     function applyLut(ch, min, max) {
       if (ch.bitDepth === 32) throw fail('IJ_NOT_32BIT', 'apply on 32-bit');
       const out = blank(ch, ch.width, ch.height);
-      let table;
-      if (ch.bitDepth === 8) {
-        table = new Uint8Array(256);
-        for (let v = 0; v < 256; v++) table[v] = v < min ? 0 : clampInt(Math.floor((v - min) * 256 / (max - min + 1)), 255);
-      } else {
-        table = new Uint16Array(65536);
-        for (let v = 0; v < 65536; v++) {
-          let r;
-          if (v <= min) r = 0; else if (v >= max) r = 65535; else r = Math.floor((v - min) / (max - min) * 65536);
-          table[v] = r > 65535 ? 65535 : r;
-        }
+      const range = ch.bitDepth === 8 ? 256 : 65536;
+      const mn = Math.trunc(min), mx = Math.trunc(max);
+      const table = ch.bitDepth === 8 ? new Uint8Array(range) : new Uint16Array(range);
+      for (let v = 0; v < range; v++) {
+        if (v <= mn) table[v] = 0;
+        else if (v >= mx) table[v] = range - 1;
+        else table[v] = Math.trunc((v - mn) / (mx - mn) * range);
       }
       const s = ch.data, d = out.data;
       for (let i = 0; i < s.length; i++) d[i] = table[s[i]];
@@ -815,18 +838,28 @@
       return out;
     }
 
-    /* 8-bit 255 − v; 16-bit 65535 − v; 32-bit max + min − v on the finite data range. */
-    function invert(ch) {
+    /* 8-bit 255 − v. 16-bit: about the data's own range, max + min − v (ImageJ
+     * ShortProcessor.invert without Prefs.fullRange16bitInversions). 32-bit:
+     * max + min − v on opts.min / opts.max (the display range ImageJ's
+     * FloatProcessor.invert reads), default the finite data range. */
+    function invert(ch, opts) {
       const out = blank(ch, ch.width, ch.height);
       const s = ch.data, d = out.data, n = s.length;
-      if (ch.bitDepth === 8) { for (let i = 0; i < n; i++) d[i] = 255 - s[i]; }
-      else if (ch.bitDepth === 16) { for (let i = 0; i < n; i++) d[i] = 65535 - s[i]; }
-      else { const r = IJImage.dataRange(s); const t = r.max + r.min; for (let i = 0; i < n; i++) d[i] = t - s[i]; }
+      if (ch.bitDepth === 8) { for (let i = 0; i < n; i++) d[i] = 255 - s[i]; return out; }
+      const r = IJImage.dataRange(s);
+      const o = opts || {};
+      const mn = ch.bitDepth === 32 && o.min !== undefined ? o.min : r.min;
+      const mx = ch.bitDepth === 32 && o.max !== undefined ? o.max : r.max;
+      const t = mx + mn;
+      for (let i = 0; i < n; i++) d[i] = t - s[i];
       return out;
     }
 
     /* Process › Math. Pixels outside the mask are unchanged.
-     * 8/16-bit: result = ⌊x + ½⌋ clamped to 0…max; divide by 0 → max.
+     * 8/16-bit follows ImageJ's integer tables: the operand of add / subtract /
+     * min / max / set is truncated ((int)value), multiply is round(v·value)
+     * (Java Math.round, half up), divide multiplies by 1/value and a division by
+     * 0 leaves the image unchanged; results are clamped to 0…max.
      * 'min' raises pixels BELOW value to value (ImageJ Min); 'max' lowers pixels ABOVE value to value.
      * 32-bit: IEEE single arithmetic (÷0 → ±Infinity / NaN). abs on unsigned data is the identity. */
     function math(ch, op, value, mb) {
@@ -834,25 +867,29 @@
       if (valid.indexOf(op) < 0) throw fail('IJ_BAD_OP', 'math ' + op);
       const out = copy(ch);
       const d = out.data, top = maxValue(ch.bitDepth), f32 = ch.bitDepth === 32;
+      if (!f32 && op === 'divide' && value === 0) return out;
+      const iv = f32 ? value : Math.trunc(value);
+      const inv = f32 ? 0 : 1 / value;
       forEachIn(ch, mb, (i) => {
         const v = d[i];
         let r;
         switch (op) {
-          case 'add': r = v + value; break;
-          case 'subtract': r = v - value; break;
-          case 'multiply': r = v * value; break;
-          case 'divide': r = value === 0 ? (f32 ? v / 0 : top) : v / value; break;
-          case 'min': r = v < value ? value : v; break;
-          case 'max': r = v > value ? value : v; break;
+          case 'add': r = v + iv; break;
+          case 'subtract': r = f32 ? v - value : v + Math.trunc(-value); break;
+          case 'multiply': r = f32 ? v * value : roundHalfUp(v * value); break;
+          case 'divide': r = f32 ? (value === 0 ? v / 0 : v / value) : roundHalfUp(v * inv); break;
+          case 'min': r = v < value ? iv : v; break;
+          case 'max': r = v > value ? iv : v; break;
           case 'abs': r = Math.abs(v); break;
-          default: r = value;
+          default: r = iv;
         }
-        d[i] = f32 ? r : clampInt(roundHalfUp(r), top);
+        d[i] = f32 ? r : clampInt(Math.floor(r + 0.5), top);
       });
       return out;
     }
 
-    function setValue(ch, value) { return ch.bitDepth === 32 ? value : clampInt(roundHalfUp(value), maxValue(ch.bitDepth)); }
+    /* The value written by fill / clear: truncated ((int)value) for integer data. */
+    function setValue(ch, value) { return ch.bitDepth === 32 ? value : clampInt(Math.trunc(value), maxValue(ch.bitDepth)); }
 
     function fill(ch, mb, value) {
       const out = copy(ch), v = setValue(ch, value), d = out.data;
@@ -924,9 +961,10 @@
     }
 
     /* ImageJ ProfilePlot of a straight line. n = round(length) steps → n + 1
-     * samples, spacing step = length / n. Line coordinates are continuous
-     * (pixel centres at +½), so a sample at (x, y) reads the image at
-     * (x − ½, y − ½). Width W = max(1, round(width)): every sample is the
+     * samples, spacing step = length / n. As ImageJ's Line.getPixels →
+     * ImageProcessor.getLine, a sample at (x, y) reads getInterpolatedValue(x, y)
+     * at the raw coordinates, with no half-pixel shift: a line snapped to integer
+     * endpoints returns exactly the pixels it passes through. Width W = max(1, round(width)): every sample is the
      * mean of W bilinear values across the line at offsets j − (W − 1)/2. */
     function profile(ch, line, width) {
       const dx = line.x2 - line.x1, dy = line.y2 - line.y1;
@@ -938,7 +976,7 @@
       const values = new Float64Array(n + 1);
       for (let k = 0; k <= n; k++) {
         const t = n > 0 ? k / n : 0;
-        const cx = line.x1 + dx * t - 0.5, cy = line.y1 + dy * t - 0.5;
+        const cx = line.x1 + dx * t, cy = line.y1 + dy * t;
         let s = 0;
         for (let j = 0; j < W; j++) { const o = j - (W - 1) / 2; s += bilinear(ch, cx + nx * o, cy + ny * o); }
         values[k] = s / W;
@@ -969,9 +1007,18 @@
   const IJProject = (() => {
     const METHODS = ['max', 'min', 'sum', 'avg', 'sd', 'median'];
 
-    /* Sum is 16-bit while 255·depth ≤ 65535 (depth ≤ 257), else 32-bit float;
-     * avg / sd / median are 32-bit float; max / min keep 8 bits. */
-    function outputBitDepth(method, depth) {
+    /* Output bit depth. Without `inputBd` (legacy): sum is 16-bit while
+     * 255·depth ≤ 65535 (depth ≤ 257), else 32-bit float; avg / sd / median are
+     * 32-bit float; max / min keep 8 bits.
+     * With `inputBd` (8 or 16) the rules are ImageJ ZProjector's: max / min / avg
+     * keep the input depth (avg rounded half up), median is 8-bit for 8-bit
+     * input and 32-bit float for 16-bit input, sum and sd are 32-bit float. */
+    function outputBitDepth(method, depth, inputBd) {
+      if (inputBd) {
+        if (method === 'sum' || method === 'sd') return 32;
+        if (method === 'median') return inputBd === 8 ? 8 : 32;
+        return inputBd;
+      }
       if (method === 'max' || method === 'min') return 8;
       if (method === 'sum') return depth <= 257 ? 16 : 32;
       return 32;
@@ -984,7 +1031,7 @@
     function estimateBytes(o) {
       const C = channelCount(o.channels), w = o.width, h = o.height, depth = o.depth;
       const bandRows = Math.min(o.bandRows || 64, h);
-      const out = C * w * h * (outputBitDepth(o.method, depth) / 8);
+      const out = C * w * h * (outputBitDepth(o.method, depth, o.inputBitDepth) / 8);
       const P = bandRows * w;
       let band;
       switch (o.method) {
@@ -1001,7 +1048,7 @@
       if (METHODS.indexOf(method) < 0) throw fail('IJ_BAD_OP', 'projection ' + method);
       const width = o.width | 0, height = o.height | 0, depth = o.depth | 0, C = channelCount(o.channels);
       if (!(width > 0 && height > 0 && depth > 0 && C > 0)) throw fail('IJ_BAD_SIZE', 'projection size');
-      const outBD = outputBitDepth(method, depth);
+      const outBD = outputBitDepth(method, depth, o.inputBitDepth);
       const outs = [];
       for (let c = 0; c < C; c++) outs.push(typedArrayFor(outBD, width * height));
       const rowsDone = new Array(C).fill(0);
@@ -1035,7 +1082,7 @@
         const out = outs[c], P = band.rows * width, base = band.y0 * width;
         switch (method) {
           case 'max': case 'min': case 'sum': for (let i = 0; i < P; i++) out[base + i] = s.a[i]; break;
-          case 'avg': for (let i = 0; i < P; i++) out[base + i] = s.a[i] / depth; break;
+          case 'avg': for (let i = 0; i < P; i++) out[base + i] = outBD < 32 ? Math.floor(s.a[i] / depth + 0.5) : s.a[i] / depth; break;
           case 'sd': // sample SD (n − 1) from exact Float64 sums: √((n·Σx² − (Σx)²) / (n·(n−1)))
             for (let i = 0; i < P; i++) {
               if (depth < 2) { out[base + i] = 0; continue; }
@@ -1054,7 +1101,7 @@
                 if (lo < 0 && cum > kLo) lo = v;
                 if (cum > kHi) { hi = v; break; }
               }
-              out[base + p] = (lo + hi) / 2;
+              out[base + p] = outBD < 32 ? Math.floor((lo + hi) / 2 + 0.5) : (lo + hi) / 2;
               for (let z = 0; z < depth; z++) counts[raw[z * P + p]] = 0;
             }
           }
@@ -1100,7 +1147,7 @@
         addBlock,
         progress: () => received / total,
         finish,
-        estimateBytes: (bandRows) => estimateBytes({ method, width, height, depth, channels: C, bandRows })
+        estimateBytes: (bandRows) => estimateBytes({ method, width, height, depth, channels: C, bandRows, inputBitDepth: o.inputBitDepth })
       };
     }
 

@@ -159,6 +159,8 @@ const StudioEditor = (() => {
     }
     // The document a mode was working on is replaced: back to the Simple view.
     if (_activeMode) _deactivateMode();
+    // Only a document being REPLACED frees the modes' state; the first open has none.
+    if (_isOpen) _releaseAllModes();
     // A new document: the previous one's raw values and GPU textures go with it.
     _cancelChannelRecompose();
     _cancelDrawRequest();
@@ -205,6 +207,15 @@ const StudioEditor = (() => {
     _renderAll();
     _refreshModeSwitch();
     return _docToken;
+  }
+
+  /**
+   * The raw atlas values (RGBA = channels 0..3) of the open single slice, or null: what
+   * a mode paints a loading placeholder from. getDocument() is a JSON clone and never
+   * carries them. The reference is the Studio's own, to be read, not kept or changed.
+   */
+  function getSliceRaw() {
+    return _isOpen && _sliceResult && _sliceResult.raw ? _sliceResult.raw : null;
   }
 
   /** The token of the open document (0 before the first open). */
@@ -376,6 +387,7 @@ const StudioEditor = (() => {
   function close() {
     if (!_isOpen) return;
     if (_activeMode) _deactivateMode();
+    _releaseAllModes();
     _isOpen = false;
     // A native slice may still be streaming for a document nobody is looking at.
     const pendingCancel = _progressOnCancel;
@@ -456,9 +468,25 @@ const StudioEditor = (() => {
     return () => {
       if (_modes.get(mode.id) !== mode) return;
       if (_activeMode === mode) _deactivateMode();
+      _releaseMode(mode);
       _modes.delete(mode.id);
       _refreshModeSwitch();
     };
+  }
+
+  /**
+   * A mode left through the Simple view keeps its worker, GPU context and documents alive
+   * (unmount() hides, it does not free). When the document they belong to goes away
+   * (close, replacement) every mode is asked to free them: mode.release(), optional,
+   * idempotent, safe when the mode is not mounted.
+   */
+  function _releaseMode(mode) {
+    if (!mode || typeof mode.release !== 'function') return;
+    try { mode.release(); } catch (err) { console.error('[StudioEditor] a mode release failed:', err); }
+  }
+
+  function _releaseAllModes() {
+    for (const mode of _modes.values()) _releaseMode(mode);
   }
 
   /** The registered mode with this id (undefined when none). */
@@ -526,7 +554,17 @@ const StudioEditor = (() => {
       button.setAttribute('aria-pressed', entry.id === active ? 'true' : 'false');
       if (!entry.ok) {
         button.disabled = true;
-        if (entry.reason) button.title = entry.reason;
+        if (entry.reason) {
+          button.title = entry.reason;
+          // A disabled button takes no focus and its title is not read: the reason
+          // is also a visually hidden description the button points at.
+          const hint = document.createElement('span');
+          hint.id = `studio-mode-reason-${entry.id}`;
+          hint.className = 'sr-only';
+          hint.textContent = entry.reason;
+          button.setAttribute('aria-describedby', hint.id);
+          button.appendChild(hint);
+        }
       }
       if (entry.icon) {
         const icon = document.createElement('i');
@@ -747,6 +785,12 @@ const StudioEditor = (() => {
     if (_eventsBound) return;
     _eventsBound = true;
     document.getElementById('btn-close-studio')?.addEventListener('click', () => { requestClose(); });
+    // The switch's labels are translated text: a language change rebuilds it.
+    try {
+      if (typeof I18n !== 'undefined' && typeof I18n.onLanguageChange === 'function') {
+        I18n.onLanguageChange(() => { _modeSwitchSignature = ''; _refreshModeSwitch(); });
+      }
+    } catch (err) { /* the labels refresh on the next open */ }
     document.getElementById('studio-mode-switch')?.addEventListener('click', (event) => {
       const button = event.target.closest?.('[data-studio-mode]');
       if (button && !button.disabled) setMode(button.dataset.studioMode);
@@ -4695,6 +4739,7 @@ const StudioEditor = (() => {
     getMode,
     setMode,
     getDocument,
+    getSliceRaw,
     documentToken,
     setNativeProvider,
     getSliceQuality

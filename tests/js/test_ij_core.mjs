@@ -83,11 +83,15 @@ test('IJLuts tables', () => {
   assert.deepEqual([sp[85 * 3], sp[85 * 3 + 1], sp[85 * 3 + 2]], [0, 255, 0]);
   assert.deepEqual([sp[170 * 3], sp[170 * 3 + 1], sp[170 * 3 + 2]], [0, 0, 255]);
   assert.deepEqual([sp[765], sp[766], sp[767]], [255, 0, 0]);
-  // 16 Colors: 16 flat bands of 16 levels
+  // 16 Colors: Fiji luts/16_colors.lut byte for byte — 15 flat bands of 16 levels,
+  // band 13 (entries 208..223) a blue ramp at r = 245, g = 0.
   const s16 = IJLuts.get('16 Colors');
+  const flat = [[0, 0, 0], [1, 1, 171], [1, 1, 224], [0, 110, 255], [1, 171, 254], [1, 224, 254], [1, 254, 1], [190, 255, 0],
+    [255, 255, 0], [255, 224, 0], [255, 141, 0], [250, 94, 0], [245, 0, 0], null, [222, 180, 222], [255, 255, 255]];
+  const ramp13 = [135, 141, 147, 153, 160, 166, 172, 178, 185, 191, 197, 203, 210, 216, 222, 228];
   for (let k = 0; k < 16; k++) for (let j = 0; j < 16; j++) {
     const i = k * 16 + j;
-    assert.deepEqual([s16[i * 3], s16[i * 3 + 1], s16[i * 3 + 2]], [s16[k * 48], s16[k * 48 + 1], s16[k * 48 + 2]]);
+    assert.deepEqual([s16[i * 3], s16[i * 3 + 1], s16[i * 3 + 2]], k === 13 ? [245, 0, ramp13[j]] : flat[k], `16 Colors entry ${i}`);
   }
   assert.deepEqual([s16[0], s16[1], s16[2]], [0, 0, 0]);
   assert.deepEqual([s16[765], s16[766], s16[767]], [255, 255, 255]);
@@ -112,9 +116,18 @@ test('IJLuts tables', () => {
   for (let i = 0; i < 256; i++) for (let k = 0; k < 3; k++) rev[i * 3 + k] = fire[(255 - i) * 3 + k];
   assert.deepEqual(IJLuts.identify(rev), { lut: 'Fire', invert: true });
   assert.deepEqual(IJLuts.identify(IJLuts.fromColor('#336699')), { lut: '#336699', invert: false });
+  {
+    // LUT.createLutFromColor truncates: (int)(i · c/255)
+    const t = IJLuts.fromColor('#c80000');
+    assert.equal(t[1 * 3], 0, 'level 1 of colour 200 is 0, not 1');
+    assert.equal(t[255 * 3], 200);
+    assert.equal(t[128 * 3], Math.floor(128 * (200 / 255)));
+    assert.deepEqual(Array.from(IJLuts.fromColor('#ffffff')), Array.from(IJLuts.get('Grays')));
+  }
 });
 
 // ------------------------------------------------------------------ IJRoi
+function polyLen(p) { let l = 0; for (let i = 0; i < p.length; i++) { const q = p[(i + 1) % p.length]; l += Math.hypot(q[0] - p[i][0], q[1] - p[i][1]); } return l; }
 test('IJRoi masks, areas, perimeters', () => {
   const r = { type: 'rect', x: 1, y: 2, w: 3, h: 2 };
   assert.deepEqual(IJRoi.bounds(r), { x: 1, y: 2, w: 3, h: 2 });
@@ -155,8 +168,26 @@ test('IJRoi masks, areas, perimeters', () => {
   near(IJRoi.tracedPerimeter([[0, 0], [1, 0], [1, 1], [0, 1]]), 4 - 2 * (2 - Math.SQRT2), 1e-12);
   near(IJRoi.tracedPerimeter([[0, 0], [2, 0], [2, 2], [0, 2]]), 4 * Math.SQRT2, 1e-12);
   near(IJRoi.perimeter({ type: 'polygon', traced: true, points: [[0, 0], [1, 0], [1, 1], [0, 1]] }), 2.8284271247461903, 1e-12);
-  // freehand: smoothed outline of a 2×2 square is the 2/3-sided inner square
-  near(IJRoi.perimeter({ type: 'freehand', points: [[0, 0], [2, 0], [2, 2], [0, 2]] }), 4 * 2 / 3, 1e-12);
+  // an integer rectilinear polygon is `traced` for ImageJ (Roi.isTraced): corner correction applies
+  near(IJRoi.perimeter({ type: 'polygon', points: [[0, 0], [3, 0], [3, 2], [0, 2]] }), 10 - 4 * (2 - Math.SQRT2), 1e-12);
+  near(IJRoi.perimeter({ type: 'polygon', points: [[0, 0], [3, 0], [0.5, 2], [0, 2]] }), polyLen([[0, 0], [3, 0], [0.5, 2], [0, 2]]), 1e-12);
+  near(IJRoi.perimeter({ type: 'polygon', points: [[0, 0], [3, 0], [3, 2]] }), 5 + Math.hypot(3, 2), 1e-12);
+  assert.equal(IJRoi.tracedPerimeter([[0, 0], [1, 0], [1, 1]]), 0, 'fewer than 4 vertices → 0');
+  // non-square pixels: Σ|dx|·pw + Σ|dy|·ph − nCorners·((pw + ph) − √(pw² + ph²))
+  near(IJRoi.tracedPerimeter([[0, 0], [1, 0], [1, 1], [0, 1]], 1, 2), 1 + 2 + 1 + 2 - 2 * (3 - Math.sqrt(5)), 1e-12);
+  // freehand: ImageJ getSmoothedPerimeter = open smoothed line (first / middle / last segments) + raw closing segment
+  const fh = [[0, 0], [2, 0], [2, 2], [0, 2]];
+  const k3 = Math.hypot(4 / 3, 2 / 3);
+  near(IJRoi.perimeter({ type: 'freehand', points: fh }), k3 + 2 / 3 + k3 + 2, 1e-12);
+  {
+    const circle = []; for (let i = 0; i < 40; i++) circle.push([50 + 30 * Math.cos(i * Math.PI / 20), 50 + 30 * Math.sin(i * Math.PI / 20)]);
+    const P = circle, n = P.length;
+    let L = Math.hypot((P[0][0] + P[1][0] + P[2][0]) / 3 - P[0][0], (P[0][1] + P[1][1] + P[2][1]) / 3 - P[0][1]);
+    for (let i = 1; i <= n - 3; i++) L += Math.hypot((P[i + 2][0] - P[i - 1][0]) / 3, (P[i + 2][1] - P[i - 1][1]) / 3);
+    L += Math.hypot(P[n - 1][0] - (P[n - 3][0] + P[n - 2][0] + P[n - 1][0]) / 3, P[n - 1][1] - (P[n - 3][1] + P[n - 2][1] + P[n - 1][1]) / 3);
+    L += Math.hypot(P[n - 1][0] - P[0][0], P[n - 1][1] - P[0][1]);
+    near(IJRoi.perimeter({ type: 'freehand', points: circle }), L, 1e-9, 'smoothed freehand of a 40-gon');
+  }
 
   // line
   const ln = { type: 'line', x1: 0, y1: 0, x2: 3, y2: 4, width: 1 };
@@ -256,7 +287,9 @@ test('IJOps.statistics', () => {
   assert.equal(s16.mean, 2000); assert.equal(s16.median, 3000); assert.equal(s16.max, 3000);
   // 32-bit: NaN / Infinity left out
   const s32 = IJOps.statistics(ch(5, 1, 32, [1, 2, NaN, Infinity, 6]), null);
-  assert.equal(s32.n, 3); assert.equal(s32.mean, 3); assert.equal(s32.min, 1); assert.equal(s32.max, 6); assert.equal(s32.median, 2);
+  assert.equal(s32.n, 3); assert.equal(s32.mean, 3); assert.equal(s32.min, 1); assert.equal(s32.max, 6); assert.equal(s32.median, 2, 'odd count 3: middle value');
+  assert.equal(IJOps.statistics(ch(4, 1, 32, [1, 2, 4, 9]), null).median, 3, 'even count: FloatStatistics averages the two middle values');
+  assert.equal(IJOps.statistics(ch(4, 1, 16, [1, 2, 4, 9]), null).median, 4, '16-bit keeps the cumulative-histogram rule');
   // 32-bit mode: 256 bins over [1,6], width 5/256; value 1 is in bin 0 (count 1), 2 in bin 51, 6 in bin 255 → first max = bin 0
   near(s32.mode, 1 + (5 / 256) / 2, 1e-9);
   // empty mask
@@ -313,7 +346,10 @@ test('IJOps.autoContrast (ImageJ ContrastAdjuster)', () => {
 
 test('IJOps.applyLut / convert / invert', () => {
   const a8 = IJOps.applyLut(ch(5, 1, 8, [40, 50, 100, 149, 150]), 50, 149);
-  assert.deepEqual(arr(a8.data), [0, 0, 128, 253, 255]);
+  // ContrastAdjuster.apply: v ≤ min → 0, v ≥ max → 255, else (int)((v − min)/(max − min)·256)
+  assert.deepEqual(arr(a8.data), [0, 0, 129, 255, 255]);
+  assert.deepEqual(arr(IJOps.applyLut(ch(4, 1, 8, [50, 51, 60, 100]), 50.9, 100.9).data), [0, 5, 51, 255], 'min / max are truncated to integers first');
+  assert.equal(IJOps.applyLut(ch(2, 1, 8, [10, 11]), 10, 10).data[1], 255, 'max === min: everything above is 255');
   assert.deepEqual(arr(IJOps.applyLut(ch(3, 1, 8, [0, 100, 255]), 0, 255).data), [0, 100, 255], 'full range is the identity');
   const a16 = IJOps.applyLut(ch(5, 1, 16, [50, 100, 150, 200, 900]), 100, 200);
   assert.deepEqual(arr(a16.data), [0, 0, 32768, 65535, 65535]);
@@ -336,7 +372,9 @@ test('IJOps.applyLut / convert / invert', () => {
   assert.equal(IJOps.convert(ch(1, 1, 8, [5]), 8).data[0], 5);
 
   assert.deepEqual(arr(IJOps.invert(ch(3, 1, 8, [0, 255, 100])).data), [255, 0, 155]);
-  assert.deepEqual(arr(IJOps.invert(ch(2, 1, 16, [0, 65000])).data), [65535, 535]);
+  assert.deepEqual(arr(IJOps.invert(ch(2, 1, 16, [0, 65000])).data), [65000, 0], '16-bit inverts about the data range, not 65535');
+  assert.deepEqual(arr(IJOps.invert(ch(3, 1, 16, [100, 500, 900])).data), [900, 500, 100]);
+  assert.deepEqual(arr(IJOps.invert(ch(3, 1, 32, [1, 2, 4]), { min: 0, max: 10 }).data), [9, 8, 6], '32-bit uses the display range when given');
   assert.deepEqual(arr(IJOps.invert(ch(3, 1, 32, [1, 2, 4])).data), [4, 3, 1]);
 });
 
@@ -347,14 +385,20 @@ test('IJOps.math / fill / clear / clearOutside', () => {
   assert.deepEqual(run('subtract', 20), [0, 180]);
   assert.deepEqual(run('multiply', 1.5), [15, 255]);
   assert.deepEqual(run('divide', 3), [3, 67]);
-  assert.deepEqual(run('divide', 0), [255, 255]);
+  assert.deepEqual(run('divide', 0), [10, 200], 'ImageMath: divide by 0 is a no-op on 8/16-bit');
+  // the operand of add / subtract / min / max / set is truncated, (int)value
+  assert.deepEqual(run('add', 2.7), [12, 202]);
+  assert.deepEqual(run('subtract', 2.7), [8, 198]);
+  assert.deepEqual(arr(IJOps.math(ch(2, 1, 8, [5, 200]), 'min', 10.6).data), [10, 200]);
+  assert.deepEqual(arr(IJOps.math(ch(2, 1, 8, [5, 200]), 'max', 99.9).data), [5, 99]);
+  assert.deepEqual(run('set', 7.9), [7, 7]);
   assert.deepEqual(run('min', 50), [50, 200]);
   assert.deepEqual(run('max', 50), [10, 50]);
   assert.deepEqual(run('abs'), [10, 200]);
   assert.deepEqual(run('set', 7.4), [7, 7]);
   assert.deepEqual(run('add', 5, { x: 0, y: 0, w: 1, h: 1, data: Uint8Array.from([1]) }), [15, 200], 'outside the mask is untouched');
   assert.deepEqual(arr(base.data), [10, 200], 'input is not modified');
-  assert.deepEqual(arr(IJOps.math(ch(2, 1, 16, [10, 65000]), 'divide', 0).data), [65535, 65535]);
+  assert.deepEqual(arr(IJOps.math(ch(2, 1, 16, [10, 65000]), 'divide', 0).data), [10, 65000]);
   assert.deepEqual(arr(IJOps.math(ch(2, 1, 16, [10, 65000]), 'add', 1000).data), [1010, 65535]);
   const f = IJOps.math(ch(3, 1, 32, [-2, 1.5, 4]), 'multiply', 0.5);
   assert.deepEqual(arr(f.data), [-1, 0.75, 2]);
@@ -365,6 +409,7 @@ test('IJOps.math / fill / clear / clearOutside', () => {
   const img = ch(3, 2, 8, [1, 2, 3, 4, 5, 6]);
   const mid = IJRoi.mask({ type: 'rect', x: 1, y: 0, w: 1, h: 2 }, 3, 2);
   assert.deepEqual(arr(IJOps.fill(img, mid, 9).data), [1, 9, 3, 4, 9, 6]);
+  assert.deepEqual(arr(IJOps.fill(img, mid, 9.9).data), [1, 9, 3, 4, 9, 6], 'setValue truncates');
   assert.deepEqual(arr(IJOps.fill(img, null, 300).data), [255, 255, 255, 255, 255, 255]);
   assert.deepEqual(arr(IJOps.clear(img, mid, 0).data), [1, 0, 3, 4, 0, 6]);
   assert.deepEqual(arr(IJOps.clearOutside(img, mid, 0).data), [0, 2, 0, 0, 5, 0]);
@@ -394,22 +439,23 @@ test('IJOps geometry: crop / flips / rotate90', () => {
 
 test('IJOps.profile / downsample2', () => {
   const row = ch(4, 1, 8, [0, 10, 20, 30]);
-  let p = IJOps.profile(row, { x1: 0.5, y1: 0.5, x2: 3.5, y2: 0.5 }, 1);
+  let p = IJOps.profile(row, { x1: 0, y1: 0, x2: 3, y2: 0 }, 1);
   assert.deepEqual(arr(p.values), [0, 10, 20, 30]); assert.equal(p.step, 1);
+  // ImageJ samples at the raw coordinates (no half-pixel shift).
   // length 1.5 → n = round(1.5) = 2 → 3 samples, spacing .75, at image x = 0, .75, 1.5
-  p = IJOps.profile(row, { x1: 0.5, y1: 0.5, x2: 2, y2: 0.5 }, 1);
+  p = IJOps.profile(row, { x1: 0, y1: 0, x2: 1.5, y2: 0 }, 1);
   assert.deepEqual(arr(p.values).map((v) => +v.toFixed(9)), [0, 7.5, 15]); near(p.step, 0.75);
   const sq = ch(2, 2, 8, [0, 10, 20, 30]);
-  p = IJOps.profile(sq, { x1: 0.5, y1: 0.5, x2: 1.5, y2: 1.5 }, 1);
+  p = IJOps.profile(sq, { x1: 0, y1: 0, x2: 1, y2: 1 }, 1);
   assert.equal(p.values.length, 2); near(p.step, Math.SQRT2); near(p.values[0], 0); near(p.values[1], 30);
   // bilinear centre between the four pixels: (0+10+20+30)/4 = 15
-  p = IJOps.profile(sq, { x1: 1, y1: 1, x2: 1, y2: 1 }, 1);
+  p = IJOps.profile(sq, { x1: 0.5, y1: 0.5, x2: 0.5, y2: 0.5 }, 1);
   assert.equal(p.values.length, 1); near(p.values[0], 15); assert.equal(p.step, 0);
   // width 3 averages across the line (offsets −1, 0, +1; clamped at the edge)
   const col = ch(3, 3, 8, [0, 0, 0, 30, 30, 30, 60, 60, 60]);
-  p = IJOps.profile(col, { x1: 0.5, y1: 1.5, x2: 2.5, y2: 1.5 }, 3);
+  p = IJOps.profile(col, { x1: 0, y1: 1, x2: 2, y2: 1 }, 3);
   assert.deepEqual(arr(p.values), [30, 30, 30]); // (0 + 30 + 60)/3
-  p = IJOps.profile(col, { x1: 0.5, y1: 0.5, x2: 2.5, y2: 0.5 }, 3);
+  p = IJOps.profile(col, { x1: 0, y1: 0, x2: 2, y2: 0 }, 3);
   near(p.values[0], (0 + 0 + 30) / 3); // offsets −1 (clamped to row 0), 0, +1
 
   const d = IJOps.downsample2(ch(3, 1, 8, [0, 10, 20]));
@@ -442,6 +488,39 @@ function feed(proj, ps, W, H, order, bandRows, zChunk, channel = 0) {
     proj.addBlock({ channel, y0: b.y0, rows: b.rows, z0: b.z0, depth: b.d, data });
   }
 }
+
+test('IJProject: ImageJ ZProjector bit depths (inputBitDepth: 8)', () => {
+  const W = 2, H = 2;
+  const ps = [Uint8Array.from([1, 2, 3, 4]), Uint8Array.from([5, 0, 3, 8]), Uint8Array.from([2, 2, 9, 1])];
+  const run = (method, depth, planes) => {
+    const pr = IJProject.create({ method, width: W, height: H, depth, channels: 1, inputBitDepth: 8 });
+    feed(pr, planes || ps, W, H, () => {}, 2, 3);
+    return pr.finish()[0];
+  };
+  assert.equal(IJProject.outputBitDepth('max', 3, 8), 8);
+  assert.equal(IJProject.outputBitDepth('min', 3, 16), 16);
+  assert.equal(IJProject.outputBitDepth('avg', 3, 8), 8);
+  assert.equal(IJProject.outputBitDepth('median', 3, 8), 8);
+  assert.equal(IJProject.outputBitDepth('median', 3, 16), 32);
+  assert.equal(IJProject.outputBitDepth('sum', 3, 8), 32, 'sum is always a float image in ZProjector');
+  assert.equal(IJProject.outputBitDepth('sd', 3, 8), 32);
+  const av = run('avg', 3);
+  assert.equal(av.bitDepth, 8); assert.ok(av.data instanceof Uint8Array);
+  // (int)(mean + 0.5): 8/3 → 3, 4/3 → 1, 5 → 5, 13/3 → 4
+  assert.deepEqual(arr(av.data), [3, 1, 5, 4]);
+  const sm = run('sum', 3); assert.equal(sm.bitDepth, 32); assert.deepEqual(arr(sm.data), [8, 4, 15, 13]);
+  const md = run('median', 3); assert.equal(md.bitDepth, 8); assert.deepEqual(arr(md.data), [2, 2, 3, 4]);
+  // even depth: mean of the two middle values, then rounded half up for the 8-bit result
+  const ev = [[1], [2], [4], [6]].map((a) => Uint8Array.from(a));
+  const pe = IJProject.create({ method: 'median', width: 1, height: 1, depth: 4, channels: 1, inputBitDepth: 8 });
+  feed(pe, ev, 1, 1, () => {}, 1, 4);
+  assert.equal(pe.finish()[0].data[0], 3); // (2+4)/2
+  const po = IJProject.create({ method: 'median', width: 1, height: 1, depth: 4, channels: 1, inputBitDepth: 8 });
+  feed(po, [[1], [2], [3], [6]].map((a) => Uint8Array.from(a)), 1, 1, () => {}, 1, 4);
+  assert.equal(po.finish()[0].data[0], 3); // (2+3)/2 = 2.5 → 3
+  assert.equal(IJProject.estimateBytes({ method: 'sum', width: 100, height: 20, depth: 10, channels: 1, inputBitDepth: 8 }), 100 * 20 * 4 + 20 * 100 * 4);
+  assert.equal(IJProject.estimateBytes({ method: 'avg', width: 100, height: 20, depth: 10, channels: 1, inputBitDepth: 8 }), 100 * 20 * 1 + 20 * 100 * 4);
+});
 
 test('IJProject: six methods, hand values', () => {
   const W = 2, H = 2;

@@ -38,6 +38,16 @@
         },
         hasUnsavedWork() {
           return typeof IJApp !== 'undefined' && IJApp.hasUnsavedWork();
+        },
+        // The Studio closed (or opened another figure) while this view was hidden behind the
+        // Simple view: unmount() never runs again then, so the Studio calls release() — and
+        // dispose(), the same hook under its other name — to free the worker, the GL context
+        // and the documents.
+        release() {
+          if (typeof IJApp !== 'undefined') IJApp.release();
+        },
+        dispose() {
+          if (typeof IJApp !== 'undefined') IJApp.release();
         }
       });
     },

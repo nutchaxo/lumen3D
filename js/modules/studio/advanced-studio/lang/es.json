@@ -225,7 +225,11 @@
     "restore": "Restaurar",
     "discard": "Descartar",
     "discarded": "Trabajo guardado descartado.",
-    "item": "{time} — {n} imagen(es)"
+    "item": "{time} — {n} imagen(es)",
+    "partial": "{n} imagen(es) solo se pudieron restaurar hasta el último paso reproducible.",
+    "noBaseline": "{n} imagen(es) no se pudieron restaurar: falta su copia guardada.",
+    "discardAll": "Eliminar todo el trabajo guardado",
+    "nothing": "No se pudo restaurar nada de este trabajo guardado."
   },
   "revert": {
     "message": "¿Revertir {name} a como se cargó? Se perderán los cambios."
@@ -244,7 +248,9 @@
     "save": "Guardar como TIFF…",
     "keep": "Conservar para después",
     "keepHint": "Se queda en este navegador",
-    "discard": "Descartar"
+    "discard": "Descartar",
+    "keepFailedTitle": "Trabajo no guardado",
+    "keepFailed": "El navegador no pudo guardar todo su trabajo. Guárdelo como TIFF o descártelo."
   },
   "err": {
     "title": "Vista avanzada",
@@ -262,7 +268,13 @@
     "frameLost": "La figura en pantalla cambió durante la lectura. Vuelva a abrir la vista avanzada.",
     "noDataset": "No hay ningún conjunto de datos abierto.",
     "scriptFailed": "La vista avanzada no pudo iniciarse. Recargue la página.",
-    "clipboard": "El portapapeles no está disponible."
+    "clipboard": "El portapapeles no está disponible.",
+    "storageFailed": "Este navegador no pudo guardar su trabajo. Guarde un TIFF para conservarlo.",
+    "emptyRoi": "La selección está vacía.",
+    "needsRoi": "Trace primero una selección.",
+    "badArgs": "Estos ajustes no se pueden usar. Revise los valores e inténtelo de nuevo.",
+    "notSupported": "La vista avanzada no puede leer la figura en pantalla.",
+    "noLevel": "No se puede abrir ninguna resolución de esta figura."
   },
   "warn": {
     "unprotected": "Su trabajo no está protegido: el navegador se negó a guardarlo.",
@@ -303,7 +315,8 @@
   "res": {
     "copy": "Copiar",
     "save": "Guardar…",
-    "clear": "Borrar"
+    "clear": "Borrar",
+    "capped": "Se muestran las primeras {shown} filas de {total}. Copiar y Guardar incluyen todas las filas."
   },
   "roi": {
     "add": "Añadir",

@@ -37,7 +37,7 @@ function fakeEl(tag) {
     appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
     remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((x) => x !== this); },
     setAttribute() {}, removeAttribute() {}, addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); },
-    removeEventListener() {}, focus() {}, click() { el.clicked = true; }, select() {},
+    removeEventListener() {}, focus() {}, click() { el.clicked = true; }, select() {}, listeners,
     getContext: () => ({ clearRect() {}, fillRect() {}, strokeRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fillText() {}, set fillStyle(v) {}, set strokeStyle(v) {}, set lineWidth(v) {}, set font(v) {} }),
     clientWidth: 800, clientHeight: 600, scrollTop: 0, scrollHeight: 0
   };
@@ -95,7 +95,7 @@ function boot() {
   sandbox.localStorage = { getItem: () => null, setItem() {} };
   sandbox.URL = { createObjectURL(b) { log.download = b; return 'blob:fake'; }, revokeObjectURL() {} };
   sandbox.document = Object.assign(fakeEl('document'), {
-    createElement: fakeEl, body: fakeEl('body'), visibilityState: 'visible', addEventListener() {}, removeEventListener() {}
+    createElement: (tag) => { const e = fakeEl(tag); (log.created = log.created || []).push(e); return e; }, body: fakeEl('body'), visibilityState: 'visible', addEventListener() {}, removeEventListener() {}
   });
   sandbox.getComputedStyle = () => ({ getPropertyValue: () => '' });
   sandbox.requestAnimationFrame = (f) => setTimeout(f, 0);
@@ -114,6 +114,17 @@ function boot() {
     }
     postMessage(m) {
       if (this.dead) return;
+      if (m && m.init && log.initFails) { setTimeout(() => this.onmessage && this.onmessage({ data: { event: 'initError', code: 'IJ_WORKER_INIT' } }), 0); return; }
+      (log.msgs = log.msgs || []).push(m);
+      // log.intercept(m) answers a request itself: a result, or { __error: code }.
+      if (m && m.cmd && log.intercept) {
+        const r = log.intercept(m);
+        if (r !== undefined) {
+          const data = r && r.__error ? { id: m.id, ok: false, error: { code: r.__error, message: r.__error } } : { id: m.id, ok: true, result: r };
+          setTimeout(() => this.onmessage && this.onmessage({ data }), 0);
+          return;
+        }
+      }
       if (m && m.init) {
         log.init = m.init;
         this.engine = sandbox.IJEngine.start(this.far, { storage: 'memory', idleMs: 3600000, bandPixels: 1 << 20, budgetBytes: m.init.budgetBytes });
@@ -154,6 +165,7 @@ function boot() {
         opts, calls, display, stage: fakeEl('div'), images: [], status: [], progress: [], warnings: [], menuRefreshes: 0, rois: [],
         windows: {
           dialog: async (spec) => answer(spec), confirm: async (s) => sandbox.Dialog.ask(s),
+          hasModal: () => false, closeAll() { shell.closedAll = true; },
           floating(spec) { const w = { id: spec.id, spec, focus() {}, close() { floats.delete(spec.id); if (spec.onClose) spec.onClose(); } }; floats.set(spec.id, w); return w; }, floats
         },
         setImage(i) { shell.images.push(i); }, clearImage() { shell.images.push(null); }, setDisplayState(s) { shell.displayState = s; },
@@ -182,6 +194,17 @@ function boot() {
   return { sandbox, IJApp: sandbox.__IJApp, log, script, shells, workers, ctx, api, root, desc };
 }
 
+// A request straight to the engine behind a fake worker (works after the worker was terminated).
+let engineSeq = 900000;
+function engineCall(w, cmd, args) {
+  return new Promise((resolve, reject) => {
+    const id = ++engineSeq, orig = w.far.postMessage;
+    w.far.postMessage = (m) => {
+      if (m && m.id === id) { w.far.postMessage = orig; if (m.ok) resolve(m.result); else reject(Object.assign(new Error('engine'), m.error || {})); } else orig.call(w.far, m);
+    };
+    w.far.onmessage({ data: { id, cmd, args: args || {} } });
+  });
+}
 const cmdOf = (shell, id) => shell.opts.commands.find((c) => c.id === id);
 const run = async (shell, id) => { const c = cmdOf(shell, id); assert.ok(c, 'command ' + id); assert.ok(c.enabled(shell.opts.getState()), id + ' is enabled'); await shell.opts.onCommand(c, { source: 'menu' }); };
 const pix = async (shell, x, y) => (await shell.opts.readPixel(x, y));
@@ -224,7 +247,10 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   const before = J(await pix(sh, 7, 3));
   await run(sh, 'editInvert');
   const inv = J(await pix(sh, 7, 3));
-  assert.deepEqual(inv, [65535 - before[0], before[1]], '16-bit invert of the active channel only (ImageJ composite behaviour)');
+  // ImageJ's 16-bit Invert reflects about the data's own min and max (ShortProcessor.invert), not 65535.
+  let lo0 = Infinity, hi0 = -Infinity;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = refSum(0, y, x); lo0 = Math.min(lo0, v); hi0 = Math.max(hi0, v); }
+  assert.deepEqual(inv, [lo0 + hi0 - before[0], before[1]], '16-bit invert of the active channel only (ImageJ composite behaviour)');
   assert.ok(sh.calls.some((c) => c[0] === 'invalidate'), 'the display drops its tiles');
   assert.equal(cmdOf(sh, 'editUndo').enabled(sh.opts.getState()), true);
   assert.equal(cmdOf(sh, 'fileRevert').enabled(sh.opts.getState()), true, 'a changed image can be reverted');
@@ -361,6 +387,155 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   await until(() => t.script.asks.length > askCount, 'recovery offered');
   assert.ok(/calculation engine stopped/.test(t.script.asks[askCount].title), 'the crash dialog names the engine, not an error');
   assert.equal(cmdOf(sh, 'editInvert').enabled(sh.opts.getState()), false, 'no document after the crash until recovered');
+  t.IJApp.unmount();
+}
+
+const loadIn = async (t, dlg) => {
+  t.script.dialogs.push(dlg || { method: 'max', start: 1, stop: D, level: 0 });
+  t.IJApp.mount(t.root, { ctx: t.ctx, api: t.api });
+  const sh = await until(() => t.shells[0], 'shell');
+  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.name), 'loaded');
+  return sh;
+};
+const errAsks = (t) => t.script.asks.filter((a) => a.title === 'Advanced view');
+const listed = async (t, key) => (await engineCall(t.workers[0], 'session.list')).sessions.filter((x) => x.key === key);
+
+// ═════════════ 5. closing one image keeps its siblings' stored state; Discard really discards ═════════════
+{
+  const t = boot();
+  const sh = await loadIn(t);
+  const key = sh.images.filter(Boolean).pop().provenance.sessionKey;
+  await run(sh, 'imageDuplicate');
+  await until(() => sh.opts.commands.filter((c) => /^winImg/.test(c.id)).length === 2, 'duplicate listed');
+  assert.equal((await listed(t, key)).length, 1, 'the session is stored');
+  // Close the ORIGINAL (clean): the duplicate (same session key) keeps its stored records.
+  await run(sh, 'windowPrevious');
+  await until(() => { const i = sh.images.filter(Boolean).pop(); return !/-1$/.test(i.name); }, 'original shown');
+  await run(sh, 'fileClose');
+  await until(() => sh.opts.commands.filter((c) => /^winImg/.test(c.id)).length === 1, 'original closed');
+  const rows = await listed(t, key);
+  assert.equal(rows.length, 1, 'closing an image never discards the session key of its sibling');
+  assert.ok(rows[0].docs >= 1, 'the duplicate is still stored');
+  // Leave with Discard: the engine's document is closed, so the dispose flush cannot bring it back.
+  assert.equal(t.IJApp.hasUnsavedWork(), true);
+  t.script.nextAsk = 'discard';
+  assert.equal(await t.IJApp.canLeave('close'), true);
+  assert.equal((await listed(t, key)).length, 0, 'discarded work is gone from storage');
+  t.IJApp.unmount();
+  await until(() => t.workers[0].dead, 'worker stopped');
+  assert.equal((await listed(t, key)).length, 0, 'the dispose flush does not resurrect a discarded session');
+}
+
+// ═════════════ 6. Keep for later must really be stored; a hidden view is released ═════════════
+{
+  const t = boot();
+  const sh = await loadIn(t);
+  await run(sh, 'editInvert');
+  t.log.intercept = (m) => (m.cmd === 'flush' ? { ok: false, unsafe: [1] } : undefined);
+  t.script.nextAsk = 'keep';
+  assert.equal(await t.IJApp.canLeave('close'), false, 'a failed flush refuses to leave: the work is not stored');
+  assert.ok(sh.warnings.some((w) => w && /not protected/.test(w)), 'the unprotected warning is up');
+  assert.ok(t.script.asks.some((a) => a.title === 'Work not stored'), 'the operator is told');
+  t.log.intercept = null;
+  // The Simple view hides it; release() (Studio closed meanwhile) disposes it.
+  assert.equal(await t.IJApp.canLeave('simple'), true);
+  t.IJApp.unmount();
+  assert.equal(sh.destroyed, undefined);
+  t.IJApp.release();
+  assert.equal(sh.destroyed, true, 'release() disposes a hidden view');
+  await until(() => t.workers[0].dead, 'worker stopped');
+  t.IJApp.mount(t.root, { ctx: t.ctx, api: t.api });
+  assert.equal(t.shells.length, 2, 'a new view after release');
+  t.IJApp.unmount();
+}
+
+// ═════════════ 7. worker start failure, cancelled operations, empty stored sessions ═════════════
+{
+  const t = boot();
+  t.log.initFails = true;
+  t.IJApp.mount(t.root, { ctx: t.ctx, api: t.api });
+  await until(() => t.api.exits >= 1, 'a failed start leaves for the Simple view');
+  await sleep(100);
+  assert.equal(t.api.exits, 1, 'it leaves once, and the aborted entry does not ask anything more');
+  assert.equal(t.script.asks.length, 1);
+  assert.ok(t.script.asks.some((a) => /could not start/.test(a.message || '')), 'the start failure is said in a sentence');
+  assert.ok(t.workers[0].dead, 'the deaf worker is terminated');
+}
+{
+  const t = boot();
+  const sh = await loadIn(t);
+  const asks = t.script.asks.length;
+  t.log.intercept = (m) => (m.cmd === 'doc.run' ? { __error: 'IJ_CANCELLED' } : undefined);
+  await run(sh, 'editInvert');
+  await sleep(30);
+  t.log.intercept = null;
+  assert.equal(t.script.asks.length, asks, 'a cancelled operation shows no error dialog');
+  assert.ok(sh.status.some((x) => /Cancelled/.test(x)));
+  for (const code of ['IJ_EMPTY_ROI', 'IJ_NEEDS_ROI', 'IJ_NOTHING_TO_UNDO', 'IJ_NOT_BINARY', 'IJ_STORAGE_QUOTA', 'IJ_BAD_ARGS', 'STUDIO_NOT_SUPPORTED', 'NO_LEVEL']) {
+    assert.ok(t.IJApp.errorKey({ code }), code + ' has a message');
+  }
+  t.IJApp.unmount();
+}
+{
+  // A stored session that restores no document is dropped and the fresh Z Project follows.
+  const t = boot();
+  const fkey = '3d/FLOW|tree1||z|0-4';
+  t.log.intercept = (m) => {
+    if (m.cmd === 'session.list') return { sessions: [{ key: fkey + '|0|max|1-5', savedAt: Date.now(), docs: 1, names: ['x'] }] };
+    if (m.cmd === 'session.restore') return { docIds: [], warnings: [{ docId: 7, code: 'IJ_NO_BASELINE' }], meta: null };
+    return undefined;
+  };
+  t.script.nextAsk = 'resume';
+  t.script.dialogs.push({ method: 'max', start: 1, stop: D, level: 0 });
+  t.IJApp.mount(t.root, { ctx: t.ctx, api: t.api });
+  const sh = await until(() => t.shells[0], 'shell');
+  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.name), 'the fresh projection loads after an empty restore');
+  assert.ok(t.log.msgs.some((m) => m.cmd === 'session.discard'), 'the empty session is discarded');
+  assert.ok(t.script.asks.some((a) => /stored copy is missing/.test(a.message || '')), 'the missing baseline is reported');
+  t.IJApp.unmount();
+}
+
+// ═════════════ 8. Save as TIFF names the exported revision; Open keeps the file name; metadata needs a session ═════════════
+{
+  const t = boot();
+  const sh = await loadIn(t);
+  await run(sh, 'editInvert');
+  await run(sh, 'fileSaveTiff');
+  const mark = t.log.msgs.find((m) => m.cmd === 'doc.markSaved');
+  assert.ok(mark && Number.isInteger(mark.args.rev), 'markSaved carries the revision that was exported');
+  const bytes = new Uint8Array(await t.log.download.arrayBuffer());
+  await run(sh, 'fileOpen');
+  const input = t.log.created.filter((e) => e.tagName === 'INPUT').pop();
+  input.files = [{ name: 'figure-7.tif', arrayBuffer: async () => bytes.buffer.slice(0) }];
+  input.listeners.change[0]();
+  await until(() => sh.images.filter(Boolean).pop().name === 'figure-7', 'the opened file keeps its name');
+  const asks = t.script.asks.length;
+  assert.equal(cmdOf(sh, 'fileRevert').enabled(sh.opts.getState()), false, 'an opened file is clean');
+  await run(sh, 'fileClose');
+  assert.equal(t.script.asks.length, asks, 'closing an untouched opened file asks nothing');
+  await run(sh, 'analyzeMeasure');
+  await sleep(1400);
+  const metas = t.log.msgs.filter((m) => m.cmd === 'session.putMeta');
+  assert.ok(metas.length && metas.every((m) => typeof m.args.key === 'string' && m.args.key.length), 'putMeta names the session key');
+  t.IJApp.unmount();
+}
+
+// ═════════════ 9. Analyze Particles: Summary window, image measurements, traced outlines ═════════════
+{
+  const t = boot();
+  const sh = await loadIn(t, { method: 'sum', start: 1, stop: D, level: 0 });
+  await run(sh, 'typeBit8');
+  await until(() => sh.images.filter(Boolean).pop().bitDepth === 8, '8-bit');
+  await run(sh, 'binMask');
+  await until(() => /-mask$/.test(sh.images.filter(Boolean).pop().name), 'mask shown');
+  t.script.dialogs.push({ minSize: 0, maxSize: 1e9, minCirc: 0, maxCirc: 1, exclude: false, holes: false, display: true, manager: true, summarize: true });
+  const asks = t.script.asks.length;
+  await run(sh, 'analyzeParticles');
+  assert.equal(t.script.asks.length, asks, 'the summary is a window, not a modal');
+  assert.ok(sh.windows.floats.has('summary'), 'the Summary window opens');
+  const last = sh.rois[sh.rois.length - 1];
+  assert.ok(last.all.length > 0 && last.all.every((r) => r.roi.traced === true), 'outlines sent to the manager are traced');
+  assert.equal(sh.progress[sh.progress.length - 1], null, 'busy ends before the summary');
   t.IJApp.unmount();
 }
 

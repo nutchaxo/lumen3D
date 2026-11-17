@@ -498,6 +498,35 @@ const IJViewPure = (() => {
     };
   }
 
+  /** Arrow-key step of a number field: a finite positive `step` wins, anything else
+   *  ('any', 0, undefined) falls back to 1 for integers and 0.1 otherwise. */
+  function numberStep(f) {
+    const s = Number(f && f.step);
+    return Number.isFinite(s) && s > 0 ? s : (f && f.integer ? 1 : 0.1);
+  }
+
+  /** Left edge for a popup of width w anchored at x inside a root of width rw: shifted left to
+   *  stay inside, never below 0. */
+  function clampPopupX(x, w, rw) {
+    return Math.max(0, Math.min(x, rw - w));
+  }
+
+  /** Top edge of a popup of height h anchored at y inside a root of height rh. */
+  function clampPopupY(y, h, rh) {
+    return Math.max(0, Math.min(y, rh - h));
+  }
+
+  /** Left edge of a submenu: right of its parent panel (parentX + parentW - 2) when it fits,
+   *  else to the left of the parent. */
+  function submenuX(parentX, parentW, w, rw) {
+    const right = parentX + parentW - 2;
+    if (right + w <= rw) return right;
+    return Math.max(0, parentX - w + 2);
+  }
+
+  /** Left edge of a centred modal box of width w in a root of width rw. */
+  function centreX(w, rw) { return Math.max(8, Math.round((rw - w) / 2)); }
+
   // --- ROI geometry (image px; pixel (i,j) covers [i,i+1) x [j,j+1))
   const _f = Math.floor;
 
@@ -545,15 +574,20 @@ const IJViewPure = (() => {
     return { type, x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
   }
 
-  /** A line between two pixel CENTRES; shift constrains the angle to multiples of 45 deg. */
+  /**
+   * A line between integer image coordinates, as ImageJ's Line tool creates it without
+   * sub-pixel resolution (offScreenX/Y floor the pointer): IJOps.profile samples
+   * getInterpolatedValue at those raw coordinates (ImageProcessor.getLine), so a
+   * horizontal, vertical or 45° line returns exactly the pixels it crosses.
+   * Shift constrains the angle to multiples of 45°, endpoints rounded back to integers.
+   */
   function lineFromDrag(p0, p1, { shift = false, width = 1 } = {}) {
-    const ax = _f(p0.x) + 0.5, ay = _f(p0.y) + 0.5;
-    let bx = _f(p1.x) + 0.5, by = _f(p1.y) + 0.5;
+    const ax = _f(p0.x), ay = _f(p0.y);
+    let bx = _f(p1.x), by = _f(p1.y);
     if (shift) {
       const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy);
       const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
-      bx = ax + Math.round(Math.cos(ang) * len * 1e6) / 1e6; by = ay + Math.round(Math.sin(ang) * len * 1e6) / 1e6;
-      bx = _f(bx + 0.5) + 0.5 - 0.5; by = _f(by + 0.5) + 0.5 - 0.5;
+      bx = Math.round(ax + Math.cos(ang) * len); by = Math.round(ay + Math.sin(ang) * len);
     }
     return { type: 'line', x1: ax, y1: ay, x2: bx, y2: by, width };
   }
@@ -633,7 +667,7 @@ const IJViewPure = (() => {
     }
     if (roi.type === 'line') {
       const fixed = id === 'p1' ? { x: roi.x2, y: roi.y2 } : { x: roi.x1, y: roi.y1 };
-      const moved = lineFromDrag({ x: fixed.x - 0.5, y: fixed.y - 0.5 }, { x: px, y: py }, { shift, width: roi.width });
+      const moved = lineFromDrag({ x: fixed.x, y: fixed.y }, { x: px, y: py }, { shift, width: roi.width });
       return id === 'p1'
         ? { ...roi, x1: moved.x2, y1: moved.y2 }
         : { ...roi, x2: moved.x2, y2: moved.y2 };
@@ -733,6 +767,7 @@ const IJViewPure = (() => {
     shortcutFromEvent, normalizeShortcut, shortcutLabel,
     TOP_ORDER, buildMenuTree, menuKey, menuListAt, nextSelectable, firstSelectable, lastSelectable,
     parseNumber, formatNumber, collectFields, clampWindowPos,
+    numberStep, clampPopupX, clampPopupY, submenuX, centreX,
     roiBounds, translateRoi, isAreaRoi, roiFromDrag, lineFromDrag, roiHandles, handleAt, hitRoi, moveHandle, handleCursor,
     formatZoomPct, formatSize, formatSubtitle, formatStatus, describeRoi
   };
@@ -1868,7 +1903,7 @@ const IJWindows = (() => {
               if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
               const p = P.parseNumber(ctrl.value, {});
               if (!p.ok) return;
-              const step = (f.step || (f.integer ? 1 : 0.1)) * (e.key === 'ArrowUp' ? 1 : -1);
+              const step = P.numberStep(f) * (e.key === 'ArrowUp' ? 1 : -1);
               let v = p.value + step;
               if (Number.isFinite(f.min)) v = Math.max(f.min, v);
               if (Number.isFinite(f.max)) v = Math.min(f.max, v);
@@ -2032,9 +2067,13 @@ const IJWindows = (() => {
       const handle = { close: () => finish(null) };
       modalStack.push(handle);
       mountPoint().appendChild(backdrop);
-      const rb = rootBox();
-      box.style.left = Math.max(8, Math.round((rb.w - box.offsetWidth) / 2)) + 'px';
-      box.style.top = Math.max(8, Math.round(rb.h * 0.12)) + 'px';
+      const place = () => {
+        const rb = rootBox();
+        box.style.left = P.centreX(box.offsetWidth, rb.w) + 'px';
+        box.style.top = Math.max(8, Math.round(rb.h * 0.12)) + 'px';
+      };
+      place();
+      handle.place = place;
       const cleanupDrag = makeDraggable(box, head, null);
       d.addEventListener('keydown', onKey, true);
       const firstCtrl = fields.map((f) => controls[f.id]).find(Boolean);
@@ -2084,9 +2123,13 @@ const IJWindows = (() => {
         box.appendChild(head); box.appendChild(body); box.appendChild(btns); backdrop.appendChild(box);
         modalStack.push(handle);
         mountPoint().appendChild(backdrop);
-        const rb = rootBox();
-        box.style.left = Math.max(8, Math.round((rb.w - box.offsetWidth) / 2)) + 'px';
-        box.style.top = Math.max(8, Math.round(rb.h * 0.2)) + 'px';
+        const place = () => {
+          const rb = rootBox();
+          box.style.left = P.centreX(box.offsetWidth, rb.w) + 'px';
+          box.style.top = Math.max(8, Math.round(rb.h * 0.2)) + 'px';
+        };
+        place();
+        handle.place = place;
         d.addEventListener('keydown', onKey, true);
         btns.querySelector('button').focus();
       });
@@ -2108,9 +2151,12 @@ const IJWindows = (() => {
       el.setAttribute('role', 'dialog');
       el.dataset.windowId = spec.id;
       el.tabIndex = -1;
+      const titleId = 'ij-win-title-' + (++uid);
       const bar = d.createElement('div');
       bar.className = 'ij-window-title';
       const titleEl = d.createElement('span');
+      titleEl.id = titleId;
+      el.setAttribute('aria-labelledby', titleId);
       titleEl.textContent = spec.titleKey ? t(spec.titleKey, spec.title || spec.titleKey) : (spec.title || '');
       const closeBtn = d.createElement('button');
       closeBtn.type = 'button';
@@ -2161,7 +2207,10 @@ const IJWindows = (() => {
           el.removeEventListener('pointerdown', raise);
           closeBtn.removeEventListener('click', win.close);
           el.removeEventListener('keydown', onWinKey);
+          // a closed window takes its focus with it: hand it back so the image shortcuts keep working
+          const hadFocus = !!(el.contains && d.activeElement && el.contains(d.activeElement));
           if (el.parentNode) el.parentNode.removeChild(el);
+          if (hadFocus && config.focusTarget) { try { config.focusTarget().focus({ preventScroll: true }); } catch (e) { /* gone */ } }
           if (spec.onClose) { try { spec.onClose(); } catch (e) { console.error('IJWindows onClose', e); } }
         }
       };
@@ -2174,18 +2223,34 @@ const IJWindows = (() => {
       return win;
     }
 
+    /** Re-fits every open window and re-centres every open modal after the root changed size. */
+    function reflow() {
+      if (destroyed) return;
+      for (const w of floatingMap.values()) w.move(w.el.offsetLeft, w.el.offsetTop);
+      for (const h of modalStack) if (h.place) h.place();
+    }
+    let reflowObserver = null;
+    const onWinResize = () => reflow();
+    if (root && typeof ResizeObserver !== 'undefined') {
+      reflowObserver = new ResizeObserver(onWinResize);
+      reflowObserver.observe(root);
+    } else {
+      const v = doc().defaultView;
+      if (v && v.addEventListener) { v.addEventListener('resize', onWinResize); reflowObserver = { disconnect: () => v.removeEventListener('resize', onWinResize) }; }
+    }
+
     function closeAll() {
       for (const h of modalStack.slice()) h.close();
       for (const w of Array.from(floatingMap.values())) w.close();
     }
-    function destroy() { closeAll(); destroyed = true; root = null; }
+    function destroy() { closeAll(); destroyed = true; if (reflowObserver) { try { reflowObserver.disconnect(); } catch (e) { /* gone */ } reflowObserver = null; } root = null; }
 
     return {
       dialog, floating, confirm,
       hasModal: () => modalStack.length > 0,
       get: (id) => floatingMap.get(id) || null,
       setRoot(r) { root = r; },
-      closeAll, destroy
+      closeAll, reflow, destroy
     };
   }
 
@@ -2311,10 +2376,12 @@ const IJShell = (() => {
     channelBar.append(channelLabel, channelSlider);
     imageWin.append(titlebar, subtitle, stage, channelBar);
     const statusbar = el('div', 'ij-statusbar');
-    statusbar.setAttribute('role', 'status');
     statusbar.setAttribute('aria-label', t('view.statusbar', 'Status'));
+    // only the message is a live region: the pointer readout changes on every move
     const statusPos = el('span', 'ij-status-pos');
+    statusPos.setAttribute('aria-hidden', 'true');
     const statusText = el('span', 'ij-status-text');
+    statusText.setAttribute('role', 'status');
     const progress = el('div', 'ij-progress');
     progress.setAttribute('role', 'progressbar');
     progress.setAttribute('aria-label', t('view.progress', 'Progress'));
@@ -2330,7 +2397,7 @@ const IJShell = (() => {
     statusbar.append(statusPos, statusText, progress, progressLabel, cancelBtn, warning);
     shell.append(menubar, toolbar, imageWin, statusbar);
 
-    const windows = IJWindows.create({ root: shell, t: opts.t });
+    const windows = IJWindows.create({ root: shell, t: opts.t, focusTarget: () => stage });
 
     // ---- Display ------------------------------------------------------------------------------------
     let info = null;
@@ -2387,15 +2454,24 @@ const IJShell = (() => {
     let menuState = { open: false, stack: [0] };
     const titleButtons = [];
     let panelsEl = null;
+    const SUBMENU_WIDTH = 220; // room reserved when deciding which side a submenu opens on
     let armed = false; // a click opened a menu: hovering another title switches
 
     function buildTree() {
       tree = P.buildMenuTree(opts.commands || [], { t, state: opts.getState ? opts.getState() : null });
     }
 
+    // title listeners are released on every rebuild instead of piling up in `cleanups`
+    const titleCleanups = [];
+    const listenTitle = (target, ev, fn) => { target.addEventListener(ev, fn); titleCleanups.push(() => target.removeEventListener(ev, fn)); };
+    const signatureOf = () => tree.map((x) => x.label).join('\u0001');
+    let titleSignature = '';
+
     function renderTitles() {
+      for (const fn of titleCleanups.splice(0)) fn();
       menubar.textContent = '';
       titleButtons.length = 0;
+      titleSignature = signatureOf();
       tree.forEach((top, i) => {
         const b = el('button', 'ij-menu-title', top.label);
         b.type = 'button';
@@ -2403,7 +2479,7 @@ const IJShell = (() => {
         b.setAttribute('aria-haspopup', 'true');
         b.setAttribute('aria-expanded', 'false');
         b.tabIndex = i === (menuState.stack[0] || 0) ? 0 : -1;
-        listen(b, 'click', (e) => {
+        listenTitle(b, 'click', (e) => {
           e.preventDefault();
           if (menuState.open && menuState.stack[0] === i) { closeMenus(); return; }
           menuState = { open: true, stack: [i, P.firstSelectable(tree[i].items)] };
@@ -2411,7 +2487,7 @@ const IJShell = (() => {
           renderMenus();
           b.focus();
         });
-        listen(b, 'pointerenter', () => {
+        listenTitle(b, 'pointerenter', () => {
           if (armed && menuState.open && menuState.stack[0] !== i) {
             menuState = { open: true, stack: [i, P.firstSelectable(tree[i].items)] };
             renderMenus();
@@ -2425,6 +2501,7 @@ const IJShell = (() => {
     function renderMenus() {
       if (panelsEl && panelsEl.parentNode) panelsEl.parentNode.removeChild(panelsEl);
       panelsEl = null;
+      menubar.removeAttribute('aria-activedescendant');
       titleButtons.forEach((b, i) => {
         const on = menuState.open && menuState.stack[0] === i;
         b.classList.toggle('is-open', on);
@@ -2456,7 +2533,8 @@ const IJShell = (() => {
           if (it.type === 'item' && it.shortcut) row.appendChild(el('span', 'ij-menu-shortcut', it.shortcut));
           if (it.type === 'group') { row.classList.add('has-children'); row.setAttribute('aria-haspopup', 'true'); row.appendChild(el('span', 'ij-menu-arrow', '▸')); }
           if (it.disabled) { row.classList.add('is-disabled'); row.setAttribute('aria-disabled', 'true'); }
-          if (idx === sel) { row.classList.add('is-active'); anchorEl = row; }
+          row.id = 'ij-menu-row-' + d + '-' + idx;
+          if (idx === sel) { row.classList.add('is-active'); anchorEl = row; menubar.setAttribute('aria-activedescendant', row.id); }
           row.addEventListener('pointerenter', () => {
             const next = menuState.stack.slice(0, d + 1);
             next[d] = idx;
@@ -2472,11 +2550,17 @@ const IJShell = (() => {
           panel.appendChild(row);
         });
         panelsEl.appendChild(panel);
-        // submenu: to the right of the highlighted parent row
-        const nextItem = list[menuState.stack[d]];
+        // keep the panel inside the shell: shifted left / up, scrollable when taller than the shell
         const pw = panel.offsetWidth;
+        if (rb.height > 0) { panel.style.maxHeight = Math.max(80, Math.round(rb.height)) + 'px'; panel.style.overflowY = 'auto'; }
+        if (rb.width > 0) x = P.clampPopupX(x, pw, rb.width);
+        if (rb.height > 0) y = P.clampPopupY(y, panel.offsetHeight, rb.height);
+        panel.style.left = Math.round(x) + 'px'; panel.style.top = Math.round(y) + 'px';
+        // submenu: right of the highlighted parent row, left of it when it would overflow
+        const nextItem = list[menuState.stack[d]];
         if (nextItem && nextItem.type === 'group' && d < depth && anchorEl) {
-          x = x + pw - 2; y = y + anchorEl.offsetTop;
+          x = rb.width > 0 ? P.submenuX(x, pw, SUBMENU_WIDTH, rb.width) : x + pw - 2;
+          y = y + anchorEl.offsetTop;
           list = nextItem.children;
         } else if (nextItem && nextItem.type === 'group') {
           // group highlighted but its panel is not open: nothing deeper
@@ -2519,7 +2603,12 @@ const IJShell = (() => {
     function refreshMenus() {
       buildTree();
       if (menuState.stack[0] >= tree.length) menuState = { open: false, stack: [0] };
-      renderTitles();
+      // the titles only change with the labels: otherwise keep the buttons (and the focus on one)
+      if (signatureOf() !== titleSignature || titleButtons.length !== tree.length) {
+        const hadFocus = titleButtons.some((b) => b === doc.activeElement);
+        renderTitles();
+        if (hadFocus && titleButtons[menuState.stack[0]]) titleButtons[menuState.stack[0]].focus();
+      }
       renderMenus();
     }
     refreshMenus();
@@ -2851,9 +2940,10 @@ const IJShell = (() => {
       if (destroyed || e.defaultPrevented) return;
       if (opts.isActive && !opts.isActive()) return;
       if (windows.hasModal()) return;
+      if (typeof Dialog !== 'undefined' && Dialog && typeof Dialog.isOpen === 'function' && Dialog.isOpen()) return;
       if (isTypingTarget(e.target)) return;
       if (menuState.open && menubar.contains(e.target)) return;
-      if (e.key === ' ' && (e.target === stage || e.target === doc.body)) {
+      if (e.key === ' ' && (e.target === stage || (e.target && shell.contains && shell.contains(e.target)))) {
         if (!spaceDown) { spaceDown = true; stageCursor(); }
         e.preventDefault();
         return;
@@ -2900,6 +2990,7 @@ const IJShell = (() => {
       if (destroyed) return;
       destroyed = true;
       for (const fn of cleanups.splice(0)) fn();
+      for (const fn of titleCleanups.splice(0)) fn();
       windows.destroy();
       display.destroy();
       pxPending = null;

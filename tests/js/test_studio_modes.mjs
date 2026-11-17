@@ -349,4 +349,45 @@ assert.equal(await E.setMode('advanced'), false);
 assert.ok(switchEl.classes.has('hidden'), 'no mode left: no switch');
 console.log('mount failure and unregister: OK');
 
+// ── release(): a mode left through Simple is freed when the Studio closes ────
+// (unmount() of a mode left to Simple only hides it: worker, GL context, documents stay)
+{
+  const rlog = [];
+  const rmode = {
+    id: 'kept',
+    label: 'Kept',
+    mount() {},
+    unmount() { rlog.push('unmount'); },
+    release() { rlog.push('release'); },
+  };
+  const unregisterKept = E.registerMode(rmode);
+  S.setup(container, canvas, { layers: [], guides: [] });
+  assert.equal(await E.setMode('kept'), true);
+  assert.equal(await E.setMode('simple'), true);
+  assert.deepEqual(rlog, ['unmount'], 'leaving to Simple hides, never releases');
+  rlog.length = 0;
+  assert.equal(await E.requestClose(), true);
+  assert.deepEqual(rlog, ['release'], 'close() releases a mode that is not active');
+  // an active mode is unmounted first, then released
+  S.setup(container, canvas, { layers: [], guides: [] });
+  assert.equal(await E.setMode('kept'), true);
+  rlog.length = 0;
+  assert.equal(await E.requestClose(), true);
+  assert.deepEqual(rlog, ['unmount', 'release']);
+  // a throwing release never blocks the close
+  rmode.release = () => { throw new Error('boom'); };
+  S.setup(container, canvas, { layers: [], guides: [] });
+  assert.equal(await E.requestClose(), true);
+  // unregistering releases too
+  rlog.length = 0;
+  rmode.release = () => { rlog.push('release'); };
+  unregisterKept();
+  assert.deepEqual(rlog, ['release']);
+  // the raw slice values reach a mode (placeholder) through getSliceRaw, null when none
+  assert.equal(typeof E.getSliceRaw, 'function');
+  S.setup(container, canvas, { layers: [], guides: [] });
+  assert.equal(E.getSliceRaw(), null, 'no raw slice: null');
+  console.log('mode release hook, getSliceRaw: OK');
+}
+
 console.log('Studio modes: OK');

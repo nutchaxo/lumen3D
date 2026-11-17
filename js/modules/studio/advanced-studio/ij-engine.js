@@ -209,18 +209,24 @@ const IJEngine = (() => {
           d.journal = d.journal.filter((e) => e.seq > snap.journalSeq);
         }
       },
+      // A journal entry or a meta patch never creates a session: only a stored document does,
+      // so a session that lists is always one that can be restored. A journal entry for a
+      // session that is gone fails, which leaves the document unprotected until its next snapshot.
       async putJournal(key, entry) {
-        const s = sess(key, true);
+        const s = sess(key, false);
+        if (!s) throw ijError('IJ_STORAGE_FAILED', 'no such session');
         docRec(s, entry.docId).journal.push(cloneValue(entry));
       },
       async putMeta(key, patch) {
-        const s = sess(key, true, patch && patch.datasetId);
+        const s = sess(key, false, patch && patch.datasetId);
+        if (!s) return;
         s.meta = Object.assign({}, s.meta, cloneValue(patch));
       },
       async list() {
-        return [...sessions.values()].map((s) => ({
-          key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: cloneValue(s.meta), docCount: s.docs.size
-        }));
+        return [...sessions.values()].map((s) => {
+          const docIds = [...s.docs].filter(([, d]) => d.baseline || d.snapshot).map(([id]) => id);
+          return { key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: cloneValue(s.meta), docCount: docIds.length, docIds };
+        });
       },
       async load(key, what) {
         const s = sessions.get(key);
@@ -244,7 +250,7 @@ const IJEngine = (() => {
           s.docs.delete(what.docId);
           if (s.meta && s.meta.docs) delete s.meta.docs[what.docId];
           if (s.meta && s.meta.display) delete s.meta.display[what.docId];
-          if (!s.docs.size) sessions.delete(key);
+          if (![...s.docs.values()].some((d) => d.baseline || d.snapshot)) sessions.delete(key);
         } else sessions.delete(key);
       },
       async estimate() {
@@ -272,11 +278,19 @@ const IJEngine = (() => {
             db.createObjectStore('docs');
             db.createObjectStore('journal');
           };
-          req.onsuccess = () => resolve(req.result);
+          req.onsuccess = () => {
+            const db = req.result;
+            // The browser may close the connection (storage cleared, another tab upgrading):
+            // forget it so the next transaction opens a new one instead of failing forever.
+            db.onclose = () => { if (dbp && dbp.db === db) dbp = null; };
+            db.onversionchange = () => { try { db.close(); } catch (e) { /* closed */ } if (dbp && dbp.db === db) dbp = null; };
+            resolve(db);
+          };
           req.onerror = () => reject(req.error || new Error('indexedDB open failed'));
           req.onblocked = () => reject(ijError('IJ_STORAGE_BLOCKED', 'indexedDB blocked'));
         });
-        dbp.catch(() => { dbp = null; });
+        const mine = dbp;
+        dbp.then((db) => { mine.db = db; }, () => { if (dbp === mine) dbp = null; });
       }
       return dbp;
     }
@@ -285,16 +299,21 @@ const IJEngine = (() => {
       return open().then((db) => new Promise((resolve, reject) => {
         const out = { v: undefined };
         let tx;
-        try { tx = db.transaction(stores, mode); } catch (e) { reject(e); return; }
+        try { tx = db.transaction(stores, mode); } catch (e) { dbp = null; reject(e); return; }
         tx.oncomplete = () => resolve(out.v);
-        tx.onerror = () => reject(tx.error || new Error('transaction failed'));
-        tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+        // A failed request bubbles here while tx.error is still null: the cause (a quota
+        // refusal in particular) is the error of the request that raised the event.
+        tx.onerror = (ev) => reject((ev && ev.target && ev.target.error) || tx.error || new Error('transaction failed'));
+        tx.onabort = () => reject(out.err || tx.error || new Error('transaction aborted'));
         try { work(tx, out); } catch (e) { try { tx.abort(); } catch (e2) { /* done */ } reject(e); }
       }));
     }
-    function touchSession(store, key, datasetId, patch) {
+    // create = a stored document makes the session; otherwise the session must already exist
+    // (a meta patch is dropped, a journal entry fails through onMissing).
+    function touchSession(store, key, datasetId, patch, create, onMissing) {
       const g = store.get(key);
       g.onsuccess = () => {
+        if (!g.result && !create) { if (onMissing) onMissing(); return; }
         const cur = g.result || { key, datasetId: null, savedAt: 0, meta: {} };
         cur.savedAt = Date.now();
         if (datasetId && !cur.datasetId) cur.datasetId = datasetId;
@@ -337,24 +356,41 @@ const IJEngine = (() => {
           if (snap.kind === 'snapshot') {
             tx.objectStore('journal').delete(range([key, snap.docId, 0], [key, snap.docId, snap.journalSeq]));
           }
-          touchSession(tx.objectStore('sessions'), key, snap.provenance && snap.provenance.datasetId, null);
+          touchSession(tx.objectStore('sessions'), key, snap.provenance && snap.provenance.datasetId, null, true);
         });
       },
       putJournal(key, entry) {
-        return run(['sessions', 'journal'], 'readwrite', (tx) => {
+        return run(['sessions', 'journal'], 'readwrite', (tx, out) => {
           tx.objectStore('journal').put(entry, [key, entry.docId, entry.seq]);
-          touchSession(tx.objectStore('sessions'), key, null, null);
+          touchSession(tx.objectStore('sessions'), key, null, null, false, () => {
+            out.err = ijError('IJ_STORAGE_FAILED', 'no such session');
+            tx.abort();
+          });
         });
       },
       putMeta(key, patch) {
         return run(['sessions'], 'readwrite', (tx) => {
-          touchSession(tx.objectStore('sessions'), key, patch && patch.datasetId, patch);
+          touchSession(tx.objectStore('sessions'), key, patch && patch.datasetId, patch, false);
         });
       },
+      // Every row says which documents are really stored (docs records [key, docId, kind]),
+      // so a session without a restorable document is never offered.
       list() {
-        return run(['sessions'], 'readonly', (tx, out) => {
+        return run(['sessions', 'docs'], 'readonly', (tx, out) => {
           const r = tx.objectStore('sessions').getAll();
-          r.onsuccess = () => { out.v = r.result.map((s) => ({ key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: s.meta || {}, docCount: 0 })); };
+          r.onsuccess = () => {
+            const rows = r.result.map((s) => ({ key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: s.meta || {}, docCount: 0, docIds: [] }));
+            out.v = rows;
+            for (const row of rows) {
+              const k = tx.objectStore('docs').getAllKeys(range([row.key], [row.key, []]));
+              k.onsuccess = () => {
+                const ids = new Set();
+                for (const key of k.result) ids.add(key[1]);
+                row.docIds = [...ids];
+                row.docCount = ids.size;
+              };
+            }
+          };
         });
       },
       async load(key, what) {
@@ -450,6 +486,10 @@ const IJEngine = (() => {
     const yielder = makeYielder();
     let transientBytes = 0;
     let idCounter = 0;
+    // Retry of a failed storage write: 3 s, then 10 s, then every 30 s while anything is unprotected.
+    const retryDelays = Array.isArray(opts.retryMs) ? opts.retryMs : [3000, 10000, 30000];
+    let retryTimer = null;
+    let retryCount = 0;
     let idleTimer = null;
     let disposed = false;
     let activeSessionKey = null;
@@ -492,13 +532,38 @@ const IJEngine = (() => {
     function enqueue(job, doc) {
       const p = queue.then(job).then(() => true, (err) => {
         const code = storageErrorCode(err);
-        if (doc) { doc.protected = false; doc.dirty = true; }
+        if (doc) {
+          doc.protected = false; doc.dirty = true;
+          // Whatever was being written is not in storage: a later snapshot may only vouch for
+          // the document once it covers this revision.
+          doc.unjournaledRev = doc.rev;
+        }
         console.error('[IJEngine] storage write failed', err);
         emitStorageError(code, doc ? doc.id : null);
+        if (doc) scheduleRetry();
         return false;
       });
       queue = p;
       return p;
+    }
+
+    // A write that failed is tried again with a back-off (a quota or IndexedDB error is often
+    // transient: another tab freed space, the connection was reopened). Nothing else would
+    // re-arm the idle timer once the operator stops editing.
+    function scheduleRetry() {
+      if (!storageOn || disposed || retryTimer) return;
+      const delay = retryDelays[Math.min(retryCount, retryDelays.length - 1)];
+      retryCount++;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        let again = false;
+        for (const d of docs.values()) {
+          if (!d.baselineStored && d.pendingBaseline) { storeBaseline(d); again = true; }
+          if (d.dirty || !d.protected) { snapshotNow(d); again = true; }
+        }
+        if (!again) retryCount = 0;
+      }, delay);
+      if (retryTimer && retryTimer.unref) retryTimer.unref();
     }
 
     // ---- budget -------------------------------------------------------------
@@ -543,13 +608,33 @@ const IJEngine = (() => {
     // Free `extra` bytes of headroom: tile cache first, then the oldest undo/redo
     // steps of any document. Refuses (IJ_OVER_BUDGET) without touching anything when
     // even that would not be enough.
-    function ensureRoom(extra) {
-      if (usedBytes() + extra <= budgetBytes) return;
+    function reclaimableBytes() {
       let reclaimable = tiles.bytes;
       for (const d of docs.values()) {
         for (const r of d.undo) reclaimable += r.bytes;
         for (const r of d.redo) reclaimable += r.bytes;
       }
+      return reclaimable;
+    }
+
+    // Would `extra` bytes fit once the tile cache and every undo step were given up? (No side effect.)
+    function couldFit(extra) {
+      return usedBytes() - reclaimableBytes() + extra <= budgetBytes;
+    }
+
+    // Room for something that is not worth an undo step (a TIFF export): only the tile cache
+    // gives way, everything else refuses.
+    function ensureRoomNoEvict(extra) {
+      if (usedBytes() + extra <= budgetBytes) return;
+      dropTiles();
+      if (usedBytes() + extra > budgetBytes) {
+        throw ijError('IJ_OVER_BUDGET', 'not enough memory for this operation', { needBytes: extra, usedBytes: usedBytes(), budgetBytes });
+      }
+    }
+
+    function ensureRoom(extra) {
+      if (usedBytes() + extra <= budgetBytes) return;
+      const reclaimable = reclaimableBytes();
       const used = usedBytes();
       if (used - reclaimable + extra > budgetBytes) {
         throw ijError('IJ_OVER_BUDGET', 'not enough memory for this operation', { needBytes: extra, usedBytes: used, budgetBytes });
@@ -671,6 +756,7 @@ const IJEngine = (() => {
         undo: [], redo: [], chain: Promise.resolve(),
         baselineSet: new WeakSet(), baselineData: null, baselineShape: null, baselineStored: false,
         journalSeq: p.journalSeq || 0, snapshotRev: 0, dirty: false, protected: storageOn,
+        unjournaledRev: -1, pendingBaseline: null,
         rangeCache: null
       };
     }
@@ -719,21 +805,35 @@ const IJEngine = (() => {
       doc.baselineCal = plainClone(doc.calibration);
       doc.baselineStored = false;
       if (!storageOn) { doc.protected = false; return; }
+      // Built once: a failed write is retried with this very record (the loaded image), never
+      // with a baseline rebuilt from a later state.
       const rec = recordOf(doc, 'baseline');
-      const bytes = recDataBytes(rec);
+      doc.pendingBaseline = { rec, bytes: recDataBytes(rec) };
+      storeBaseline(doc);
+    }
+
+    function storeBaseline(doc) {
+      const pb = doc.pendingBaseline;
+      if (!pb || !storageOn) return;
       enqueue(async () => {
-        transientBytes += bytes;
-        try { await storage.putSnapshot(doc.sessionKey, rec); } finally { transientBytes -= bytes; }
+        if (doc.baselineStored) return;
+        transientBytes += pb.bytes;
+        try { await storage.putSnapshot(doc.sessionKey, pb.rec); } finally { transientBytes -= pb.bytes; }
         doc.baselineStored = true;
         doc.baselineData = null;
+        doc.pendingBaseline = null;
         doc.protected = true;
         post({ event: 'saved', at: Date.now(), docId: doc.id });
+        // The session now exists: its meta (document list, display state) can be written.
+        if (docs.has(doc.id)) markMeta(doc);
       }, doc);
     }
 
     // Capture NOW (arrays are immutable, so the references stay valid), write later.
-    function snapshotNow(doc) {
-      if (!storageOn || !docs.has(doc.id)) return queue;
+    // `force`: the document has just left `docs` (doc.close keeps it for later) but its last
+    // state still has to be written.
+    function snapshotNow(doc, force) {
+      if (!storageOn || (!force && !docs.has(doc.id))) return queue;
       const rec = recordOf(doc, 'snapshot');
       const bytes = recDataBytes(rec);
       doc.snapshotRev = doc.rev;
@@ -743,7 +843,10 @@ const IJEngine = (() => {
       return enqueue(async () => {
         transientBytes += bytes;
         try { await storage.putSnapshot(doc.sessionKey, rec); } finally { transientBytes -= bytes; }
-        doc.protected = true;
+        // Stored state + journal restores the document only when no commit after the snapshot
+        // went unjournaled (a journal write that failed while the doc was unprotected).
+        if (rec.rev >= doc.unjournaledRev) doc.protected = true;
+        else { doc.dirty = true; scheduleIdle(); }
         post({ event: 'saved', at: Date.now(), docId: doc.id });
       }, doc);
     }
@@ -759,8 +862,17 @@ const IJEngine = (() => {
 
     function flushAll() {
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-      for (const d of docs.values()) if (d.dirty || !d.protected) snapshotNow(d);
+      for (const d of docs.values()) {
+        if (!d.baselineStored && d.pendingBaseline) storeBaseline(d);
+        if (d.dirty || !d.protected) snapshotNow(d);
+      }
       return queue;
+    }
+
+    // Documents the stored state cannot restore as they are now (after a flush: the ones whose
+    // write failed). Used to tell the page that "keep for later" did not keep anything.
+    function unsafeDocs() {
+      return [...docs.values()].filter((d) => d.dirty || !d.protected || (d.pendingBaseline && !d.baselineStored)).map((d) => d.id);
     }
 
     function noteCommit(doc, entry) {
@@ -770,10 +882,13 @@ const IJEngine = (() => {
         entry.docId = doc.id;
         entry.seq = doc.journalSeq;
         entry.at = Date.now();
+        entry.rev = doc.rev;
         enqueue(async () => {
-          if (!doc.protected) return;
+          if (!doc.protected) { doc.unjournaledRev = Math.max(doc.unjournaledRev, entry.rev); return; }
           await storage.putJournal(doc.sessionKey, entry);
         }, doc);
+      } else if (storageOn) {
+        doc.unjournaledRev = doc.rev;
       }
       markMeta(doc);
       scheduleIdle();
@@ -1075,15 +1190,21 @@ const IJEngine = (() => {
       const chBytes = W * H * (bd / 8);
       const patchBytes = fullReg ? 0 : reg.w * reg.h * (bd / 8);
       const preps = chans.map((c) => spec.prepare(doc, c, params, null));
-      ensureRoom(chans.length * (chBytes + patchBytes));
+      const need = chans.length * (chBytes + patchBytes);
+      ensureRoom(need);
+      // Reserved while the operation runs, so an operation on another document sees the
+      // headroom this one is about to take; released at commit (the new arrays are counted then).
+      transientBytes += need;
       const outs = [];
-      for (let i = 0; i < chans.length; i++) {
-        const base = i / chans.length, span = 1 / chans.length;
-        const out = await pixelPass(task, W, H, bd, doc.channels[chans[i]].data, preps[i], mask, reg, outside,
-          (f) => base + span * f, 'op.' + op);
-        outs.push(out);
-      }
-      task.check();
+      try {
+        for (let i = 0; i < chans.length; i++) {
+          const base = i / chans.length, span = 1 / chans.length;
+          const out = await pixelPass(task, W, H, bd, doc.channels[chans[i]].data, preps[i], mask, reg, outside,
+            (f) => base + span * f, 'op.' + op);
+          outs.push(out);
+        }
+        task.check();
+      } finally { transientBytes -= need; }
       // Commit (synchronous: nothing can interleave from here on).
       const rec = newRecord(doc, op);
       rec.patches = chans.map((c) => ({
@@ -1125,23 +1246,27 @@ const IJEngine = (() => {
         if (![8, 16, 32].includes(newBd)) throw ijError('IJ_BAD_ARGS', 'bitDepth');
         if (newBd === bd) return { changed: { channels: [], sizeChanged: false }, newDocIds: [], noop: true };
       }
-      ensureRoom(all.length * newW * newH * (newBd / 8));
+      const need = all.length * newW * newH * (newBd / 8);
+      ensureRoom(need);
+      transientBytes += need;
       const outs = [];
-      for (let i = 0; i < all.length; i++) {
-        const ch = doc.channels[i];
-        let data;
-        if (op === 'crop') {
-          data = copyRect(ch.data, W, cropBox.x, cropBox.y, cropBox.w, cropBox.h);
-        } else if (op === 'rotate90') {
-          data = unwrap(IJOps.rotate90(chImg(W, H, bd, ch.data), params.dir), W * H);
-        } else {
-          const r = params.ranges[i];
-          data = unwrap(IJOps.convert(chImg(W, H, bd, ch.data), newBd, { min: r.min, max: r.max, scale: params.scale !== false }), W * H);
+      try {
+        for (let i = 0; i < all.length; i++) {
+          const ch = doc.channels[i];
+          let data;
+          if (op === 'crop') {
+            data = copyRect(ch.data, W, cropBox.x, cropBox.y, cropBox.w, cropBox.h);
+          } else if (op === 'rotate90') {
+            data = unwrap(IJOps.rotate90(chImg(W, H, bd, ch.data), params.dir), W * H);
+          } else {
+            const r = params.ranges[i];
+            data = unwrap(IJOps.convert(chImg(W, H, bd, ch.data), newBd, { min: r.min, max: r.max, scale: params.scale !== false }), W * H);
+          }
+          outs.push(data);
+          await task.tick((i + 1) / all.length, 'op.' + op);
         }
-        outs.push(data);
-        await task.tick((i + 1) / all.length, 'op.' + op);
-      }
-      task.check();
+        task.check();
+      } finally { transientBytes -= need; }
       const rec = newRecord(doc, op);
       rec.full = fullState(doc);
       pushUndo(doc, rec);
@@ -1395,7 +1520,12 @@ const IJEngine = (() => {
         const x = Math.floor(pts[0][0]), y = Math.floor(pts[0][1]);
         if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) throw ijError('IJ_EMPTY_ROI', 'point outside the image');
         const v = doc.channels[c].data[y * doc.width + x];
-        row = { n: 1, mean: v, min: v, max: v, median: v, stdDev: 0, area: 0, x: pts[0][0] * cal.pw, y: pts[0][1] * cal.ph };
+        // ImageJ prints a point's X / Y: the Centroid and Center of Mass columns of its row.
+        const px = pts[0][0] * cal.pw, py = pts[0][1] * cal.ph;
+        row = {
+          n: 1, mean: v, min: v, max: v, median: v, mode: v, stdDev: 0, area: 0, intDen: 0, rawIntDen: v,
+          x: px, y: py, xCentroid: px, yCentroid: py, xCenterOfMass: px, yCenterOfMass: py
+        };
       } else {
         const mask = roiMask(roi, doc.width, doc.height);
         row = Object.assign({}, IJOps.statistics(channelImage(doc, c), mask, { calibration: doc.calibration }));
@@ -1454,12 +1584,28 @@ const IJEngine = (() => {
     };
 
     // Output images + the accumulators of one band (the streaming peak), from the projector itself.
-    function projectEstimate(a) {
+    // `bandRows` is the band the caller streams with (a median / sd accumulator is P * depth
+    // for P = bandRows * width pixels, so the band decides the peak, not the image).
+    function projectEstimate(a, bandRows) {
       const e = dep('IJProject').estimateBytes({
-        method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length
+        method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length, bandRows
       });
       if (!(e > 0)) throw ijError('IJ_BAD_ARGS', 'projection size');
       return e;
+    }
+
+    // The largest band (halving from the one asked for, never below MIN_BAND_ROWS) whose
+    // projection fits the budget; the caller streams with the band it is told.
+    const MIN_BAND_ROWS = 8;
+    function fitProjectBand(a) {
+      let rows = isInt(a.bandRows) && a.bandRows > 0 ? a.bandRows : 64;
+      rows = Math.min(rows, a.height);
+      let e = projectEstimate(a, rows);
+      while (rows > MIN_BAND_ROWS && !couldFit(e)) {
+        rows = Math.max(MIN_BAND_ROWS, rows >> 1);
+        e = projectEstimate(a, rows);
+      }
+      return { rows, estimate: e };
     }
 
     handlers['doc.project.begin'] = (a) => {
@@ -1467,7 +1613,8 @@ const IJEngine = (() => {
       for (const k of ['width', 'height', 'depth']) if (!isInt(a[k]) || a[k] < 1) throw ijError('IJ_BAD_ARGS', k);
       if (!Array.isArray(a.channels) || !a.channels.length) throw ijError('IJ_BAD_ARGS', 'channels');
       const docId = a.docId || newId();
-      const estimate = projectEstimate(a);
+      const fit = fitProjectBand(a);
+      const estimate = fit.estimate;
       if (projects.has(docId)) projects.delete(docId);
       ensureRoom(estimate);
       const projector = IJProject.create({
@@ -1475,7 +1622,7 @@ const IJEngine = (() => {
       });
       projects.set(docId, { projector, meta: plainClone({ name: a.name, method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels, calibration: a.calibration, provenance: a.provenance }), estimate, fraction: 0 });
       finishMutation();
-      return { docId, outputBitDepth: projector.outputBitDepth, estimateBytes: estimate };
+      return { docId, outputBitDepth: projector.outputBitDepth, estimateBytes: estimate, bandRows: fit.rows };
     };
 
     handlers['doc.project.add'] = (a) => {
@@ -1514,8 +1661,11 @@ const IJEngine = (() => {
     handlers['doc.open'] = (a) => {
       if (!a.bytes || !a.bytes.byteLength) throw ijError('IJ_BAD_ARGS', 'bytes');
       ensureRoom(a.bytes.byteLength * 2);
-      const img = dep('IJTiff').read(a.bytes);
+      const img = dep('IJTiff').read(a.bytes, typeof a.name === 'string' && a.name ? a.name : undefined);
       const doc = addDocFromImage(img, Object.assign({ opened: true }, a.provenance || {}), a.sessionKey);
+      // A file just read from disk is what is on disk: nothing is unsaved until it is edited.
+      doc.savedRev = doc.rev;
+      markMeta(doc);
       finishMutation();
       return { docId: doc.id, info: infoOf(doc) };
     };
@@ -1536,22 +1686,31 @@ const IJEngine = (() => {
       if (pr && !docs.has(a.docId)) { projects.delete(a.docId); finishMutation(); return {}; }
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
-        docs.delete(doc.id);
-        purgeTiles(doc.id);
-        latestPreview.delete(doc.id);
         const clean = doc.savedRev === doc.rev;
         const s = sessions.get(doc.sessionKey);
+        let ok = true;
         if (storageOn && (clean || a.discard)) {
-          await queue;
+          docs.delete(doc.id);
           if (s) { delete s.docs[doc.id]; delete s.display[doc.id]; }
+          await queue;
           await enqueue(() => storage.discard(doc.sessionKey, { docId: doc.id }), null);
         } else if (storageOn) {
-          // Keep for later: make sure the stored state is the last one.
-          if (doc.dirty) snapshotNow(doc);
+          // Keep for later: the stored state must be the last one. The document is still in
+          // `docs` here: a snapshot of a document that has left it is skipped.
+          if (doc.dirty || !doc.protected) ok = (await snapshotNow(doc, true)) !== false;
           await queue;
+          // A failed write keeps the document in the engine: its retry timer is what still
+          // tries to store it, and the caller (ok:false) can offer Save as TIFF instead.
+          if (ok) docs.delete(doc.id);
+        } else docs.delete(doc.id);
+        purgeTiles(doc.id);
+        latestPreview.delete(doc.id);
+        if (activeSessionKey === doc.sessionKey && ![...docs.values()].some((d) => d.sessionKey === doc.sessionKey)) {
+          const other = [...docs.values()].pop();
+          activeSessionKey = other ? other.sessionKey : null;
         }
         finishMutation();
-        return {};
+        return { ok, kept: !!(storageOn && !clean && !a.discard) };
       });
     };
 
@@ -1597,6 +1756,10 @@ const IJEngine = (() => {
 
     handlers['doc.duplicate'] = (a) => {
       const doc = getDoc(a.docId);
+      return lockDoc(doc, async () => duplicateDoc(doc, a));
+    };
+
+    function duplicateDoc(doc, a) {
       const W = doc.width, H = doc.height;
       const sel = Array.isArray(a.channels) ? a.channels : doc.channels.map((c, i) => i);
       let box = { x: 0, y: 0, w: W, h: H };
@@ -1621,7 +1784,7 @@ const IJEngine = (() => {
       registerDoc(nd, { baseline: true });
       finishMutation();
       return { docId: nd.id, info: infoOf(nd) };
-    };
+    }
 
     handlers['doc.undo'] = (a) => {
       const doc = getDoc(a.docId);
@@ -1653,70 +1816,119 @@ const IJEngine = (() => {
       });
     };
 
+    // Reads of a document's pixels go through the document's queue, behind any operation
+    // already accepted for it: the operation swaps the channel arrays only at its commit, so a
+    // read that overtook it would answer from the pixels it is about to replace. Display reads
+    // (doc.tile, doc.pixel, doc.preview) stay outside the queue on purpose: they must answer
+    // between two slices of a running operation, and 'invalidate' tells the page to redraw.
     handlers['doc.stats'] = (a) => {
       const doc = getDoc(a.docId);
-      const c = isInt(a.channel) ? a.channel : doc.active;
-      getChannel(doc, c);
-      return { row: measureRow(doc, c, a.roi || null, a.measurements) };
+      return lockDoc(doc, async () => {
+        const c = isInt(a.channel) ? a.channel : doc.active;
+        getChannel(doc, c);
+        return { row: measureRow(doc, c, a.roi || null, a.measurements) };
+      });
     };
 
     handlers['doc.histogram'] = (a) => {
       const doc = getDoc(a.docId);
-      const c = isInt(a.channel) ? a.channel : doc.active;
-      const mask = roiMask(a.roi || null, doc.width, doc.height);
-      const o = { bins: a.bins > 0 ? a.bins : 256 };
-      if (a.min != null) o.min = a.min;
-      if (a.max != null) o.max = a.max;
-      return dep('IJOps').histogram(channelImage(doc, c), mask, o);
+      return lockDoc(doc, async () => {
+        const c = isInt(a.channel) ? a.channel : doc.active;
+        const mask = roiMask(a.roi || null, doc.width, doc.height);
+        const o = { bins: a.bins > 0 ? a.bins : 256 };
+        if (a.min != null) o.min = a.min;
+        if (a.max != null) o.max = a.max;
+        return dep('IJOps').histogram(channelImage(doc, c), mask, o);
+      });
     };
 
     handlers['doc.profile'] = (a) => {
       const doc = getDoc(a.docId);
-      const c = isInt(a.channel) ? a.channel : doc.active;
-      const line = a.line;
-      if (!line || line.type !== 'line') throw ijError('IJ_BAD_ROI', 'a straight line is needed');
-      const cal = calOf(doc);
-      const prof = dep('IJOps').profile(channelImage(doc, c), line, line.width > 0 ? line.width : 1);
-      return { values: prof.values, stepUm: prof.step * (cal.pw + cal.ph) / 2 };
+      return lockDoc(doc, async () => {
+        const c = isInt(a.channel) ? a.channel : doc.active;
+        const line = a.line;
+        if (!line || line.type !== 'line') throw ijError('IJ_BAD_ROI', 'a straight line is needed');
+        const cal = calOf(doc);
+        const prof = dep('IJOps').profile(channelImage(doc, c), line, line.width > 0 ? line.width : 1);
+        return { values: prof.values, stepUm: prof.step * (cal.pw + cal.ph) / 2 };
+      });
     };
 
     handlers['doc.threshold'] = (a) => {
       const doc = getDoc(a.docId);
-      const c = isInt(a.channel) ? a.channel : doc.active;
-      const mask = roiMask(a.roi || null, doc.width, doc.height);
-      const o = { dark: !!a.dark, maskBox: mask };
-      if (doc.bitDepth !== 8) {
-        const r = rangeOf(doc, c);
-        o.min = r.min; o.max = r.max;
-      }
-      const r = dep('IJThreshold').levels(channelImage(doc, c), a.method || 'Default', o);
-      return { lower: r.lower, upper: r.upper, level: r.level, min: r.min, max: r.max };
+      return lockDoc(doc, async () => {
+        const c = isInt(a.channel) ? a.channel : doc.active;
+        const mask = roiMask(a.roi || null, doc.width, doc.height);
+        const o = { dark: !!a.dark, maskBox: mask };
+        if (doc.bitDepth !== 8) {
+          const r = rangeOf(doc, c);
+          o.min = r.min; o.max = r.max;
+        }
+        const r = dep('IJThreshold').levels(channelImage(doc, c), a.method || 'Default', o);
+        return { lower: r.lower, upper: r.upper, level: r.level, min: r.min, max: r.max };
+      });
     };
 
-    handlers['doc.particles'] = async (a, ctx) => {
-      const doc = getDoc(a.docId);
-      const c = isInt(a.channel) ? a.channel : doc.active;
-      if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'particle analysis needs an 8-bit mask');
-      const o = Object.assign({}, a.opts || {});
-      const cal = calOf(doc);
-      if (o.unit === 'um2') {
-        const px = cal.pw * cal.ph;
-        if (o.minSize != null) o.minSize = o.minSize / px;
-        if (o.maxSize != null) o.maxSize = o.maxSize / px;
+    // Image measurements of one particle: the Set Measurements columns (Mean, Min, Max, IntDen...)
+    // of the analysed channel over the particle's own outline, which is a traced polygon
+    // (ImageJ perimeter rules). The particle's own area / perimeter / circularity are kept.
+    const PARTICLE_OWN = new Set(['area', 'perimeter', 'circularity', 'n', 'xCentroid', 'yCentroid']);
+    // Without "Include holes" ImageJ measures only the particle's own pixels: the filled
+    // outline limited to the foreground (ParticleAnalyzer measures with the threshold as a
+    // LIMIT), so a hole inside the outline never enters Mean / Min / IntDen.
+    function particleImageStats(doc, c, outline, includeHoles) {
+      const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
+      const box = IJRoi.mask({ type: 'polygon', points: outline, traced: true }, doc.width, doc.height);
+      if (!includeHoles && box && box.data) {
+        const src = doc.channels[c].data, w = doc.width;
+        for (let yy = 0; yy < box.h; yy++) {
+          for (let xx = 0; xx < box.w; xx++) {
+            const k = yy * box.w + xx;
+            if (box.data[k] && src[(box.y + yy) * w + box.x + xx] === 0) box.data[k] = 0;
+          }
+        }
       }
-      o.calibration = doc.calibration;
-      o.maskBox = o.roi ? roiMask(o.roi, doc.width, doc.height) : null;
-      delete o.roi; delete o.unit;
-      await ctx.task.tick(0, 'op.particles');
-      const r = dep('IJParticles').analyze(doc.channels[c].data, doc.width, doc.height, o);
-      return {
-        rows: r.particles.map((p, i) => ({
-          n: i + 1, area: p.area, areaPx: p.areaPx, perimeter: p.perimeter, circularity: p.circularity,
-          bx: p.bx, by: p.by, bw: p.bw, bh: p.bh, xCentroid: p.xCentroid, yCentroid: p.yCentroid
-        })),
-        outlines: r.particles.map((p) => p.outline),
-        summary: { count: r.count, totalArea: r.totalArea, averageSize: r.averageSize, areaFraction: r.areaFraction, percentArea: r.percentArea }
-      };
+      const st = IJOps.statistics(channelImage(doc, c), box, { calibration: doc.calibration });
+      const out = {};
+      for (const k of Object.keys(st)) if (!PARTICLE_OWN.has(k)) out[k] = st[k];
+      return out;
+    }
+
+    handlers['doc.particles'] = (a, ctx) => {
+      const doc = getDoc(a.docId);
+      return lockDoc(doc, async () => {
+        const c = isInt(a.channel) ? a.channel : doc.active;
+        if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'particle analysis needs an 8-bit mask');
+        const o = Object.assign({}, a.opts || {});
+        const cal = calOf(doc);
+        if (o.unit === 'um2') {
+          const px = cal.pw * cal.ph;
+          if (o.minSize != null) o.minSize = o.minSize / px;
+          if (o.maxSize != null) o.maxSize = o.maxSize / px;
+        }
+        o.calibration = doc.calibration;
+        o.maskBox = o.roi ? roiMask(o.roi, doc.width, doc.height) : null;
+        delete o.roi; delete o.unit;
+        await ctx.task.tick(0, 'op.particles');
+        const r = dep('IJParticles').analyze(doc.channels[c].data, doc.width, doc.height, o);
+        const measure = a.measureImage !== false;
+        const rows = [];
+        for (let i = 0; i < r.particles.length; i++) {
+          const p = r.particles[i];
+          const row = {
+            n: i + 1, area: p.area, areaPx: p.areaPx, perimeter: p.perimeter, circularity: p.circularity,
+            bx: p.bx, by: p.by, bw: p.bw, bh: p.bh, xCentroid: p.xCentroid, yCentroid: p.yCentroid
+          };
+          if (measure && p.outline && p.outline.length >= 3) Object.assign(row, particleImageStats(doc, c, p.outline, !!o.includeHoles));
+          rows.push(row);
+          if ((i & 63) === 63) await ctx.task.tick(0.1 + 0.9 * (i + 1) / r.particles.length, 'op.particles');
+        }
+        return {
+          rows,
+          outlines: r.particles.map((p) => p.outline),
+          summary: { count: r.count, totalArea: r.totalArea, averageSize: r.averageSize, areaFraction: r.areaFraction, percentArea: r.percentArea }
+        };
+      });
     };
 
     handlers['doc.pixel'] = (a) => {
@@ -1745,24 +1957,32 @@ const IJEngine = (() => {
       return { width: w, height: h, bitDepth: doc.bitDepth, data };
     };
 
+    // The answer carries the revision the bytes were written from: the page hands it back to
+    // doc.markSaved, so an edit committed between the export and the end of the file write is
+    // never recorded as saved.
     handlers['doc.exportTiff'] = (a, ctx) => {
       const doc = getDoc(a.docId);
-      let n = 0;
-      for (const c of doc.channels) n += c.data.byteLength;
-      ensureRoom(n + 65536);
-      transientBytes += n + 65536;
-      ctx.release = () => { transientBytes -= n + 65536; };
-      let bytes = dep('IJTiff').write(doc);
-      if (bytes.byteOffset !== 0 || bytes.buffer.byteLength !== bytes.byteLength) bytes = bytes.slice();
-      ctx.transfer.push(bytes.buffer);
-      return { bytes };
+      return lockDoc(doc, async () => {
+        let n = 0;
+        for (const c of doc.channels) n += c.data.byteLength;
+        ensureRoomNoEvict(n + 65536);
+        transientBytes += n + 65536;
+        ctx.release = () => { transientBytes -= n + 65536; };
+        let bytes = dep('IJTiff').write(doc);
+        if (bytes.byteOffset !== 0 || bytes.buffer.byteLength !== bytes.byteLength) bytes = bytes.slice();
+        ctx.transfer.push(bytes.buffer);
+        return { bytes, rev: doc.rev };
+      });
     };
 
     handlers['doc.markSaved'] = (a) => {
       const doc = getDoc(a.docId);
-      doc.savedRev = doc.rev;
-      markMeta(doc);
-      return {};
+      return lockDoc(doc, async () => {
+        const rev = isInt(a.rev) && a.rev >= 0 ? Math.min(a.rev, doc.rev) : doc.rev;
+        doc.savedRev = rev;
+        markMeta(doc);
+        return { savedRev: rev, unsaved: doc.savedRev !== doc.rev };
+      });
     };
 
     handlers['session.list'] = async (a) => {
@@ -1773,22 +1993,40 @@ const IJEngine = (() => {
       for (const r of rows) {
         if (a.datasetId && r.datasetId !== a.datasetId) continue;
         const dm = (r.meta && r.meta.docs) || {};
-        const ids = Object.keys(dm);
+        // What can be restored is what is stored: a document the meta lists without a stored
+        // record is not offered, and a session with none is not a session.
+        const ids = Array.isArray(r.docIds) ? r.docIds : Object.keys(dm);
+        if (!ids.length) continue;
         out.push({
           key: r.key, datasetId: r.datasetId, savedAt: r.savedAt, docs: ids.length,
-          unsaved: ids.some((i) => !dm[i].saved), names: ids.map((i) => dm[i].name)
+          unsaved: ids.some((i) => !dm[i] || !dm[i].saved), names: ids.map((i) => (dm[i] && dm[i].name) || '')
         });
       }
       out.sort((x, y) => y.savedAt - x.savedAt);
       return { sessions: out };
     };
 
+    // Discards the STORED session. A document of that session that is open in the engine is
+    // never stripped of its stored baseline (its next snapshot would reference a baseline that
+    // is gone and the document could no longer be restored): those documents are left as they
+    // are and named in `kept`. Closing them with doc.close { discard: true } is how an open
+    // document's stored state is dropped.
     handlers['session.discard'] = async (a) => {
-      if (!storageOn) return {};
+      if (!storageOn) return { kept: [] };
       await queue;
-      await storage.discard(a.key);
-      sessions.delete(a.key);
-      return {};
+      const live = [...docs.values()].filter((d) => d.sessionKey === a.key);
+      if (!live.length) {
+        await storage.discard(a.key);
+        sessions.delete(a.key);
+        return { kept: [] };
+      }
+      const rows = await storage.list();
+      const row = rows.find((r) => r.key === a.key);
+      const open = new Set(live.map((d) => d.id));
+      for (const id of (row && row.docIds) || []) if (!open.has(id)) await storage.discard(a.key, { docId: id });
+      const s = sessions.get(a.key);
+      if (s) for (const id of Object.keys(s.docs)) if (!open.has(id)) { delete s.docs[id]; delete s.display[id]; }
+      return { kept: [...open] };
     };
 
     handlers['session.putMeta'] = async (a) => {
@@ -1796,6 +2034,7 @@ const IJEngine = (() => {
       if (!key || !storageOn) return {};
       const s = sessions.get(key);
       if (s) s.ui = { results: a.results, rois: a.rois, measurements: a.measurements, windows: a.windows };
+      // Storage only updates a session that already holds a document (no ghost session).
       await enqueue(() => storage.putMeta(key, { ui: { results: a.results, rois: a.rois, measurements: a.measurements, windows: a.windows } }), null);
       return {};
     };
@@ -1803,71 +2042,109 @@ const IJEngine = (() => {
     handlers['session.restore'] = async (a, ctx) => {
       if (!storageOn) throw ijError('IJ_NO_SESSION', 'storage is not available');
       await queue;
-      const data = await storage.load(a.key);
-      if (!data) throw ijError('IJ_NO_SESSION', 'no such session');
-      const ids = [], warnings = [];
-      const dm = (data.meta && data.meta.display) || {};
-      for (const docId of Object.keys(data.docs)) {
-        if (docs.has(docId)) { ids.push(docId); continue; }
-        const rec = data.docs[docId];
-        const base = rec.baseline, snap = rec.snapshot;
-        const src = snap || base;
-        if (!src) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
-        let missing = false;
-        const arrays = src.channels.map((c, i) => {
-          const d = c.data || (base && base.channels[i] && base.channels[i].data);
-          if (!d) missing = true;
-          return d;
-        });
-        if (missing) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
-        ensureRoom(arrays.reduce((n, d) => n + d.byteLength, 0));
-        const chans = src.channels.map((c, i) => makeChannel(c.name, c.color, arrays[i], src.bitDepth, c.display));
-        const doc = buildDoc({
-          id: docId, sessionKey: a.key, name: src.name, width: src.width, height: src.height, bitDepth: src.bitDepth,
-          channels: chans, calibration: src.calibration, provenance: src.provenance, rev: src.rev,
-          savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0
-        });
-        if (base) {
-          doc.baselineSet = new WeakSet(base.channels.map((c) => c.data));
-          doc.baselineShape = { w: base.width, h: base.height, bd: base.bitDepth };
-          doc.baselineStored = true;
-        }
-        const entries = (rec.journal || []).filter((e) => e.seq > (snap ? snap.journalSeq : 0)).sort((x, y) => x.seq - y.seq);
-        const replayTask = makeTask(null);
-        for (const e of entries) {
+      const rows = await storage.list();
+      const row = rows.find((r) => r.key === a.key);
+      if (!row) throw ijError('IJ_NO_SESSION', 'no such session');
+      // One document at a time (a baseline + a snapshot of a large image is hundreds of MB
+      // decoded); a storage that cannot list its documents is read whole.
+      const perDoc = Array.isArray(row.docIds);
+      const whole = perDoc ? null : await storage.load(a.key);
+      const docIds = perDoc ? row.docIds : Object.keys(whole ? whole.docs : {});
+      const datasetId = row.datasetId;
+      const ids = [], warnings = [], registered = [];
+      const dm = (row.meta && row.meta.display) || {};
+      try {
+        for (const docId of docIds) {
+          if (docs.has(docId)) { ids.push(docId); continue; }
+          let loaded = null;
+          if (perDoc) loaded = await storage.load(a.key, { docId });
+          const rec = (perDoc ? (loaded && loaded.docs[docId]) : whole.docs[docId]) || { baseline: null, snapshot: null, journal: [] };
+          const base = rec.baseline, snap = rec.snapshot;
+          const src = snap || base;
+          if (!src) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
+          let missing = false;
+          const arrays = src.channels.map((c, i) => {
+            const d = c.data || (base && base.channels[i] && base.channels[i].data);
+            if (!d) missing = true;
+            return d;
+          });
+          if (missing) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
+          const loadedBytes = arrays.reduce((n, d) => n + d.byteLength, 0);
+          // The decoded records are in memory while the document is built: counted until then.
+          transientBytes += loadedBytes;
+          let doc;
           try {
-            if (e.kind === 'run') await executeRun(doc, e, replayTask, true);
-            else if (e.kind === 'undo' || e.kind === 'redo') await doUndoRedo(doc, e.kind, true);
-            else continue;
-            doc.journalSeq = e.seq;
-          } catch (err) {
-            console.error('[IJEngine] journal replay stopped', err);
-            warnings.push({ docId, code: 'IJ_REPLAY_STOPPED', seq: e.seq });
-            break;
+            ensureRoom(loadedBytes);
+            const chans = src.channels.map((c, i) => makeChannel(c.name, c.color, arrays[i], src.bitDepth, c.display));
+            doc = buildDoc({
+              id: docId, sessionKey: a.key, name: src.name, width: src.width, height: src.height, bitDepth: src.bitDepth,
+              channels: chans, calibration: src.calibration, provenance: src.provenance, rev: src.rev,
+              savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0
+            });
+          } finally { transientBytes -= loadedBytes; }
+          if (base) {
+            doc.baselineSet = new WeakSet(base.channels.map((c) => c.data));
+            doc.baselineShape = { w: base.width, h: base.height, bd: base.bitDepth };
+            doc.baselineStored = true;
           }
+          const entries = (rec.journal || []).filter((e) => e.seq > doc.journalSeq).sort((x, y) => x.seq - y.seq);
+          const replayTask = makeTask(null);
+          for (const e of entries) {
+            // The journal is only a faithful history while it is contiguous: a hole means an
+            // entry was never written, and what follows would be applied to the wrong state.
+            if (e.seq !== doc.journalSeq + 1) {
+              warnings.push({ docId, code: 'IJ_REPLAY_STOPPED', seq: e.seq, reason: 'gap' });
+              break;
+            }
+            try {
+              if (e.kind === 'run') await executeRun(doc, e, replayTask, true);
+              else if (e.kind === 'undo' || e.kind === 'redo') await doUndoRedo(doc, e.kind, true);
+              doc.journalSeq = e.seq;
+            } catch (err) {
+              console.error('[IJEngine] journal replay stopped', err);
+              warnings.push({ docId, code: 'IJ_REPLAY_STOPPED', seq: e.seq });
+              break;
+            }
+          }
+          if (dm[docId]) {
+            const ds = dm[docId];
+            if (ds.mode) doc.mode = ds.mode;
+            if (isInt(ds.active)) doc.active = ds.active;
+            if (Array.isArray(ds.visible) && ds.visible.length === doc.channels.length) doc.visible = ds.visible;
+            if (Array.isArray(ds.channels)) ds.channels.forEach((d, i) => { if (doc.channels[i] && d) doc.channels[i].display = Object.assign({}, doc.channels[i].display, d); });
+          }
+          doc.snapshotRev = doc.rev;
+          if (!doc.baselineStored) writeBaseline(doc);
+          docs.set(docId, doc);
+          registered.push(docId);
+          const s = sessionOf(a.key, datasetId);
+          activeSessionKey = a.key;
+          s.docs[docId] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
+          ids.push(docId);
+          // A replay that stopped early leaves the document at an earlier state than the stored
+          // journal describes. The sequence number moves past every stored entry, so a later
+          // commit can never collide with one that was not applied; the next snapshot of the
+          // document (scheduled below) then replaces that journal with the state the operator
+          // was told about (the warning above).
+          if (warnings.some((w) => w.docId === docId && w.code === 'IJ_REPLAY_STOPPED') && entries.length) {
+            doc.journalSeq = Math.max(doc.journalSeq, entries[entries.length - 1].seq);
+          }
+          doc.dirty = entries.length > 0;
+          if (doc.dirty) scheduleIdle();
+          post({ event: 'invalidate', docId, channels: doc.channels.map((c, i) => i), sizeChanged: true });
+          await ctx.task.tick(ids.length / Math.max(1, docIds.length), 'session.restore');
         }
-        if (dm[docId]) {
-          const ds = dm[docId];
-          if (ds.mode) doc.mode = ds.mode;
-          if (isInt(ds.active)) doc.active = ds.active;
-          if (Array.isArray(ds.visible) && ds.visible.length === doc.channels.length) doc.visible = ds.visible;
-          if (Array.isArray(ds.channels)) ds.channels.forEach((d, i) => { if (doc.channels[i] && d) doc.channels[i].display = Object.assign({}, doc.channels[i].display, d); });
-        }
-        doc.snapshotRev = doc.rev;
-        if (!doc.baselineStored) writeBaseline(doc);
-        docs.set(docId, doc);
-        const s = sessionOf(a.key, data.datasetId);
-        activeSessionKey = a.key;
-        s.docs[docId] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
-        ids.push(docId);
-        doc.dirty = entries.length > 0;
-        if (doc.dirty) scheduleIdle();
-        post({ event: 'invalidate', docId, channels: doc.channels.map((c, i) => i), sizeChanged: true });
-        await ctx.task.tick(ids.length / Object.keys(data.docs).length, 'session.restore');
+      } catch (err) {
+        // All or nothing for the page: documents this call registered are not left behind unknown.
+        for (const id of registered) { docs.delete(id); purgeTiles(id); }
+        throw err;
       }
       finishMutation();
-      return { docIds: ids, meta: (data.meta && data.meta.ui) || null, warnings };
+      return { docIds: ids, meta: (row.meta && row.meta.ui) || null, warnings };
     };
+
+    // Liveness probe for the page's watchdog: answered at once.
+    handlers['ping'] = () => ({ at: Date.now() });
 
     handlers['cancel'] = (a) => {
       const t = tasks.get(a.targetId);
@@ -1875,9 +2152,12 @@ const IJEngine = (() => {
       return {};
     };
 
+    // ok:false = something could not be stored (`unsafe` lists the documents): the page must not
+    // present "keep for later" as done.
     handlers['flush'] = async () => {
       await flushAll();
-      return {};
+      const unsafe = storageOn ? unsafeDocs() : [...docs.keys()];
+      return { ok: unsafe.length === 0, unsafe, protected: storageOn };
     };
 
     // doc.preview: the answer is an event, the request is acknowledged when done.
@@ -2008,6 +2288,8 @@ const IJEngine = (() => {
       disposed = true;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = null;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
       yielder.close();
     }
 

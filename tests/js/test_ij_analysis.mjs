@@ -40,13 +40,36 @@ function spikes(a, b, n) {
 {
   assert.deepEqual(IJThreshold.methods(), ['Default', 'Huang', 'IsoData', 'Li', 'MaxEntropy', 'Mean', 'Otsu', 'Triangle']);
 
-  // Two equal spikes at 50 and 200: every closed form is known.
-  const sp = spikes(50, 200, 1000);
+  // AutoThresholder.bilevel: one or two non-empty bins answer (index of the only /
+  // second bin) − 1 for EVERY method, whatever it would compute otherwise.
+  const bi = spikes(50, 200, 1000);
+  for (const m of IJThreshold.methods()) assert.equal(IJThreshold.level(bi, m), 199, `bilevel ${m}`);
+  const one = new Float64Array(256); one[77] = 5;
+  for (const m of IJThreshold.methods()) assert.equal(IJThreshold.level(one, m), 76, `single bin ${m}`);
+  const mask01 = spikes(0, 255, 10);
+  for (const m of IJThreshold.methods()) assert.equal(IJThreshold.level(mask01, m), 254, `0/255 mask ${m}`);
+  const onlyZero = new Float64Array(256); onlyZero[0] = 9; // index − 1 < 0: falls through to the method
+  assert.equal(IJThreshold.level(onlyZero, 'Otsu') >= 0, true);
+
+  // Two equal spikes at 50 and 200 plus one stray pixel at 125 (three bins, so
+  // the bilevel shortcut is off): the closed forms are known.
+  const sp = spikes(50, 200, 1000); sp[125] = 1;
   assert.equal(IJThreshold.level(sp, 'Mean'), 125, 'Mean = floor(125)');
   assert.equal(IJThreshold.level(sp, 'Default'), 125, 'IJ_IsoData: (50+200)/2');
   assert.equal(IJThreshold.level(sp, 'IsoData'), 125, 'intermeans: (50+200)/2');
-  assert.equal(IJThreshold.level(sp, 'Otsu'), 50, 'Otsu: first maximum of the between-class variance');
   assert.equal(IJThreshold.level(sp, 'Li'), 108, 'Li: (200-50)/ln(200/50) = 108.2 → 108');
+
+  // defaultIsoData clips a dominant mode (> 2 × the second highest) to
+  // (int)(1.5 × second) before IJ_IsoData; without it the level is far lower.
+  {
+    const dom = new Float64Array(256);
+    dom[20] = 100000; dom[100] = 100; dom[200] = 100;
+    const clipped = new Float64Array(256); clipped[20] = 150; clipped[100] = 100; clipped[200] = 100;
+    const lv = IJThreshold.level(dom, 'Default');
+    assert.equal(lv, IJThreshold.level(clipped, 'Default'), 'dominant mode is clipped to 1.5 x the second count');
+    const huge = dom.slice(); huge[20] = 1e9;
+    assert.equal(IJThreshold.level(huge, 'Default'), lv, 'the size of a dominant mode does not matter');
+  }
 
   // Triangle by hand: peak 50 at bin 0, tail 30,10,5,2,1 → ImageJ mirrors the histogram,
   // the largest distance to the peak-to-tail line is at reversed bin 253 → split 252 → 255-252.
@@ -86,7 +109,7 @@ function spikes(a, b, n) {
   }
 
   // Method names: case-insensitive, unknown refused, a histogram must have 256 bins; empty → 0.
-  assert.equal(IJThreshold.level(sp, 'otsu'), 50);
+  assert.equal(IJThreshold.level(sp, 'otsu'), IJThreshold.level(sp, 'Otsu'));
   assert.throws(() => IJThreshold.level(sp, 'Nope'), (e) => e.code === 'IJ_BAD_METHOD');
   assert.throws(() => IJThreshold.level(new Float64Array(100), 'Otsu'), (e) => e.code === 'IJ_BAD_HISTOGRAM');
   assert.equal(IJThreshold.level(new Float64Array(256), 'Huang'), 0);
@@ -100,10 +123,10 @@ function spikes(a, b, n) {
   for (let i = 0; i < d.length; i++) d[i] = (i % 20) < 10 ? 50 : 200;
   const ch8 = { width: w, height: h, bitDepth: 8, data: d };
   const dark = IJThreshold.levels(ch8, 'Otsu', { dark: true });
-  assert.equal(dark.level, 50);
-  assert.deepEqual([dark.lower, dark.upper], [51, 255]);
+  assert.equal(dark.level, 199, 'bilevel image: second bin − 1');
+  assert.deepEqual([dark.lower, dark.upper], [200, 255]);
   const light = IJThreshold.levels(ch8, 'Otsu', { dark: false });
-  assert.deepEqual([light.lower, light.upper], [0, 50]);
+  assert.deepEqual([light.lower, light.upper], [0, 199]);
   const m = IJThreshold.toMask(ch8, dark.lower, dark.upper);
   assert.equal(m.filter((v) => v === 255).length, 200, 'bright half selected');
   assert.equal(m.filter((v) => v === 0).length, 200);
@@ -117,11 +140,26 @@ function spikes(a, b, n) {
   for (let i = 0; i < d16.length; i++) d16[i] = (i % 20) < 10 ? 1000 : 40000;
   const ch16 = { width: w, height: h, bitDepth: 16, data: d16 };
   const l16 = IJThreshold.levels(ch16, 'Otsu', { dark: true });
-  assert.equal(l16.level, 0, 'spikes sit in bins 0 and 255');
-  near(l16.lower, 1000 + (1 / 255) * 39000, 1e-9, '16-bit lower');
+  assert.equal(l16.level, 254, 'spikes sit in bins 0 and 255 → bilevel 254');
+  near(l16.lower, 40000, 1e-9, '16-bit lower');
   near(l16.upper, 40000, 1e-9, '16-bit upper');
   const m16 = IJThreshold.toMask(ch16, l16.lower, l16.upper);
   assert.equal(m16.filter((v) => v === 255).length, 200);
+  // 16-bit histogram is the 8-bit conversion's: (int)((v − min)·256/(max − min + 1) + 0.5),
+  // 32-bit (int)((v − min)·255/(max − min) + 0.5) — not floor(256·(v − min)/(max − min)).
+  {
+    const v16 = new Uint16Array([0, 1, 2, 1000]);
+    const h16 = IJThreshold.histogram({ width: 4, height: 1, bitDepth: 16, data: v16 }).counts;
+    const sc = 256 / 1001;
+    const want = new Array(256).fill(0);
+    for (const v of v16) want[Math.min(255, Math.trunc(v * sc + 0.5))]++;
+    assert.deepEqual(Array.from(h16), want);
+    assert.equal(h16[1], 1, 'v = 2 of [0, 1000] lands in bin 1 (a floor would give 0)');
+    const v32 = new Float32Array([0, 2, 500, 1000]);
+    const h32 = IJThreshold.histogram({ width: 4, height: 1, bitDepth: 32, data: v32 }).counts;
+    assert.equal(h32[1], 1); assert.equal(h32[0], 1);
+    assert.equal(h32[Math.trunc(500 * 0.255 + 0.5)], 1); assert.equal(h32[255], 1);
+  }
   // 32-bit with NaN: NaN never counted nor selected.
   const d32 = new Float32Array(w * h);
   for (let i = 0; i < d32.length; i++) d32[i] = (i % 20) < 10 ? 0.25 : 3.5;
@@ -328,6 +366,57 @@ function show(a, w, h) {
   }
   assert.equal(rr.count, sizes.length, 'component count equals the reference labelling');
   assert.deepEqual(rr.particles.map((p) => p.areaPx), sizes, 'component sizes equal the reference');
+  // ImageJ's outline starts below the end of the first row run (the Wand's start
+  // vertex (xEnd, sy+1), walking down) and the traced perimeter's corner count
+  // depends on it: this blob measures 22.3848 from there, 22.9706 from the top edge.
+  {
+    const blob = Uint8Array.from([0, 255, 255, 255, 0, 0, 255, 255, 0, 255, 255, 255, 0, 0, 0, 0, 0, 255, 255, 0, 255, 255, 255, 255, 0]);
+    const pb = IJParticles.analyze(blob, 5, 5, {}).particles[0];
+    assert.deepEqual(pb.outline[0], [4, 1], 'first vertex = first corner at/after (xEnd, sy + 1)');
+    assert.deepEqual(pb.outline[pb.outline.length - 1], [4, 0]);
+    near(pb.perimeter, 22.384776310850235, 1e-9, 'perimeter from ImageJ start');
+    const top = [pb.outline[pb.outline.length - 1]].concat(pb.outline.slice(0, -1));
+    assert.ok(Math.abs(IJParticles.tracedPerimeter(top, 1, 1) - 22.970562748477143) < 1e-9, 'the top-edge start would differ');
+    // a single pixel: the start vertex itself is a corner
+    const one = IJParticles.analyze(Uint8Array.from([0, 0, 0, 0, 255, 0, 0, 0, 0]), 3, 3, {}).particles[0];
+    assert.deepEqual(one.outline[0], [2, 2]);
+  }
+  // Traced perimeter with non-square pixels: Σ|dx|·pw + Σ|dy|·ph − nCorners·((pw + ph) − √(pw² + ph²)); < 4 vertices → 0.
+  near(IJParticles.tracedPerimeter([[0, 0], [1, 0], [1, 1], [0, 1]], 1, 2), 6 - 2 * (3 - Math.sqrt(5)), 1e-12);
+  assert.equal(IJParticles.tracedPerimeter([[0, 0], [1, 0], [1, 1]], 1, 1), 0);
+  // %Area is relative to the selection, not the image; Exclude on edges tests the selection's rectangle.
+  {
+    const W2 = 20, H2 = 10, m2 = new Uint8Array(W2 * H2);
+    for (let y = 2; y < 5; y++) for (let x = 6; x < 10; x++) m2[y * W2 + x] = 255;      // 4×3 = 12 px, inside the selection
+    for (let y = 2; y < 4; y++) for (let x = 10; x < 13; x++) m2[y * W2 + x] = 255;     // 3×2 = 6 px, touches the selection's right edge (x = 13) only when it ends there
+    const sel = { x: 5, y: 1, w: 8, h: 6, data: new Uint8Array(48).fill(1) };           // x 5..12, y 1..6 → 48 px
+    const rs = IJParticles.analyze(m2, W2, H2, { maskBox: sel });
+    assert.equal(rs.count, 1, 'the two blocks touch: one particle');
+    near(rs.percentArea, 18 / 48 * 100, 1e-9, '%Area over the selection');
+    near(rs.areaFraction, 18 / 48, 1e-12);
+    assert.equal(IJParticles.analyze(m2, W2, H2, { maskBox: sel, excludeEdges: true }).count, 0, 'touches the selection edge x = 13');
+    const sel2 = { x: 4, y: 1, w: 12, h: 6, data: new Uint8Array(72).fill(1) };
+    assert.equal(IJParticles.analyze(m2, W2, H2, { maskBox: sel2, excludeEdges: true }).count, 1, 'clear of the selection edge');
+    // a non-rectangular selection: the particle is rejected where its outline meets the selection's boundary
+    const diag = new Uint8Array(72); for (let j = 0; j < 6; j++) for (let i = 0; i < 12; i++) diag[j * 12 + i] = i >= 12 - 3 - j ? 0 : 1;
+    const dm = { x: 4, y: 1, w: 12, h: 6, data: diag };
+    const rdiag = IJParticles.analyze(m2, W2, H2, { maskBox: dm, excludeEdges: true });
+    assert.ok(rdiag.count <= 1);
+  }
+  // Per-particle measurements of the analysed image (opts.channel).
+  {
+    const W3 = 6, H3 = 3, m3 = new Uint8Array(W3 * H3), img = new Uint8Array(W3 * H3);
+    [0, 1, 2, 3].forEach((x, i) => { m3[x] = 255; img[x] = [10, 20, 30, 40][i]; });  // row 0, 4 px
+    m3[W3 * 2 + 5] = 255; img[W3 * 2 + 5] = 200;                                     // a single pixel
+    const r3 = IJParticles.analyze(m3, W3, H3, { channel: { width: W3, height: H3, bitDepth: 8, data: img } });
+    assert.equal(r3.count, 2);
+    const a = r3.particles[0].stats, b = r3.particles[1].stats;
+    assert.equal(a.mean, 25); assert.equal(a.min, 10); assert.equal(a.max, 40); assert.equal(a.median, 30); assert.equal(a.rawIntDen, 100);
+    near(a.stdDev, Math.sqrt(500 / 3), 1e-12); assert.equal(a.intDen, 100);
+    near(a.xCenterOfMass, (10 * 0.5 + 20 * 1.5 + 30 * 2.5 + 40 * 3.5) / 100, 1e-12);
+    assert.equal(b.mean, 200); assert.equal(b.stdDev, 0); assert.equal(b.mode, 200);
+    assert.equal(IJParticles.analyze(m3, W3, H3, {}).particles[0].stats, undefined, 'no channel, no stats');
+  }
   console.log('particles: OK');
 }
 

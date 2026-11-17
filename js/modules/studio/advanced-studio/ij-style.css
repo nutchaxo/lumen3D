@@ -31,9 +31,18 @@
   --ij-accent-text: var(--color-accent-text, var(--color-accent, #0e6d8c));
   --ij-danger: var(--color-error, #ff6b6b);
   --ij-warn: var(--color-warning, #feca57);
+  /* Text on the panel surface: the bright warning / error colours are for fills and borders. */
+  --ij-warn-text: var(--ij-warn);
+  --ij-danger-text: var(--ij-danger);
   position: relative;
   color: var(--ij-text);
   font: var(--ij-font);
+}
+
+/* Light theme: both bright tokens fall below 3:1 as text on white (pale yellow 1.5:1, coral 2.8:1). */
+[data-theme="light"] .ij-root {
+  --ij-warn-text: #8a5a00;
+  --ij-danger-text: #b3261e;
 }
 
 .ij-app {
@@ -159,7 +168,7 @@
   padding: 0 6px;
   border-radius: 8px;
   background: var(--color-warning-subtle, rgba(254, 202, 87, 0.15));
-  color: var(--ij-warn);
+  color: var(--ij-warn-text);
   font-size: 10px;
   font-weight: 500;
 }
@@ -244,7 +253,7 @@
 }
 @keyframes ij-indeterminate { from { transform: translateX(0); } to { transform: translateX(185%); } }
 .ij-progress-label { flex: 0 1 40%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ij-text); }
-.ij-warning { flex: 0 1 36%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ij-warn); }
+.ij-warning { flex: 0 1 36%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ij-warn-text); }
 
 /* ── Buttons, inputs ────────────────────────────────────── */
 .ij-btn,
@@ -265,7 +274,7 @@
 .ij-btn[disabled] { opacity: 0.5; cursor: default; }
 .ij-btn--primary { background: var(--color-primary-strong, #00803f); border-color: var(--color-primary-strong, #00803f); color: #fff; }
 .ij-btn--primary:hover { background: var(--color-primary-strong-hover, #006b35); border-color: var(--color-primary-strong-hover, #006b35); }
-.ij-btn--danger { border-color: var(--ij-danger); color: var(--ij-danger); }
+.ij-btn--danger { border-color: var(--ij-danger); color: var(--ij-danger-text); }
 .ij-btn--danger:hover { background: var(--color-error-subtle, rgba(255, 107, 107, 0.12)); border-color: var(--ij-danger); }
 
 .ij-app input[type='number'],

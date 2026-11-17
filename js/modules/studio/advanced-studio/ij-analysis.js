@@ -73,15 +73,18 @@
     return { min: min, max: max };
   }
 
-  // 256-bin histogram the way ImageJ's statistics build it: 8-bit = exact,
-  // 16/32-bit = 256 bins over [min, max], index = floor(256 * (v - min) / (max - min)),
-  // the last bin closed. Values outside [min, max] and NaN are not counted.
+  // 256-bin histogram of the image ImageJ actually thresholds on. For 16/32-bit
+  // data ImageProcessor.setAutoThreshold(Method, …) converts to 8 bits first
+  // (resetMinAndMax + convertToByte(true)) and uses that histogram:
+  //   16-bit  TypeConverter.convertShortToByte: (int)((v − min)·(256/(max − min + 1)) + 0.5), clamped to 0..255
+  //   32-bit  FloatProcessor.create8BitImage:   (int)((v − min)·(255/(max − min)) + 0.5),      clamped to 0..255
+  // 8-bit data is counted exactly. NaN is not counted.
   function histogram256(ch, mb, min, max) {
     const counts = new Float64Array(256);
     const d = ch.data, w = ch.width, h = ch.height;
     const b = boxBounds(mb, w, h);
-    const is8 = ch.bitDepth === 8;
-    const scale = max > min ? 256 / (max - min) : 0;
+    const is8 = ch.bitDepth === 8, is16 = ch.bitDepth === 16;
+    const scale = is16 ? 256 / (max - min + 1) : (max > min ? 255 / (max - min) : 0);
     for (let y = b.y0; y < b.y1; y++) {
       const row = y * w;
       const mrow = mb ? (y - mb.y) * mb.w - mb.x : 0;
@@ -89,9 +92,9 @@
         if (mb && !mb.data[mrow + x]) continue;
         const v = d[row + x];
         if (is8) { counts[v]++; continue; }
-        if (!(v >= min && v <= max)) continue; // also drops NaN
-        let idx = Math.floor(scale * (v - min));
-        if (idx > 255) idx = 255;
+        if (v !== v) continue;
+        let idx = Math.trunc((v - min) * scale + 0.5);
+        if (idx < 0) idx = 0; else if (idx > 255) idx = 255;
         counts[idx]++;
       }
     }
@@ -107,8 +110,16 @@
 
     // "Default" of the Threshold dialog = ImageJ's modified IsoData (IJ_IsoData).
     // Bins 0 and 255 are ignored so saturated/erased areas do not count.
+    // AutoThresholder.defaultIsoData first clips a dominant mode: when the
+    // highest count exceeds twice the second highest (and that one is not 0) the
+    // mode bin is set to (int)(1.5 · second highest), then IJ_IsoData runs.
     function ijDefault(data) {
       const maxValue = data.length - 1;
+      let mode = 0, maxCount = 0;
+      for (let i = 0; i <= maxValue; i++) if (data[i] > maxCount) { maxCount = data[i]; mode = i; }
+      let maxCount2 = 0;
+      for (let i = 0; i <= maxValue; i++) if (data[i] > maxCount2 && i !== mode) maxCount2 = data[i];
+      if (maxCount > maxCount2 * 2 && maxCount2 !== 0) data[mode] = Math.trunc(maxCount2 * 1.5);
       data[0] = 0;
       data[maxValue] = 0;
       let min = 0;
@@ -343,6 +354,16 @@
       let total = 0;
       for (let i = 0; i < 256; i++) { data[i] = counts[i]; total += data[i]; }
       if (!(total > 0)) return 0;
+      // AutoThresholder.bilevel: a histogram with one or two non-empty bins
+      // answers (index of the only / second bin) − 1, whatever the method.
+      let nz = 0, first = -1, second = -1;
+      for (let i = 0; i < 256; i++) {
+        if (data[i] > 0) { nz++; if (nz > 2) break; if (first < 0) first = i; else second = i; }
+      }
+      if (nz === 1 || nz === 2) {
+        const bl = (nz === 1 ? first : second) - 1;
+        if (bl >= 0) return bl;
+      }
       let t;
       switch (name) {
         case 'Huang': t = huang(data); break;
@@ -588,10 +609,12 @@
       throw fail('IJ_TRACE_FAILED');
     }
 
-    // PolygonRoi.getTracedPerimeter: boundary length minus 2 − √2 per corner
-    // pair, so a 1×1 pixel measures 2√2 and a 2×2 block 4·√2 … see ImageJ docs.
+    // PolygonRoi.getTracedPerimeter: Σ|dx|·pw + Σ|dy|·ph − nCorners·((pw + ph) − √(pw² + ph²)).
+    // The corner count depends on which vertex comes first (ImageJ documents this),
+    // so analyze() hands it the outline starting where ImageJ's Wand does.
     function tracedPerimeter(pts, pw, ph) {
       const n = pts.length;
+      if (n < 4) return 0;
       let sumdx = 0, sumdy = 0, nCorners = 0;
       let dx1 = pts[0][0] - pts[n - 1][0];
       let dy1 = pts[0][1] - pts[n - 1][1];
@@ -609,9 +632,93 @@
         dy1 = dy2;
         side1 = side2;
       }
-      return sumdx * pw + sumdy * ph - (nCorners * ((pw + ph) / 2.0) * (2.0 - Math.SQRT2));
+      return sumdx * pw + sumdy * ph - nCorners * ((pw + ph) - Math.sqrt(pw * pw + ph * ph));
     }
 
+    // Statistics of the image pixels listed in idx[0..n) (ImageStatistics rules,
+    // as IJOps.statistics): mean, sample stdDev, min, max, median (8/16-bit: first
+    // value whose running count exceeds n/2; 32-bit: sorted middle, mean of the
+    // two middle values for an even count), mode, intDen = area·mean, rawIntDen,
+    // centre of mass. NaN / ±Infinity pixels of a 32-bit image are left out.
+    function particleStats(ch, idx, n, pw, ph, w) {
+      const d = ch.data, f32 = ch.bitDepth === 32;
+      let k = 0, sum = 0, min = Infinity, max = -Infinity, vx = 0, vy = 0;
+      const vals = f32 ? new Float32Array(n) : null;
+      const counts = f32 ? null : new Uint32Array(ch.bitDepth === 8 ? 256 : 65536);
+      for (let j = 0; j < n; j++) {
+        const i = idx[j], v = d[i];
+        if (f32 && v - v !== 0) continue;
+        const x = i % w, y = (i - x) / w;
+        k++; sum += v;
+        if (v < min) min = v;
+        if (v > max) max = v;
+        vx += v * (x + 0.5); vy += v * (y + 0.5);
+        if (f32) vals[k - 1] = v; else counts[v]++;
+      }
+      if (k === 0) return { mean: NaN, stdDev: NaN, min: NaN, max: NaN, median: NaN, mode: NaN, intDen: 0, rawIntDen: 0, xCenterOfMass: NaN, yCenterOfMass: NaN };
+      const mean = sum / k;
+      let m2 = 0;
+      for (let j = 0; j < n; j++) {
+        const v = d[idx[j]];
+        if (f32 && v - v !== 0) continue;
+        m2 += (v - mean) * (v - mean);
+      }
+      let median, mode = 0;
+      if (f32) {
+        const sorted = vals.subarray(0, k).sort();
+        const m = k >> 1;
+        median = (k & 1) ? sorted[m] : Math.fround((sorted[m - 1] + sorted[m]) / 2);
+        if (max === min) mode = min;
+        else {
+          const c = new Uint32Array(256), bw = (max - min) / 256;
+          for (let j = 0; j < k; j++) { let b = Math.floor((sorted[j] - min) / bw); if (b > 255) b = 255; c[b]++; }
+          let best = 0;
+          for (let b = 1; b < 256; b++) if (c[b] > c[best]) best = b;
+          mode = min + best * bw + bw / 2;
+        }
+      } else {
+        let cum = 0, bestC = -1, found = false;
+        median = 0;
+        for (let v = 0; v < counts.length; v++) {
+          const c = counts[v];
+          if (c > bestC) { bestC = c; mode = v; }
+          if (!found) { cum += c; if (cum > k / 2) { median = v; found = true; } }
+        }
+      }
+      return {
+        mean: mean, stdDev: k > 1 ? Math.sqrt(m2 / (k - 1)) : 0, min: min, max: max, median: median, mode: mode,
+        intDen: k * pw * ph * mean, rawIntDen: sum,
+        xCenterOfMass: sum !== 0 ? vx / sum * pw : NaN, yCenterOfMass: sum !== 0 ? vy / sum * ph : NaN
+      };
+    }
+
+    // True when a pixel across one of the outline's edges (the side away from the
+    // particle; the outline runs clockwise, object on the right) lies inside the
+    // image but outside the selection mask: the particle touches the selection's edge.
+    function touchesOutside(outline, mb, w, h) {
+      const n = outline.length;
+      for (let i = 0; i < n; i++) {
+        const p = outline[i], q = outline[(i + 1) % n];
+        const sxn = Math.sign(q[0] - p[0]), syn = Math.sign(q[1] - p[1]);
+        const len = Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]);
+        for (let k = 0; k < len; k++) {
+          const x = p[0] + sxn * k, y = p[1] + syn * k;
+          let px, py;
+          if (sxn > 0) { px = x; py = y - 1; }
+          else if (sxn < 0) { px = x - 1; py = y; }
+          else if (syn > 0) { px = x; py = y; }
+          else { px = x - 1; py = y - 1; }
+          if (px < 0 || py < 0 || px >= w || py >= h) continue;
+          if (px < mb.x || py < mb.y || px >= mb.x + mb.w || py >= mb.y + mb.h || mb.data[(py - mb.y) * mb.w + (px - mb.x)] === 0) return true;
+        }
+      }
+      return false;
+    }
+
+    // opts: calibration, minSize/maxSize (pixels), minCirc/maxCirc, excludeEdges,
+    // includeHoles, maskBox (analysis restricted to a selection) and channel
+    // (the image the binary was made from, { data, bitDepth } of the same size:
+    // each particle then carries `stats`, the measurements of its pixels).
     function analyze(mask, w, h, opts) {
       opts = opts || {};
       if (!mask || !(w > 0) || !(h > 0) || mask.length !== w * h) throw fail('IJ_BAD_IMAGE');
@@ -642,6 +749,21 @@
         }
       }
 
+      // Selection the analysis is restricted to: ImageJ excludes on the edges of
+      // THIS rectangle (r = ip.getRoi()) and divides %Area by its (mask) area.
+      const sb = mb ? boxBounds(mb, w, h) : { x0: 0, y0: 0, x1: w, y1: h };
+      let roiPx = n;
+      if (mb) {
+        roiPx = 0;
+        for (let y = sb.y0; y < sb.y1; y++) for (let x = sb.x0; x < sb.x1; x++) if (mb.data[(y - mb.y) * mb.w + (x - mb.x)] !== 0) roiPx++;
+      }
+      const img = opts.channel && opts.channel.data && opts.channel.data.length === n ? opts.channel : null;
+      let pix = img ? new Int32Array(1024) : null, np = 0;
+      const addPix = img ? function (i) {
+        if (np === pix.length) { const bigger = new Int32Array(pix.length * 2); bigger.set(pix); pix = bigger; }
+        pix[np++] = i;
+      } : null;
+
       let stack = new Int32Array(1024);
       const particles = [];
       let totalAreaPx = 0, totalArea = 0;
@@ -649,7 +771,18 @@
       for (let start = 0; start < n; start++) {
         if (work[start] !== 1) continue;
         const sx = start % w, sy = (start - sx) / w;
-        const outline = traceOutline(work, w, h, sx, sy);
+        let outline = traceOutline(work, w, h, sx, sy);
+        // ImageJ's Wand starts at the vertex below the end of the first row run
+        // (xEnd, sy + 1), walking down, and its polygon begins with the first
+        // corner at or after it; traceOutline starts on the top-left corner, so
+        // its first vertex is (xEnd, sy) and the ImageJ order begins one later.
+        // The traced perimeter's corner count depends on this start.
+        {
+          let xEnd = sx;
+          while (xEnd < w && work[sy * w + xEnd] === 1) xEnd++;
+          if (outline.length > 1 && outline[0][0] === xEnd && outline[0][1] === sy) outline = outline.slice(1).concat([outline[0]]);
+        }
+        np = 0;
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (let i = 0; i < outline.length; i++) {
@@ -684,6 +817,7 @@
             for (let j = 0; j + 1 < xs.length; j += 2) {
               for (let x = xs[j]; x < xs[j + 1]; x++) {
                 work[y * w + x] = 0;
+                if (addPix) addPix(y * w + x);
                 areaPx++;
                 sumX += x;
                 sumY += y;
@@ -699,6 +833,7 @@
           while (sp > 0) {
             const i = stack[--sp];
             const x = i % w, y = (i - x) / w;
+            if (addPix) addPix(i);
             areaPx++;
             sumX += x;
             sumY += y;
@@ -730,10 +865,13 @@
 
         let keep = areaPx >= minSize && areaPx <= maxSize;
         if (keep && (circularity < minCirc || circularity > maxCirc)) keep = false;
-        if (keep && excludeEdges && (minX === 0 || minY === 0 || maxX === w || maxY === h)) keep = false;
+        if (keep && excludeEdges) {
+          if (minX <= sb.x0 || minY <= sb.y0 || maxX >= sb.x1 || maxY >= sb.y1) keep = false;
+          else if (mb && touchesOutside(outline, mb, w, h)) keep = false;
+        }
         if (!keep) continue;
 
-        particles.push({
+        const rec = {
           area: area,
           areaPx: areaPx,
           perimeter: perimeter,
@@ -742,13 +880,15 @@
           xCentroid: (sumX / areaPx + 0.5) * pw,
           yCentroid: (sumY / areaPx + 0.5) * ph,
           outline: outline
-        });
+        };
+        if (img) rec.stats = particleStats(img, pix, np, pw, ph, w);
+        particles.push(rec);
         totalAreaPx += areaPx;
         totalArea += area;
       }
 
       const count = particles.length;
-      const fraction = totalAreaPx / n;
+      const fraction = roiPx > 0 ? totalAreaPx / roiPx : 0;  // ImageJ: the selection's area, else the whole image
       return {
         particles: particles,
         count: count,

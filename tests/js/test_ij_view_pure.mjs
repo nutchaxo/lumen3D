@@ -294,7 +294,8 @@ const near = (a, b, e = 1e-9) => assert.ok(Math.abs(a - b) <= e, `${a} !~ ${b}`)
   deq({ ...P.roiFromDrag('oval', { x: 10, y: 10 }, { x: 14, y: 30 }, { shift: true }) }, { type: 'oval', x: 10, y: 10, w: 20, h: 20 });
   deq({ ...P.roiFromDrag('rect', { x: 50, y: 50 }, { x: 40, y: 45 }, { alt: true }) }, { type: 'rect', x: 40, y: 45, w: 20, h: 10 });
   const ln = P.lineFromDrag({ x: 3.2, y: 4.9 }, { x: 10.1, y: 4.2 });
-  deq({ ...ln }, { type: 'line', x1: 3.5, y1: 4.5, x2: 10.5, y2: 4.5, width: 1 });
+  // Integer endpoints (ImageJ Line tool without sub-pixel): IJOps.profile then reads exact pixels.
+  deq({ ...ln }, { type: 'line', x1: 3, y1: 4, x2: 10, y2: 4, width: 1 });
   const diag = P.lineFromDrag({ x: 0, y: 0 }, { x: 10, y: 7 }, { shift: true });
   near(Math.abs(diag.x2 - diag.x1), Math.abs(diag.y2 - diag.y1), 1);
   const rect = { type: 'rect', x: 10, y: 20, w: 30, h: 40 };
@@ -307,10 +308,10 @@ const near = (a, b, e = 1e-9) => assert.ok(Math.abs(a - b) <= e, `${a} !~ ${b}`)
   assert.equal(flipped.x, 5); assert.equal(flipped.w, 5, 'dragging past the opposite edge normalises');
   const sq = P.moveHandle(rect, 'se', 60, 50, { shift: true });
   assert.equal(sq.w, sq.h);
-  const line = { type: 'line', x1: 1.5, y1: 1.5, x2: 20.5, y2: 1.5, width: 1 };
+  const line = { type: 'line', x1: 1, y1: 1, x2: 20, y2: 1, width: 1 };
   assert.equal(P.roiHandles(line).length, 2);
   const l2 = P.moveHandle(line, 'p2', 30.2, 10.7);
-  assert.equal(l2.x1, 1.5); assert.equal(l2.x2, 30.5); assert.equal(l2.y2, 10.5);
+  assert.equal(l2.x1, 1); assert.equal(l2.y1, 1); assert.equal(l2.x2, 30); assert.equal(l2.y2, 10);
   const poly = { type: 'polygon', points: [[0, 0], [10, 0], [10, 10], [0, 10]] };
   assert.equal(P.roiHandles(poly).length, 4);
   deq(P.moveHandle(poly, 'v2', 12.4, 11.6).points[2], [12, 12]);
@@ -323,11 +324,11 @@ const near = (a, b, e = 1e-9) => assert.ok(Math.abs(a - b) <= e, `${a} !~ ${b}`)
   assert.equal(P.hitRoi(line, 10, 2, 1.5), true); assert.equal(P.hitRoi(line, 10, 8, 1.5), false);
   assert.equal(P.hitRoi({ type: 'point', points: [[5.5, 5.5]] }, 6, 6, 1), true);
   deq({ ...P.roiBounds(poly) }, { x: 0, y: 0, w: 10, h: 10 });
-  deq({ ...P.roiBounds(line) }, { x: 1.5, y: 1.5, w: 19, h: 0 });
+  deq({ ...P.roiBounds(line) }, { x: 1, y: 1, w: 19, h: 0 });
   const tr = P.translateRoi(poly, 3, -2);
   deq(tr.points[1], [13, -2]);
   assert.equal(poly.points[1][0], 10, 'the original is untouched');
-  deq({ ...P.translateRoi(line, 1, 1) }, { type: 'line', x1: 2.5, y1: 2.5, x2: 21.5, y2: 2.5, width: 1 });
+  deq({ ...P.translateRoi(line, 1, 1) }, { type: 'line', x1: 2, y1: 2, x2: 21, y2: 2, width: 1 });
   deq({ ...P.translateRoi({ type: 'mask', x: 1, y: 2, w: 3, h: 4, rle: [0, 2] }, 1, 1) }, { type: 'mask', x: 2, y: 3, w: 3, h: 4, rle: [0, 2] });
   assert.equal(P.isAreaRoi(rect), true); assert.equal(P.isAreaRoi(line), false);
   assert.equal(P.handleCursor('nw'), 'nwse-resize'); assert.equal(P.handleCursor('n'), 'ns-resize'); assert.equal(P.handleCursor('e'), 'ew-resize'); assert.equal(P.handleCursor('ne'), 'nesw-resize');
@@ -578,6 +579,24 @@ function makeGl() {
     disp.destroy();
     assert.equal(live.size, 0);
   }
+}
+
+// ── popup / step helpers ──
+{
+  assert.equal(P.numberStep({ step: 'any' }), 0.1);
+  assert.equal(P.numberStep({ step: 'any', integer: true }), 1);
+  assert.equal(P.numberStep({ step: 0.5 }), 0.5);
+  assert.equal(P.numberStep({ step: 0 }), 0.1);
+  assert.equal(P.numberStep({}), 0.1);
+  assert.equal(P.clampPopupX(500, 200, 600), 400);
+  assert.equal(P.clampPopupX(10, 200, 600), 10);
+  assert.equal(P.clampPopupX(10, 800, 600), 0);
+  assert.equal(P.clampPopupY(250, 100, 300), 200);
+  assert.equal(P.submenuX(100, 150, 200, 600), 248);
+  assert.equal(P.submenuX(400, 150, 200, 600), 202, 'opens to the left of its parent when it would overflow');
+  assert.equal(P.submenuX(10, 150, 200, 300), 0);
+  assert.equal(P.centreX(200, 1000), 400);
+  assert.equal(P.centreX(1200, 1000), 8);
 }
 
 // ── IJShell / IJWindows against a small fake DOM ──────────────────────────────────────────────
@@ -964,6 +983,40 @@ function makeGl() {
   assert.equal(closed, 1);
   assert.equal(byClass(shell.el, 'ij-window').length, 0);
   assert.equal(fw.isOpen(), false);
+
+  // ── refreshMenus: no listener growth, buttons (and their focus) kept ──
+  {
+    const t0 = byClass(shell.menubar, 'ij-menu-title');
+    t0[1].focus();
+    const before = listeners.added - listeners.removed;
+    for (let i = 0; i < 50; i++) shell.refreshMenus();
+    assert.equal(listeners.added - listeners.removed, before, 'refreshMenus leaves the listener count alone');
+    const t1 = byClass(shell.menubar, 'ij-menu-title');
+    assert.equal(t1.length, t0.length);
+    assert.ok(t1.every((b, i) => b === t0[i]), 'same title buttons');
+    assert.equal(doc.activeElement, t0[1], 'focus kept');
+  }
+
+  // ── floating windows and modals follow a smaller root ──
+  {
+    const c2 = new FEl('div', doc);
+    const w2 = shell.windows.floating({ id: 'far', title: 'Far', content: c2, x: 900, y: 500 });
+    const pm = shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'n', label: 'N', value: 1 }] });
+    const dbox = byClass(shell.el, 'ij-dialog')[0];
+    const leftBefore = parseFloat(dbox.style.left);
+    shell.el.clientWidth = 400; shell.el.clientHeight = 300;
+    shell.windows.reflow();
+    assert.ok(parseFloat(w2.el.style.left) <= 400 - 24, 'window pulled back inside: ' + w2.el.style.left);
+    assert.ok(parseFloat(w2.el.style.top) <= 300 - 24);
+    assert.ok(parseFloat(dbox.style.left) < leftBefore, 'modal re-centred');
+    doc.fire('keydown', { key: 'Escape', target: doc.body });
+    assert.equal(await pm, null);
+    // closing a focused window gives the focus back to the image stage
+    w2.el.focus();
+    w2.close();
+    assert.equal(doc.activeElement, shell.stage, 'focus returns to the stage');
+    shell.el.clientWidth = 1000; shell.el.clientHeight = 700;
+  }
 
   // ── destroy: nothing left behind ──
   shell.destroy();

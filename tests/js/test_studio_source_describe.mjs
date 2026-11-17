@@ -602,7 +602,7 @@ async function blockCheck(spec, level, axis, expectAt) {
 {
   const { page } = makeEnv();
   const ctxStudio = page.facade();
-  assert.deepEqual(Object.keys(ctxStudio).sort(), ['getDocument', 'isOpen', 'registerMode', 'source']);
+  assert.deepEqual(Object.keys(ctxStudio).sort(), ['getDocument', 'getSliceRaw', 'isOpen', 'registerMode', 'source']);
   assert.deepEqual(Object.keys(ctxStudio.source).sort(), ['describe', 'open']);
   assert.equal(ctxStudio.isOpen(), true);
   assert.equal(ctxStudio.getDocument().dataset.id, '3d/demo');

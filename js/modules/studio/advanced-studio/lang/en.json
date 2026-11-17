@@ -225,7 +225,11 @@
     "restore": "Restore",
     "discard": "Discard",
     "discarded": "Saved work discarded.",
-    "item": "{time} — {n} image(s)"
+    "item": "{time} — {n} image(s)",
+    "partial": "{n} image(s) could only be restored up to the last step that could be replayed.",
+    "noBaseline": "{n} image(s) could not be restored: their stored copy is missing.",
+    "discardAll": "Delete all saved work",
+    "nothing": "Nothing could be restored from this saved work."
   },
   "revert": {
     "message": "Revert {name} to the image as it was loaded? Changes are lost."
@@ -244,7 +248,9 @@
     "save": "Save as TIFF…",
     "keep": "Keep for later",
     "keepHint": "Stays in this browser",
-    "discard": "Discard"
+    "discard": "Discard",
+    "keepFailedTitle": "Work not stored",
+    "keepFailed": "The browser could not store all your work. Save as TIFF, or discard it."
   },
   "err": {
     "title": "Advanced view",
@@ -262,7 +268,13 @@
     "frameLost": "The figure on screen changed while it was being read. Reopen the Advanced view.",
     "noDataset": "No dataset is open.",
     "scriptFailed": "The Advanced view could not start. Reload the page.",
-    "clipboard": "The clipboard is not available."
+    "clipboard": "The clipboard is not available.",
+    "storageFailed": "This browser could not store your work. Save a TIFF to keep it.",
+    "emptyRoi": "The selection is empty.",
+    "needsRoi": "Draw a selection first.",
+    "badArgs": "These settings cannot be used. Check the values and try again.",
+    "notSupported": "The Advanced view cannot read the figure on screen.",
+    "noLevel": "No resolution of this figure can be opened."
   },
   "warn": {
     "unprotected": "Your work is not protected: the browser refused to store it.",
@@ -303,7 +315,8 @@
   "res": {
     "copy": "Copy",
     "save": "Save…",
-    "clear": "Clear"
+    "clear": "Clear",
+    "capped": "Showing the first {shown} of {total} rows. Copy and Save include all rows."
   },
   "roi": {
     "add": "Add",

@@ -59,6 +59,11 @@ const IJApp = (() => {
     ['area', 'Area'], ['perimeter', 'Perim.'], ['circularity', 'Circ.'], ['bx', 'BX'], ['by', 'BY'],
     ['bw', 'Width'], ['bh', 'Height'], ['xCentroid', 'X'], ['yCentroid', 'Y']
   ];
+  // A particle row also carries the image measurements Set Measurements asks for (ImageJ
+  // measures every particle's mask): these follow the particle's own columns, in COLUMNS order.
+  const PARTICLE_MEASURE_KEYS = ['mean', 'stdDev', 'mode', 'min', 'max', 'xCenterOfMass', 'yCenterOfMass',
+    'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis'];
+  const SUMMARY_COLUMNS = ['Image', 'Count', 'Total Area', 'Average Size', '%Area'];
   // IJ_* codes (engine, pure modules) and loader codes → plugin lang keys.
   const ERROR_KEYS = {
     IJ_OVER_BUDGET: 'err.overBudget',
@@ -68,9 +73,15 @@ const IJApp = (() => {
     IJ_TIFF_UNSUPPORTED: 'err.tiffUnsupported',
     IJ_INCOMPLETE: 'err.incomplete',
     IJ_WORKER_CRASHED: 'err.workerCrashed',
-    IJ_NO_UNDO: 'err.noUndo',
-    IJ_NOT_8BIT: 'err.not8bit',
-    IJ_STORAGE_FULL: 'err.storageFull',
+    IJ_NOTHING_TO_UNDO: 'err.noUndo',
+    IJ_NOT_BINARY: 'err.not8bit',
+    IJ_STORAGE_QUOTA: 'err.storageFull',
+    IJ_STORAGE_FAILED: 'err.storageFailed',
+    IJ_EMPTY_ROI: 'err.emptyRoi',
+    IJ_NEEDS_ROI: 'err.needsRoi',
+    IJ_BAD_ARGS: 'err.badArgs',
+    STUDIO_NOT_SUPPORTED: 'err.notSupported',
+    NO_LEVEL: 'err.noLevel',
     STUDIO_FRAME_LOST: 'err.frameLost',
     NO_DATASET: 'err.noDataset',
     PLUGIN_SCRIPT_FAILED: 'err.scriptFailed'
@@ -89,6 +100,7 @@ const IJApp = (() => {
   const LONG_COMMANDS = new Set(['doc.run', 'doc.project.add', 'doc.threshold', 'doc.particles',
     'doc.open', 'doc.duplicate', 'doc.exportTiff']);
   const PERSIST_MS = 1200;
+  const WORKER_READY_MS = 20000;
   const GIB = 1024 * 1024 * 1024;
 
   // ───────────────────────────── command registry ─────────────────────────────
@@ -309,7 +321,9 @@ const IJApp = (() => {
     leaving: null, figureKey: null, desc: null, enterToken: 0,
     previewSeq: 0, previewTimer: 0, pointer: null, pixelBusy: false, pixelDirty: false,
     persistTimer: 0, persistAsked: false, firstCommitDone: false,
-    visHandler: null, menuList: [], warnUnprotected: false, warnBudget: '', warnLow: false,
+    visHandler: null, menuList: [], unprotected: new Set(), warnBudget: '', warnLow: false,
+    summaryRows: [],          // one row per Analyze Particles run (the Summary window)
+    locks: new Map(),         // session key → release() of the Web Lock held while this tab uses it
     emptyEl: null, displayPatch: new Map(), displayInflight: new Map(),
     openCounter: 0, savedAt: 0
   };
@@ -398,7 +412,7 @@ const IJApp = (() => {
   // ───────────────────────────── errors ─────────────────────────────
 
   function errorText(err) {
-    if (err && typeof err === 'object' && (err.name === 'AbortError' || err.cancelled)) return '';
+    if (err && typeof err === 'object' && (err.name === 'AbortError' || err.cancelled || err.code === 'IJ_CANCELLED')) return '';
     const key = errorKey(err);
     if (key) return tr(key);
     if (typeof Utils !== 'undefined' && typeof Utils.friendlyErrorText === 'function') {
@@ -422,7 +436,7 @@ const IJApp = (() => {
   function showWarning() {
     if (!S.shell) return;
     const parts = [];
-    if (S.warnUnprotected) parts.push(tr('warn.unprotected'));
+    if (S.unprotected.size) parts.push(tr('warn.unprotected'));
     if (S.warnLow) parts.push(tr('warn.lowStorage'));
     if (S.warnBudget) parts.push(S.warnBudget);
     S.shell.setWarning(parts.length ? parts.join(' ') : null);
@@ -432,8 +446,13 @@ const IJApp = (() => {
 
   function startWorker() {
     const p = S.ctx.plugin;
-    const w = new Worker(p.assetUrl('ij-worker.js'));
-    const client = { w, pending: new Map(), nextId: 1, dead: false, gen: ++S.workerGen };
+    // A bootstrap built from the verified bytes when the host offers it; the on-disk file otherwise.
+    const w = new Worker(typeof p.workerUrl === 'function' ? p.workerUrl('ij-worker.js') : p.assetUrl('ij-worker.js'));
+    const client = { w, pending: new Map(), nextId: 1, dead: false, ready: false, readyTimer: 0, gen: ++S.workerGen };
+    // The engine announces itself with 'ready'; a worker that never does (failed script load that
+    // raised no error event, out of memory) would leave every call pending for ever.
+    client.readyTimer = setTimeout(() => { if (!client.ready) onWorkerCrash(client, 'PLUGIN_SCRIPT_FAILED'); }, WORKER_READY_MS);
+    if (client.readyTimer && client.readyTimer.unref) client.readyTimer.unref();
     w.onmessage = (ev) => onWorkerMessage(client, ev.data);
     w.onerror = (ev) => { if (ev && ev.preventDefault) ev.preventDefault(); console.error('[advanced-studio] worker error', ev && ev.message); onWorkerCrash(client); };
     w.onmessageerror = () => onWorkerCrash(client);
@@ -457,7 +476,7 @@ const IJApp = (() => {
 
   function onWorkerMessage(client, m) {
     if (!m || client.dead) return;
-    if (m.event) { onWorkerEvent(m); return; }
+    if (m.event) { onWorkerEvent(m, client); return; }
     const entry = client.pending.get(m.id);
     if (!entry) return;
     client.pending.delete(m.id);
@@ -468,8 +487,16 @@ const IJApp = (() => {
     }
   }
 
-  function onWorkerEvent(m) {
+  function onWorkerEvent(m, client) {
     switch (m.event) {
+      case 'ready':
+        if (client) { client.ready = true; clearTimeout(client.readyTimer); }
+        break;
+      case 'initError':
+        // The worker is alive but deaf (its scripts failed): same recovery as a crash.
+        console.error('[advanced-studio] worker init failed', m.code);
+        if (client) onWorkerCrash(client, 'PLUGIN_SCRIPT_FAILED');
+        break;
       case 'progress':
         if (S.busy && S.shell) {
           const step = m.stepKey ? tr(m.stepKey) : '';
@@ -488,11 +515,12 @@ const IJApp = (() => {
       }
       case 'saved':
         S.savedAt = m.at || Date.now();
-        S.warnUnprotected = false;
+        // One document's snapshot never clears another's failure.
+        if (m.docId !== undefined && m.docId !== null) S.unprotected.delete(m.docId); else S.unprotected.clear();
         showWarning();
         break;
       case 'storageError':
-        S.warnUnprotected = true;
+        S.unprotected.add(m.docId !== undefined && m.docId !== null ? m.docId : '*');
         showWarning();
         break;
       case 'budget':
@@ -511,19 +539,29 @@ const IJApp = (() => {
   }
 
   /** The worker died (crash, failed script load, out of memory): every document it held is gone from memory. */
-  function onWorkerCrash(client) {
+  function onWorkerCrash(client, code) {
     if (client.dead) return;
     client.dead = true;
+    clearTimeout(client.readyTimer);
     try { client.w.terminate(); } catch (_) { /* already gone */ }
-    for (const [, e] of client.pending) e.reject(Object.assign(new Error('worker crashed'), { code: 'IJ_WORKER_CRASHED' }));
+    for (const [, e] of client.pending) e.reject(Object.assign(new Error('worker crashed'), { code: code || 'IJ_WORKER_CRASHED' }));
     client.pending.clear();
     if (S.worker !== client || !S.mounted) return;
     S.docs.clear(); S.order = []; S.activeId = null;
+    S.unprotected.clear(); showWarning();
     endBusy();
-    recoverAfterCrash().catch((err) => console.error('[advanced-studio]', err));
+    recoverAfterCrash(code).catch((err) => console.error('[advanced-studio]', err));
   }
 
-  async function recoverAfterCrash() {
+  async function recoverAfterCrash(code) {
+    if (code === 'PLUGIN_SCRIPT_FAILED') {
+      // A worker that cannot start would only fail again: say so, offer the Simple view.
+      if (S.shell) S.shell.clearImage();
+      refreshUi();
+      await ask({ title: tr('err.title'), message: tr('err.scriptFailed'), options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }], dismissId: 'ok' });
+      if (S.mounted) { S.leaving = 'simple'; await S.api.exit(); }
+      return;
+    }
     startWorker();
     if (S.shell) S.shell.clearImage();
     refreshUi();
@@ -683,7 +721,9 @@ const IJApp = (() => {
     if (roi) S.sel.set(docId, roi); else S.sel.delete(docId);
     if (docId === S.activeId) {
       if (!fromShell && S.shell) S.shell.setActiveRoi(roi || null);
-      refreshUi();
+      // The menus' enabled state depends on whether there is a selection and of which kind: a
+      // pointer move that only reshapes it (draw / move / resize, final === false) changes neither.
+      if (final !== false || !cur || !roi || cur.type !== roi.type) refreshUi();
       scheduleToolRefresh('selection');
     }
   }
@@ -719,7 +759,7 @@ const IJApp = (() => {
     let last = null;
     for (const id of ids || []) {
       const info = await call('doc.info', { docId: id });
-      registerDoc(info, { clean: false, provenance: S.sources.get(S.activeId) || null });
+      registerDoc(info, { clean: false, provenance: S.sources.get(S.activeId) || null, sessionKey: S.sessionKeys.get(S.activeId) || null });
       last = id;
     }
     if (last !== null) await showDoc(last);
@@ -759,7 +799,11 @@ const IJApp = (() => {
     clearTimeout(S.persistTimer);
     S.persistTimer = setTimeout(() => {
       if (!S.worker || S.worker.dead) return;
-      call('session.putMeta', { results: S.results, rois: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })),
+      // The UI state belongs to the session of the image being edited; with no stored session
+      // there is nothing to attach it to (a meta write must never create a document-less session).
+      const key = (S.activeId !== null && S.sessionKeys.get(S.activeId)) || Array.from(S.sessionKeys.values())[0];
+      if (!key) return;
+      call('session.putMeta', { key, results: S.results, rois: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })),
         measurements: S.measurements, windows: Array.from(S.wins.keys()) }).catch((err) => console.error('[advanced-studio] putMeta', err));
     }, PERSIST_MS);
   }
@@ -915,13 +959,17 @@ const IJApp = (() => {
   async function saveDocTiff(docId) {
     const info = S.docs.get(docId);
     if (!info) return false;
+    // The file holds the revision the engine exported: that revision, never the current one, is
+    // what gets marked saved (an operation may commit while the picker or the write is open).
+    let savedRev;
     const ok = await saveFile(safeName(info.name, '.tif'), 'image/tiff', '.tif', 'TIFF', async () => {
       const res = await call('doc.exportTiff', { docId });
+      savedRev = res.rev;
       return res.bytes;
     });
     if (ok) {
-      await call('doc.markSaved', { docId });
-      S.cleanRev.set(docId, S.revs.get(docId));
+      await call('doc.markSaved', savedRev === undefined ? { docId } : { docId, rev: savedRev });
+      S.cleanRev.set(docId, savedRev === undefined ? S.revs.get(docId) : savedRev);
       await refreshInfo(docId);
       refreshUi();
       setStatus(tr('status.saved', { name: info.name }));
@@ -978,7 +1026,7 @@ const IJApp = (() => {
       if (!f) return;
       await busy(tr('op.open'), async () => {
         const buf = await f.arrayBuffer();
-        const res = await call('doc.open', { bytes: new Uint8Array(buf) }, [buf]);
+        const res = await call('doc.open', { bytes: new Uint8Array(buf), name: String(f.name || '').replace(/\.tiff?$/i, '') || undefined }, [buf]);
         const info = res.info;
         registerDoc(info, { clean: true });
         await showDoc(info.docId);
@@ -1006,6 +1054,16 @@ const IJApp = (() => {
     });
   }
 
+  /** Drop every local trace of a document (the engine has been told, or is gone). */
+  function forgetDoc(id) {
+    const key = S.sessionKeys.get(id);
+    for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources]) m.delete(id);
+    S.unprotected.delete(id);
+    S.order = S.order.filter((x) => x !== id);
+    S.roiList = S.roiList.filter((r) => r.docId !== id);
+    if (key && !Array.from(S.sessionKeys.values()).includes(key)) releaseSessionLock(key);
+  }
+
   async function closeImage(docId) {
     const id = docId !== undefined ? docId : S.activeId;
     const info = S.docs.get(id);
@@ -1016,12 +1074,11 @@ const IJApp = (() => {
       if (a === 'save') { let ok = false; try { ok = await saveDocTiff(id); } catch (err) { await reportError(err); } if (!ok) return; }
       else if (a !== 'discard') return;
     }
-    try { await call('doc.close', { docId: id }); } catch (err) { console.error('[advanced-studio]', err); }
-    const key = S.sessionKeys.get(id);
-    if (key) call('session.discard', { key }).catch(() => {});
-    for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources]) m.delete(id);
-    S.order = S.order.filter((x) => x !== id);
-    S.roiList = S.roiList.filter((r) => r.docId !== id);
+    // The engine drops this document's own stored records (a saved or discarded one has nothing
+    // left to protect). The session key is shared by every image derived from the projection, so
+    // it is never discarded here: that would erase the stored state of the siblings.
+    try { await call('doc.close', { docId: id, discard: true }); } catch (err) { console.error('[advanced-studio]', err); }
+    forgetDoc(id);
     if (S.activeId === id) {
       S.activeId = null;
       if (S.order.length) await showDoc(S.order[S.order.length - 1]);
@@ -1034,44 +1091,116 @@ const IJApp = (() => {
   async function recoverDialog() {
     let list = [];
     try { list = (await call('session.list', {})).sessions || []; } catch (err) { await reportError(err); return; }
+    // The sessions this very view has open are not "saved work to recover": discarding one would
+    // remove the baseline its live images still rely on.
+    const open = new Set(S.sessionKeys.values());
+    const elsewhere = await sessionsHeldElsewhere();
+    list = list.filter((s) => !open.has(s.key) && !elsewhere.has(s.key));
     if (!list.length) {
       await ask({ title: tr('cmd.fileRecover'), message: tr('recover.none'), options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }], dismissId: 'ok' });
       return;
     }
     const fmt = (s) => {
       const n = Array.isArray(s.docs) ? s.docs.length : Number(s.docs) || 0;
-      return tr('recover.item', { time: new Date(s.savedAt).toLocaleString(), n }) + (s.unsaved ? ' *' : '');
+      const names = Array.isArray(s.names) && s.names.length ? ' ' + s.names.join(', ') : '';
+      return tr('recover.item', { time: new Date(s.savedAt).toLocaleString(), n }) + names + (s.unsaved ? ' *' : '');
     };
     const v = await dialog({ title: tr('cmd.fileRecover'), okLabel: tr('dlg.ok'), fields: [
       { type: 'choice', id: 'key', label: tr('recover.session'), value: list[0].key, options: list.map((s) => ({ value: s.key, label: fmt(s) })) },
-      { type: 'choice', id: 'action', label: tr('recover.action'), value: 'restore', options: [{ value: 'restore', label: tr('recover.restore') }, { value: 'discard', label: tr('recover.discard') }] }] });
+      { type: 'choice', id: 'action', label: tr('recover.action'), value: 'restore', options: [{ value: 'restore', label: tr('recover.restore') }, { value: 'discard', label: tr('recover.discard') }, { value: 'discardAll', label: tr('recover.discardAll') }] }] });
     if (!v) return;
+    if (v.action === 'discardAll') {
+      try { for (const s of list) await call('session.discard', { key: s.key }); setStatus(tr('recover.discarded')); } catch (err) { await reportError(err); }
+      return;
+    }
     if (v.action === 'discard') {
       try { await call('session.discard', { key: v.key }); setStatus(tr('recover.discarded')); } catch (err) { await reportError(err); }
       return;
     }
-    await restoreSession(v.key);
+    if (!(await restoreSession(v.key))) setStatus(tr('recover.nothing'));
   }
 
+  /**
+   * Restores a stored session. Resolves to the number of documents it brought back (0 = nothing
+   * restorable, the caller falls back to the fresh load); a replay that stopped early or a
+   * document without a stored baseline is said, never silently dropped.
+   */
   async function restoreSession(key) {
+    let count = 0;
+    let warned = [];
     await busy(tr('op.restore'), async () => {
-      const res = await call('session.restore', { key });
+      let res;
+      try { res = await call('session.restore', { key }); }
+      catch (err) { if (err && err.code === 'IJ_NO_SESSION') return; throw err; }
       let last = null;
       for (const id of res.docIds || []) {
         const info = await call('doc.info', { docId: id });
         registerDoc(info, { clean: false, sessionKey: key });
-        last = id;
+        last = id; count++;
       }
+      if (count) holdSessionLock(key);
       if (res.meta) restoreMeta(res.meta);
       if (last !== null) { await showDoc(last); S.display.fit(); }
+      warned = res.warnings || [];
     });
+    if (warned.length) {
+      const stopped = warned.filter((w) => w.code === 'IJ_REPLAY_STOPPED').length;
+      const lost = warned.filter((w) => w.code === 'IJ_NO_BASELINE').length;
+      const lines = [];
+      if (stopped) lines.push(tr('recover.partial', { n: stopped }));
+      if (lost) lines.push(tr('recover.noBaseline', { n: lost }));
+      if (lines.length) {
+        setStatus(lines.join(' '));
+        await ask({ title: tr('cmd.fileRecover'), message: lines.join('\n'), options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }], dismissId: 'ok' });
+      }
+    }
+    return count;
   }
 
+  /** Results and selections of the restored session are added to the ones already here, not swapped for them. */
   function restoreMeta(meta) {
-    if (Array.isArray(meta.results)) S.results = meta.results;
-    if (Array.isArray(meta.rois)) S.roiList = meta.rois.filter((r) => r && r.roi).map((r) => ({ name: r.name, docId: r.docId, roi: r.roi }));
+    if (Array.isArray(meta.results)) S.results = S.results.concat(meta.results);
+    if (Array.isArray(meta.rois)) {
+      const known = new Set(S.roiList.map((r) => r.docId + '|' + r.name));
+      for (const r of meta.rois) {
+        if (!r || !r.roi) continue;
+        const k = r.docId + '|' + r.name;
+        if (known.has(k)) continue;
+        known.add(k);
+        S.roiList.push({ name: r.name, docId: r.docId, roi: r.roi });
+      }
+    }
     scheduleToolRefresh('results');
+    scheduleToolRefresh('rois');
     refreshRois();
+  }
+
+  // ── one tab per session: a Web Lock held while this tab works on a stored session ──
+
+  function locksApi() { return typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' ? navigator.locks : null; }
+  function holdSessionLock(key) {
+    const locks = locksApi();
+    if (!locks || S.locks.has(key)) return;
+    let release = null;
+    const held = new Promise((r) => { release = r; });
+    S.locks.set(key, release);
+    locks.request('lumen3d-ij:' + key, { ifAvailable: true }, (lock) => (lock ? held : null)).catch(() => {});
+  }
+  function releaseSessionLock(key) {
+    const r = S.locks.get(key);
+    if (r) { S.locks.delete(key); r(); }
+  }
+  /** Keys of the stored sessions another tab is working on. */
+  async function sessionsHeldElsewhere() {
+    const locks = locksApi();
+    const out = new Set();
+    if (!locks || typeof locks.query !== 'function') return out;
+    try {
+      const q = await locks.query();
+      for (const l of q.held || []) if (typeof l.name === 'string' && l.name.startsWith('lumen3d-ij:')) out.add(l.name.slice('lumen3d-ij:'.length));
+    } catch (_) { /* no answer: nothing is hidden */ }
+    for (const k of S.locks.keys()) out.delete(k);
+    return out;
   }
 
   // ───────────────────────────── entering: describe, resume, Z Project ─────────────────────────────
@@ -1092,7 +1221,7 @@ const IJApp = (() => {
     if (!S.host || S.emptyEl) return;
     S.emptyEl = h('div', { class: 'ij-empty' },
       h('p', { class: 'ij-banner', text: tr('empty.message') }),
-      row(btn(tr('cmd.stackProject'), () => zProject(), 'ij-btn-primary'), btn(tr('cmd.fileOpen'), () => openTiff()), btn(tr('cmd.fileSimple'), () => simpleView())));
+      row(btn(tr('cmd.stackProject'), () => zProject(), 'ij-btn--primary'), btn(tr('cmd.fileOpen'), () => openTiff()), btn(tr('cmd.fileSimple'), () => simpleView())));
     S.host.appendChild(S.emptyEl);
   }
   function hideEmpty() { if (S.emptyEl) { S.emptyEl.remove(); S.emptyEl = null; } }
@@ -1116,16 +1245,23 @@ const IJApp = (() => {
     try {
       const res = await call('session.list', { datasetId: desc.datasetId });
       const loaded = new Set(S.sessionKeys.values());
-      const mine = (res.sessions || []).filter((s) => String(s.key).startsWith(fkey + '|') && !loaded.has(s.key));
+      const elsewhere = await sessionsHeldElsewhere();
+      const docCount = (s) => (Array.isArray(s.docs) ? s.docs.length : Number(s.docs) || 0);
+      const mine = (res.sessions || []).filter((s) => String(s.key).startsWith(fkey + '|') && !loaded.has(s.key) && !elsewhere.has(s.key) && docCount(s) > 0);
       mine.sort((a, b) => b.savedAt - a.savedAt);
       match = mine[0] || null;
     } catch (err) { console.error('[advanced-studio] session.list', err); }
-    if (token !== S.enterToken) return;
+    // A worker that died meanwhile has its own recovery path (crash / failed start): nothing to add here.
+    if (token !== S.enterToken || !S.worker || S.worker.dead) return;
 
     if (match) {
       const a = await ask({ title: tr('resume.title'), message: tr('resume.message', { time: new Date(match.savedAt).toLocaleString() }),
         options: [{ id: 'resume', label: tr('resume.resume'), primary: true }, { id: 'fresh', label: tr('resume.fresh') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
-      if (a === 'resume') { await restoreSession(match.key); return; }
+      if (a === 'resume') {
+        // A stored session that yields no document is dropped and the fresh load follows.
+        if ((await restoreSession(match.key)) > 0) return;
+        await call('session.discard', { key: match.key }).catch(() => {});
+      } else
       if (a !== 'fresh') { if (!S.docs.size) { S.leaving = 'simple'; await S.api.exit(); } return; }
     }
     const done = await zProject();
@@ -1139,7 +1275,7 @@ const IJApp = (() => {
     if (typeof I18n !== 'undefined' && I18n.t) text = I18n.t(key);
     if (!S.host) return;
     S.emptyEl = h('div', { class: 'ij-empty' }, h('p', { class: 'ij-banner', text }),
-      row(btn(tr('cmd.fileSimple'), () => simpleView(), 'ij-btn-primary')));
+      row(btn(tr('cmd.fileSimple'), () => simpleView(), 'ij-btn--primary')));
     S.host.appendChild(S.emptyEl);
   }
 
@@ -1179,13 +1315,15 @@ const IJApp = (() => {
 
   /** Greyscale placeholder from the Studio's own picture, shown until the first band is in. */
   function placeholderProvider(info) {
-    let raw = null;
+    // The Studio's own raw atlas values (the document is a JSON clone and never carries them).
+    let raw = null, ac = NaN;
     try {
-      const d = S.ctx.studio.getDocument();
-      raw = d && ((d.sliceResult && d.sliceResult.raw) || d.raw) || null;
+      const st = S.ctx.studio;
+      const got = typeof st.getSliceRaw === 'function' ? st.getSliceRaw() : null;
+      raw = got && got.raw ? got.raw : got;
+      ac = Number(got && got.activeChannel !== undefined ? got.activeChannel : (st.getDocument() || {}).activeChannel);
     } catch (_) { raw = null; }
     if (!raw || !raw.data || !raw.width || !raw.height) return null;
-    const ac = Number(S.ctx.studio.getDocument && (S.ctx.studio.getDocument() || {}).activeChannel);
     const c = Number.isInteger(ac) ? Math.min(3, Math.max(0, ac)) : 0;
     return (channel, level, tx, ty) => {
       const f = 1 << level;
@@ -1215,7 +1353,10 @@ const IJApp = (() => {
     const channels = desc.channels || [];
     const cal = { pixelWidth: lvDesc.voxelUm ? lvDesc.voxelUm[desc.uAxis] : 1, pixelHeight: lvDesc.voxelUm ? lvDesc.voxelUm[desc.vAxis] : 1, unit: 'µm' };
     const fkey = figureKeyOf(desc);
-    const sessionKey = [fkey, lvDesc.level, opt.method, (opt.a) + '-' + (opt.b)].join('|');
+    // One session per load: "Start again from the data" must not pour its images into the
+    // session it declined (that one stays whole in File › Recover). Entry matches by the
+    // `fkey|` prefix, so the trailing load stamp changes nothing there.
+    const sessionKey = [fkey, lvDesc.level, opt.method, (opt.a) + '-' + (opt.b), Date.now().toString(36)].join('|');
     const provenance = { datasetId: desc.datasetId, datasetName: desc.datasetName, treeKey: desc.treeKey, timepoint: desc.timepoint,
       axis: desc.axis, level: lvDesc.level, method: opt.method, first: lvDesc.indices[lo], last: lvDesc.indices[hi - 1], sessionKey };
     const name = depth > 1
@@ -1228,9 +1369,12 @@ const IJApp = (() => {
     let session = null, docId = null, ok = false;
     try {
       session = await S.ctx.studio.source.open({ level: lvDesc.level, signal: ac.signal });
+      // The band decides the peak of a median / sd accumulator (P * depth for P = rows * width):
+      // the engine fits it to the budget and says which band to stream with.
       const begin = await call('doc.project.begin', { name, method: opt.method, width: session.width, height: session.height, depth,
-        channels: channels.map((c) => ({ name: c.name, color: c.color })), calibration: cal, provenance });
+        channels: channels.map((c) => ({ name: c.name, color: c.color })), calibration: cal, provenance, bandRows: session.bandRows });
       docId = begin.docId;
+      const bandRows = Math.max(1, Math.min(session.bandRows, Number.isInteger(begin.bandRows) && begin.bandRows > 0 ? begin.bandRows : session.bandRows));
       const prov = placeholderProvider({ width: session.width, height: session.height });
       if (prov && S.shell) {
         const fake = { docId: -1, name, width: session.width, height: session.height, bitDepth: 8, channels: channels.map((c) => ({ name: c.name, color: c.color, display: { min: 0, max: 255, lut: c.color } })), calibration: cal };
@@ -1242,13 +1386,13 @@ const IJApp = (() => {
       // delivers (w·h·planes·channels bytes) — not session.estimateBytes(), which counts the
       // compressed bytes fetched and is smaller.
       const est = session.width * session.height * depth * channels.length;
-      const bands = Math.ceil(session.height / session.bandRows);
+      const bands = Math.ceil(session.height / bandRows);
       const zChunk = Math.max(1, session.zChunk || 1);
       const chIdx = channels.map((c) => c.index);
       const totalPlanes = depth * bands;
       let donePlanes = 0, loadedBytes = 0, inflight = null;
-      for (let bi = 0, y0 = 0; y0 < session.height; bi++, y0 += session.bandRows) {
-        const y1 = Math.min(session.height, y0 + session.bandRows);
+      for (let bi = 0, y0 = 0; y0 < session.height; bi++, y0 += bandRows) {
+        const y1 = Math.min(session.height, y0 + bandRows);
         for (let z0 = lo; z0 < hi; z0 += zChunk) {
           const z1 = Math.min(hi, z0 + zChunk);
           if (ac.signal.aborted) throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
@@ -1274,6 +1418,7 @@ const IJApp = (() => {
       const fin = await call('doc.project.finish', { docId });
       const info = fin.info;
       registerDoc(info, { clean: true, sessionKey, provenance });
+      holdSessionLock(sessionKey);
       ok = true;
       await showDoc(docId);
       S.display.fit();
@@ -1342,7 +1487,7 @@ const IJApp = (() => {
     await busy(tr('op.duplicate'), async () => {
       const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
       const res = await call('doc.duplicate', { docId: info.docId, roi, channels: all ? undefined : [activeChannel(info)], name: info.name.replace(/(-\d+)?$/, '') + '-1' });
-      registerDoc(res.info, { clean: false, provenance: S.sources.get(info.docId) || null });
+      registerDoc(res.info, { clean: false, provenance: S.sources.get(info.docId) || null, sessionKey: S.sessionKeys.get(info.docId) || null });
       await showDoc(res.info.docId);
       S.display.fit();
       commitHook();
@@ -1421,9 +1566,9 @@ const IJApp = (() => {
     if (!info) return;
     const cal = info.calibration || {};
     await filterDialog('cmd.filterGaussian', [
-      { type: 'number', id: 'sigma', label: tr('dlg.sigma'), value: 2, min: 0, step: 0.5, units: tr('dlg.pixels') },
+      { type: 'number', id: 'sigma', label: tr('dlg.sigma'), value: 2, min: 0.01, step: 0.5, units: tr('dlg.pixels') },
       { type: 'check', id: 'scaled', label: tr('dlg.scaled', { unit: cal.unit || 'µm' }), value: false }],
-    'gaussian', (v) => ({ sigma: Math.max(0, Number(v.sigma)), scaled: !!v.scaled }));
+    'gaussian', (v) => ({ sigma: Math.max(0.01, Number(v.sigma)), scaled: !!v.scaled }));
   }
   async function rank(type) {
     const names = { median: 'filterMedian', mean: 'filterMean', min: 'filterMinimum', max: 'filterMaximum' };
@@ -1507,30 +1652,43 @@ const IJApp = (() => {
       { type: 'check', id: 'manager', label: tr('part.manager'), value: false },
       { type: 'check', id: 'summarize', label: tr('part.summarize'), value: true }] });
     if (!v) return;
+    let summary = null;
     await busy(tr('op.particles'), async () => {
       const opts = { minSize: Math.max(0, Number(v.minSize)) / pxArea, maxSize: Math.max(0, Number(v.maxSize)) / pxArea,
         minCirc: Number(v.minCirc), maxCirc: Number(v.maxCirc), excludeEdges: !!v.exclude, includeHoles: !!v.holes,
         roi: isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null };
       const res = await call('doc.particles', { docId: info.docId, channel: activeChannel(info), opts });
+      // The particle's own columns, then the image measurements Set Measurements ticked.
+      const wanted = new Set(measuredKeys(null));
       const rowsOut = (res.rows || []).map((p) => {
         const r = {};
+        if ((info.channels || []).length > 1) r.Ch = activeChannel(info) + 1;
         for (const [key, col] of PARTICLE_COLUMNS) if (p[key] !== undefined) r[col] = p[key];
+        for (const key of PARTICLE_MEASURE_KEYS) {
+          if (!wanted.has(key) || p[key] === undefined) continue;
+          const col = COLUMNS.find((c) => c[0] === key)[1];
+          if (r[col] === undefined) r[col] = p[key];
+        }
         return r;
       });
       if (v.display) { S.results = S.results.concat(rowsOut); scheduleToolRefresh('results'); }
       if (v.manager) {
-        (res.outlines || []).forEach((pts) => S.roiList.push({ name: roiName({ type: 'polygon', points: pts }), docId: info.docId, roi: { type: 'polygon', points: pts } }));
+        // traced: a particle outline is a pixel-edge polygon, so its perimeter is the traced one
+        // (ImageJ's Wand ROI), the same number the particle row reports.
+        (res.outlines || []).forEach((pts) => S.roiList.push({ name: roiName({ type: 'polygon', points: pts }), docId: info.docId, roi: { type: 'polygon', points: pts, traced: true } }));
         refreshRois(); scheduleToolRefresh('rois');
       }
       scheduleMetaPersist();
       if (v.display) openTool('results');
       if (v.manager) openTool('roiManager');
-      if (v.summarize && res.summary) {
-        const s = res.summary;
-        await ask({ title: tr('part.summaryTitle'), message: tr('part.summary', { count: s.count, total: num(s.totalArea, 3), avg: num(s.averageSize, 3), frac: num(s.percentArea, 2), unit }),
-          options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }], dismissId: 'ok' });
-      }
+      if (v.summarize && res.summary) summary = res.summary;
     });
+    // ImageJ shows a "Summary" table window, one row per run: never a modal that holds the busy state.
+    if (summary) {
+      S.summaryRows.push({ Image: info.name, Count: summary.count, 'Total Area': summary.totalArea, 'Average Size': summary.averageSize, '%Area': summary.percentArea });
+      openTool('summary');
+      scheduleToolRefresh('summary');
+    }
   }
 
   function roiName(roi) {
@@ -1558,7 +1716,7 @@ const IJApp = (() => {
 
   // ───────────────────────────── tool windows ─────────────────────────────
 
-  const TOOL_WINDOWS = { bc: buildBC, channels: buildChannels, threshold: buildThreshold, results: buildResults, roiManager: buildRoiManager };
+  const TOOL_WINDOWS = { bc: buildBC, channels: buildChannels, threshold: buildThreshold, results: buildResults, roiManager: buildRoiManager, summary: buildSummary };
 
   function floatingWindow(id, titleKey, build) {
     if (!S.shell) return null;
@@ -1577,7 +1735,7 @@ const IJApp = (() => {
   }
 
   function openTool(id) {
-    const titles = { bc: 'cmd.adjustBC', channels: 'cmd.colorChannels', threshold: 'cmd.adjustThreshold', results: 'win.results', roiManager: 'cmd.toolsRoiManager' };
+    const titles = { bc: 'cmd.adjustBC', channels: 'cmd.colorChannels', threshold: 'cmd.adjustThreshold', results: 'win.results', roiManager: 'cmd.toolsRoiManager', summary: 'part.summaryTitle' };
     if ((id === 'bc' || id === 'channels' || id === 'threshold') && !activeInfo()) return;
     floatingWindow(id, titles[id], TOOL_WINDOWS[id]);
   }
@@ -1813,7 +1971,7 @@ const IJApp = (() => {
       row(selectEl(IJThresholdMethods().map((m) => ({ value: m, label: m })), T.method, (m) => { T.method = m; auto(); }),
         selectEl([{ value: 'red', label: tr('thr.red') }, { value: 'bw', label: tr('thr.bw') }, { value: 'overunder', label: tr('thr.overUnder') }], T.mode, (m) => { T.mode = m; commit(); })),
       check(tr('thr.dark'), T.dark, (on) => { T.dark = on; S.thrDark = on; auto(); }),
-      row(btn(tr('thr.auto'), auto), btn(tr('thr.apply'), apply, 'ij-btn-primary'), btn(tr('thr.reset'), reset), btn(tr('thr.setBtn'), setDialog)));
+      row(btn(tr('thr.auto'), auto), btn(tr('thr.apply'), apply, 'ij-btn--primary'), btn(tr('thr.reset'), reset), btn(tr('thr.setBtn'), setDialog)));
     // Opening the window thresholds with the default method at once, like ImageJ.
     let first = true;
     return {
@@ -1828,26 +1986,59 @@ const IJApp = (() => {
 
   // ── Results
 
+  const RESULTS_CAP = 20000;
   function buildResults() {
     const table = h('table', { class: 'ij-table' });
+    const note = h('p', { class: 'ij-banner' });
+    note.hidden = true;
     const wrap = h('div', { class: 'ij-table-wrap' }, table);
+    let shown = 0, shownCols = '', tbody = null, firstRef = null;
+    const cell = (r, c) => h('td', { text: r[c] === undefined ? '' : (typeof r[c] === 'number' ? num(r[c], 4) : String(r[c])) });
+    // Only the rows added since the last refresh are built; a full rebuild happens when the
+    // columns change or the table was cleared / replaced.
     function render() {
-      table.textContent = '';
       const cols = resultColumns();
-      table.appendChild(h('thead', null, h('tr', null, [h('th', { text: ' ' })].concat(cols.map((c) => h('th', { text: c }))))));
-      const tb = h('tbody');
-      const cap = Math.min(S.results.length, 20000);
-      for (let i = 0; i < cap; i++) {
-        const r = S.results[i];
-        tb.appendChild(h('tr', null, [h('td', { text: String(i + 1) })].concat(cols.map((c) => h('td', { text: r[c] === undefined ? '' : (typeof r[c] === 'number' ? num(r[c], 4) : String(r[c])) })))));
+      const sig = cols.join('\u0001');
+      if (sig !== shownCols || S.results.length < shown || (firstRef !== null && S.results[0] !== firstRef)) {
+        table.textContent = '';
+        table.appendChild(h('thead', null, h('tr', null, [h('th', { text: ' ' })].concat(cols.map((c) => h('th', { text: c }))))));
+        tbody = h('tbody');
+        table.appendChild(tbody);
+        shown = 0; shownCols = sig;
       }
-      table.appendChild(tb);
+      firstRef = S.results.length ? S.results[0] : null;
+      const cap = Math.min(S.results.length, RESULTS_CAP);
+      const frag = document.createDocumentFragment ? document.createDocumentFragment() : tbody;
+      for (let i = shown; i < cap; i++) {
+        const r = S.results[i];
+        frag.appendChild(h('tr', null, [h('td', { text: String(i + 1) })].concat(cols.map((c) => cell(r, c)))));
+      }
+      if (frag !== tbody) tbody.appendChild(frag);
+      shown = Math.max(shown, cap);
+      note.hidden = S.results.length <= RESULTS_CAP;
+      note.textContent = note.hidden ? '' : tr('res.capped', { shown: RESULTS_CAP, total: S.results.length });
       wrap.scrollTop = wrap.scrollHeight;
     }
-    const el = h('div', { class: 'ij-panel ij-results' }, wrap,
+    const el = h('div', { class: 'ij-panel ij-results' }, wrap, note,
       row(btn(tr('res.copy'), async () => { try { await navigator.clipboard.writeText(resultsText('\t')); setStatus(tr('status.copied')); } catch (err) { console.error(err); setStatus(tr('err.clipboard'), 'error'); } }),
         btn(tr('res.save'), () => saveResults()), btn(tr('res.clear'), () => clearResults())));
     return { el, update(kind) { if (kind === 'results' || kind === 'doc') render(); } };
+  }
+
+  // ── Particle Summary (one row per Analyze Particles run, like ImageJ's Summary window)
+
+  function buildSummary() {
+    const table = h('table', { class: 'ij-table' });
+    function render() {
+      table.textContent = '';
+      table.appendChild(h('thead', null, h('tr', null, SUMMARY_COLUMNS.map((c) => h('th', { text: c })))));
+      const tb = h('tbody');
+      for (const r of S.summaryRows) tb.appendChild(h('tr', null, SUMMARY_COLUMNS.map((c) => h('td', { text: typeof r[c] === 'number' ? num(r[c], 4) : String(r[c] === undefined ? '' : r[c]) }))));
+      table.appendChild(tb);
+    }
+    const el = h('div', { class: 'ij-panel ij-summary' }, h('div', { class: 'ij-table-wrap' }, table),
+      row(btn(tr('res.clear'), () => { S.summaryRows = []; render(); })));
+    return { el, update(kind) { if (kind === 'summary' || kind === 'doc') render(); } };
   }
 
   // ── ROI Manager
@@ -1867,7 +2058,9 @@ const IJApp = (() => {
     function rename(item, li) {
       const input = h('input', { type: 'text', class: 'ij-rename', value: item.name });
       li.textContent = ''; li.appendChild(input); input.focus(); input.select();
-      const done = (ok) => { if (ok && input.value.trim()) item.name = input.value.trim(); render(); scheduleMetaPersist(); };
+      // Removing the focused input fires blur, which would re-enter done(true) after an Escape.
+      let finished = false;
+      const done = (ok) => { if (finished) return; finished = true; if (ok && input.value.trim()) item.name = input.value.trim(); render(); scheduleMetaPersist(); };
       input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); });
       input.addEventListener('blur', () => done(true));
     }
@@ -2019,7 +2212,10 @@ const IJApp = (() => {
   }
 
   function onVisibility() {
-    if (document.visibilityState === 'hidden' && S.worker && !S.worker.dead && S.docs.size) call('flush', {}).catch(() => {});
+    if (document.visibilityState !== 'hidden' || !S.worker || S.worker.dead || !S.docs.size) return;
+    call('flush', {}).then((res) => {
+      if (res && res.ok === false) { S.unprotected.add('*'); showWarning(); }
+    }).catch(() => {});
   }
 
   // The facade the commands receive.
@@ -2033,9 +2229,17 @@ const IJApp = (() => {
   // ───────────────────────────── public lifecycle ─────────────────────────────
 
   function mount(root, { ctx, api }) {
-    S.ctx = ctx; S.api = api; S.root = root; S.leaving = null;
+    S.ctx = ctx; S.api = api; S.root = root;
     if (S.appEl && S.shell) {
-      // Back from the Simple view: the DOM, the worker and the documents are still here.
+      // Back from the Simple view: the DOM, the worker and the documents are still here, provided
+      // the worker lives and the figure is the one they were made from. Otherwise start afresh
+      // (dispose stores what is unsaved: it stays recoverable).
+      let same = false;
+      try { same = !!(S.worker && !S.worker.dead && S.figureKey !== null && figureKeyOf(ctx.studio.source.describe()) === S.figureKey); } catch (_) { same = false; }
+      if (!same) { S.leaving = null; dispose(); }
+    }
+    S.leaving = null;
+    if (S.appEl && S.shell) {
       S.mounted = true;
       root.classList.add('ij-root');
       S.appEl.style.display = '';
@@ -2076,41 +2280,77 @@ const IJApp = (() => {
 
   function hasUnsavedWork() { return dirtyDocs().length > 0; }
 
+  /**
+   * Closes documents in the engine, discarding their stored records: the operator saved them,
+   * discarded them, or they never changed. Whatever stays open in the engine is flushed again
+   * when the view is disposed, so a discarded document must really be gone from it.
+   */
+  async function discardDocs(ids) {
+    for (const id of ids) {
+      try { await call('doc.close', { docId: id, discard: true }); } catch (err) { console.error('[advanced-studio]', err); }
+      forgetDoc(id);
+    }
+  }
+
   async function canLeave(reason) {
     if (reason === 'simple') { S.leaving = 'simple'; return true; }
     const dirty = dirtyDocs();
-    if (!dirty.length) { S.leaving = reason; return true; }
-    const a = await ask({ title: tr('leave.title'), message: tr('leave.message', { n: dirty.length }), layout: 'row',
-      options: [{ id: 'save', label: tr('leave.save'), primary: true }, { id: 'keep', label: tr('leave.keep'), hint: tr('leave.keepHint') },
-        { id: 'discard', label: tr('leave.discard'), variant: 'danger' }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
-    if (a === 'save') {
-      for (const id of dirty) {
-        let ok = false;
-        try { ok = await saveDocTiff(id); } catch (err) { await reportError(err); }
-        if (!ok) return false;
+    let keep = false;
+    if (dirty.length) {
+      const a = await ask({ title: tr('leave.title'), message: tr('leave.message', { n: dirty.length }), layout: 'row',
+        options: [{ id: 'save', label: tr('leave.save'), primary: true }, { id: 'keep', label: tr('leave.keep'), hint: tr('leave.keepHint') },
+          { id: 'discard', label: tr('leave.discard'), variant: 'danger' }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+      if (a === 'save') {
+        for (const id of dirty) {
+          let ok = false;
+          try { ok = await saveDocTiff(id); } catch (err) { await reportError(err); }
+          if (!ok) return false;
+        }
+      } else if (a === 'keep') {
+        // Keeping is only true when the engine says every document reached the storage.
+        let res = null;
+        try { res = await call('flush', {}); } catch (err) { console.error('[advanced-studio] flush', err); await reportError(err); return false; }
+        if (res && res.ok === false) {
+          S.unprotected.add('*'); showWarning();
+          await ask({ title: tr('leave.keepFailedTitle'), message: tr('leave.keepFailed'), options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }], dismissId: 'ok' });
+          return false;
+        }
+        keep = true;
+      } else if (a === 'discard') {
+        await discardDocs(dirty);
+      } else {
+        return false;
       }
-    } else if (a === 'keep') {
-      try { await call('flush', {}); } catch (err) { console.error('[advanced-studio] flush', err); await reportError(err); return false; }
-    } else if (a === 'discard') {
-      for (const id of dirty) { const key = S.sessionKeys.get(id); if (key) await call('session.discard', { key }).catch(() => {}); }
-      for (const id of dirty) { S.docs.delete(id); S.order = S.order.filter((x) => x !== id); }
-    } else {
-      return false;
     }
+    // Everything saved, discarded or untouched leaves no stored session behind; only 'keep' does.
+    await discardDocs(S.order.filter((id) => S.docs.has(id) && !(keep && isDirty(id))));
     S.leaving = reason;
     return true;
   }
 
   function unmount() {
-    if (!S.mounted) return;
+    if (!S.mounted) {
+      // Hidden by the Simple view and now closed or replaced (canLeave said so): nothing to show, release it.
+      if (S.appEl && S.leaving && S.leaving !== 'simple') dispose();
+      return;
+    }
     if (S.leaving === 'simple' && S.display) {
       // Hidden, not torn down: the worker and the documents keep running.
       S.mounted = false;
       endPreview();
+      // A modal left open would keep swallowing the keyboard of the Simple view.
+      if (S.shell && typeof S.shell.windows.hasModal === 'function' && S.shell.windows.hasModal()) S.shell.windows.closeAll();
       if (S.appEl) S.appEl.style.display = 'none';
       if (S.root) S.root.classList.remove('ij-root');
       return;
     }
+    dispose();
+  }
+
+  /** The Studio closed or replaced its document while this view was hidden: free the worker, the GL context and the documents. */
+  function release() {
+    if (!S.appEl && !S.worker) return;
+    S.leaving = 'close';
     dispose();
   }
 
@@ -2121,6 +2361,7 @@ const IJApp = (() => {
     const w = S.worker;
     if (w && !w.dead) {
       // Snapshot what is unsaved, then stop the worker.
+      clearTimeout(w.readyTimer);
       Promise.race([call('flush', {}).catch(() => {}), new Promise((r) => setTimeout(r, 2000))]).then(() => { w.dead = true; try { w.w.terminate(); } catch (_) { /* gone */ } });
     }
     S.worker = null;
@@ -2131,14 +2372,15 @@ const IJApp = (() => {
     try { if (S.shell) S.shell.destroy(); } catch (err) { console.error('[advanced-studio] shell destroy', err); }
     if (S.appEl) S.appEl.remove();
     if (S.root) S.root.classList.remove('ij-root');
+    for (const key of Array.from(S.locks.keys())) releaseSessionLock(key);
     S.display = null; S.shell = null; S.windows = null; S.appEl = null; S.host = null; S.emptyEl = null; S.menuList = [];
     for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.displayPatch, S.displayInflight]) m.clear();
-    S.order = []; S.activeId = null; S.roiList = []; S.roiSelected.clear(); S.results = []; S.figureKey = null; S.desc = null;
-    S.leaving = null; S.busy = false; S.warnUnprotected = false; S.warnBudget = ''; S.warnLow = false;
+    S.order = []; S.activeId = null; S.roiList = []; S.roiSelected.clear(); S.results = []; S.summaryRows = []; S.figureKey = null; S.desc = null;
+    S.leaving = null; S.busy = false; S.unprotected.clear(); S.warnBudget = ''; S.warnLow = false;
   }
 
   return {
-    mount, unmount, canLeave, hasUnsavedWork,
+    mount, unmount, release, canLeave, hasUnsavedWork,
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
     // pure helpers, exposed for tests
     planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st

@@ -3133,6 +3133,7 @@ const ViewerApp = (() => {
       registerMode: (mode) => (none ? () => {} : StudioEditor.registerMode(mode)),
       isOpen: () => (none ? false : StudioEditor.isOpen()),
       getDocument: () => (none ? null : StudioEditor.getDocument()),
+      getSliceRaw: () => (none || typeof StudioEditor.getSliceRaw !== 'function' ? null : StudioEditor.getSliceRaw()),
       source: { describe: () => _studioSourceDescribe(), open: (options) => _studioSourceOpen(options) }
     };
   }

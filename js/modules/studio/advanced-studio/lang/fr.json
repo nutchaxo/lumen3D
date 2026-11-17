@@ -225,7 +225,11 @@
     "restore": "Restaurer",
     "discard": "Supprimer",
     "discarded": "Travail enregistré supprimé.",
-    "item": "{time} — {n} image(s)"
+    "item": "{time} — {n} image(s)",
+    "partial": "{n} image(s) n’ont pu être restaurées que jusqu’à la dernière étape rejouable.",
+    "noBaseline": "{n} image(s) n’ont pas pu être restaurées : leur copie enregistrée est absente.",
+    "discardAll": "Supprimer tout le travail enregistré",
+    "nothing": "Rien n’a pu être restauré depuis ce travail enregistré."
   },
   "revert": {
     "message": "Rétablir {name} tel qu’il a été chargé ? Les modifications seront perdues."
@@ -244,7 +248,9 @@
     "save": "Enregistrer en TIFF…",
     "keep": "Garder pour plus tard",
     "keepHint": "Reste dans ce navigateur",
-    "discard": "Abandonner"
+    "discard": "Abandonner",
+    "keepFailedTitle": "Travail non enregistré",
+    "keepFailed": "Le navigateur n’a pas pu enregistrer tout votre travail. Enregistrez un TIFF ou abandonnez-le."
   },
   "err": {
     "title": "Vue avancée",
@@ -262,7 +268,13 @@
     "frameLost": "La figure à l’écran a changé pendant la lecture. Rouvrez la vue avancée.",
     "noDataset": "Aucun jeu de données n’est ouvert.",
     "scriptFailed": "La vue avancée n’a pas pu démarrer. Rechargez la page.",
-    "clipboard": "Le presse-papiers n’est pas disponible."
+    "clipboard": "Le presse-papiers n’est pas disponible.",
+    "storageFailed": "Ce navigateur n’a pas pu enregistrer votre travail. Enregistrez un TIFF pour le conserver.",
+    "emptyRoi": "La sélection est vide.",
+    "needsRoi": "Tracez d’abord une sélection.",
+    "badArgs": "Ces réglages sont inutilisables. Vérifiez les valeurs et réessayez.",
+    "notSupported": "La vue avancée ne peut pas lire la figure affichée.",
+    "noLevel": "Aucune résolution de cette figure ne peut être ouverte."
   },
   "warn": {
     "unprotected": "Votre travail n’est pas protégé : le navigateur a refusé de le stocker.",
@@ -303,7 +315,8 @@
   "res": {
     "copy": "Copier",
     "save": "Enregistrer…",
-    "clear": "Effacer"
+    "clear": "Effacer",
+    "capped": "Affichage des {shown} premières lignes sur {total}. Copier et Enregistrer incluent toutes les lignes."
   },
   "roi": {
     "add": "Ajouter",

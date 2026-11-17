@@ -343,4 +343,21 @@ for (const m of createCall[1].matchAll(/(?:^|[\s,{])(commands|getState|t|tools|o
 }
 assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW), 'the shell exposes its windows');
 
+// ── the error codes the controller maps are codes the engine / pure modules really throw ──
+const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js'].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
+for (const code of Object.keys(IJApp.ERROR_KEYS)) {
+  if (!code.startsWith('IJ_') || code === 'IJ_WORKER_CRASHED') continue; // the client raises its own crash code
+  assert.ok(CODE_SRC.includes(`'${code}'`), `ERROR_KEYS maps ${code}, which no engine module throws`);
+}
+for (const code of ['IJ_CANCELLED', 'IJ_EMPTY_ROI', 'IJ_NEEDS_ROI', 'IJ_NOTHING_TO_UNDO', 'IJ_NOT_BINARY', 'IJ_STORAGE_QUOTA', 'IJ_STORAGE_FAILED', 'IJ_BAD_ARGS']) {
+  assert.ok(CODE_SRC.includes(`'${code}'`), `${code} is thrown by the engine`);
+}
+assert.ok(/IJ_CANCELLED/.test(SRC), 'a cancelled operation is recognised, not reported as an error');
+
+// ── every button class the controller uses is styled ──
+const CSS = readFileSync(path.join(DIR, 'ij-style.css'), 'utf8');
+for (const m of SRC.matchAll(/'(ij-btn--[a-z]+)'/g)) assert.ok(CSS.includes('.' + m[1]), `${m[1]} has a rule in ij-style.css`);
+// ── both themes define the text colours of warnings and errors ──
+assert.ok(/--ij-warn-text/.test(CSS) && /\[data-theme="light"\] \.ij-root\s*\{[^}]*--ij-warn-text[^}]*--ij-danger-text/.test(CSS), 'light theme text tokens for warning / error');
+
 console.log(`ij commands: OK (${COMMANDS.length} commands, ${seen.size} key specs, ${enKeys.size} lang keys x ${LANGS.length})`);

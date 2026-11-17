@@ -572,10 +572,23 @@ function blobImage(W, H, seed) {
     const { id } = await a.makeDoc(W, H, [img], { sessionKey });
     await a.eng.whenIdle();
     assert.equal((await a.ok('session.list', {})).sessions.length, 1);
-    await a.ok('session.discard', { key: sessionKey });
+    // an OPEN document keeps its stored baseline: its next snapshot would reference it
+    const kept = await a.ok('session.discard', { key: sessionKey });
+    assert.deepEqual(P(kept.kept), [id]);
+    assert.equal((await a.ok('session.list', {})).sessions.length, 1, 'session.discard leaves an open document stored');
+    // closing it with discard is what drops its stored state, and nothing comes back on flush
+    await a.ok('doc.close', { docId: id, discard: true });
     assert.equal((await a.ok('session.list', {})).sessions.length, 0);
+    await a.ok('flush', {});
+    await a.ok('session.putMeta', { key: sessionKey, results: [] });
+    assert.equal((await a.ok('session.list', {})).sessions.length, 0, 'no ghost session after discard + flush + putMeta');
     assert.equal((await a.err('session.restore', { key: sessionKey })).code, 'IJ_NO_SESSION');
-    void id;
+    // no live document: the whole stored session goes
+    const { id: id2 } = await a.makeDoc(W, H, [img], { sessionKey: 'ds1|other' });
+    await a.ok('doc.close', { docId: id2 });             // clean-by-doc? no: unsaved → kept for later
+    assert.equal((await a.ok('session.list', {})).sessions.length, 1);
+    assert.deepEqual(P((await a.ok('session.discard', { key: 'ds1|other' })).kept), []);
+    assert.equal((await a.ok('session.list', {})).sessions.length, 0);
   }
 
   // (f) a document created from another one (toMask, duplicate) is recoverable on its own
@@ -668,6 +681,16 @@ function blobImage(W, H, seed) {
   assert.equal(pa.summary.count, 2);
   assert.equal(pa.rows[0].areaPx, 100); assert.equal(pa.rows[1].areaPx, 60);
   assert.equal(pa.rows[0].area, 25); assert.equal(pa.outlines.length, 2);
+  // A ring (10×10 square with a 4×4 hole): without "Include holes" the image measurements
+  // cover the particle's own pixels only (Mean = Min = 255); with it the hole counts (Min 0).
+  const ring = new Uint8Array(W * H);
+  for (let y = 10; y < 20; y++) for (let x = 10; x < 20; x++) ring[y * W + x] = (x >= 13 && x < 17 && y >= 13 && y < 17) ? 0 : 255;
+  const rm = await c.makeDoc(W, H, [ring], { name: 'ring' });
+  const noHoles = (await c.ok('doc.particles', { docId: rm.id, channel: 0, opts: { minSize: 0, maxSize: 1e9 } })).rows[0];
+  assert.equal(noHoles.areaPx, 84); assert.equal(noHoles.mean, 255); assert.equal(noHoles.min, 255);
+  const withHoles = (await c.ok('doc.particles', { docId: rm.id, channel: 0, opts: { minSize: 0, maxSize: 1e9, includeHoles: true } })).rows[0];
+  assert.equal(withHoles.min, 0); assert.ok(withHoles.mean < 255);
+  await c.ok('doc.close', { docId: rm.id, discard: true });
   const pb = await c.ok('doc.particles', { docId: m.id, channel: 0, opts: { minSize: 20, unit: 'um2', excludeEdges: false } });
   assert.equal(pb.summary.count, 1, 'um² size limits are converted with the calibration (20 µm² = 80 px: the 100 px square stays, the 60 px one goes)');
   const d16 = await c.makeDoc(W, H, [img], { method: 'sum' });
@@ -724,6 +747,233 @@ function blobImage(W, H, seed) {
   assert.equal((await c.err('doc.nothing', {})).code, 'IJ_UNKNOWN_CMD');
   assert.equal((await c.err('doc.info', { docId: 'zz' })).code, 'IJ_NO_DOC');
   console.log('analysis commands, new documents, TIFF round trip, preview: OK');
+}
+
+// ── 8. review fixes: ordering of reads, saved revision, durability, ghost sessions, worker start ─────────────
+{
+  const W = 512, H = 512;
+  const r = rng(99);
+  const big = Uint8Array.from({ length: W * H }, () => Math.floor(r() * 256));
+  const origError = console.error;
+
+  // (a) a read issued while an operation runs waits for it (stats, histogram, duplicate, export)
+  {
+    const c = client({ bandPixels: 1 << 16, sliceMs: 5 });
+    const { id } = await c.makeDoc(W, H, [big]);
+    const before = (await c.ok('doc.stats', { docId: id, roi: null })).row;
+    const run = c.call('doc.run', { docId: id, op: 'gaussian', params: { sigma: 20 }, roi: null, channel: 0 });
+    const st = c.call('doc.stats', { docId: id, roi: null });
+    const hi = c.call('doc.histogram', { docId: id, roi: null });
+    const ex = c.call('doc.exportTiff', { docId: id });
+    const du = c.call('doc.duplicate', { docId: id });
+    const [rr, ss, hh, ee, dd] = await Promise.all([run, st, hi, ex, du]);
+    assert.ok(rr.ok && ss.ok && hh.ok && ee.ok && dd.ok);
+    const after = (await c.ok('doc.stats', { docId: id, roi: null })).row;
+    assert.ok(after.stdDev < before.stdDev / 3, 'the blur really lowered the spread');
+    assert.equal(ss.result.row.stdDev, after.stdDev, 'a stats read queued behind the operation sees its result');
+    assert.equal(ss.result.row.mean, after.mean);
+    assert.equal(A(hh.result.counts).reduce((x, y) => x + y, 0), W * H);
+    assert.equal(ee.result.rev, 1, 'the export is of the revision after the operation');
+    const reopened = await c.ok('doc.open', { bytes: ee.result.bytes });
+    assert.deepEqual(await c.pixels(reopened.docId), await c.pixels(id), 'TIFF export holds the operation');
+    assert.deepEqual(await c.pixels(dd.result.docId), await c.pixels(id), 'duplicate holds the operation');
+  }
+
+  // (b) an opened TIFF keeps its name and is not unsaved; markSaved takes the revision that was exported
+  {
+    const c = client();
+    const { id } = await c.makeDoc(40, 30, [blobImage(40, 30, 5)]);
+    const ex = await c.ok('doc.exportTiff', { docId: id });
+    const op = await c.ok('doc.open', { bytes: ex.bytes, name: 'piece' });
+    assert.equal(op.info.name, 'piece');
+    assert.equal(op.info.unsaved, false, 'a file just read is clean');
+    await c.ok('doc.run', { docId: op.docId, op: 'invert', params: {}, roi: null, channel: 0 });
+    assert.equal((await c.ok('doc.info', { docId: op.docId })).unsaved, true);
+    // export at rev 0, an edit commits, then the file write ends: the edit is not saved
+    assert.equal(ex.rev, 0);
+    await c.ok('doc.run', { docId: id, op: 'invert', params: {}, roi: null, channel: 0 });
+    const ms = await c.ok('doc.markSaved', { docId: id, rev: ex.rev });
+    assert.equal(ms.unsaved, true);
+    assert.equal((await c.ok('doc.info', { docId: id })).unsaved, true, 'the edit made after the export stays unsaved');
+    assert.equal((await c.ok('doc.markSaved', { docId: id })).unsaved, false);
+  }
+
+  // (c) keep for later writes the last snapshot even when the journal had failed; flush says when it could not
+  {
+    const base = IJEngine.createMemoryStorage();
+    let failJournal = false, failSnap = false;
+    const quota = () => { const e = new Error('full'); e.name = 'QuotaExceededError'; return Promise.reject(e); };
+    const flaky = Object.assign({}, base, {
+      putJournal(k, e) { return failJournal ? quota() : base.putJournal(k, e); },
+      putSnapshot(k, s) { return failSnap && s.kind === 'snapshot' ? quota() : base.putSnapshot(k, s); }
+    });
+    console.error = () => {};
+    const key = 'ds1|keep|0';
+    const a = client({ storage: flaky, retryMs: [3600000] });
+    const img = blobImage(64, 48, 3);
+    const { id } = await a.makeDoc(64, 48, [img], { sessionKey: key });
+    failJournal = true;
+    await a.ok('doc.run', { docId: id, op: 'invert', params: {}, roi: null, channel: 0 });
+    await a.eng.whenIdle();
+    assert.equal((await a.ok('doc.info', { docId: id })).protected, false);
+    failJournal = false;
+    const closed = await a.ok('doc.close', { docId: id });
+    assert.equal(closed.ok, true); assert.equal(closed.kept, true);
+    const b = client({ storage: base });
+    await b.ok('session.restore', { key });
+    assert.deepEqual(await b.pixels(id), A(img).map((v) => 255 - v), 'the close wrote the last state');
+
+    // flush: refused write -> ok:false with the document listed; then healthy -> ok:true
+    const c2 = client({ storage: flaky, retryMs: [3600000] });
+    const d2 = await c2.makeDoc(64, 48, [img], { sessionKey: 'ds1|flush|0' });
+    failJournal = true; failSnap = true;
+    await c2.ok('doc.run', { docId: d2.id, op: 'invert', params: {}, roi: null, channel: 0 });
+    const f1 = await c2.ok('flush', {});
+    assert.equal(f1.ok, false); assert.deepEqual(P(f1.unsafe), [d2.id]);
+    const stillOpen = await c2.ok('doc.close', { docId: d2.id });
+    assert.equal(stillOpen.ok, false, 'a close that could not keep the work says so');
+    assert.equal((await c2.ok('doc.list', {})).docs.length, 1, 'and the document stays in the engine (its retry still runs)');
+    failJournal = false; failSnap = false;
+    const f2 = await c2.ok('flush', {});
+    assert.equal(f2.ok, true); assert.deepEqual(P(f2.unsafe), []);
+    console.error = origError;
+  }
+
+  // (d) no ghost session: a failed baseline is not listed, then the retry stores it; putMeta alone creates nothing
+  {
+    const base = IJEngine.createMemoryStorage();
+    let failBase = true;
+    const flaky = Object.assign({}, base, {
+      putSnapshot(k, s) { if (failBase && s.kind === 'baseline') { const e = new Error('full'); e.name = 'QuotaExceededError'; return Promise.reject(e); } return base.putSnapshot(k, s); }
+    });
+    console.error = () => {};
+    const key = 'ds1|ghost|0';
+    const a = client({ storage: flaky, retryMs: [25] });
+    const img = blobImage(64, 48, 8);
+    const { id } = await a.makeDoc(64, 48, [img], { sessionKey: key });
+    await a.eng.whenIdle();
+    assert.equal((await a.ok('session.list', {})).sessions.length, 0, 'baseline refused: nothing to resume');
+    await a.ok('session.putMeta', { key, results: [{ Area: 1 }] });
+    assert.equal((await a.ok('session.list', {})).sessions.length, 0, 'putMeta does not create a session');
+    failBase = false;
+    await sleep(150); await a.eng.whenIdle();
+    const l = (await a.ok('session.list', {})).sessions;
+    assert.equal(l.length, 1, 'the baseline write is retried');
+    assert.equal(l[0].docs, 1);
+    assert.equal((await a.ok('doc.info', { docId: id })).protected, true);
+    console.error = origError;
+  }
+
+  // (e) a replay with a hole in the journal stops there and says so; the next commit does not collide
+  {
+    const base = IJEngine.createMemoryStorage();
+    const key = 'ds1|gap|0';
+    const a = client({ storage: base });
+    const img = blobImage(64, 48, 12);
+    const { id } = await a.makeDoc(64, 48, [img], { sessionKey: key });
+    for (const v of [10, 20, 30]) await a.ok('doc.run', { docId: id, op: 'math', params: { op: 'add', value: v }, roi: null, channel: 0 });
+    await a.eng.whenIdle(); a.eng.dispose();
+    const holed = Object.assign({}, base, {
+      async load(k, w) {
+        const r = await base.load(k, w);
+        for (const d of Object.values(r.docs)) d.journal = d.journal.filter((e) => e.seq !== 2);
+        return r;
+      }
+    });
+    console.error = () => {};
+    const b = client({ storage: holed });
+    const res = await b.ok('session.restore', { key });
+    console.error = origError;
+    assert.equal(res.warnings.length, 1);
+    assert.equal(res.warnings[0].code, 'IJ_REPLAY_STOPPED'); assert.equal(res.warnings[0].seq, 3);
+    assert.deepEqual(await b.pixels(id), A(img).map((v) => Math.min(255, v + 10)), 'only the contiguous part was replayed');
+    await b.ok('doc.run', { docId: id, op: 'invert', params: {}, roi: null, channel: 0 });
+    await b.eng.whenIdle();
+    const seqs = (await base.load(key)).docs[id].journal.map((e) => e.seq);
+    assert.equal(new Set(seqs).size, seqs.length, 'no seq collision');
+    assert.equal(Math.max(...seqs), 4, 'the new entry starts after every stored one (seq 4, not 2)');
+  }
+
+  // (f) a snapshot captured before an unjournaled commit does not vouch for it
+  {
+    const base = IJEngine.createMemoryStorage();
+    let failJournal = false;
+    let release = null;
+    const gate = new Promise((res) => { release = res; });
+    let hold = false;
+    const flaky = Object.assign({}, base, {
+      putJournal(k, e) { if (failJournal) { const er = new Error('full'); er.name = 'QuotaExceededError'; return Promise.reject(er); } return base.putJournal(k, e); },
+      async putSnapshot(k, s) { if (hold && s.kind === 'snapshot') await gate; return base.putSnapshot(k, s); }
+    });
+    console.error = () => {};
+    const a = client({ storage: flaky, retryMs: [3600000] });
+    const { id } = await a.makeDoc(64, 48, [blobImage(64, 48, 4)], { sessionKey: 'ds1|vouch|0' });
+    failJournal = true;
+    await a.ok('doc.run', { docId: id, op: 'invert', params: {}, roi: null, channel: 0 });
+    await a.eng.whenIdle();
+    hold = true;
+    const fl = a.call('flush', {});                       // snapshot of rev 1, held
+    await sleep(10);
+    await a.ok('doc.run', { docId: id, op: 'invert', params: {}, roi: null, channel: 0 });   // rev 2, not journaled
+    release();
+    await fl;
+    await a.eng.whenIdle();
+    assert.equal((await a.ok('doc.info', { docId: id })).protected, false, 'the snapshot of rev 1 cannot vouch for rev 2');
+    console.error = origError;
+  }
+
+  // (g) projection: the band the caller streams with decides the estimate, and the engine answers the band that fits
+  {
+    const c = client({ budgetBytes: 40 * 1048576 });
+    const base = { name: 'p', method: 'median', width: 2000, height: 2000, depth: 50, channels: [{ name: 'a', color: '#ffffff' }] };
+    const small = await c.ok('doc.project.begin', Object.assign({ docId: 'pa' }, base, { bandRows: 64 }));
+    assert.equal(small.bandRows, 64);
+    await c.ok('doc.close', { docId: 'pa' });
+    const asked = await c.ok('doc.project.begin', Object.assign({ docId: 'pb' }, base, { bandRows: 2000 }));
+    assert.ok(asked.bandRows < 2000 && asked.bandRows >= 8, 'a whole-height band does not fit: ' + asked.bandRows);
+    assert.ok(asked.estimateBytes <= 40 * 1048576);
+    assert.equal(asked.estimateBytes, sandbox.IJProject.estimateBytes({ method: 'median', width: 2000, height: 2000, depth: 50, channels: 1, bandRows: asked.bandRows }));
+    await c.ok('doc.close', { docId: 'pb' });
+    const huge = await c.err('doc.project.begin', Object.assign({ docId: 'pc' }, base, { width: 20000, height: 20000, depth: 50 }));
+    assert.equal(huge.code, 'IJ_OVER_BUDGET');
+  }
+
+  // (h) a point measures X / Y as centroid columns; particles carry the image measurements of the analysed channel
+  {
+    const c = client();
+    const m = new Uint8Array(64 * 48);
+    const box = (x0, y0, w, h) => { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) m[y * 64 + x] = 255; };
+    box(5, 5, 8, 6); box(30, 20, 10, 10);
+    const { id } = await c.makeDoc(64, 48, [m], { calibration: { pixelWidth: 2, pixelHeight: 2, unit: 'µm' } });
+    const pt = (await c.ok('doc.stats', { docId: id, roi: { type: 'point', points: [[7.5, 8.5]] } })).row;
+    assert.equal(pt.xCentroid, 15); assert.equal(pt.yCentroid, 17); assert.equal(pt.mean, 255);
+    const pa = await c.ok('doc.particles', { docId: id, channel: 0, opts: {} });
+    assert.equal(pa.rows.length, 2);
+    for (const row of pa.rows) {
+      assert.equal(row.mean, 255); assert.equal(row.min, 255); assert.equal(row.max, 255);
+      assert.equal(row.intDen, row.area * 255); assert.equal(row.rawIntDen, row.areaPx * 255);
+    }
+    assert.equal(pa.rows[0].areaPx, 48);
+    const off = await c.ok('doc.particles', { docId: id, channel: 0, measureImage: false, opts: {} });
+    assert.equal(off.rows[0].mean, undefined);
+  }
+
+  // (i) a worker whose engine did not start answers every request with an error instead of leaving it pending
+  {
+    const posted = [];
+    const wk = { postMessage: (m) => posted.push(m), importScripts() { throw new Error('boom'); }, onmessage: null, console: { error() {} } };
+    wk.self = wk;
+    vm.createContext(wk);
+    vm.runInContext(fs.readFileSync(path.join(DIR, 'ij-worker.js'), 'utf8'), wk, { filename: 'ij-worker.js' });
+    wk.onmessage({ data: { init: { scripts: ['x.js'], budgetBytes: 1 } } });
+    assert.deepEqual(P(posted[0]), { event: 'initError', code: 'IJ_WORKER_INIT' });
+    wk.onmessage({ data: { id: 7, cmd: 'session.list', args: {} } });
+    assert.equal(posted[1].id, 7); assert.equal(posted[1].ok, false); assert.equal(posted[1].error.code, 'IJ_WORKER_INIT');
+    // and the engine answers a ping for the page's watchdog
+    const c = client();
+    assert.ok((await c.ok('ping', {})).at > 0);
+  }
+  console.log('review fixes: ordered reads, revisions, durability, ghost sessions, replay gaps, bands, particles, worker init: OK');
 }
 
 for (const f of closers) f();

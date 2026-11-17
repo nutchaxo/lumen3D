@@ -225,7 +225,11 @@
     "restore": "Herstellen",
     "discard": "Verwijderen",
     "discarded": "Opgeslagen werk verwijderd.",
-    "item": "{time} — {n} afbeelding(en)"
+    "item": "{time} — {n} afbeelding(en)",
+    "partial": "{n} afbeelding(en) konden alleen worden hersteld tot de laatste afspeelbare stap.",
+    "noBaseline": "{n} afbeelding(en) konden niet worden hersteld: hun opgeslagen kopie ontbreekt.",
+    "discardAll": "Al het opgeslagen werk verwijderen",
+    "nothing": "Uit dit opgeslagen werk kon niets worden hersteld."
   },
   "revert": {
     "message": "{name} terugzetten naar de geladen afbeelding? Wijzigingen gaan verloren."
@@ -244,7 +248,9 @@
     "save": "Opslaan als TIFF…",
     "keep": "Bewaren voor later",
     "keepHint": "Blijft in deze browser",
-    "discard": "Verwerpen"
+    "discard": "Verwerpen",
+    "keepFailedTitle": "Werk niet opgeslagen",
+    "keepFailed": "De browser kon niet al uw werk opslaan. Sla het op als TIFF of gooi het weg."
   },
   "err": {
     "title": "Geavanceerde weergave",
@@ -262,7 +268,13 @@
     "frameLost": "De figuur op het scherm is tijdens het lezen veranderd. Open de geavanceerde weergave opnieuw.",
     "noDataset": "Er is geen dataset geopend.",
     "scriptFailed": "De geavanceerde weergave kon niet starten. Herlaad de pagina.",
-    "clipboard": "Het klembord is niet beschikbaar."
+    "clipboard": "Het klembord is niet beschikbaar.",
+    "storageFailed": "Deze browser kon uw werk niet opslaan. Sla een TIFF op om het te bewaren.",
+    "emptyRoi": "De selectie is leeg.",
+    "needsRoi": "Teken eerst een selectie.",
+    "badArgs": "Deze instellingen zijn onbruikbaar. Controleer de waarden en probeer opnieuw.",
+    "notSupported": "De geavanceerde weergave kan de getoonde figuur niet lezen.",
+    "noLevel": "Er kan geen resolutie van deze figuur worden geopend."
   },
   "warn": {
     "unprotected": "Uw werk is niet beschermd: de browser weigerde het op te slaan.",
@@ -303,7 +315,8 @@
   "res": {
     "copy": "Kopiëren",
     "save": "Opslaan…",
-    "clear": "Wissen"
+    "clear": "Wissen",
+    "capped": "De eerste {shown} van {total} rijen worden getoond. Kopiëren en Opslaan bevatten alle rijen."
   },
   "roi": {
     "add": "Toevoegen",

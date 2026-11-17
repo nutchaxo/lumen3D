@@ -436,6 +436,9 @@
   color: var(--ij-text);
 }
 .ij-panel p { margin: 0; max-width: 440px; line-height: 1.5; }
+.ij-about { max-height: 70vh; overflow: auto; }
+.ij-about h4 { margin: 4px 0 0; font-size: 12px; font-weight: 600; }
+.ij-about ul { margin: 0; padding-left: 18px; max-width: 440px; line-height: 1.5; }
 
 .ij-table-wrap { max-height: 280px; max-width: 70vw; overflow: auto; border: 1px solid var(--border-default); border-radius: 3px; }
 .ij-table { border-collapse: collapse; width: 100%; font-family: var(--ij-mono); font-size: 11px; }

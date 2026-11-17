@@ -122,18 +122,32 @@ const IJApp = (() => {
     minMax: ['min', 'max'],
     centroid: ['xCentroid', 'yCentroid'],
     center: ['xCenterOfMass', 'yCenterOfMass'],
+    perimeter: ['perim'],
+    rect: ['bx', 'by', 'bw', 'bh'],
+    ellipse: ['major', 'minor', 'angle'],
+    shape: ['circularity', 'aspectRatio', 'roundness', 'solidity'],
+    feret: ['feret', 'feretX', 'feretY', 'feretAngle', 'minFeret'],
     intDen: ['intDen', 'rawIntDen'],
     median: ['median'],
     skewness: ['skewness'],
-    kurtosis: ['kurtosis']
+    kurtosis: ['kurtosis'],
+    areaFraction: ['areaFraction'],
+    limit: ['minThreshold', 'maxThreshold'],
+    labels: []
   };
   const MEASURE_DEFAULT = ['area', 'mean', 'minMax'];
-  // Result column of each statistics key, in ImageJ's column order.
+  // Result column of each statistics key, in ImageJ's column order (ResultsTable: Area Mean StdDev Mode Min Max X Y XM YM
+  // Perim. BX BY Width Height Major Minor Angle Circ. Feret IntDen Median Skew Kurt %Area RawIntDen … FeretX FeretY
+  // FeretAngle MinFeret AR Round Solidity MinThr MaxThr; Length is a column of the line measurements).
   const COLUMNS = [
     ['area', 'Area'], ['mean', 'Mean'], ['stdDev', 'StdDev'], ['mode', 'Mode'], ['min', 'Min'],
     ['max', 'Max'], ['xCentroid', 'X'], ['yCentroid', 'Y'], ['xCenterOfMass', 'XM'],
-    ['yCenterOfMass', 'YM'], ['intDen', 'IntDen'], ['rawIntDen', 'RawIntDen'], ['median', 'Median'],
-    ['skewness', 'Skew'], ['kurtosis', 'Kurt'], ['angle', 'Angle'], ['length', 'Length']
+    ['yCenterOfMass', 'YM'], ['perim', 'Perim.'], ['bx', 'BX'], ['by', 'BY'], ['bw', 'Width'], ['bh', 'Height'],
+    ['major', 'Major'], ['minor', 'Minor'], ['angle', 'Angle'], ['circularity', 'Circ.'], ['feret', 'Feret'],
+    ['intDen', 'IntDen'], ['median', 'Median'], ['skewness', 'Skew'], ['kurtosis', 'Kurt'], ['areaFraction', '%Area'],
+    ['rawIntDen', 'RawIntDen'], ['feretX', 'FeretX'], ['feretY', 'FeretY'], ['feretAngle', 'FeretAngle'], ['minFeret', 'MinFeret'],
+    ['aspectRatio', 'AR'], ['roundness', 'Round'], ['solidity', 'Solidity'], ['minThreshold', 'MinThr'], ['maxThreshold', 'MaxThr'],
+    ['length', 'Length']
   ];
   const PARTICLE_COLUMNS = [
     ['area', 'Area'], ['perimeter', 'Perim.'], ['circularity', 'Circ.'], ['bx', 'BX'], ['by', 'BY'],
@@ -142,7 +156,8 @@ const IJApp = (() => {
   // A particle row also carries the image measurements Set Measurements asks for (ImageJ
   // measures every particle's mask): these follow the particle's own columns, in COLUMNS order.
   const PARTICLE_MEASURE_KEYS = ['mean', 'stdDev', 'mode', 'min', 'max', 'xCenterOfMass', 'yCenterOfMass',
-    'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis'];
+    'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis', 'major', 'minor', 'angle', 'aspectRatio', 'roundness', 'solidity',
+    'feret', 'feretX', 'feretY', 'feretAngle', 'minFeret', 'areaFraction', 'minThreshold', 'maxThreshold'];
   const SUMMARY_COLUMNS = ['Image', 'Count', 'Total Area', 'Average Size', '%Area'];
   // IJ_* codes (engine, pure modules) and loader codes → plugin lang keys.
   const ERROR_KEYS = {
@@ -155,6 +170,7 @@ const IJApp = (() => {
     IJ_WORKER_CRASHED: 'err.workerCrashed',
     IJ_NOTHING_TO_UNDO: 'err.noUndo',
     IJ_NOT_BINARY: 'err.not8bit',
+    IJ_MODULE_MISSING: 'err.moduleMissing',
     IJ_STORAGE_QUOTA: 'err.storageFull',
     IJ_STORAGE_FAILED: 'err.storageFailed',
     IJ_EMPTY_ROI: 'err.emptyRoi',
@@ -176,7 +192,10 @@ const IJApp = (() => {
     { id: 'polygon', labelKey: 'tool.polygon', icon: 'pentagon' },
     { id: 'freehand', labelKey: 'tool.freehand', icon: 'pen-tool' },
     { id: 'line', labelKey: 'tool.line', icon: 'minus', hasOptions: true },
+    { id: 'polyline', labelKey: 'tool.polyline', icon: 'activity' },
+    { id: 'angle', labelKey: 'tool.angle', icon: 'triangle' },
     { id: 'point', labelKey: 'tool.point', icon: 'crosshair', hasOptions: true },
+    { id: 'wand', labelKey: 'tool.wand', icon: 'wand', hasOptions: true },
     { separator: true },
     { id: 'zoom', labelKey: 'tool.zoom', icon: 'zoom-in' },
     { id: 'hand', labelKey: 'tool.hand', icon: 'hand' }
@@ -287,10 +306,12 @@ const IJApp = (() => {
       // ── Analyze
       cmd('analyzeMeasure', ['Analyze'], Object.assign(sc('m'), { run: (a) => a.measure() })),
       cmd('analyzeParticles', ['Analyze'], { enabled: is8, run: (a) => a.particles() }),
+      cmd('analyzeSummarize', ['Analyze'], { enabled: (st) => !st.busy && !!st.hasResults, run: (a) => a.summarize() }),
+      cmd('analyzeDistribution', ['Analyze'], { enabled: (st) => !st.busy && !!st.hasResults, run: (a) => a.distribution() }),
       cmd('analyzeClearResults', ['Analyze'], { enabled: (st) => !!st.hasResults, run: (a) => a.clearResults() }),
       cmd('analyzeSetMeasurements', ['Analyze'], { enabled: always, run: (a) => a.setMeasurements() }),
       cmd('analyzeHistogram', ['Analyze'], Object.assign(sc('h'), { run: (a) => a.histogram() })),
-      cmd('analyzePlotProfile', ['Analyze'], Object.assign(sc('k'), { enabled: (st) => has(st) && !!st.roi && st.roi.type === 'line', run: (a) => a.plotProfile() })),
+      cmd('analyzePlotProfile', ['Analyze'], Object.assign(sc('k'), { enabled: (st) => has(st) && !!st.roi && (st.roi.type === 'line' || st.roi.type === 'polyline'), run: (a) => a.plotProfile() })),
       cmd('toolsRoiManager', ['Analyze', 'Tools'], { enabled: always, run: (a) => a.openTool('roiManager') }),
 
       // ── Window
@@ -320,7 +341,7 @@ const IJApp = (() => {
     binMask: 10, binErode: 20, binDilate: 30, binOpen: 40, binClose: 50, binFillHoles: 70,
     mathAdd: 10, mathSubtract: 20, mathMultiply: 30, mathDivide: 40, mathMin: 80, mathMax: 90, mathSet: 110, mathAbs: 180,
     filterGaussian: 20, filterMedian: 30, filterMean: 40, filterMinimum: 50, filterMaximum: 60,
-    analyzeMeasure: 10, analyzeParticles: 20, analyzeClearResults: 50, analyzeSetMeasurements: 60, analyzeHistogram: 80, analyzePlotProfile: 90,
+    analyzeMeasure: 10, analyzeParticles: 20, analyzeSummarize: 30, analyzeDistribution: 40, analyzeClearResults: 50, analyzeSetMeasurements: 60, analyzeHistogram: 80, analyzePlotProfile: 90,
     toolsRoiManager: 10,
     windowResults: 10, windowRoiManager: 20, windowNext: 30, windowPrevious: 40,
     helpAbout: 10, helpShortcuts: 20
@@ -462,7 +483,9 @@ const IJApp = (() => {
     previewCompute: 0,        // request id of the running compute preview
     overlayDoc: null,         // the image the overlay items belong to
     extWindowSeq: 0,
-    lastToolReady: null       // promise of the tool window opened last (its first update)
+    lastToolReady: null,      // promise of the tool window opened last (its first update)
+    redirect: null,           // Set Measurements › Redirect to: { docId, channel } | null (not kept across a reload, as ImageJ)
+    wand: { tolerance: 0, mode: 8 } // the Wand tool's options (tolerance in pixel values, 4- or 8-connected)
   };
 
   // ───────────────────────────── extension registry ─────────────────────────────
@@ -1066,8 +1089,9 @@ const IJApp = (() => {
       const ch = res.changed || {};
       const active = docId === S.activeId;
       if (ch.sizeChanged) {
-        S.sel.delete(docId);
-        if (active) { await showDoc(docId); if (S.display) S.display.fit(); }
+        // Same geometry (a channel reorder): the selection and the view stay.
+        if (!ch.sameGeometry) S.sel.delete(docId);
+        if (active) { await showDoc(docId); if (S.display && !ch.sameGeometry) S.display.fit(); }
       } else if (ch.calibration) {
         // metadata only: the selection and the view stay
         if (active && S.shell) S.shell.updateInfo(viewInfo(docId));
@@ -1093,7 +1117,7 @@ const IJApp = (() => {
       const u = S.undo.get(info.docId) || { undo: 0, redo: 0 };
       S.undo.set(info.docId, kind === 'undo' ? { undo: Math.max(0, u.undo - 1), redo: u.redo + 1 } : { undo: u.undo + 1, redo: Math.max(0, u.redo - 1) });
       if (res.info) { if (res.changed && res.changed.sizeChanged) afterLayoutChange(info.docId, res.info); else initDisplayState(res.info); }
-      if (res.changed && res.changed.sizeChanged) { S.sel.delete(info.docId); await showDoc(info.docId); S.display.fit(); }
+      if (res.changed && res.changed.sizeChanged) { if (!res.changed.sameGeometry) S.sel.delete(info.docId); await showDoc(info.docId); if (!res.changed.sameGeometry) S.display.fit(); }
       else if (res.changed && res.changed.calibration) { S.shell.updateInfo(viewInfo(info.docId)); refreshUi(); }
       else { S.display.invalidate(res.changed ? res.changed.channels : undefined); pushDisplay(); }
       scheduleToolRefresh('pixels');
@@ -1424,6 +1448,7 @@ const IJApp = (() => {
     S.unprotected.delete(id); S.held.delete(id);
     S.order = S.order.filter((x) => x !== id);
     S.roiList = S.roiList.filter((r) => r.docId !== id);
+    if (S.redirect && S.redirect.docId === id) S.redirect = null;
     if (key && !Array.from(S.sessionKeys.values()).includes(key)) releaseSessionLock(key);
   }
 
@@ -1944,37 +1969,181 @@ const IJApp = (() => {
   // ── analysis
 
   function measuredKeys(roi) {
-    return measurementKeys(S.measurements, !!roi && roi.type === 'line');
+    if (roi && roi.type === 'angle') return ['angle'];
+    return measurementKeys(S.measurements, !!roi && (roi.type === 'line' || roi.type === 'polyline'));
+  }
+  /** What the Threshold window holds for this image and channel (the range %Area and "Limit to threshold" read), or null. */
+  function thresholdFor(info, ch) {
+    const t = S.threshold;
+    return t && t.docId === info.docId && t.channel === ch ? { lower: t.lower, upper: t.upper } : null;
+  }
+  /** The arguments of doc.stats beyond the keys: the threshold, Limit to threshold, Redirect to. */
+  function measureOptions(info, ch) {
+    const o = { threshold: thresholdFor(info, ch), limit: S.measurements.includes('limit') };
+    if (S.redirect) {
+      const rinfo = S.docs.get(S.redirect.docId);
+      // a redirect image closed, or whose channel Arrange Channels dropped, is no longer a target
+      if (!rinfo || !(S.redirect.channel < (rinfo.channels || []).length)) S.redirect = null;
+      else {
+        o.redirect = { docId: S.redirect.docId, channel: S.redirect.channel };
+        // Analyzer.getRedirectStats reads the redirect image's own threshold
+        o.threshold = thresholdFor(rinfo, S.redirect.channel);
+      }
+    }
+    return o;
   }
   function toRow(res, info, roi, channelIdx) {
     const out = {};
+    if (S.measurements.includes('labels')) {
+      const src = S.redirect && S.docs.get(S.redirect.docId);
+      out.Label = (src || info).name;
+    }
     if ((info.channels || []).length > 1) out.Ch = channelIdx + 1;
     for (const [key, col] of COLUMNS) if (res[key] !== undefined) out[col] = res[key];
     return out;
   }
-  async function measureRoi(info, roi, channelIdx) {
-    const res = await call('doc.stats', { docId: info.docId, roi, channel: channelIdx, measurements: measuredKeys(roi) });
-    return toRow(res.row || res, info, roi, channelIdx);
+  /** Results rows of one selection: one row, but a row per point of a multi-point selection. */
+  async function measureRows(info, roi, channelIdx) {
+    const res = await call('doc.stats', Object.assign({ docId: info.docId, roi, channel: channelIdx, measurements: measuredKeys(roi) }, measureOptions(info, channelIdx)));
+    const list = res.rows || [res.row || res];
+    return list.map((r) => toRow(r, info, roi, channelIdx));
+  }
+  async function measureRoi(info, roi, channelIdx) { return (await measureRows(info, roi, channelIdx))[0]; }
+
+  // Analyze > Summarize appends Mean / SD / Min / Max rows; the next measurement removes them ("clearSummary").
+  const SUMMARY_LABELS = ['Mean', 'SD', 'Min', 'Max'];
+  function hasSummary() {
+    const n = S.results.length;
+    return n >= 4 && SUMMARY_LABELS.every((l, i) => S.results[n - 4 + i].Label === l);
+  }
+  function appendResults(rows) {
+    if (hasSummary()) S.results = S.results.slice(0, -4);
+    S.results = S.results.concat(rows);
+    scheduleToolRefresh('results');
+    scheduleMetaPersist();
+    refreshUi();
   }
   async function measure() {
     const info = activeInfo();
     if (!info) return;
     await busy(tr('op.measure'), async () => {
-      S.results.push(await measureRoi(info, selOf(info.docId), activeChannel(info)));
-      scheduleToolRefresh('results');
-      scheduleMetaPersist();
+      appendResults(await measureRows(info, selOf(info.docId), activeChannel(info)));
     });
     openTool('results');
   }
   function clearResults() { S.results = []; scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi(); }
 
-  // owner: P6 (wave 2)
+  /** Analyzer.summarize: Mean, SD ("(sum2-sum*sum/n)/(n-1)"), Min, Max of every column; a missing cell counts as 0 (ImageJ's table). */
+  function summarize() {
+    const rows = S.results, n = rows.length;
+    if (n < 2 || hasSummary()) return;
+    const cols = resultColumns().filter((c) => c !== 'Label');
+    const out = SUMMARY_LABELS.map((l) => ({ Label: l }));
+    for (const c of cols) {
+      let min = Infinity, max = -Infinity, sum = 0, sum2 = 0;
+      for (const r of rows) {
+        const v = typeof r[c] === 'number' ? r[c] : 0;
+        if (v < min) min = v;
+        if (v > max) max = v;
+        sum += v; sum2 += v * v;
+      }
+      out[0][c] = sum / n; out[1][c] = Math.sqrt((sum2 - sum * sum / n) / (n - 1)); out[2][c] = min; out[3][c] = max;
+    }
+    S.results = rows.concat(out);
+    scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi();
+    openTool('results');
+  }
+
+  /**
+   * Analyze > Distribution (ij.plugin.Distribution): a frequency histogram of one Results column. Automatic binning is
+   * Scott's rule, "binWidth = (float)(3.49 * sd * (float)Math.pow(count, -1.0/3.0)); nBins = floor((max-min)/binWidth + .5)"
+   * (at least 2); a given range keeps only the values inside it, "index = (int)(scale*(v-histMin))", the last value in the last bin.
+   */
+  function distributionHistogram(data, auto, nBinsIn, range) {
+    const fr = Math.fround, count = data.length;
+    let min = Infinity, max = -Infinity, total = 0;
+    for (let i = 0; i < count; i++) { total = fr(total + data[i]); if (data[i] < min) min = data[i]; if (data[i] > max) max = data[i]; }
+    const ave = fr(total / count);
+    let varSum = 0;
+    for (let i = 0; i < count; i++) { const d = fr(data[i] - ave); varSum = fr(varSum + fr(d * d)); }
+    const variance = count > 1 ? fr(varSum / (count - 1)) : 0, sd = fr(Math.sqrt(variance));
+    let nBins = nBinsIn, histMin = range ? range[0] : 0, histMax = range ? range[1] : 0;
+    if (auto) {
+      const binWidth = fr(3.49 * sd * fr(Math.pow(count, -1.0 / 3.0)));
+      nBins = Math.floor(((max - min) / binWidth) + 0.5);
+      if (!(nBins >= 2)) nBins = 2;
+      histMin = 0; histMax = 0;
+    }
+    const fixed = histMin !== 0 || histMax !== 0;
+    if (!fixed) { histMin = min; histMax = max; }
+    const scale = nBins / (histMax - histMin);
+    const counts = new Array(nBins).fill(0);
+    for (let i = 0; i < count; i++) {
+      const v = data[i];
+      if (v < histMin || v > histMax) continue;
+      let idx = Math.trunc(scale * (v - histMin));
+      if (idx >= nBins) idx = nBins - 1;
+      if (idx < 0) idx = 0;
+      counts[idx]++;
+    }
+    const binSize = (histMax - histMin) / nBins;
+    return { counts, nBins, histMin, histMax, binSize, count, mean: ave, sd, min, max };
+  }
+
+  async function distribution() {
+    const cols = resultColumns().filter((c) => c !== 'Label' && S.results.some((r) => typeof r[c] === 'number'));
+    if (!S.results.length || !cols.length) return;
+    const last = S.distribution || {};
+    const v = await dialog({ title: tr('cmd.analyzeDistribution'), okLabel: tr('dlg.ok'),
+      fields: [
+        { type: 'choice', id: 'parameter', label: tr('dlg.roi.distParameter'), options: cols.map((c) => ({ value: c, label: columnHeader(c) })), value: cols.includes(last.parameter) ? last.parameter : cols[0] },
+        { type: 'message', id: 'points', value: tr('dlg.roi.distPoints', { n: S.results.length }) },
+        { type: 'check', id: 'auto', labelKey: 'dlg.roi.distAuto', value: last.auto !== false },
+        { type: 'number', id: 'bins', labelKey: 'dlg.roi.distBins', value: last.bins || 10, min: 1, max: 100000, integer: true, enabledIf: (x) => !x.auto },
+        { type: 'string', id: 'range', labelKey: 'dlg.roi.distRange', value: last.range || '0-0', enabledIf: (x) => !x.auto }],
+      validate: (x) => {
+        if (x.auto) return null;
+        const m = /^\s*(-?[0-9.]+(?:e-?[0-9]+)?)\s*[-,]\s*(-?[0-9.]+(?:e-?[0-9]+)?)\s*$/i.exec(String(x.range));
+        return m && isFinite(Number(m[1])) && isFinite(Number(m[2])) ? null : { range: 'dlg.roi.distRangeBad' };
+      } });
+    if (!v) return;
+    S.distribution = { parameter: v.parameter, auto: !!v.auto, bins: v.bins, range: v.range };
+    const data = Float32Array.from(S.results.map((r) => (typeof r[v.parameter] === 'number' ? r[v.parameter] : 0)));
+    let range = null;
+    if (!v.auto) {
+      const m = /^\s*(-?[0-9.]+(?:e-?[0-9]+)?)\s*[-,]\s*(-?[0-9.]+(?:e-?[0-9]+)?)\s*$/i.exec(String(v.range));
+      range = m ? [Number(m[1]), Number(m[2])] : [0, 0];
+    }
+    const h = distributionHistogram(data, !!v.auto, Math.max(1, Math.round(Number(v.bins))), range);
+    const name = columnHeader(v.parameter);
+    const xs = h.counts.map((c, i) => h.histMin + i * h.binSize);
+    openPlot({ title: tr('plot.distTitle', { name }), xLabel: name, yLabel: tr('hist.count'),
+      series: [{ kind: 'bars', x: xs, y: h.counts, label: tr('hist.count') }],
+      text: [tr('plot.distCount', { n: h.count }), tr('plot.distMean', { v: num(h.mean, 4) }), tr('plot.distSd', { v: num(h.sd, 4) }),
+        tr('plot.distMin', { v: num(h.min, 4) }), tr('plot.distMax', { v: num(h.max, 4) }), tr('plot.distBins', { n: h.nBins, w: num(h.binSize, 4) })].join('\n'),
+      csv: { columns: [tr('plot.distBinStart'), tr('hist.count')], rows: h.counts.map((c, i) => [num(xs[i], 6), c]) } });
+  }
+
+  /**
+   * Analyze > Set Measurements: the groups, Limit to threshold, Display label and Redirect to (another image or channel
+   * the statistics are read from; the same size as this image).
+   */
   async function setMeasurements() {
-    const v = await dialog({ title: tr('cmd.analyzeSetMeasurements'), okLabel: tr('dlg.ok'),
-      fields: Object.keys(MEASURE_GROUPS).map((g) => ({ type: 'check', id: g, label: tr('meas.' + g), value: S.measurements.includes(g) })) });
+    const info = activeInfo();
+    const red = S.redirect && S.docs.has(S.redirect.docId) ? S.redirect : null;
+    const fields = Object.keys(MEASURE_GROUPS).map((g) => ({ type: 'check', id: g, label: tr('meas.' + g), value: S.measurements.includes(g) }));
+    const others = S.order.map((id) => S.docs.get(id)).filter(Boolean);
+    if (info && others.length) {
+      const same = (d) => d.width === info.width && d.height === info.height;
+      fields.push({ type: 'check', id: 'redirectOn', labelKey: 'dlg.roi.redirect', value: !!red });
+      fields.push({ type: 'doc', id: 'redirectDoc', labelKey: 'dlg.roi.redirectImage', filter: same, value: red ? red.docId : undefined, enabledIf: (x) => !!x.redirectOn });
+      fields.push({ type: 'channel', id: 'redirectChannel', labelKey: 'dlg.roi.redirectChannel', docField: 'redirectDoc', value: red ? red.channel : 0, enabledIf: (x) => !!x.redirectOn });
+    }
+    const v = await dialog({ title: tr('cmd.analyzeSetMeasurements'), okLabel: tr('dlg.ok'), fields });
     if (!v) return;
     S.measurements = Object.keys(MEASURE_GROUPS).filter((g) => v[g]);
     if (!S.measurements.length) S.measurements = ['area'];
+    S.redirect = v.redirectOn && v.redirectDoc !== undefined && v.redirectDoc !== '' ? { docId: v.redirectDoc, channel: Number.isInteger(v.redirectChannel) ? v.redirectChannel : 0 } : null;
     saveMeasurements();
     scheduleMetaPersist();
   }
@@ -1994,7 +2163,7 @@ const IJApp = (() => {
   async function plotProfile() {
     const info = activeInfo();
     const line = info && selOf(info.docId);
-    if (!line || line.type !== 'line') return;
+    if (!line || (line.type !== 'line' && line.type !== 'polyline')) return;
     await busy(tr('op.profile'), async () => {
       const res = await call('doc.profile', { docId: info.docId, line, channel: activeChannel(info) });
       openProfileWindow(info, res);
@@ -2023,7 +2192,7 @@ const IJApp = (() => {
       const opts = { minSize: Math.max(0, Number(v.minSize)) / pxArea, maxSize: Math.max(0, Number(v.maxSize)) / pxArea,
         minCirc: Number(v.minCirc), maxCirc: Number(v.maxCirc), excludeEdges: !!v.exclude, includeHoles: !!v.holes,
         roi: isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null };
-      const res = await call('doc.particles', { docId: info.docId, channel: activeChannel(info), opts });
+      const res = await call('doc.particles', { docId: info.docId, channel: activeChannel(info), opts, keys: measuredKeys(null), redirect: measureOptions(info, activeChannel(info)).redirect });
       // The particle's own columns, then the image measurements Set Measurements ticked.
       const wanted = new Set(measuredKeys(null));
       const rowsOut = (res.rows || []).map((p) => {
@@ -2037,7 +2206,7 @@ const IJApp = (() => {
         }
         return r;
       });
-      if (v.display) { S.results = S.results.concat(rowsOut); scheduleToolRefresh('results'); }
+      if (v.display) appendResults(rowsOut);
       if (v.manager) {
         // traced: a particle outline is a pixel-edge polygon, so its perimeter is the traced one
         // (ImageJ's Wand ROI), the same number the particle row reports.
@@ -2412,6 +2581,45 @@ const IJApp = (() => {
     return { el, update(kind) { if (kind === 'summary' || kind === 'doc') render(); } };
   }
 
+  /**
+   * ROI Manager › Multi Measure (RoiManager.multiMeasure): every selection of the list on every channel. "One row per
+   * channel": a row per channel whose columns are the measurements of each selection, "head + suffix" with the suffix the
+   * selection's number (or "(name)" for a named one); otherwise a row per selection and channel. The table replaces Results
+   * unless "Append results" is ticked.
+   */
+  async function multiMeasure(list) {
+    const info = activeInfo();
+    if (!info || !list.length) return;
+    const nCh = (info.channels || []).length;
+    const v = await dialog({ title: tr('roi.multiMeasure'), okLabel: tr('dlg.ok'), fields: [
+      ...(nCh > 1 ? [{ type: 'check', id: 'all', label: tr('roi.measureAllChannels', { n: nCh }), value: true }] : []),
+      { type: 'check', id: 'oneRow', label: tr('roi.oneRowPerChannel'), value: true },
+      { type: 'check', id: 'append', label: tr('roi.appendResults'), value: false },
+      { type: 'message', id: 'note', value: tr('roi.multiNote') }] });
+    if (!v) return;
+    const channels = v.all === false || nCh <= 1 ? [activeChannel(info)] : info.channels.map((c, i) => i);
+    await busy(tr('op.measure'), async () => {
+      const out = [];
+      for (const ch of channels) {
+        const row = {};
+        if (S.measurements.includes('labels')) row.Label = info.name;
+        if (nCh > 1 && v.oneRow) row.Ch = ch + 1;
+        let n = 0;
+        for (const item of list) {
+          n++;
+          const rows = await measureRows(info, item.roi, ch);
+          if (!v.oneRow) { for (const r of rows) out.push(r); continue; }
+          const name = item.name && item.name.length > 0 && (item.name.length < 9 || !/^[0-9]/.test(item.name)) ? '(' + item.name + ')' : String(n);
+          const r0 = rows[0] || {};
+          for (const k of Object.keys(r0)) if (k !== 'Label' && k !== 'Ch') row[k + name] = r0[k];
+        }
+        if (v.oneRow) out.push(row);
+      }
+      if (v.append) appendResults(out); else { S.results = out; scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi(); }
+    });
+    openTool('results');
+  }
+
   // ── ROI Manager
 
   // owner: P6 (wave 2)
@@ -2441,9 +2649,13 @@ const IJApp = (() => {
       row(btn(tr('roi.add'), () => addToManager()), btn(tr('roi.delete'), () => { const t = targets(); S.roiList = S.roiList.filter((r) => !t.includes(r)); t.forEach((r) => S.roiSelected.delete(r)); render(); refreshRois(); scheduleMetaPersist(); })),
       row(btn(tr('roi.measure'), async () => {
         const info = activeInfo(); if (!info) return;
-        await busy(tr('op.measure'), async () => { for (const r of targets()) S.results.push(await measureRoi(info, r.roi, activeChannel(info))); scheduleToolRefresh('results'); scheduleMetaPersist(); });
+        await busy(tr('op.measure'), async () => {
+          const rows = [];
+          for (const r of targets()) for (const row of await measureRows(info, r.roi, activeChannel(info))) rows.push(row);
+          appendResults(rows);
+        });
         openTool('results');
-      }), check(tr('roi.showAll'), S.showAll, (on) => { S.showAll = on; refreshRois(); })));
+      }), btn(tr('roi.multiMeasure'), () => multiMeasure(targets())), check(tr('roi.showAll'), S.showAll, (on) => { S.showAll = on; refreshRois(); })));
     return { el, update(kind) { if (kind === 'rois' || kind === 'doc') render(); } };
   }
 
@@ -2575,8 +2787,15 @@ const IJApp = (() => {
   }
 
   function showAbout() {
-    const paras = ['about.intro', 'about.source', 'about.depth', 'about.deviations', 'about.storage', 'about.tables'].map((k) => h('p', { text: tr(k) }));
-    openStaticWindow('about', tr('cmd.helpAbout'), h('div', { class: 'ij-panel' }, paras));
+    const para = (k) => h('p', { text: tr(k) });
+    const families = ['about.famDisplay', 'about.famSelect', 'about.famBackground', 'about.famFilters', 'about.famBinary', 'about.famMulti', 'about.famGeometry', 'about.famMeasure', 'about.famColoc']
+      .map((k) => h('li', { text: tr(k) }));
+    openStaticWindow('about', tr('cmd.helpAbout'), h('div', { class: 'ij-panel ij-about' }, [
+      para('about.intro'), para('about.source'), para('about.depth'),
+      h('h4', { text: tr('about.familiesTitle') }), h('ul', null, families),
+      h('h4', { text: tr('about.missingTitle') }), para('about.missing'),
+      para('about.deviations'), para('about.storage'), para('about.tables')
+    ]));
   }
 
   function showShortcuts() {
@@ -2629,6 +2848,13 @@ const IJApp = (() => {
 
   // owner: P6 (wave 2)
   function onToolOptions(id) {
+    if (id === 'wand') {
+      dialog({ title: tr('tool.wand'), okLabel: tr('dlg.ok'), fields: [
+        { type: 'number', id: 'tolerance', labelKey: 'dlg.roi.wandTolerance', value: S.wand.tolerance, min: 0, step: 'any' },
+        { type: 'radio', id: 'mode', labelKey: 'dlg.roi.wandMode', value: String(S.wand.mode), options: [{ value: '8', labelKey: 'dlg.roi.wand8' }, { value: '4', labelKey: 'dlg.roi.wand4' }] }] })
+        .then((v) => { if (v) S.wand = { tolerance: Math.max(0, Number(v.tolerance)), mode: String(v.mode) === '4' ? 4 : 8 }; });
+      return;
+    }
     if (id !== 'line') return;
     dialog({ title: tr('tool.lineWidth'), okLabel: tr('dlg.ok'), fields: [{ type: 'number', id: 'w', label: tr('tool.lineWidth'), value: S.lineWidth, min: 1, max: 200, integer: true, units: tr('dlg.pixels') }] })
       .then((v) => { if (v) { S.lineWidth = Math.max(1, Math.round(Number(v.w))); S.shell.setLineWidth(S.lineWidth); } });
@@ -2641,20 +2867,75 @@ const IJApp = (() => {
     }).catch(() => {});
   }
 
+  /**
+   * The Wand tool (ij.gui.Wand.autoOutline through IJ.doWand): the click traces the pixels of the same value (± the
+   * tolerance) that touch it, 4- or 8-connected; while the Threshold window holds a range for this channel the thresholded
+   * pixels are traced instead (ImageJ: "if (!ip.isThreshold() ...) autoOutline(x, y, tolerance, mode) else autoOutline(x, y,
+   * lower, upper, mode)"). The outline is a traced polygon selection (holes stay inside it).
+   */
+  /** Roi.update(add, subtract) of the Wand: the new outline joins ("add", Shift) or leaves ("subtract", Alt) the selection that
+   *  was there — a mask selection; "if (add) previousRoi.add(this) else if (subtract) previousRoi.subtract(this)". */
+  function combineWithPrevious(prev, next, add, W, H) {
+    const a = IJRoi.mask(prev, W, H), b = IJRoi.mask(next, W, H);
+    const x0 = add ? Math.min(a.w ? a.x : b.x, b.w ? b.x : a.x) : a.x, y0 = add ? Math.min(a.w ? a.y : b.y, b.w ? b.y : a.y) : a.y;
+    const x1 = add ? Math.max(a.x + a.w, b.x + b.w) : a.x + a.w, y1 = add ? Math.max(a.y + a.h, b.y + b.h) : a.y + a.h;
+    const w = x1 - x0, h = y1 - y0;
+    if (!(w > 0 && h > 0)) return null;
+    const full = new Uint8Array(w * h);
+    for (let j = 0; j < a.h; j++) for (let i = 0; i < a.w; i++) if (a.data[j * a.w + i]) full[(a.y - y0 + j) * w + a.x - x0 + i] = 1;
+    for (let j = 0; j < b.h; j++) for (let i = 0; i < b.w; i++) if (b.data[j * b.w + i]) { const cx = b.x - x0 + i, cy = b.y - y0 + j; if (cx >= 0 && cy >= 0 && cx < w && cy < h) full[cy * w + cx] = add ? 1 : 0; }
+    const roi = IJRoi.fromMask(full, w, h);
+    if (!(roi.w > 0 && roi.h > 0)) return null;
+    return IJRoi.translate(roi, x0, y0);
+  }
+  async function wandAt(x, y, mods) {
+    const info = activeInfo();
+    if (!info || S.busy || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= info.width || y >= info.height) return null;
+    // the operation lives in ij-proc-roi.js: without it the click says why nothing happens instead of failing with IJ_UNKNOWN_OP
+    if (S.failedPackages.has('roi')) { setStatus(tr('warn.packageFailed', { pkg: 'roi' })); return null; }
+    const ch = activeChannel(info);
+    const params = { x, y, tolerance: S.wand.tolerance, connectivity: S.wand.mode };
+    const thr = thresholdFor(info, ch);
+    if (thr) { params.lower = thr.lower; params.upper = thr.upper; }
+    const res = await compute('wand', params, { docId: info.docId, channel: ch, roi: null, labelKey: 'op.wand' });
+    if (!res || !res.points || res.points.length < 3) return null;
+    const outline = { type: 'polygon', points: res.points, traced: true };
+    const prev = selOf(info.docId);
+    if (mods && (mods.shift || mods.alt) && prev && IJRoi.isArea(prev)) {
+      const merged = combineWithPrevious(prev, outline, !!mods.shift, info.width, info.height);
+      if (merged) { setSelection(info.docId, merged, true); return res.points.length; }
+      if (!mods.shift) { setSelection(info.docId, null, true); return res.points.length; }
+    }
+    setSelection(info.docId, outline, true);
+    return res.points.length;
+  }
+
   // The facade the commands receive.
   const API = {
     openTiff, saveTiff, savePng, saveResults, revert, recover: recoverDialog, closeImage: () => closeImage(), simpleView, closeStudio,
     undo: () => undoRedo('undo'), redo: () => undoRedo('redo'), clearSel, fillSel, invert, selectAll, selectNone, restoreSelection, makeInverse, addToManager,
     convertType, openTool, showInfo, zProject, crop, duplicate, simpleOp, zoom, zoom100, zoomToSelection, zoomFit, applyLut, setLut, invertLut,
-    convertToMask, binary, math, gaussian, rank, measure, particles, clearResults, setMeasurements, histogram, plotProfile, cycleImage, showAbout, showShortcuts
+    convertToMask, binary, math, gaussian, rank, measure, particles, clearResults, setMeasurements, histogram, plotProfile, cycleImage, showAbout, showShortcuts,
+    summarize, distribution
   };
 
   // ───────────────────────────── extension API ─────────────────────────────
 
+  /** The image info with the display the operator sees: the stored info keeps the display of the last engine answer, which a
+   *  display change (Invert LUT, B&C, api.setDisplay) does not refresh. */
+  function liveInfo(info) {
+    const d = info ? S.dstate.get(info.docId) : null;
+    if (!d || !Array.isArray(info.channels)) return info;
+    return Object.assign({}, info, { channels: info.channels.map((c, i) => {
+      const s = d.channels[i];
+      return s ? Object.assign({}, c, { display: Object.assign({}, c.display, { min: s.min, max: s.max, lut: s.lut, invert: !!s.invert }) }) : c;
+    }) });
+  }
+
   function stateForApi() {
     const info = activeInfo();
     return {
-      doc: info, docs: S.order.map((id) => S.docs.get(id)).filter(Boolean), roi: info ? selOf(info.docId) : null, busy: S.busy,
+      doc: liveInfo(info), docs: S.order.map((id) => S.docs.get(id)).filter(Boolean).map(liveInfo), roi: info ? selOf(info.docId) : null, busy: S.busy,
       activeChannel: info ? activeChannel(info) : 0, threshold: S.threshold, measurements: S.measurements.slice(), lineWidth: S.lineWidth,
       roiList: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })), resultsCount: S.results.length
     };
@@ -2856,7 +3137,7 @@ const IJApp = (() => {
       S.shell = IJShell.create(S.appEl, {
         commands: S.menuList, getState: snapshot, t: shellT, menuGroups: GROUP_META,
         tools: TOOLS.map((t) => (t.separator ? t : { id: t.id, labelKey: t.labelKey })),
-        onCommand, onTool: (id) => { S.tool = id; }, onToolOptions,
+        onCommand, onTool: (id) => { S.tool = id; }, onToolOptions, onWand: (x, y, mods) => wandAt(x, y, mods).catch((err) => reportError(err)),
         onRoi: (roi, o) => { const i = activeInfo(); if (i) setSelection(i.docId, roi, !o || o.final !== false, true); },
         onChannel: (c) => { const i = activeInfo(); if (i) setDocDisplayMode(i.docId, { active: c }); },
         onCancel: cancelRunning, readPixel, isActive: () => S.mounted,
@@ -2974,7 +3255,7 @@ const IJApp = (() => {
     S.display = null; S.shell = null; S.windows = null; S.appEl = null; S.host = null; S.emptyEl = null; S.menuList = [];
     for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.displayPatch, S.displayInflight]) m.clear();
     S.order = []; S.activeId = null; S.roiList = []; S.roiSelected.clear(); S.results = []; S.summaryRows = []; S.figureKey = null; S.desc = null;
-    S.threshold = null; S.previewCompute = 0;
+    S.threshold = null; S.previewCompute = 0; S.redirect = null;
     S.leaving = null; S.busy = false; S.unprotected.clear(); S.held.clear(); S.warnBudget = ''; S.warnLow = false;
   }
 
@@ -2983,6 +3264,6 @@ const IJApp = (() => {
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
     extend, EXT_API_MEMBERS, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
-    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit
+    planLevels, mapRange, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, COLUMNS, PARTICLE_COLUMNS
   };
 })();

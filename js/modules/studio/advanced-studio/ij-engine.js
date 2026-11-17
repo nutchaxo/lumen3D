@@ -245,7 +245,7 @@ const IJEngine = (() => {
       id: doc.id, name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth,
       calibration: doc.calibration ? Object.freeze(Object.assign({}, doc.calibration)) : doc.calibration,
       provenance: doc.provenance ? Object.freeze(Object.assign({}, doc.provenance)) : doc.provenance,
-      channels: Object.freeze(channels), active: doc.active
+      channels: Object.freeze(channels), active: doc.active, mode: doc.mode
     });
   }
 
@@ -1214,6 +1214,7 @@ const IJEngine = (() => {
     function noteCommit(doc, entry) {
       doc.dirty = true;
       doc.journalSeq++;
+      if (entry && entry.kind === 'run' && entry.maskRule == null) entry.maskRule = 2;
       if (entry && storageOn && doc.protected) {
         entry.docId = doc.id;
         entry.seq = doc.journalSeq;
@@ -1584,6 +1585,9 @@ const IJEngine = (() => {
       if (spec.kind === 'compute') throw ijError('IJ_BAD_ARGS', 'a compute operation runs through doc.compute');
       // An entry written under another version of the operation cannot be replayed faithfully.
       if (replay && (args.version || 1) !== spec.version) throw ijError('IJ_VERSION_MISMATCH', 'operation version changed');
+      // Selection masks follow ImageJ's PolygonFiller since 1.1.0 (`maskRule: 2` on the entry); a journal entry written
+      // before that replays a polygon / freehand / wide-line selection with the fill rule it was recorded with.
+      if (replay && args.roi && args.maskRule !== 2) args = Object.assign({}, args, { roi: Object.assign({}, args.roi, { fillRule: 1 }) });
       if (spec.kind === 'newdoc') return runNewDoc(doc, spec, args, task, extraDocs || []);
       if (spec.kind === 'size') return runSize(doc, spec, args, task, replay);
       return runPixel(doc, spec, args, task, replay);
@@ -1622,7 +1626,12 @@ const IJEngine = (() => {
       const swapChannel = (c, out) => {
         const ch = doc.channels[c];
         ch.data = out;
-        if (spec.display) ch.display = defaultDisplay(ch, bd);
+        // A step that resets the display range (resetMinAndMax) keeps the channel's lookup table and its
+        // inverted flag: only min and max come from the new data.
+        if (spec.display) {
+          const d = defaultDisplay(ch, bd), old = ch.display || {};
+          ch.display = { min: d.min, max: d.max, lut: old.lut != null ? old.lut : d.lut, invert: old.invert != null ? !!old.invert : d.invert };
+        }
       };
       try {
         for (let i = 0; i < chans.length; i++) {
@@ -1733,7 +1742,7 @@ const IJEngine = (() => {
       else doc.journalSeq++;
       const changed = calOnly
         ? { channels: [], sizeChanged: false, calibration: true }
-        : { channels: doc.channels.map((c, i) => i), sizeChanged: true };
+        : { channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: res.width === W && res.height === H && res.bitDepth === bd && res.channels.every((c) => oldByData.has(c.data)) };
       return { changed, newDocIds: [] };
     }
 
@@ -1831,10 +1840,20 @@ const IJEngine = (() => {
       return n;
     }
 
+    // Every channel of `now` holds an array that `before` also held: the channels were only reordered or dropped.
+    function sameArrays(before, now) {
+      if (!Array.isArray(before)) return false;
+      const set = new Set(before.map((c) => c.data));
+      return now.every((c) => set.has(c.data));
+    }
+
     function changedOf(rec, beforeSize, doc) {
       if (rec.full) {
         if (rec.calOnly) return { channels: [], sizeChanged: false, calibration: true };
-        return { channels: doc.channels.map((c, i) => i), sizeChanged: true };
+        // `sameGeometry`: the width, height and bit depth did not move and every array is one the document already held (an Arrange reordered the channels): the page
+        // refreshes its channel layout but keeps the selection and the view.
+        const f = beforeSize && beforeSize.full;
+        return { channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: !!(f && f.width === doc.width && f.height === doc.height && f.bitDepth === doc.bitDepth && sameArrays(f.channels, doc.channels)) };
       }
       return { channels: rec.patches.map((p) => p.c), sizeChanged: false };
     }
@@ -1851,7 +1870,7 @@ const IJEngine = (() => {
       doc.rev++;
       if (top.full) doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
-      const changed = changedOf(top, null, doc);
+      const changed = changedOf(top, inv, doc);
       if (replay) { doc.journalSeq++; return changed; }
       if (top.replayable && storageOn && doc.protected) noteCommit(doc, { kind: which });
       else {
@@ -1933,63 +1952,127 @@ const IJEngine = (() => {
 
     // ---- statistics ------------------------------------------------------------------------------
 
-    // owner: P6 (wave 2) — measureRow, lineStats, particleImageStats and the doc.stats / doc.particles /
-    // doc.profile handlers are the measurement code; no other package edits this file.
-    function lineStats(doc, c, roi) {
+    // owner: P6 (wave 2) — measureRow, particleImageStats and the doc.stats / doc.particles /
+    // doc.profile handlers are the measurement code; no other package edits this file. The maths is in
+    // ij-proc-roi.js (IJRoiTools, Analyzer.saveResults / measureLength / measurePoint / measureAngle of ImageJ 1.54p);
+    // when that package did not load, the basic statistics of the pixels below are still answered.
+    const BASE_KEYS = ['area', 'mean', 'stdDev', 'mode', 'min', 'max', 'xCentroid', 'yCentroid', 'xCenterOfMass', 'yCenterOfMass',
+      'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis'];
+
+    // The pixels a measurement reads: the image itself or the "Redirect to" image (same size, ImageJ: "Redirect image
+    // is not the same size as the current image").
+    function measureSource(doc, c, redirect) {
+      if (!redirect || redirect.docId === undefined || redirect.docId === null) return { img: channelImage(doc, c), doc };
+      const src = getDoc(redirect.docId);
+      if (src.width !== doc.width || src.height !== doc.height) throw ijError('IJ_ROI_REDIRECT_SIZE', 'redirect image size');
+      const rc = isInt(redirect.channel) ? redirect.channel : 0;
+      return { img: channelImage(src, rc), doc: src };
+    }
+    function finiteNum(v) { return typeof v === 'number' && isFinite(v); }
+
+    // → [row]; one row, except a multi-point selection (one row per point). `keys` are the short keys of IJRoiTools.
+    function measureRows(doc, c, roi, keys, opts) {
       const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
-      const cal = calOf(doc);
-      const prof = IJOps.profile(channelImage(doc, c), roi, roi.width > 0 ? roi.width : 1);
-      const v = prof.values;
-      const n = v.length;
-      let sum = 0, min = Infinity, max = -Infinity;
-      for (let i = 0; i < n; i++) { sum += v[i]; if (v[i] < min) min = v[i]; if (v[i] > max) max = v[i]; }
-      const mean = n ? sum / n : NaN;
-      let ss = 0;
-      for (let i = 0; i < n; i++) ss += (v[i] - mean) * (v[i] - mean);
-      const sorted = Array.from(v).sort((a, b) => a - b);
-      const median = n ? (n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2) : NaN;
-      const dx = (roi.x2 - roi.x1) * cal.pw, dy = (roi.y2 - roi.y1) * cal.ph;
-      const length = Math.sqrt(dx * dx + dy * dy);
-      return {
-        n, mean, min, max, median, stdDev: n > 1 ? Math.sqrt(ss / (n - 1)) : 0,
-        length, angle: IJRoi.lineAngle(roi), area: length * (roi.width > 0 ? roi.width : 1) * cal.pw, intDen: sum
-      };
+      const o = opts || {};
+      const want = Array.isArray(keys) && keys.length ? keys : BASE_KEYS;
+      const src = measureSource(doc, c, o.redirect);
+      const T = ROOT.IJRoiTools;
+      if (roi) IJRoi.validate(roi);
+      if (!T) {
+        const cl = calOf(doc);
+        if (roi && (roi.type === 'line' || roi.type === 'polyline')) {
+          const len = IJRoi.lineLength(roi, doc.calibration);
+          return [roi.type === 'line' ? { length: len, angle: IJRoi.lineAngle(roi) } : { length: len }];
+        }
+        if (roi && roi.type === 'point') {
+          // the basic row: the pixel under the first point, X / Y = the point as drawn (pixel centre) in calibrated units
+          const x = Math.floor(roi.points[0][0]), y = Math.floor(roi.points[0][1]);
+          if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) throw ijError('IJ_EMPTY_ROI', 'point outside the image');
+          const v = src.img.data[y * doc.width + x], px = roi.points[0][0] * cl.pw, py = roi.points[0][1] * cl.ph;
+          return [{ n: 1, mean: v, min: v, max: v, median: v, mode: v, stdDev: 0, area: 0, intDen: 0, rawIntDen: v, xCentroid: px, yCentroid: py, xCenterOfMass: px, yCenterOfMass: py }];
+        }
+        if (roi && !IJRoi.isArea(roi)) throw ijError('IJ_MODULE_MISSING', 'module IJRoiTools is not loaded');
+        const mask = roiMask(roi, doc.width, doc.height);
+        const row = Object.assign({}, IJOps.statistics(src.img, mask, { calibration: doc.calibration }));
+        const b = boundsOf(mask, doc.width, doc.height);
+        row.bx = b.x * cl.pw; row.by = b.y * cl.ph; row.bw = b.w * cl.pw; row.bh = b.h * cl.ph;
+        if (roi && IJRoi.isArea(roi)) row.perim = IJRoi.perimeter(roi) * cl.pw;
+        if (Array.isArray(keys) && keys.length) { const out = {}; for (const k of keys) if (k in row) out[k] = row[k]; return [out]; }
+        return [row];
+      }
+      const thr = o.thr && finiteNum(o.thr.lower) && finiteNum(o.thr.upper) ? { lower: o.thr.lower, upper: o.thr.upper } : null;
+      // ImageJ Analyzer.getRedirectStats: "ImageStatistics stats = redirectImp.getStatistics(...)" with redirectImp's
+      // calibration (and its threshold, which the page sends): the measured image brings its own.
+      const a = { img: src.img, roi: roi || null, cal: src.doc.calibration, keys: want, thr, limit: !!o.limit };
+      if (roi && roi.type === 'point') return T.measurePoints(a);
+      if (roi && roi.type === 'angle') return [T.measureAngle(a)];
+      if (roi && (roi.type === 'line' || roi.type === 'polyline')) return [T.measureLine(a)];
+      return [T.measureArea(a)];
     }
 
+    // The document a "Redirect to" names, or null; it must be locked together with the measured one.
+    function redirectDoc(redirect, doc) {
+      if (!redirect || redirect.docId === undefined || redirect.docId === null) return null;
+      const src = getDoc(redirect.docId);
+      if (src.width !== doc.width || src.height !== doc.height) throw ijError('IJ_ROI_REDIRECT_SIZE', 'redirect image size');
+      return src;
+    }
+
+    function measureRow(doc, c, roi, keys, opts) { return measureRows(doc, c, roi, keys, opts)[0]; }
+
+    // Image measurements of one particle: the Set Measurements columns (Mean, Min, Max, IntDen...)
+    // of the analysed channel over the particle's own outline, which is a traced polygon
+    // (ImageJ perimeter rules). The particle's own area / perimeter / circularity are kept.
+    const PARTICLE_OWN = new Set(['area', 'perimeter', 'circularity', 'n', 'xCentroid', 'yCentroid']);
+    // Without "Include holes" ImageJ measures only the particle's own pixels: the filled
+    // outline limited to the foreground (ParticleAnalyzer measures with the threshold as a
+    // LIMIT), so a hole inside the outline never enters Mean / Min / IntDen.
     // owner: P6 (wave 2)
-    function measureRow(doc, c, roi, keys) {
+    function particleImageStats(doc, c, outline, includeHoles, keys, redirect) {
       const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
-      const cal = calOf(doc);
-      let row;
-      if (roi && roi.type === 'line') {
-        row = lineStats(doc, c, roi);
-        row.bx = Math.min(roi.x1, roi.x2) * cal.pw; row.by = Math.min(roi.y1, roi.y2) * cal.ph;
-        row.bw = Math.abs(roi.x2 - roi.x1) * cal.pw; row.bh = Math.abs(roi.y2 - roi.y1) * cal.ph;
-      } else if (roi && roi.type === 'point') {
-        IJRoi.validate(roi);
-        const pts = roi.points;
-        const x = Math.floor(pts[0][0]), y = Math.floor(pts[0][1]);
-        if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) throw ijError('IJ_EMPTY_ROI', 'point outside the image');
-        const v = doc.channels[c].data[y * doc.width + x];
-        // ImageJ prints a point's X / Y: the Centroid and Center of Mass columns of its row.
-        const px = pts[0][0] * cal.pw, py = pts[0][1] * cal.ph;
-        row = {
-          n: 1, mean: v, min: v, max: v, median: v, mode: v, stdDev: 0, area: 0, intDen: 0, rawIntDen: v,
-          x: px, y: py, xCentroid: px, yCentroid: py, xCenterOfMass: px, yCenterOfMass: py
-        };
-      } else {
-        const mask = roiMask(roi, doc.width, doc.height);
-        row = Object.assign({}, IJOps.statistics(channelImage(doc, c), mask, { calibration: doc.calibration }));
-        const b = boundsOf(mask, doc.width, doc.height);
-        row.bx = b.x * cal.pw; row.by = b.y * cal.ph; row.bw = b.w * cal.pw; row.bh = b.h * cal.ph;
-        if (roi && IJRoi.isArea(roi)) row.perim = IJRoi.perimeter(roi) * cal.pw;
-      }
-      if (Array.isArray(keys) && keys.length) {
-        const out = {};
-        for (const k of keys) if (k in row) out[k] = row[k];
+      const roi = { type: 'polygon', points: outline, traced: true };
+      const T = ROOT.IJRoiTools;
+      const out = {};
+      if (redirect && T) {
+        // ParticleAnalyzer: "ImageProcessor ip2 = redirectIP!=null?redirectIP:ip;" and "redirectImp.getCalibration()": the
+        // particle's pixels are measured in the redirect image; without "Include holes" the particle's own mask (the
+        // analysed image's foreground inside the outline) decides which pixels count, not a value range of the redirect.
+        let r2 = roi;
+        if (!includeHoles) {
+          const m = IJRoi.mask(roi, doc.width, doc.height);
+          if (m && m.data && m.w > 0 && m.h > 0) {
+            const sub = new Uint8Array(m.w * m.h), own = doc.channels[c].data;
+            for (let yy = 0; yy < m.h; yy++) for (let xx = 0; xx < m.w; xx++) {
+              const k = yy * m.w + xx;
+              if (m.data[k] && own[(m.y + yy) * doc.width + m.x + xx] !== 0) sub[k] = 1;
+            }
+            r2 = { type: 'mask', x: m.x, y: m.y, w: m.w, h: m.h, rle: Uint32Array.from(IJRoi.rleEncode(sub)) };
+          }
+        }
+        const row = T.measureArea({ img: redirect.img, roi: r2, cal: redirect.doc.calibration, keys: Array.isArray(keys) && keys.length ? keys.filter((k) => !PARTICLE_OWN.has(k)) : BASE_KEYS.filter((k) => !PARTICLE_OWN.has(k)), thr: null, limit: false });
+        for (const k of Object.keys(row)) out[k] = row[k];
         return out;
       }
-      return row;
+      if (T && Array.isArray(keys) && keys.length) {
+        // the columns Set Measurements ticked, computed as Analyze > Measure computes them on the particle's outline
+        const row = T.measureArea({ img: channelImage(doc, c), roi, cal: doc.calibration, keys: keys.filter((k) => !PARTICLE_OWN.has(k)),
+          thr: includeHoles ? null : { lower: 1, upper: 255 }, limit: !includeHoles });
+        for (const k of Object.keys(row)) out[k] = row[k];
+        return out;
+      }
+      const box = IJRoi.mask(roi, doc.width, doc.height);
+      if (!includeHoles && box && box.data) {
+        const src = doc.channels[c].data, w = doc.width;
+        for (let yy = 0; yy < box.h; yy++) {
+          for (let xx = 0; xx < box.w; xx++) {
+            const k = yy * box.w + xx;
+            if (box.data[k] && src[(box.y + yy) * w + box.x + xx] === 0) box.data[k] = 0;
+          }
+        }
+      }
+      const st = IJOps.statistics(channelImage(doc, c), box, { calibration: doc.calibration });
+      for (const k of Object.keys(st)) if (!PARTICLE_OWN.has(k)) out[k] = st[k];
+      return out;
     }
 
     // ---- commands ----------------------------------------------------------------------------------
@@ -2209,7 +2292,7 @@ const IJEngine = (() => {
         const r = await executeRun(live, a, ctx.task, false, others);
         if (r.newDocIds && r.newDocIds.length) { finishMutation(); return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: r.newDocIds, newInfos: r.newInfos }; }
         if (live.rev !== before) {
-          post({ event: 'invalidate', docId: live.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged, calibration: !!r.changed.calibration });
+          post({ event: 'invalidate', docId: live.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged, sameGeometry: !!r.changed.sameGeometry, calibration: !!r.changed.calibration });
         }
         finishMutation();
         return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: [] };
@@ -2310,7 +2393,7 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const changed = await doUndoRedo(doc, 'undo', false);
-        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged });
+        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed };
       });
@@ -2320,7 +2403,7 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const changed = await doUndoRedo(doc, 'redo', false);
-        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged });
+        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed };
       });
@@ -2342,12 +2425,27 @@ const IJEngine = (() => {
     // (doc.tile, doc.pixel, doc.preview) stay outside the queue on purpose: they must answer
     // between two slices of a running operation, and 'invalidate' tells the page to redraw.
     // owner: P6 (wave 2)
+    // doc.stats { docId, roi, channel, measurements: [short key], redirect?: { docId, channel }, threshold?: { lower, upper },
+    //   limit? } → { row, rows } (rows = one per point of a multi-point selection)
     handlers['doc.stats'] = (a) => {
       const doc = getDoc(a.docId);
-      return lockDoc(doc, async () => {
+      const red = redirectDoc(a.redirect, doc);
+      return lockDocs(red && red !== doc ? [doc, red] : [doc], async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
         getChannel(doc, c);
-        return { row: measureRow(doc, c, a.roi || null, a.measurements) };
+        // memory: the selection's mask, the threshold-limited mask and the ellipse / hull buffers are box-sized byte
+        // arrays (+ the traced vertices of a mask) — declared against the budget before they exist
+        let need = 65536;
+        if (a.roi && a.roi.type !== 'point' && a.roi.type !== 'angle') {
+          const b = dep('IJRoi').bounds(a.roi);
+          need += Math.min(Math.max(0, b.w), doc.width) * Math.min(Math.max(0, b.h), doc.height) * 4;
+        } else if (!a.roi) need += doc.width * doc.height * 3;
+        ensureRoomNoEvict(need);
+        transientBytes += need;
+        try {
+          const rows = measureRows(doc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit });
+          return { row: rows[0], rows };
+        } finally { transientBytes -= need; }
       });
     };
 
@@ -2364,15 +2462,31 @@ const IJEngine = (() => {
     };
 
     // owner: P6 (wave 2)
+    // doc.profile { docId, line, channel } → { values, stepUm }: a straight line (any width) or a segmented line
+    // (ProfilePlot.getProfile). The step is ImageJ's xInc: the pixel width, or the calibrated over the pixel length of a
+    // straight line when the pixels are not square.
     handlers['doc.profile'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
         const line = a.line;
-        if (!line || line.type !== 'line') throw ijError('IJ_BAD_ROI', 'a straight line is needed');
+        if (!line || (line.type !== 'line' && line.type !== 'polyline')) throw ijError('IJ_BAD_ROI', 'a line selection is needed');
+        dep('IJRoi').validate(line);
+        const T = ROOT.IJRoiTools;
         const cal = calOf(doc);
-        const prof = dep('IJOps').profile(channelImage(doc, c), line, line.width > 0 ? line.width : 1);
-        return { values: prof.values, stepUm: prof.step * (cal.pw + cal.ph) / 2 };
+        if (!T) {
+          // package P6 not loaded: the straight line of width W as the core samples it
+          if (line.type !== 'line') throw ijError('IJ_MODULE_MISSING', 'module IJRoiTools is not loaded');
+          const prof = dep('IJOps').profile(channelImage(doc, c), line, line.width > 0 ? line.width : 1);
+          return { values: prof.values, stepUm: prof.step * (cal.pw + cal.ph) / 2 };
+        }
+        const values = T.profile(channelImage(doc, c), line);
+        let step = cal.pw;
+        if (line.type === 'line' && cal.pw !== cal.ph) {
+          const dx = line.x2 - line.x1, dy = line.y2 - line.y1, pixelLength = Math.sqrt(dx * dx + dy * dy);
+          if (pixelLength > 0) step = Math.sqrt((dx * cal.pw) ** 2 + (dy * cal.ph) ** 2) / pixelLength;
+        }
+        return { values, stepUm: step };
       });
     };
 
@@ -2391,37 +2505,13 @@ const IJEngine = (() => {
       });
     };
 
-    // Image measurements of one particle: the Set Measurements columns (Mean, Min, Max, IntDen...)
-    // of the analysed channel over the particle's own outline, which is a traced polygon
-    // (ImageJ perimeter rules). The particle's own area / perimeter / circularity are kept.
-    const PARTICLE_OWN = new Set(['area', 'perimeter', 'circularity', 'n', 'xCentroid', 'yCentroid']);
-    // Without "Include holes" ImageJ measures only the particle's own pixels: the filled
-    // outline limited to the foreground (ParticleAnalyzer measures with the threshold as a
-    // LIMIT), so a hole inside the outline never enters Mean / Min / IntDen.
-    // owner: P6 (wave 2)
-    function particleImageStats(doc, c, outline, includeHoles) {
-      const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
-      const box = IJRoi.mask({ type: 'polygon', points: outline, traced: true }, doc.width, doc.height);
-      if (!includeHoles && box && box.data) {
-        const src = doc.channels[c].data, w = doc.width;
-        for (let yy = 0; yy < box.h; yy++) {
-          for (let xx = 0; xx < box.w; xx++) {
-            const k = yy * box.w + xx;
-            if (box.data[k] && src[(box.y + yy) * w + box.x + xx] === 0) box.data[k] = 0;
-          }
-        }
-      }
-      const st = IJOps.statistics(channelImage(doc, c), box, { calibration: doc.calibration });
-      const out = {};
-      for (const k of Object.keys(st)) if (!PARTICLE_OWN.has(k)) out[k] = st[k];
-      return out;
-    }
-
     // owner: P6 (wave 2)
     handlers['doc.particles'] = (a, ctx) => {
       const doc = getDoc(a.docId);
-      return lockDoc(doc, async () => {
+      const red = redirectDoc(a.redirect, doc);
+      return lockDocs(red && red !== doc ? [doc, red] : [doc], async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
+        const redirectSrc = a.redirect && a.redirect.docId !== undefined && a.redirect.docId !== null ? measureSource(doc, c, a.redirect) : null;
         if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'particle analysis needs an 8-bit mask');
         const o = Object.assign({}, a.opts || {});
         const cal = calOf(doc);
@@ -2443,7 +2533,7 @@ const IJEngine = (() => {
             n: i + 1, area: p.area, areaPx: p.areaPx, perimeter: p.perimeter, circularity: p.circularity,
             bx: p.bx, by: p.by, bw: p.bw, bh: p.bh, xCentroid: p.xCentroid, yCentroid: p.yCentroid
           };
-          if (measure && p.outline && p.outline.length >= 3) Object.assign(row, particleImageStats(doc, c, p.outline, !!o.includeHoles));
+          if (measure && p.outline && p.outline.length >= 3) Object.assign(row, particleImageStats(doc, c, p.outline, !!o.includeHoles, a.keys, redirectSrc));
           rows.push(row);
           if ((i & 63) === 63) await ctx.task.tick(0.1 + 0.9 * (i + 1) / r.particles.length, 'op.particles');
         }

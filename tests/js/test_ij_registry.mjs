@@ -105,20 +105,33 @@ await test('IJOpRegistry: define is idempotent for one spec, refuses another und
   const w = await t.spawn();
   const R2 = w.far.IJOpRegistry;
   for (const name of ['invert', 'math', 'fill', 'clear', 'clearOutside', 'applyLut', 'gaussian', 'rank', 'binary', 'flipH', 'flipV']) assert.equal(R2.get(name) === null, false, name);
-  assert.deepEqual(arr(R2.list('size')).sort(), ['convert', 'crop', 'rotate90']);
-  assert.deepEqual(arr(R2.list('newdoc')).sort(), ['cropToNew', 'toMask']);
+  // The v1 size / newdoc ops are always there; the wave-2 packages add theirs (PLAN-wave2 §1).
+  const sizeOps = arr(R2.list('size')), newdocOps = arr(R2.list('newdoc'));
+  for (const n of ['convert', 'crop', 'rotate90']) assert.ok(sizeOps.includes(n), 'size op ' + n);
+  for (const n of ['cropToNew', 'toMask']) assert.ok(newdocOps.includes(n), 'newdoc op ' + n);
+  const WAVE2_SIZE = ['arrangeChannels', 'bin', 'canvasSize', 'resize', 'rotateEnlarge', 'setCalibration'];
+  assert.deepEqual(sizeOps.filter((n) => !['convert', 'crop', 'rotate90'].includes(n)).sort(), WAVE2_SIZE.filter((n) => sizeOps.includes(n)).sort(), 'no unexpected size op');
+  const WAVE2_NEWDOC = ['findMaximaImage', 'imageCalculator', 'mergeChannels', 'scaleNew', 'splitChannels', 'createMask', 'edmOutput'];
+  assert.deepEqual(newdocOps.filter((n) => !['cropToNew', 'toMask'].includes(n)).filter((n) => !WAVE2_NEWDOC.includes(n)), [], 'no unexpected newdoc op');
   assert.equal(R2.get('gaussian').preview, 'reduced');
   assert.equal(R2.get('flipH').preview, false);
   t.close();
 });
 
 // ─────────────────────────────── v1 operations after the move ───────────────────────────────
-const GOLDEN = { // the pre-registry engine's output (ij-engine.js of dev bb6f214) for the scenario below
+const GOLDEN_LEGACY_FILL = { // the pre-registry engine's output (ij-engine.js of dev bb6f214) for the scenario below: it fills a polygon with the 1.0.0 rule (left/top edges inclusive), which a journal entry without `maskRule` still replays with
   painted: ['40x30/8', 'a1114875', '5944c1d5', '7dc6b0d5'], gauss: ['40x30/8', '3bf7170f', 'c810c371', '9bcccadb'], ops: ['40x30/8', '18e2d32c', '41e9d8da', '8ba5c7e2'],
   crop: ['25x20/8', '2b9e6379', '71bf7ab4', '408d6bba'], rot: ['20x25/8', 'ae7a52b7', '1c3ffb98', '4d8e7b72'], conv16: ['20x25/16', '27075951', 'af0fe8de', '36b5294a'],
   f32: ['20x25/32', 'bba5a20', 'd43d4b23', 'e93a7c26'], undo2: ['20x25/32', '41a17cfc', 'bf7aa880', '2f5df3f7'], redo1: ['20x25/32', 'bba5a20', 'e1c65d32', 'e93a7c26'],
   revert: ['40x30/8', 'eaeee985', 'eaeee985', 'eaeee985']
 };
+const GOLDEN = { // the same scenario since 1.1.0: the polygon selection is filled with ImageJ's PolygonFiller rule
+  painted: ['40x30/8', 'a1114875', '5944c1d5', '7dc6b0d5'], gauss: ['40x30/8', '3bf7170f', 'c810c371', '9bcccadb'], ops: ['40x30/8', 'e6a3cabf', '802caadd', '6864cec9'],
+  crop: ['25x20/8', '54dd0ac6', '5c99cee5', '7d4a3cb'], rot: ['20x25/8', '8eb29d16', 'a5eedeb9', '968ccf9b'], conv16: ['20x25/16', '3249db42', '6db0b3e7', '96fc6d63'],
+  f32: ['20x25/32', '8f1ed98b', '1b6cc1e', '17afd91f'], undo2: ['20x25/32', '5c5ffa3', '10cf0fd5', '590c39ce'], redo1: ['20x25/32', '8f1ed98b', '6262b6af', '17afd91f'],
+  revert: ['40x30/8', 'eaeee985', 'eaeee985', 'eaeee985']
+};
+
 async function v1Scenario(t, w, upTo) {
   const { docId } = await create(t, w, { name: 't', width: 40, height: 30 });
   const hashes = {};
@@ -177,7 +190,7 @@ await test('a journal written before the registry (entries without a version) re
   // an old journal: no `version`, no `roiRef`
   const old = w.far.IJEngine.createMemoryStorage();
   await old.putSnapshot(key, rec.baseline);
-  for (const e of rec.journal) { const c = J(e); delete c.version; await old.putJournal(key, Object.assign(c, { roi: e.roi })); }
+  for (const e of rec.journal) { const c = J(e); delete c.version; delete c.maskRule; await old.putJournal(key, Object.assign(c, { roi: e.roi })); }
   const t2 = await boot({ storage: old });
   const w2 = await t2.spawn();
   const res = await t2.engine('session.restore', { key }, w2);
@@ -185,9 +198,21 @@ await test('a journal written before the registry (entries without a version) re
   const info = await t2.engine('doc.info', { docId }, w2);
   const out = [];
   for (let c = 0; c < 3; c++) out.push(fnv((await t2.engine('doc.tile', { docId, channel: c, level: 0, tx: 0, ty: 0 }, w2)).data));
-  assert.deepEqual([info.width + 'x' + info.height + '/' + info.bitDepth, ...out], GOLDEN.ops);
+  assert.deepEqual([info.width + 'x' + info.height + '/' + info.bitDepth, ...out], GOLDEN_LEGACY_FILL.ops, 'an entry without maskRule replays with the 1.0.0 polygon fill');
   assert.deepEqual(J(hashes.ops), GOLDEN.ops);
-  t.close(); t2.close();
+  assert.ok(rec.journal.every((e) => e.maskRule === 2), 'new entries carry the mask rule');
+  // the same journal WITH maskRule 2 replays to what was recorded
+  const cur = w.far.IJEngine.createMemoryStorage();
+  await cur.putSnapshot(key, rec.baseline);
+  for (const e of rec.journal) { const c = J(e); await cur.putJournal(key, Object.assign(c, { roi: e.roi })); }
+  const t3 = await boot({ storage: cur });
+  const w3 = await t3.spawn();
+  const res3 = await t3.engine('session.restore', { key }, w3);
+  assert.equal(res3.warnings.length, 0, JSON.stringify(res3.warnings));
+  const out3 = [];
+  for (let c = 0; c < 3; c++) out3.push(fnv((await t3.engine('doc.tile', { docId, channel: c, level: 0, tx: 0, ty: 0 }, w3)).data));
+  assert.deepEqual(out3, GOLDEN.ops.slice(1));
+  t.close(); t2.close(); t3.close();
 });
 
 // ─────────────────────────────── channel count / baseline identity ───────────────────────────────

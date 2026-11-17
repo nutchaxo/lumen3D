@@ -364,11 +364,11 @@
       return { x: bx, y: by, w: Math.ceil(x1) - bx, h: Math.ceil(y1) - by };
     }
 
-    /* Even-odd scanline fill, ImageJ's PolygonFiller rule: a pixel is inside
-     * when its CENTRE is. Crossings use half-open edges (y1 ≤ yc < y2) and the
-     * span is [ceil(xa − ½), ceil(xb − ½)) so left/top edges are inclusive and
-     * right/bottom exclusive. Writes into `out` for the box (bx, by, bw, bh). */
-    function fillPolygon(pts, bx, by, bw, bh, out) {
+    /* The fill rule of journals written before the PolygonFiller port (plugin 1.0.0): a pixel is inside when its
+     * centre is, crossings use half-open edges (y1 <= yc < y2) and the span is [ceil(xa - 1/2), ceil(xb - 1/2)), so
+     * left/top edges are inclusive and right/bottom exclusive. Kept ONLY so such a journal replays to the pixels it
+     * was recorded with: an entry carries `maskRule: 2` since 1.1.0, an entry without it replays with `fillRule: 1`. */
+    function fillPolygonLegacy(pts, bx, by, bw, bh, out) {
       const n = pts.length;
       const xs = [];
       for (let row = 0; row < bh; row++) {
@@ -386,6 +386,50 @@
           if (s < 0) s = 0;
           if (e > bw) e = bw;
           for (let x = s; x < e; x++) out[row * bw + x] = 1;
+        }
+      }
+    }
+
+    /* ij.process.PolygonFiller, ported: an even-odd scanline fill where "outline and pixel coordinates are shifted by
+     * 0.5" (pixel (i, j) is the square [i, i+1) x [j, j+1)). Quotes of the source that settle the tie rules:
+     *   "int y1 = (int)Math.round(y1f); ... if (y1==y2) continue;"                  a horizontal edge is ignored; an edge
+     *                                                                                covers the rows [round(y1), round(y2))
+     *   "ex[edges] = x1f + (y1 - y1f + 0.5)*slope + 1e-8;"                          its x at the CENTRE of its first row
+     *   "x1 = (int)(ex[aedge[i]]+0.5); x2 = (int)(ex[aedge[i+1]]+0.5); for (x=x1; x<x2; x++)"
+     * so a pixel is inside when its centre lies in (left edge, right edge]: a centre exactly on a left boundary is
+     * outside, exactly on a right boundary inside; vertically (top, bottom]. Writes 1 into `out` for the box
+     * (bx, by, bw, bh); the active edges are kept sorted per row, so the cost is O(rows * active edges). */
+    function fillPolygon(pts, bx, by, bw, bh, out) {
+      const n = pts.length;
+      const edges = [];
+      for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[i + 1 === n ? 0 : i + 1];
+        let x1f = a[0], y1f = a[1], x2f = b[0], y2f = b[1];
+        let y1 = Math.floor(y1f + 0.5), y2 = Math.floor(y2f + 0.5);
+        if (y1 === y2) continue;
+        if (y1 > y2) { let t = y1; y1 = y2; y2 = t; t = y1f; y1f = y2f; y2f = t; t = x1f; x1f = x2f; x2f = t; }
+        const slope = (x2f - x1f) / (y2f - y1f);
+        edges.push({ y1, y2, ex: x1f + (y1 - y1f + 0.5) * slope + 1e-8, slope });
+      }
+      if (!edges.length) return;
+      edges.sort((p, q) => p.y1 - q.y1);
+      let active = [], next = 0;
+      let yMax = edges[0].y2;
+      for (let i = 1; i < edges.length; i++) if (edges[i].y2 > yMax) yMax = edges[i].y2;
+      const yEnd = Math.min(by + bh, yMax);
+      let y = Math.max(by, edges[0].y1);
+      for (; y < yEnd; y++) {
+        while (next < edges.length && edges[next].y1 <= y) { active.push(edges[next]); next++; }
+        active = active.filter((e) => y < e.y2);
+        if (active.length < 2) continue;
+        const xs = active.map((e) => e.ex + (y - e.y1) * e.slope);
+        xs.sort((p, q) => p - q);
+        const row = (y - by) * bw;
+        for (let k = 0; k + 1 < xs.length; k += 2) {
+          let s = Math.floor(xs[k] + 0.5) - bx, e2 = Math.floor(xs[k + 1] + 0.5) - bx;
+          if (s < 0) s = 0;
+          if (e2 > bw) e2 = bw;
+          for (let x = s; x < e2; x++) out[row + x] = 1;
         }
       }
     }
@@ -430,8 +474,8 @@
           }
           break;
         }
-        case 'polygon': case 'freehand': fillPolygon(roi.points, b.x, b.y, b.w, b.h, data); break;
-        case 'line': fillPolygon(lineCorners(roi), b.x, b.y, b.w, b.h, data); break;
+        case 'polygon': case 'freehand': (roi.fillRule === 1 ? fillPolygonLegacy : fillPolygon)(roi.points, b.x, b.y, b.w, b.h, data); break;
+        case 'line': (roi.fillRule === 1 ? fillPolygonLegacy : fillPolygon)(lineCorners(roi), b.x, b.y, b.w, b.h, data); break;
         case 'point':
           for (const p of roi.points) {
             const i = Math.floor(p[0]) - b.x, j = Math.floor(p[1]) - b.y;
@@ -594,6 +638,10 @@
      * diagonally the path turns RIGHT first, so diagonal neighbours are separate outlines (the
      * foreground is 4-connected, holes 8-connected). The outer loops and the holes all appear.
      * Golden fixtures of ImageJ 1.54f's ThresholdToSelection will confirm this rule. */
+    // Tracing a mask costs O(box) memory (a dense copy + a visited map): the loops are cached per run array (immutable once
+    // published), and a box beyond MAX_OUTLINE_PIXELS is refused instead of exhausting the memory of the worker.
+    const OUTLINE_CACHE = new WeakMap();
+    const MAX_OUTLINE_PIXELS = 1 << 27;
     function outlines(roi) {
       if (roi.type !== 'mask') {
         if (roi.type === 'polygon' || roi.type === 'freehand') return [roi.points.map((p) => [p[0], p[1]])];
@@ -601,6 +649,15 @@
       }
       const w = roi.w, h = roi.h;
       if (!(w > 0 && h > 0)) return [];
+      const hit = OUTLINE_CACHE.get(roi.rle);
+      if (hit && hit.x === roi.x && hit.y === roi.y && hit.w === w && hit.h === h) return hit.loops;
+      if (w * h > MAX_OUTLINE_PIXELS) throw tooComplex('outline of a very large mask');
+      const loops = traceOutlines(roi, w, h);
+      OUTLINE_CACHE.set(roi.rle, { x: roi.x, y: roi.y, w, h, loops });
+      return loops;
+    }
+
+    function traceOutlines(roi, w, h) {
       const dense = maskDense(roi);
       const fg = (x, y) => x >= 0 && y >= 0 && x < w && y < h && dense[y * w + x] === 1;
       const W1 = w + 1;

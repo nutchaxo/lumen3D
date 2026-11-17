@@ -715,7 +715,7 @@ const IJViewPure = (() => {
       return _RECT_HANDLES.map(([id, fx, fy]) => ({ id, x: roi.x + roi.w * fx, y: roi.y + roi.h * fy }));
     }
     if (roi.type === 'line') return [{ id: 'p1', x: roi.x1, y: roi.y1 }, { id: 'p2', x: roi.x2, y: roi.y2 }];
-    if (roi.type === 'polygon' || roi.type === 'point') {
+    if (roi.type === 'polygon' || roi.type === 'point' || roi.type === 'polyline' || roi.type === 'angle') {
       const pts = roi.points || [];
       if (pts.length > 400) return [];
       return pts.map(([x, y], i) => ({ id: 'v' + i, x, y }));
@@ -761,6 +761,17 @@ const IJViewPure = (() => {
       }
       case 'point':
         return (roi.points || []).some(([px, py]) => Math.hypot(px - x, py - y) <= tol);
+      case 'polyline': case 'angle': {
+        // a segmented line / the two arms of an angle: within a click's reach of any segment
+        const pts = roi.points || [], reach = Math.max(tol, 0.75) + (roi.type === 'polyline' ? (roi.width || 1) / 2 : 0);
+        for (let i = 1; i < pts.length; i++) {
+          const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1], l2 = dx * dx + dy * dy;
+          let t = l2 ? ((x - pts[i - 1][0]) * dx + (y - pts[i - 1][1]) * dy) / l2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          if (Math.hypot(x - (pts[i - 1][0] + t * dx), y - (pts[i - 1][1] + t * dy)) <= reach) return true;
+        }
+        return false;
+      }
       default: return false;
     }
   }
@@ -786,10 +797,11 @@ const IJViewPure = (() => {
         ? { ...roi, x1: moved.x2, y1: moved.y2 }
         : { ...roi, x2: moved.x2, y2: moved.y2 };
     }
-    if (roi.type === 'polygon' || roi.type === 'point') {
+    if (roi.type === 'polygon' || roi.type === 'point' || roi.type === 'polyline' || roi.type === 'angle') {
       const i = Number(id.slice(1));
       const pts = roi.points.map((p) => p.slice());
-      if (pts[i]) pts[i] = roi.type === 'point' ? [_f(px) + 0.5, _f(py) + 0.5] : [Math.round(px), Math.round(py)];
+      // a point is marked by its pixel centre, a segmented line / an angle by integer pixel-centre coordinates (as a line), a polygon by corners
+      if (pts[i]) pts[i] = roi.type === 'point' ? [_f(px) + 0.5, _f(py) + 0.5] : (roi.type === 'polyline' || roi.type === 'angle') ? [_f(px), _f(py)] : [Math.round(px), Math.round(py)];
       return { ...roi, points: pts };
     }
     return roi;
@@ -864,7 +876,25 @@ const IJViewPure = (() => {
         if (ang < 0) ang += 360;
         return `angle=${_fmtCal(Math.round(ang * 100) / 100)}, length=${_fmtCal(len)}${cal ? ' ' + cal.unit : ''}`;
       }
-      case 'polygon': case 'freehand': case 'point': case 'polyline': case 'angle': {
+      case 'angle': {
+        // PolygonRoi.getAngleAsString: "degrees = Math.abs(180-Math.abs(angle1-angle2)); if (degrees>180.0) degrees = 360.0-degrees;"
+        const q = roi.points || [];
+        if (q.length === 3) {
+          const pw = cal ? cal.pixelWidth : 1, ph = cal ? cal.pixelHeight : 1;
+          const ang = (a, b) => (180.0 / Math.PI) * Math.atan2((a[1] - b[1]) * ph, (b[0] - a[0]) * pw);
+          let deg = Math.abs(180 - Math.abs(ang(q[0], q[1]) - ang(q[1], q[2])));
+          if (deg > 180) deg = 360 - deg;
+          return `angle=${_fmtCal(Math.round(deg * 100) / 100)}`;
+        }
+        return `n=${q.length}`;
+      }
+      case 'polyline': {
+        const q = roi.points || [];
+        let len = 0;
+        for (let i = 1; i < q.length; i++) len += Math.hypot((q[i][0] - q[i - 1][0]) * (cal ? cal.pixelWidth : 1), (q[i][1] - q[i - 1][1]) * (cal ? cal.pixelHeight : 1));
+        return `n=${q.length}, length=${_fmtCal(len)}${cal ? ' ' + cal.unit : ''}`;
+      }
+      case 'polygon': case 'freehand': case 'point': {
         const b = roiBounds(roi);
         return `n=${(roi.points || []).length}` + (b ? `, x=${_f(b.x)}, y=${_f(b.y)}, w=${_f(b.w)}, h=${_f(b.h)}` : '');
       }
@@ -2785,19 +2815,22 @@ const IJShell = (() => {
   const SVGNS = 'http://www.w3.org/2000/svg';
 
   const DEFAULT_TOOLS = [
-    { id: 'rect' }, { id: 'oval' }, { id: 'polygon' }, { id: 'freehand' }, { id: 'line' }, { id: 'point' },
+    { id: 'rect' }, { id: 'oval' }, { id: 'polygon' }, { id: 'freehand' }, { id: 'line' }, { id: 'polyline' }, { id: 'angle' }, { id: 'point' }, { id: 'wand' },
     { separator: true },
     { id: 'zoom' }, { id: 'hand' }
   ];
-  const TOOL_FALLBACK = { rect: 'Rectangle', oval: 'Oval', polygon: 'Polygon', freehand: 'Freehand', line: 'Straight line', point: 'Point', zoom: 'Magnifying glass', hand: 'Scrolling hand' };
-  const ROI_TOOLS = new Set(['rect', 'oval', 'polygon', 'freehand', 'line', 'point']);
+  const TOOL_FALLBACK = { rect: 'Rectangle', oval: 'Oval', polygon: 'Polygon', freehand: 'Freehand', line: 'Straight line', polyline: 'Segmented line', angle: 'Angle', point: 'Point', wand: 'Wand', zoom: 'Magnifying glass', hand: 'Scrolling hand' };
+  const ROI_TOOLS = new Set(['rect', 'oval', 'polygon', 'freehand', 'line', 'polyline', 'angle', 'point', 'wand']);
   const ICONS = {
     rect: '<rect x="3.5" y="5.5" width="13" height="9"/>',
     oval: '<ellipse cx="10" cy="10" rx="7" ry="5"/>',
     polygon: '<path d="M4 14.5L6.5 5l8 1.5 2 7z"/>',
     freehand: '<path d="M3 13c2-7 4 3 6-2s3-5 5-1 2 3 3 2"/>',
     line: '<path d="M3.5 16L16.5 4"/>',
+    polyline: '<path d="M3.5 15.5L8 7l4.5 6L16.5 4.5"/><circle cx="3.5" cy="15.5" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="16.5" cy="4.5" r="1" fill="currentColor" stroke="none"/>',
+    angle: '<path d="M16 15.5H4.5L14.5 5"/><path d="M10.5 15.5a6 6 0 00-1.7-4.2"/>',
     point: '<circle cx="10" cy="10" r="2"/><path d="M10 3v4M10 13v4M3 10h4M13 10h4"/>',
+    wand: '<path d="M4 16L13 7"/><path d="M13 3v3M13 10v3M9.5 6.5h3M13.5 6.5h3M10.5 3.9l1.6 1.6M14 7.5l1.6 1.6M15.6 3.9l-1.6 1.6"/>',
     zoom: '<circle cx="8.5" cy="8.5" r="4.5"/><path d="M12 12l5 5"/>',
     hand: '<path d="M6.5 10.5V5.5a1 1 0 012 0V9V4a1 1 0 012 0v5V5a1 1 0 012 0v5V7a1 1 0 012 0v5.5a5 5 0 01-5 5h-1.5a4 4 0 01-3-1.5L3.5 12.5a1 1 0 011.5-1.3z"/>'
   };
@@ -2940,7 +2973,7 @@ const IJShell = (() => {
       listen(b, 'click', () => setTool(td.id, true));
       listen(b, 'dblclick', () => {
         if (td.id === 'zoom') display.view100();
-        else if ((td.id === 'line' || td.id === 'point') && opts.onToolOptions) opts.onToolOptions(td.id);
+        else if ((td.id === 'line' || td.id === 'point' || td.id === 'wand') && opts.onToolOptions) opts.onToolOptions(td.id);
       });
       toolbar.appendChild(b);
       toolButtons.set(td.id, b);
@@ -3253,10 +3286,15 @@ const IJShell = (() => {
 
     function finishPolygon(close) {
       if (!polyDraft) return;
-      const pts = polyDraft.points;
+      const pts = polyDraft.points, kind = polyDraft.kind;
       polyDraft = null;
       display.setDraft(null);
-      if (close && pts.length >= 3) commitRoi({ type: 'polygon', points: pts }, 'draw');
+      // a segmented line (finished by a double click / Enter) and an angle (its third click) are open: the Enter / double click of a polygon closes it
+      if (kind === 'polyline') {
+        if (pts.length >= 2) commitRoi({ type: 'polyline', points: pts, width: lineWidth }, 'draw'); else commitRoi(null, 'clear');
+      } else if (kind === 'angle') {
+        if (pts.length === 3) commitRoi({ type: 'angle', points: pts }, 'draw'); else commitRoi(null, 'clear');
+      } else if (close && pts.length >= 3) commitRoi({ type: 'polygon', points: pts }, 'draw');
       else if (pts.length === 2 && !close) commitRoi({ type: 'line', x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1], width: 1 }, 'draw');
       else commitRoi(null, 'clear');
     }
@@ -3282,7 +3320,22 @@ const IJShell = (() => {
       }
       if (e.button !== 0 || !ROI_TOOLS.has(tool)) return;
 
+      // the wand traces what is under the click: the controller does it (the engine owns the pixels)
+      if (tool === 'wand') {
+        if (opts.onWand) opts.onWand(Math.floor(p.x), Math.floor(p.y), { shift: e.shiftKey, alt: e.altKey });
+        return;
+      }
       const tol = tolImg();
+      // segmented line / angle in progress: a vertex per click (pixel-centre integers, as a line); an angle ends at its third
+      if ((tool === 'polyline' || tool === 'angle') && polyDraft) {
+        const pt = [Math.floor(p.x), Math.floor(p.y)];
+        const last = polyDraft.points[polyDraft.points.length - 1];
+        if (tool === 'polyline' && e.detail >= 2 && last && last[0] === pt[0] && last[1] === pt[1]) { finishPolygon(false); return; }
+        polyDraft.points.push(pt);
+        if (tool === 'angle' && polyDraft.points.length === 3) { finishPolygon(false); return; }
+        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+        return;
+      }
       // polygon in progress: add a vertex (close on the first one / double click)
       if (tool === 'polygon' && polyDraft) {
         const pt = [Math.round(p.x), Math.round(p.y)];
@@ -3302,7 +3355,7 @@ const IJShell = (() => {
           stage.setPointerCapture(e.pointerId);
           return;
         }
-        if (!(tool === 'point' && !e.shiftKey) && P.hitRoi(activeRoi, p.x, p.y, activeRoi.type === 'line' ? tol : 0)) {
+        if (!(tool === 'point' && !e.shiftKey) && P.hitRoi(activeRoi, p.x, p.y, (activeRoi.type === 'line' || activeRoi.type === 'polyline' || activeRoi.type === 'angle') ? tol : 0)) {
           drag = { kind: 'move', start: activeRoi, p0: p, moved: false, id: e.pointerId };
           stage.setPointerCapture(e.pointerId);
           return;
@@ -3315,8 +3368,15 @@ const IJShell = (() => {
         commitRoi({ type: 'point', points: pts }, 'draw');
         return;
       }
+      if (tool === 'polyline' || tool === 'angle') {
+        polyDraft = { kind: tool, points: [[Math.floor(p.x), Math.floor(p.y)]], rubber: null };
+        activeRoi = null; pushRois();
+        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+        emitRoi(null, false, 'clear');
+        return;
+      }
       if (tool === 'polygon') {
-        polyDraft = { points: [[Math.round(p.x), Math.round(p.y)]], rubber: null };
+        polyDraft = { kind: 'polygon', points: [[Math.round(p.x), Math.round(p.y)]], rubber: null };
         activeRoi = null; pushRois();
         display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
         emitRoi(null, false, 'clear');
@@ -3432,6 +3492,7 @@ const IJShell = (() => {
     listen(stage, 'contextmenu', (e) => { if (tool === 'zoom') e.preventDefault(); });
     listen(stage, 'dblclick', (e) => {
       if (tool === 'polygon' && polyDraft && polyDraft.points.length >= 3) { e.preventDefault(); finishPolygon(true); }
+      else if (tool === 'polyline' && polyDraft && polyDraft.points.length >= 2) { e.preventDefault(); finishPolygon(false); }
     });
     listen(stage, 'wheel', (e) => {
       if (!info) return;
@@ -3466,7 +3527,7 @@ const IJShell = (() => {
         return;
       }
       if (polyDraft) {
-        if (e.key === 'Enter') { e.preventDefault(); finishPolygon(true); return; }
+        if (e.key === 'Enter') { e.preventDefault(); finishPolygon(polyDraft.kind === 'polygon'); return; }
         if (e.key === 'Escape') { e.preventDefault(); cancelPolygon(); commitRoi(null, 'clear'); return; }
         if (e.key === 'Backspace') {
           e.preventDefault();

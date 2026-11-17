@@ -151,11 +151,14 @@ test('IJRoi masks, areas, perimeters', () => {
   near(IJRoi.perimeter({ type: 'oval', x: 0, y: 0, w: 10, h: 4 }), Math.PI * (3 * 7 - Math.sqrt((15 + 2) * (5 + 6))), 1e-12);
   assert.equal(IJRoi.mask({ type: 'oval', x: 3, y: 3, w: 1, h: 1 }, 10, 10).data[0], 1);
 
-  // polygon: right triangle (0,0)(4,0)(0,4): pixel centres with x+y ≤ 2 → 6
+  // polygon: right triangle (0,0)(4,0)(0,4), ImageJ's PolygonFiller: a centre exactly on the right boundary is INSIDE
+  // (the diagonal x+y=4 passes through the centres with i+j=3), so the mask is 10 pixels, not the 6 of x+y < 4.
   const tri = { type: 'polygon', points: [[0, 0], [4, 0], [0, 4]] };
   const mt = IJRoi.mask(tri, 4, 4);
-  assert.deepEqual(arr(mt.data), [1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
-  assert.equal(IJRoi.area(tri), 6);
+  assert.deepEqual(arr(mt.data), [1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0]);
+  // the 1.0.0 rule (journal entries without maskRule) kept the centres on the boundary out
+  assert.deepEqual(arr(IJRoi.mask(Object.assign({ fillRule: 1 }, tri), 4, 4).data), [1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(IJRoi.area(tri), 10);
   near(IJRoi.perimeter(tri), 8 + 4 * Math.SQRT2, 1e-12);
   // a rectangle drawn as polygon fills every pixel (left/top inclusive, right/bottom exclusive)
   assert.equal(IJRoi.area({ type: 'polygon', points: [[0, 0], [3, 0], [3, 2], [0, 2]] }), 6);

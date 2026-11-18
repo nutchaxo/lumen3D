@@ -22,7 +22,7 @@ class TestAllowlist(unittest.TestCase):
     def test_api_ships_php_and_two_support_files_only(self):
         shipped = {p.relative_to(ROOT).as_posix() for _, p in br.collect_files(ROOT) if p.relative_to(ROOT).parts[0] == "api"}
         for name in shipped:
-            self.assertTrue(name.endswith(".php") or name in ("api/.htaccess", "api/ca-bundle.pem"), name)
+            self.assertTrue(name.endswith(".php") or name in ("api/.htaccess", "api/ca-bundle.pem", "api/code-manifest.json"), name)
         for state in ("api/admin_credential.json", "api/stats.json", "api/page-drafts/.migrated", "api/plugin-trust.json"):
             self.assertNotIn(state, shipped)
 

@@ -12,6 +12,7 @@ Run: python tests/test_stale_code.py
 import shutil
 import sys
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
@@ -188,6 +189,79 @@ class BuildStampTests(unittest.TestCase):
         shipped = {a for a, _ in br.collect_files(ROOT)}
         for arc in br.CODE_VERSION_FILES:
             self.assertIn(arc, shipped)
+
+
+class CodeManifestTests(unittest.TestCase):
+    """api/code-manifest.json: which shipped PHP file differs, hashed after stamping."""
+
+    def _tree(self):
+        by_name = {a: (ROOT / a).read_bytes() for a in br.CODE_VERSION_FILES}
+        by_name["api/admin.php"] = b"<?php // admin"
+        by_name["router.php"] = b"<?php // router"
+        by_name["install.php"] = b"<?php // installer"
+        by_name["api/.htaccess"] = b"Deny from all"
+        by_name["js/app.js"] = b"x"
+        return by_name
+
+    def test_manifest_hashes_the_stamped_php_files(self):
+        import hashlib, json
+        by_name = self._tree()
+        br.stamp_code_version(by_name, "9.8.7")
+        br.build_code_manifest(by_name, "9.8.7")
+        doc = json.loads(by_name["api/code-manifest.json"])
+        self.assertEqual(doc["version"], "9.8.7")
+        self.assertEqual(sorted(doc["files"]), ["api/_admin_lib.php", "api/admin.php", "router.php"])
+        self.assertEqual(doc["files"]["api/_admin_lib.php"], hashlib.sha256(by_name["api/_admin_lib.php"]).hexdigest())
+        self.assertIn(b"const LUMEN_CODE_VERSION = '9.8.7';", by_name["api/_admin_lib.php"])
+        self.assertNotIn("install.php", doc["files"])
+        self.assertNotIn("api/code-manifest.json", doc["files"])
+        raw = by_name["api/code-manifest.json"].decode("utf-8")
+        self.assertEqual(raw, json.dumps(doc, sort_keys=True, separators=(",", ":")))
+
+    def test_build_fails_without_any_api_php(self):
+        with self.assertRaises(ValueError):
+            br.build_code_manifest({"router.php": b"<?php"}, "9.8.7")
+
+    def test_manifest_passes_the_api_allowlist_and_is_not_protected(self):
+        from pathlib import PurePosixPath
+        self.assertFalse(br.is_excluded(PurePosixPath("api/code-manifest.json")))
+        src = (ROOT / "api" / "_admin_lib.php").read_text(encoding="utf-8")
+        self.assertNotIn("code-manifest", src[src.index("function admin_update_protected"):src.index("const ADMIN_UPDATE_OBSOLETE")])
+        self.assertNotIn("code-manifest", Path(ds.__file__).read_text(encoding="utf-8")[Path(ds.__file__).read_text(encoding="utf-8").index("_UPDATE_PROTECT"):][:3000])
+
+
+class PermissionRepairKeysTests(unittest.TestCase):
+    def test_repair_reports_what_it_could_not_change(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "api").mkdir()
+            (root / "api" / "late.php").write_text("<?php\n", encoding="utf-8")
+            (root / "dev_server.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "other.txt").write_text("x", encoding="utf-8")
+            real_chmod = Path.chmod
+
+            def chmod(self, mode, *a, **k):
+                if self.name == "other.txt":
+                    raise PermissionError("not the owner")
+                return real_chmod(self, mode, *a, **k)
+
+            with mock.patch.object(ds, "ROOT", root),                  mock.patch.object(Path, "chmod", chmod),                  mock.patch.object(ds.os, "access", lambda p, m, **k: False):
+                out = ds._apply_tree_modes()
+        if os.name != "posix":
+            self.assertEqual(out["failedPaths"], [])
+            self.assertEqual(out["codeUnwritable"], [])
+            return
+        self.assertIn("other.txt", out["failedPaths"])
+        self.assertEqual(out["failed"], len(out["failedPaths"]))
+        self.assertLessEqual(len(out["failedPaths"]), 20)
+        self.assertEqual(sorted(out["codeUnwritable"]), ["api/late.php", "dev_server.py"])
+        for k in ("fixed", "failed", "scanned", "dirMode", "fileMode", "split"):
+            self.assertIn(k, out)
+
+    def test_python_answer_has_no_reinstall(self):
+        self.assertFalse(ds._version_info()["reinstallSupported"])
 
 
 if __name__ == "__main__":

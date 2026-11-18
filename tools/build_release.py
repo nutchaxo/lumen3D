@@ -107,7 +107,7 @@ API_RUNTIME_STATE = frozenset(
 # Runtime directories under api/ (PHP sessions, login throttle, file locks, page drafts).
 API_RUNTIME_DIRS = frozenset({".sessions", ".bruteforce", ".locks", ".telemetry", "page-drafts"})
 
-API_SHIPPED_FILES = frozenset({".htaccess", "ca-bundle.pem"})
+API_SHIPPED_FILES = frozenset({".htaccess", "ca-bundle.pem", "code-manifest.json"})
 
 EXCLUDED_DIR_NAMES = frozenset({"__pycache__"})
 EXCLUDED_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db", ".htaccess.lumen-backup"})
@@ -439,6 +439,31 @@ def stamp_code_version(by_name, version):
     return by_name
 
 
+CODE_MANIFEST = "api/code-manifest.json"
+
+
+def build_code_manifest(by_name, version):
+    """Add api/code-manifest.json: the sha256 of every shipped PHP entry point (api/*.php
+    and root-level *.php except install.php, which an update never touches), taken AFTER
+    stamping. A host reads it (api/_code_probe.php) to tell which file an update did not
+    write. The manifest does not list itself. Raises ValueError when nothing was hashed."""
+    files = {}
+    for arc, data in by_name.items():
+        parts = arc.split("/")
+        if not arc.endswith(".php") or arc == "install.php" or len(parts) > 2:
+            continue
+        if len(parts) == 2 and parts[0] != "api":
+            continue
+        files[arc] = sha256_hex(data)
+    if not any(a.startswith("api/") for a in files):
+        raise ValueError("no api/*.php to hash into the code manifest")
+    by_name[CODE_MANIFEST] = json.dumps(
+        {"version": version, "files": dict(sorted(files.items()))},
+        sort_keys=True, separators=(",", ":")).encode("utf-8")
+    print(f"    code manifest: {len(files)} PHP files")
+    return by_name
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build the Lumen3D web release zip.")
     parser.add_argument("--version", required=True, help="platform version X.Y.Z")
@@ -479,6 +504,7 @@ def main():
     stamp_asset_versions(by_name, args.version)
     try:
         stamp_code_version(by_name, args.version)
+        build_code_manifest(by_name, args.version)
     except ValueError as e:
         print(f"ERROR: {e}")
         return 1

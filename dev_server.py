@@ -484,7 +484,7 @@ def _apply_tree_modes(max_entries: int = 200_000) -> dict:
     """Repair pass: re-apply the resolved modes across the install (symlinks skipped)."""
     out = {"fixed": 0, "failed": 0, "scanned": 0,
            "dirMode": format(_dir_mode(), "04o"), "fileMode": format(_file_mode(), "04o"),
-           "split": _perms_owner_split()}
+           "split": _perms_owner_split(), "failedPaths": [], "codeUnwritable": []}
     if os.name != "posix":
         return out
     dir_mode, file_mode = _dir_mode(), _file_mode()
@@ -493,7 +493,7 @@ def _apply_tree_modes(max_entries: int = 200_000) -> dict:
             p = Path(dirpath) / name
             out["scanned"] += 1
             if out["scanned"] > max_entries:
-                return out
+                return _code_unwritable(out)
             if p.is_symlink():
                 continue
             rel = p.relative_to(ROOT).as_posix()
@@ -507,6 +507,27 @@ def _apply_tree_modes(max_entries: int = 200_000) -> dict:
                 out["fixed"] += 1
             except OSError:
                 out["failed"] += 1
+                if len(out["failedPaths"]) < 20:
+                    out["failedPaths"].append(rel)
+    return _code_unwritable(out)
+
+
+def _code_unwritable(out: dict) -> dict:
+    """chmod cannot change ownership: a served code file (.py/.php at the root and in
+    api/) that this process can neither write nor replace by rename is listed."""
+    for folder in (ROOT, ROOT / "api"):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for name in names:
+            p = folder / name
+            if len(out["codeUnwritable"]) >= 50:
+                return out
+            if p.suffix not in (".py", ".php") or not p.is_file():
+                continue
+            if not os.access(p, os.W_OK) and not os.access(folder, os.W_OK):
+                out["codeUnwritable"].append(p.relative_to(ROOT).as_posix())
     return out
 
 
@@ -2674,6 +2695,7 @@ def _version_info() -> dict:
         "filesVersion": code["filesVersion"],
         "codeStale": code["stale"],
         "codeDiagnosis": code["diagnosis"],
+        "reinstallSupported": False,
     }
 
 

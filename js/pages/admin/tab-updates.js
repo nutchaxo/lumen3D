@@ -390,11 +390,136 @@ function fill(text, vars) {
   return out;
 }
 
+let _repair = { busy: false, result: null };
+
+/** The late files PHP could not write, the PHP account, and the repair button. */
+function staleRepairBlock(s, vars) {
+  const yn = (b) => (b === true ? t('admin.staleCodeYes', 'yes') : b === false ? t('admin.staleCodeNo', 'no') : '?');
+  const rows = s.outdated.slice(0, 12).map((o) => {
+    const owner = o.owner ? `${o.owner}${o.group ? ':' + o.group : ''}` : '?';
+    // The updater replaces a file by renaming it aside, so a writable directory is enough:
+    // `replaceable` is the answer the operator needs; an older probe only knows `writable`.
+    const hasReplaceable = typeof o.replaceable === 'boolean';
+    const w = yn(hasReplaceable ? o.replaceable : (o.exists === false ? o.dirWritable === true : o.writable === true));
+    const wText = hasReplaceable
+      ? fill(t('admin.staleCodeReplaceable', 'PHP can replace: {w}', { w }), { w })
+      : fill(t('admin.staleCodeWritable', 'writable by PHP: {w}', { w }), { w });
+    return `<li><code>${escHtml(o.path)}</code> <span class="adm-muted">— ${escHtml(o.perms || '?')}, ${escHtml(owner)}, ${escHtml(wText)}</span></li>`;
+  }).join('');
+  const user = s.phpUser
+    ? `<p class="adm-muted" style="margin:0 0 8px;font-size:.85em">${escHtml(fill(t('admin.staleCodePhpUser', 'PHP runs as {user}.', { user: s.phpUser }), { user: s.phpUser }))}</p>` : '';
+  const labelKey = s.reinstall
+    ? ['admin.staleCodeRepairReinstall', 'Repair permissions and reinstall version {files}']
+    : ['admin.staleCodeRepair', 'Repair permissions'];
+  const label = fill(t(labelKey[0], labelKey[1], vars), vars);
+  return `
+        ${rows ? `<ul style="margin:0 0 8px;padding-left:18px">${rows}</ul>` : ''}
+        ${user}
+        <p style="margin:0 0 12px"><button class="adm-btn adm-btn-sm" id="btn-stale-repair"${_repair.busy || _versionsLoading ? ' disabled' : ''}>${_repair.busy
+    ? `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.staleCodeRepairing', 'Repairing…'))}`
+    : `<i data-lucide="wrench"></i> ${escHtml(label)}`}</button></p>`;
+}
+
+/** What the last repair did, inside the card. */
+function staleRepairResult() {
+  const r = _repair.result;
+  if (!r) return '';
+  const out = [];
+  if (r.error) {
+    out.push(`<p style="margin:0 0 8px;color:var(--color-danger,#c0392b)">${escHtml(r.error)}</p>`);
+  } else {
+    const vars = { fixed: r.fixed, failed: r.failed };
+    const done = fill(t('admin.staleCodeRepairDone', '{fixed} entries fixed, {failed} failed.', vars), vars);
+    out.push(`<p style="margin:0 0 8px">${escHtml(done)}${r.reinstalled ? ' ' + escHtml(t('admin.staleCodeReinstalled', 'The version was reinstalled.')) : ''}</p>`);
+  }
+  const paths = [...new Set([...(r.failedPaths || []), ...(r.codeUnwritable || [])])];
+  if (paths.length) {
+    out.push(`<p class="adm-muted" style="margin:0 0 4px">${escHtml(t('admin.staleCodeCannotWrite', 'PHP cannot change these files, they belong to another account: upload them again by SFTP, or ask the host to give the PHP user write access to them.'))}</p>`);
+    out.push(`<ul style="margin:0 0 12px;padding-left:18px">${paths.slice(0, 20).map((p) => `<li><code>${escHtml(p)}</code></li>`).join('')}</ul>`);
+  }
+  return out.join('');
+}
+
+/** A failed repair or reinstall call as one sentence: never the raw code. */
+function repairErrorText(base, r) {
+  const d = r && r.data;
+  const code = d && typeof d.error === 'string' ? d.error : '';
+  let why;
+  if (code === 'no_update_available' || code === 'reinstall_unsupported') why = t('admin.staleCodeReinstallOutdated', 'the server refused because the process that answered still runs older code: re-check, then try again');
+  else if (code === 'unverifiable_release') why = unverifiableMessage('');
+  else if (code === 'reinstall_version_mismatch') {
+    const latest = d && typeof d.latest === 'string' ? d.latest : '';
+    const current = d && typeof d.current === 'string' ? d.current : '';
+    const tuple = (v) => String(v).split('.').map((n) => parseInt(n, 10) || 0);
+    const cmp = (a, b) => { const x = tuple(a), y = tuple(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; };
+    if (latest && current && cmp(latest, current) > 0) {
+      why = fill(t('admin.updateErr_reinstall_version_mismatch', 'a newer version {latest} is published: run the normal update instead, it rewrites every file too', { latest }), { latest });
+    } else {
+      const vars = { latest: latest || '?', current: current || '?' };
+      why = fill(t('admin.updateErr_reinstall_version_differs', 'the published release ({latest}) differs from the files on disk ({current}): re-check, then decide', vars), vars);
+    }
+  } else if (code) why = t(`admin.updateErr_${code}`, '') || t('admin.updateErr_generic', 'unexpected error: see the server log');
+  else why = '';
+  return `${base} (HTTP ${r ? r.status : 0}${why ? ' — ' + why : ''})`;
+}
+
+/** Repair the modes of what PHP owns (the Security tab's repair), reinstall the current
+ *  version when the server can, then ask again whether the code is fresh. */
+async function repairStale() {
+  if (_repair.busy || _updating || _versionsLoading) return;
+  _repair = { busy: true, result: null };
+  render();
+  const s0 = describeStaleCode(_versions);
+  const reinstall = s0?.reinstall === true;
+  const result = { fixed: 0, failed: 0, failedPaths: [], codeUnwritable: [], reinstalled: false, error: null };
+  try {
+    const r = await apiFetchStatus(`${API_ADMIN}?action=repair_permissions`, { method: 'POST', body: '{}' });
+    const d = r.data;
+    if (!d || d.error || typeof d.fixed !== 'number') {
+      result.error = repairErrorText(t('admin.permsFailed', 'Permission repair failed.'), r);
+    } else {
+      result.fixed = d.fixed;
+      result.failed = Number(d.failed) || 0;
+      result.failedPaths = Array.isArray(d.failedPaths) ? d.failedPaths.filter((p) => typeof p === 'string') : [];
+      result.codeUnwritable = Array.isArray(d.codeUnwritable) ? d.codeUnwritable.filter((p) => typeof p === 'string') : [];
+      if (reinstall) {
+        // `version` pins the target: a server must not install a newer release in its place.
+        const u = await apiFetchStatus(`${API_ADMIN}?action=update_apply`, {
+          method: 'POST', body: JSON.stringify({ reinstall: true, version: s0.files }) });
+        const ud = u.data;
+        if (!(u.ok && ud && ud.ok)) {
+          result.error = repairErrorText(t('admin.staleCodeReinstallFailed', 'The reinstall failed.'), u);
+        } else if (ud.applied && String(ud.applied) !== String(s0.files)) {
+          // Another version landed: the running admin JS is outdated, reload as an update does.
+          const applied = String(ud.applied);
+          toast(t('admin.updateApplied', 'Mise à jour appliquée (v{v}) — rechargement…', { v: applied }).replace('{v}', applied), 'success');
+          setTimeout(() => location.reload(), 2000);
+          _repair = { busy: false, result: null };
+          render();
+          return;
+        } else if (Number(ud.pendingFinalize) > 0) {
+          result.error = t('admin.staleCodeReinstallPending', 'Some files could not be replaced and are parked beside their target: finish the update by renaming them, or upload them again by SFTP.');
+        } else if (ud.reinstalled === true) {
+          result.reinstalled = true;
+        } else {
+          result.error = repairErrorText(t('admin.staleCodeReinstallFailed', 'The reinstall failed.'), { status: u.status, data: null });
+        }
+      }
+    }
+  } catch (e) {
+    console.error('stale code repair failed', e);
+    result.error = t('admin.permsFailed', 'Permission repair failed.');
+  }
+  _repair = { busy: false, result };
+  await loadVersions({ keepResult: true });
+  render();
+}
+
 /** Warning shown when the code the server executes differs from its files. Not shown
  *  while an update runs: the process is about to be replaced and the numbers are moving. */
 function staleCodeBlock() {
   if (_updating) return '';
-  const s = describeStaleCode(_versions);
+  const s = describeStaleCode(_versions, { retriesExhausted: _staleExhausted });
   if (!s) return '';
   const vars = { code: s.code ?? '?', files: s.files, seconds: s.waitSeconds, details: s.details };
   const remedyText = {
@@ -405,6 +530,10 @@ function staleCodeBlock() {
     incomplete: ['admin.staleCodeRemedyIncomplete', 'Run the update again (Verify, then update) so that every file reaches version {code}.'],
     reupload: ['admin.staleCodeRemedyReupload', 'Upload the files of version {files} again over the existing ones (the api/ folder first), or ask your host to restart PHP, then re-check.'],
     opcache: ['admin.staleCodeRemedyOpcache', 'Restart PHP or ask your host to clear opcache, then re-check.'],
+    processes: ['admin.staleCodeRemedyProcesses', 'PHP dropped its cached copy, but other PHP processes of the host still hold the old one. Each is cleared when it next answers. If the warning stays, ask your host to restart PHP.'],
+    permissions: s.reinstall
+      ? ['admin.staleCodeRemedyPermissionsReinstall', 'Some files of version {files} could not be written by PHP, so their old versions are still in place. Repair their permissions and reinstall the version from here.']
+      : ['admin.staleCodeRemedyPermissions', 'Some files of version {files} could not be written by PHP, so their old versions are still in place. Repair their permissions, then upload version {files} again over them (the api/ folder first) if the warning stays.'],
   }[s.remedy];
   // t() interpolates {files} itself, so the parked list must be in the params it receives.
   const remedyVars = s.remedy === 'parked' ? { ...vars, files: (s.parked || []).join(', ') } : vars;
@@ -421,7 +550,9 @@ function staleCodeBlock() {
         <p style="margin:8px 0">${escHtml(body)}</p>
         <p class="adm-muted" style="margin:8px 0 ${details ? '4px' : '12px'}">${escHtml(remedy)}</p>
         ${details ? `<p class="adm-muted" style="margin:0 0 12px;font-size:.85em">${escHtml(details)}</p>` : ''}
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-stale-recheck"><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.staleCodeRecheck', 'Re-check'))}</button>
+        ${s.repairable ? staleRepairBlock(s, vars) : ''}
+        ${staleRepairResult()}
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-stale-recheck"${_repair.busy || _versionsLoading ? ' disabled' : ''}><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.staleCodeRecheck', 'Re-check'))}</button>
       </div>
     </div>`;
 }
@@ -479,6 +610,7 @@ function render(lastOutcome) {
 
   el('btn-recheck')?.addEventListener('click', recheck);
   el('btn-stale-recheck')?.addEventListener('click', recheck);
+  el('btn-stale-repair')?.addEventListener('click', repairStale);
   el('btn-ack-update')?.addEventListener('click', ackOutcome);
   bindUpdateBody(root);
   bindPluginUpdates(root);
@@ -486,22 +618,48 @@ function render(lastOutcome) {
   if (_updating) paintProgress();
 }
 
-let _staleRetried = false;
+let _staleTries = 0;
+let _staleExhausted = false;
+let _versionsGen = 0;
+let _versionsLoading = false;
+const STALE_RETRIES = 4;
+const STALE_RETRY_MS = 1500;
 
-async function loadVersions() {
+/** Reads the versions and, while the server says it just dropped its cached code, asks
+ *  again. One run at a time: a newer call supersedes a running loop (its generation ends it). */
+async function loadVersions(opts = {}) {
+  const gen = ++_versionsGen;
+  _staleTries = 0; _staleExhausted = false;
   const v = await apiFetch(`${API_ADMIN}?action=version`);
+  if (gen !== _versionsGen) return;
   if (v) _versions = v;
-  // When the server dropped its cached code during that very request, the answer still
-  // came from the old bytecode: ask once more before telling the operator anything.
-  const s = describeStaleCode(_versions);
-  if (s && s.retry && !_staleRetried) {
-    _staleRetried = true;
-    await new Promise((r) => setTimeout(r, 800));
-    const again = await apiFetch(`${API_ADMIN}?action=version`);
-    if (again) _versions = again;
-  } else if (!s) {
-    _staleRetried = false;
+  let s = describeStaleCode(_versions, { retriesExhausted: false });
+  if (s && s.retry) {
+    _versionsLoading = true;
+    render();
+    let answers = 0;
+    let lost = false;
+    try {
+      while (s && s.retry && _staleTries < STALE_RETRIES) {
+        _staleTries++;
+        await new Promise((r) => setTimeout(r, STALE_RETRY_MS));
+        if (gen !== _versionsGen) return;
+        const again = await apiFetch(`${API_ADMIN}?action=version`);
+        if (gen !== _versionsGen) return;
+        if (!again) { lost = true; break; }   // no answer: the old reading says nothing new
+        answers++;
+        _versions = again;
+        s = describeStaleCode(_versions, { retriesExhausted: false });
+      }
+    } finally {
+      if (gen === _versionsGen) _versionsLoading = false;
+    }
+    // Still "the server just acted" after every answered attempt: other PHP processes hold the old code.
+    if (s && s.retry && !lost && answers >= STALE_RETRIES) _staleExhausted = true;
   }
+  // A repair report belongs to the card it was shown in: it survives only the re-check
+  // that follows the repair while the banner is still up.
+  if (!(opts.keepResult && s)) _repair = { ..._repair, result: null };
 }
 
 async function loadCheck() {
@@ -530,7 +688,11 @@ async function loadPipelinePack() {
 
 function recheck() {
   if (_updating) return;
-  loadVersions().then(() => render());
+  // A running repair or retry loop owns the versions read: the GitHub checks still run.
+  if (!(_repair.busy || _versionsLoading)) {
+    _repair = { ..._repair, result: null };
+    loadVersions().then(() => render());
+  }
   loadCheck(); loadPluginUpdates(); loadPipelinePack();
 }
 

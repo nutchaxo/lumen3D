@@ -102,7 +102,12 @@ async function repairPerms() {
       + ` (HTTP ${r.status}${d && d.error ? ' — ' + d.error : ''})`, 'error');
     return;
   }
-  toast(t('admin.permsDone', '{n} entrées corrigées ({failed} échecs).', { n: d.fixed, failed: d.failed }));
+  let msg = t('admin.permsDone', '{n} entrées corrigées ({failed} échecs).', { n: d.fixed, failed: d.failed });
+  const failedPaths = Array.isArray(d.failedPaths) ? d.failedPaths.filter((p) => typeof p === 'string') : [];
+  if (d.failed > 0 && failedPaths.length) {
+    msg += ' ' + failedPaths.slice(0, 3).join(', ') + (failedPaths.length > 3 || d.failed > 3 ? ' …' : '');
+  }
+  toast(msg);
   loadPermsState();
 }
 

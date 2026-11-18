@@ -205,7 +205,8 @@ function mkt_modes_recursive(string $base): void {
 
 /** Secrets that keep 0600 whatever the site mode is. */
 function admin_is_secret_path(string $rel): bool {
-    return strncmp($rel, 'api/', 4) === 0 && substr($rel, -5) === '.json';
+    // code-manifest.json ships in every release (hashes of shipped code, no secret).
+    return strncmp($rel, 'api/', 4) === 0 && substr($rel, -5) === '.json' && $rel !== 'api/code-manifest.json';
 }
 
 /** Read-only view of the permission situation, for the admin UI. */
@@ -255,7 +256,7 @@ function admin_apply_tree_modes(int $maxEntries = 200000): array {
     $root = rtrim(str_replace('\\', '/', admin_root()), '/');
     $out = ['fixed' => 0, 'failed' => 0, 'scanned' => 0,
             'dirMode' => sprintf('%04o', admin_dir_mode()), 'fileMode' => sprintf('%04o', admin_file_mode()),
-            'split' => admin_perms_owner_split()];
+            'split' => admin_perms_owner_split(), 'failedPaths' => [], 'codeUnwritable' => []];
     if (DIRECTORY_SEPARATOR !== '/') return $out;
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
@@ -269,7 +270,17 @@ function admin_apply_tree_modes(int $maxEntries = 200000): array {
         if ($rel === '' || admin_is_secret_path($rel)) continue;
         $want = $info->isDir() ? admin_dir_mode_for((string)$path) : admin_file_mode_for((string)$path);
         if ((@fileperms((string)$path) & 0777) === $want) continue;
-        if (@chmod((string)$path, $want)) $out['fixed']++; else $out['failed']++;
+        if (@chmod((string)$path, $want)) $out['fixed']++;
+        else {
+            $out['failed']++;
+            if (count($out['failedPaths']) < 20) $out['failedPaths'][] = $rel;
+        }
+    }
+    // chmod cannot change ownership: a served PHP file that PHP can neither write nor
+    // replace by rename (directory not writable either) can only be fixed by its owner.
+    foreach (admin_served_php_files() as $f) {
+        if (count($out['codeUnwritable']) >= 50) break;
+        if (!@is_writable($f) && !@is_writable(dirname($f))) $out['codeUnwritable'][] = admin_rel_path($f);
     }
     return $out;
 }
@@ -1923,10 +1934,11 @@ function admin_stale_recovery_file(): string { return admin_root() . '/api/.stal
 function admin_recover_stale_code(): array {
     $file = admin_stale_recovery_file();
     $prev = is_file($file) ? json_decode((string)@file_get_contents($file), true) : null;
-    if (is_array($prev) && isset($prev['at'], $prev['result']) && is_int($prev['at']) && is_array($prev['result'])
-        && time() - $prev['at'] >= 0 && time() - $prev['at'] < LUMEN_STALE_RECOVERY_INTERVAL) {
-        return array_merge($prev['result'], ['throttled' => true]);
-    }
+    // Only the opcache reset is throttled. The per-file invalidation is cheap and is
+    // per PHP process/node: on a host with several nodes the throttle file is shared,
+    // so a throttled call would make node B skip the invalidation node A just tried.
+    $recent = is_array($prev) && isset($prev['at'], $prev['result']) && is_int($prev['at']) && is_array($prev['result'])
+        && time() - $prev['at'] >= 0 && time() - $prev['at'] < LUMEN_STALE_RECOVERY_INTERVAL;
     $before = count(admin_parked_update_files());
     $swapped = admin_update_finish_pending();
     $files = admin_served_php_files();
@@ -1935,10 +1947,14 @@ function admin_recover_stale_code(): array {
         foreach ($files as $f) if (@opcache_invalidate($f, true)) $invalidated++;
     }
     $reset = false;
-    if ($invalidated === 0 && function_exists('opcache_reset')) $reset = (bool)@opcache_reset();
+    $throttled = false;
+    if ($invalidated === 0 && function_exists('opcache_reset')) {
+        if ($recent) $throttled = true;
+        else $reset = (bool)@opcache_reset();
+    }
     $result = ['parkedBefore' => $before, 'parkedAfter' => count(admin_parked_update_files()), 'swapped' => $swapped,
-               'invalidated' => $invalidated, 'filesTried' => count($files), 'opcacheReset' => $reset, 'throttled' => false];
-    @file_put_contents($file, json_encode(['at' => time(), 'result' => $result]));
+               'invalidated' => $invalidated, 'filesTried' => count($files), 'opcacheReset' => $reset, 'throttled' => $throttled];
+    if (!$recent || $reset) @file_put_contents($file, json_encode(['at' => time(), 'result' => $result]));
     return $result;
 }
 
@@ -3361,12 +3377,43 @@ function admin_merge_htaccess(string $existing, string $shipped): string {
  *  can simply be re-run — the copy pass is idempotent). One apply at a time: a
  *  second click (or a second admin) is refused while the first runs, instead of two
  *  copy passes racing over the same files. */
-function admin_update_apply_php(): array {
+/** Advertised to admin.php so a caller can tell a library that accepts `$reinstall`
+ *  from an older one whose admin_update_apply_php() takes no argument. */
+const LUMEN_UPDATE_REINSTALL = true;
+
+/** May the release `$latest` be applied over files at `$current`? A newer one always;
+ *  the same version only as an explicit reinstall (repairing files that were not all
+ *  written); an older one never. */
+function admin_update_target_ok(string $latest, string $current, bool $reinstall): bool {
+    if ($latest === '') return false;
+    $cmp = admin_version_tuple($latest) <=> admin_version_tuple($current);
+    return $cmp > 0 || ($cmp === 0 && $reinstall);
+}
+
+/** A well-formed `X.Y.Z` version from a request body, else '' (not pinned). */
+function admin_update_requested_version($v): string {
+    $v = is_string($v) ? ltrim(trim($v), 'v') : '';
+    return preg_match('/^\d{1,4}\.\d{1,5}\.\d{1,6}$/', $v) === 1 ? $v : '';
+}
+
+/** Verdict for applying the release `$latest` over files at `$current`: '' = go,
+ *  'no_update_available' (a normal update with nothing newer), or
+ *  'reinstall_version_mismatch' (a reinstall must rewrite exactly the version on disk,
+ *  and the one the caller named when it named one: never a different release). */
+function admin_update_target_verdict(string $latest, string $current, bool $reinstall, string $requested = ''): string {
+    if (!$reinstall) return admin_update_target_ok($latest, $current, false) ? '' : 'no_update_available';
+    if ($latest === '') return 'no_update_available';
+    if ((admin_version_tuple($latest) <=> admin_version_tuple($current)) !== 0) return 'reinstall_version_mismatch';
+    if ($requested !== '' && (admin_version_tuple($requested) <=> admin_version_tuple($current)) !== 0) return 'reinstall_version_mismatch';
+    return '';
+}
+
+function admin_update_apply_php(bool $reinstall = false, $requested = ''): array {
     $lock = @fopen(admin_private_dir() . '/.update.lock', 'c');
     if ($lock === false) return [500, ['error' => 'update_lock_failed']];
     if (!@flock($lock, LOCK_EX | LOCK_NB)) { @fclose($lock); return [409, ['error' => 'update_in_progress']]; }
     try {
-        return admin_update_apply_locked();
+        return admin_update_apply_locked($reinstall, admin_update_requested_version($requested));
     } finally {
         @flock($lock, LOCK_UN);
         @fclose($lock);
@@ -3428,7 +3475,7 @@ function admin_update_fail(string $code, string $relPath, int $updated): array {
     return [500, ['error' => $code, 'path' => $relPath, 'filesUpdated' => $updated]];
 }
 
-function admin_update_apply_locked(): array {
+function admin_update_apply_locked(bool $reinstall = false, string $requested = ''): array {
     if (!class_exists('ZipArchive')) return [500, ['error' => 'zip_unavailable']];
     @set_time_limit(600);
     $root = admin_root();
@@ -3439,7 +3486,11 @@ function admin_update_apply_locked(): array {
     if (!is_array($rel) || !is_array($rel['assets'] ?? null)) return [502, ['error' => 'release_unreachable']];
     $latest = ltrim((string)($rel['tag_name'] ?? ''), 'v');
     $current = admin_max_version(changelog_dir()) ?? '0.0.0';
-    if ($latest === '' || admin_version_tuple($latest) <= admin_version_tuple($current)) {
+    $verdict = admin_update_target_verdict($latest, $current, $reinstall, $requested);
+    if ($verdict === 'reinstall_version_mismatch') {
+        return [409, ['error' => 'reinstall_version_mismatch', 'current' => $current, 'latest' => $latest, 'requested' => $requested]];
+    }
+    if ($verdict !== '') {
         return [400, ['error' => 'no_update_available', 'current' => $current, 'latest' => $latest]];
     }
     $assets = admin_release_assets($rel, $latest);
@@ -3575,7 +3626,8 @@ function admin_update_apply_locked(): array {
     admin_opcache_flush($phpWritten);   // else opcache serves the OLD compiled *.php
     return [200, ['ok' => true, 'applied' => $latest, 'from' => $current, 'filesUpdated' => $updated,
                   'skippedProtected' => $skipped, 'pendingFinalize' => count($pending),
-                  'signature' => LUMEN_RELEASE_PUBKEY !== '' ? 'verified' : 'sha256-only']];
+                  'signature' => LUMEN_RELEASE_PUBKEY !== '' ? 'verified' : 'sha256-only']
+            + ($latest === $current ? ['reinstalled' => true] : [])];
 }
 
 /** Drop stale bytecode for freshly-overwritten *.php so the NEW code answers the

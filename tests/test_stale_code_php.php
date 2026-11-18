@@ -93,15 +93,25 @@ $b = child($r4, 'echo json_encode(["s" => admin_code_status()]);');
 check('the file is still reported as parked', ($b['s']['diagnosis']['parked'] ?? null) === ['child.php']);
 check('and the recovery says it left it', ($b['s']['diagnosis']['recovery']['parkedAfter'] ?? null) === 1);
 
-echo "\nthe recovery is throttled and acts only as far as it must\n";
+echo "\nthe reset is throttled, the per-file invalidation is not\n";
 $r5 = make_root($src, '1.2.0', ['1.2.0', '1.3.0'], $PLACEHOLDER); $roots[] = $r5;
 $t = child($r5, 'echo json_encode(["a" => admin_code_status(), "b" => admin_code_status()]);');
 check('the first call runs the recovery', ($t['a']['diagnosis']['recovery']['throttled'] ?? null) === false);
-check('the second call inside the window is throttled and keeps the first result', ($t['b']['diagnosis']['recovery']['throttled'] ?? null) === true
-    && ($t['b']['diagnosis']['recovery']['filesTried'] ?? -1) === ($t['a']['diagnosis']['recovery']['filesTried'] ?? -2));
+check('the second call still tries every file (no throttle on invalidation)',
+    ($t['b']['diagnosis']['recovery']['filesTried'] ?? -1) === ($t['a']['diagnosis']['recovery']['filesTried'] ?? -2)
+    && ($t['b']['diagnosis']['recovery']['filesTried'] ?? 0) > 0);
 check('the attempt is recorded in api/.stale-recovery.json', is_file("$r5/api/.stale-recovery.json"));
 check('a code older than its files says code_older', ($t['a']['diagnosis']['direction'] ?? null) === 'code_older');
 check('without opcache functions nothing is invalidated nor reset (CLI)', ($t['a']['diagnosis']['recovery']['invalidated'] ?? -1) === 0);
+$t2 = child($r5, '$r = admin_recover_stale_code(); echo json_encode(["r" => $r, "reset" => function_exists("opcache_reset")]);');
+check('the recovery result keeps its documented shape', is_array($t2['r'] ?? null)
+    && array_keys($t2['r']) === ['parkedBefore', 'parkedAfter', 'swapped', 'invalidated', 'filesTried', 'opcacheReset', 'throttled']);
+if (!empty($t2['reset'])) {
+    check('inside the window the reset is skipped and reported as throttled',
+        ($t2['r']['throttled'] ?? null) === true && ($t2['r']['opcacheReset'] ?? null) === false);
+} else {
+    echo "  note  opcache_reset is not available on this CLI; the throttled reset is not exercised\n";
+}
 
 echo "\ncode NEWER than its files (an update that stopped half-way)\n";
 $r6 = make_root($src, '1.4.0', ['1.2.0', '1.3.0'], $PLACEHOLDER); $roots[] = $r6;
@@ -174,6 +184,57 @@ $i = run_admin($a3, 'install_plugin', 'POST');
 check('install over an older library is refused as stale_server_code, not bad_plugin_id', ($i['error'] ?? null) === 'stale_server_code' && array_key_exists('codeVersion', $i) && $i['codeVersion'] === null);
 $i = run_admin($a3, 'update_plugin', 'POST');
 check('update over an older library is refused the same way', ($i['error'] ?? null) === 'stale_server_code');
+
+require_once __DIR__ . '/../api/_admin_lib.php';
+echo "\nreinstall guard\n";
+check('a newer release is always applied', admin_update_target_ok('1.84.2', '1.84.1', false) && admin_update_target_ok('1.84.2', '1.84.1', true));
+check('the same version needs an explicit reinstall', !admin_update_target_ok('1.84.1', '1.84.1', false) && admin_update_target_ok('1.84.1', '1.84.1', true));
+check('an older release is never applied', !admin_update_target_ok('1.84.0', '1.84.1', true) && !admin_update_target_ok('1.9.0', '1.84.1', true));
+check('an empty tag is never applied', !admin_update_target_ok('', '1.84.1', true));
+// Reinstall installs exactly the version on disk, never another release.
+check('reinstall same version is allowed', admin_update_target_verdict('1.84.1', '1.84.1', true) === '');
+check('reinstall with a newer release is a mismatch', admin_update_target_verdict('1.85.0', '1.84.1', true) === 'reinstall_version_mismatch');
+check('reinstall with an older release is a mismatch', admin_update_target_verdict('1.84.0', '1.84.1', true) === 'reinstall_version_mismatch');
+check('reinstall with a different requested version is a mismatch', admin_update_target_verdict('1.84.1', '1.84.1', true, '1.84.0') === 'reinstall_version_mismatch');
+check('reinstall with the matching requested version is allowed', admin_update_target_verdict('1.84.1', '1.84.1', true, '1.84.1') === '');
+check('reinstall with an empty tag is refused', admin_update_target_verdict('', '1.84.1', true) !== '');
+check('normal update: newer is allowed', admin_update_target_verdict('1.85.0', '1.84.1', false) === '');
+check('normal update: same is refused', admin_update_target_verdict('1.84.1', '1.84.1', false) === 'no_update_available');
+check('normal update: older is refused', admin_update_target_verdict('1.84.0', '1.84.1', false) === 'no_update_available');
+check('normal update ignores a requested version', admin_update_target_verdict('1.85.0', '1.84.1', false, '1.84.1') === '');
+check('a requested version is validated', admin_update_requested_version('v1.84.1') === '1.84.1' && admin_update_requested_version('1.84') === '' && admin_update_requested_version(['x']) === '' && admin_update_requested_version('1.84.1; rm') === '');
+check('the library advertises reinstall support', defined('LUMEN_UPDATE_REINSTALL') && LUMEN_UPDATE_REINSTALL === true);
+$rf = new ReflectionFunction('admin_update_apply_php');
+check('admin_update_apply_php takes optional $reinstall and $requested', $rf->getNumberOfParameters() === 2 && $rf->getParameters()[0]->isOptional() && $rf->getParameters()[1]->isOptional() && $rf->getParameters()[0]->getName() === 'reinstall');
+
+echo "\nthe permission repair names what it could not fix\n";
+$r8 = make_root($src, null, ['1.3.0'], $PLACEHOLDER); $roots[] = $r8;
+$pm = child($r8, 'echo json_encode(admin_apply_tree_modes());');
+check('failedPaths and codeUnwritable are always present as lists', is_array($pm['failedPaths'] ?? null) && is_array($pm['codeUnwritable'] ?? null)
+    && isset($pm['fixed'], $pm['failed'], $pm['scanned'], $pm['dirMode'], $pm['fileMode'], $pm['split']));
+check('the code manifest is not treated as a secret', !admin_is_secret_path('api/code-manifest.json') && admin_is_secret_path('api/stats.json'));
+
+echo "\nadmin.php: the probe rides on the version answer\n";
+copy(__DIR__ . '/../api/_code_probe.php', "$a2/api/_code_probe.php");
+$v = run_admin($a2, 'version');
+check('a stale host carries probe.cause', is_array($v['codeDiagnosis']['probe'] ?? null)
+    && in_array($v['codeDiagnosis']['probe']['cause'] ?? '', ['opcache', 'not_written', 'incomplete', 'unknown'], true));
+check('the probe sees the executing and files versions', ($v['codeDiagnosis']['probe']['executingVersion'] ?? null) === '1.2.0'
+    && ($v['codeDiagnosis']['probe']['filesVersion'] ?? null) === '1.3.0');
+check('the probe ran its recovery', is_array($v['codeDiagnosis']['probe']['recovery'] ?? null));
+check('reinstallSupported is advertised', ($v['reinstallSupported'] ?? null) === true);
+copy(__DIR__ . '/../api/_code_probe.php', "$a3/api/_code_probe.php");
+$v = run_admin($a3, 'version');
+check('over an OLD library the probe still answers, executing version unknown', is_array($v['codeDiagnosis']['probe'] ?? null)
+    && ($v['codeDiagnosis']['libraryOutdated'] ?? null) === true
+    && array_key_exists('executingVersion', $v['codeDiagnosis']['probe']) && $v['codeDiagnosis']['probe']['executingVersion'] === null);
+check('the probe names the stamped-1.2.0 library as late', ($v['codeDiagnosis']['probe']['cause'] ?? null) === 'not_written'
+    && ($v['codeDiagnosis']['probe']['outdated'][0]['path'] ?? null) === 'api/_admin_lib.php');
+$v = run_admin($a1, 'version');
+check('a healthy host carries no probe', !isset($v['codeDiagnosis']['probe']) && ($v['codeStale'] ?? null) === false);
+file_put_contents("$a3/api/_admin_lib.php", str_replace('const LUMEN_UPDATE_REINSTALL = true;', '', (string)file_get_contents("$a3/api/_admin_lib.php")));
+$v = run_admin($a3, 'version');
+check('a library without reinstall support is reported as such', ($v['reinstallSupported'] ?? null) === false);
 
 echo "\nthe version override (a test seam; the endpoint never passes it)\n";
 require_once __DIR__ . '/../api/_admin_lib.php';

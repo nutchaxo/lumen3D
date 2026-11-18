@@ -53,6 +53,43 @@ assert.equal(describeOpcache(null, null), '');
 assert.match(describeOpcache({ enabled: true, restrictApi: '/srv', validateTimestamps: false, revalidateFreq: 2 }, { invalidated: 3, filesTried: 5, opcacheReset: false }),
   /opcache\.restrict_api=\/srv.*validate_timestamps=0.*invalidated=3\/5, reset=no/);
 
+// ---- 1.84.2: the probe (api/_code_probe.php) ----
+const pv = (probe, extra = {}, top = {}) => describeStaleCode({ ...php, codeVersion: null, ...top,
+  codeDiagnosis: { backend: 'php', direction: 'code_older', parked: [], libraryOutdated: true, probe, ...extra } });
+const LATE = { path: 'api/_admin_lib.php', exists: true, writable: false, dirWritable: false, owner: 'sftp', group: 'sftp', perms: '0644', phpOwns: false };
+// A late file PHP cannot write: repairable from the banner.
+const perm = pv({ cause: 'not_written', outdated: [LATE, 'junk', { nope: 1 }, null], php: { user: 'www-data' } });
+assert.equal(perm.remedy, 'permissions'); assert.equal(perm.repairable, true);
+assert.equal(perm.cause, 'not_written'); assert.equal(perm.phpUser, 'www-data');
+assert.deepEqual(perm.outdated, [LATE], 'outdated keeps only objects with a string path');
+assert.equal(perm.reinstall, false);
+assert.equal(pv({ cause: 'not_written', outdated: [LATE] }, {}, { reinstallSupported: true }).reinstall, true);
+// not_written without a listed file is not repairable.
+assert.notEqual(pv({ cause: 'not_written', outdated: [] }).remedy, 'permissions');
+assert.equal(pv({ cause: 'opcache', outdated: [] }).repairable, false);
+// The probe says the disk is newer than the files version: incomplete update.
+assert.equal(pv({ cause: 'incomplete', outdated: [] }).remedy, 'incomplete');
+// Parked files and Python still outrank the probe; permissions outrank recheck.
+assert.equal(pv({ cause: 'not_written', outdated: [LATE] }, { parked: ['api/a.php'] }).remedy, 'parked');
+assert.equal(pv({ cause: 'not_written', outdated: [LATE], recovery: { invalidated: 3, tried: 3, blocked: false } }).remedy, 'permissions');
+assert.equal(pv(null, { backend: 'python' }).remedy, 'restart');
+// The probe invalidated this process: recheck, then (retries spent) processes.
+const POPEN = { cause: 'opcache', outdated: [], recovery: { invalidated: 5, tried: 5, blocked: false } };
+const rc = pv(POPEN, { recovery: { throttled: true, invalidated: 0, filesTried: 0 } });
+assert.equal(rc.remedy, 'recheck'); assert.equal(rc.retry, true, 'a throttled library recovery is ignored when the probe invalidated');
+const spent = describeStaleCode({ ...php, codeVersion: null, codeDiagnosis: { backend: 'php', parked: [], probe: POPEN } }, { retriesExhausted: true });
+assert.equal(spent.remedy, 'processes'); assert.equal(spent.retry, false);
+// retriesExhausted changes nothing else.
+assert.equal(describeStaleCode(php, { retriesExhausted: true }).remedy, 'parked');
+// The probe could not clear opcache: ask the host (even when the library is outdated).
+const blocked = pv({ cause: 'opcache', outdated: [], recovery: { invalidated: 0, tried: 4, blocked: true } });
+assert.equal(blocked.remedy, 'opcache');
+// Without a probe cause the old library rule stays.
+assert.equal(pv({ outdated: [], recovery: { invalidated: 0, tried: 4, blocked: false } }).remedy, 'reupload');
+// Details carry the probe's recovery.
+assert.match(describeOpcache(null, null, { invalidated: 2, tried: 6, blocked: true }), /probe invalidated=2\/6, blocked=yes/);
+assert.match(blocked.details, /blocked=yes/);
+
 // Install refusals with a sentence of their own (and an English one when the dictionary lacks it).
 assert.deepEqual(INSTALL_ERROR_KEYS.stale_server_code.slice(0, 2), ['staleServerCode', ['codeVersion', 'filesVersion']]);
 assert.deepEqual(INSTALL_ERROR_KEYS.unsupported_placement.slice(0, 2), ['unsupportedPlacement', ['placement']]);
@@ -91,7 +128,10 @@ const langs = ['en', 'fr', 'es', 'nl'].map((l) => [l, JSON.parse(readFileSync(pa
 const need = {
   admin: ['staleCodeTitle', 'staleCodeBody', 'staleCodeBodyOlder', 'staleCodeBodyNewer', 'staleCodeRemedyParked', 'staleCodeRemedyOpcache',
     'staleCodeRemedyRestart', 'staleCodeRemedyRecheck', 'staleCodeRemedyWait', 'staleCodeRemedyIncomplete', 'staleCodeRemedyReupload',
-    'staleCodeDetails', 'staleCodeRecheck'],
+    'staleCodeDetails', 'staleCodeRecheck', 'staleCodeRemedyProcesses', 'staleCodeRemedyPermissions',
+    'staleCodeRemedyPermissionsReinstall', 'staleCodeYes', 'staleCodeNo', 'staleCodeWritable', 'staleCodeReplaceable', 'updateErr_reinstall_version_mismatch', 'updateErr_reinstall_version_differs', 'staleCodePhpUser', 'staleCodeRepair',
+    'staleCodeRepairReinstall', 'staleCodeRepairing', 'staleCodeRepairDone', 'staleCodeReinstalled', 'staleCodeReinstallFailed',
+    'staleCodeCannotWrite'],
   mkt: ['staleServerCode', 'staleServerCodeOlder', 'unsupportedPlacement', 'badPluginId'],
 };
 for (const [l, d] of langs) {
@@ -102,9 +142,26 @@ for (const [l, d] of langs) {
   assert.ok(d.admin.staleCodeRemedyParked.includes('{files}'), `${l} parked token`);
   assert.ok(d.admin.staleCodeBodyOlder.includes('{files}') && d.admin.staleCodeBodyNewer.includes('{code}') && d.admin.staleCodeBodyNewer.includes('{files}'), `${l} body tokens (older/newer)`);
   assert.ok(d.admin.staleCodeRemedyWait.includes('{seconds}') && d.admin.staleCodeRemedyIncomplete.includes('{code}') && d.admin.staleCodeRemedyReupload.includes('{files}') && d.admin.staleCodeDetails.includes('{details}'), `${l} remedy tokens`);
+  assert.ok(d.admin.staleCodeRepairReinstall.includes('{files}') && d.admin.staleCodeRemedyPermissions.includes('{files}')
+    && d.admin.staleCodeWritable.includes('{w}') && d.admin.staleCodeReplaceable.includes('{w}') && d.admin.updateErr_reinstall_version_mismatch.includes('{latest}') && d.admin.staleCodePhpUser.includes('{user}')
+    && d.admin.staleCodeRepairDone.includes('{fixed}') && d.admin.staleCodeRepairDone.includes('{failed}'), `${l} repair tokens`);
   assert.ok(d.mkt.staleServerCodeOlder.includes('{filesVersion}'), `${l} older token`);
   assert.ok(d.mkt.staleServerCode.includes('{codeVersion}') && d.mkt.staleServerCode.includes('{filesVersion}'), `${l} stale tokens`);
   assert.ok(d.mkt.unsupportedPlacement.includes('{placement}'), `${l} placement token`);
+}
+
+// Probe-only facts (old library fallback): incomplete names the disk library; opcache settings stand in.
+{
+  const inc = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.2',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: { cause: 'incomplete', library: { diskVersion: '1.84.3' } } } });
+  assert.equal(inc.remedy, 'incomplete');
+  assert.equal(inc.code, '1.84.3');
+  const w = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.2',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: { cause: 'opcache', opcache: { enabled: true, restrictApi: '/x', validateTimestamps: true, revalidateFreq: 2 },
+      recovery: { invalidated: 0, tried: 5, blocked: true } } } });
+  assert.equal(w.remedy, 'wait');
+  assert.equal(w.waitSeconds, 2);
+  assert.ok(w.details.includes('opcache.revalidate_freq=2') && w.details.includes('blocked=yes'));
 }
 
 console.log('ok');

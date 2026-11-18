@@ -191,7 +191,24 @@ switch ($action) {
                             'parked' => function_exists('admin_parked_update_files') ? admin_parked_update_files() : [],
                             'opcache' => null, 'recovery' => null],
         ];
+        // The probe is self-contained (it calls nothing of the library), so it still
+        // answers when the library that executes is the old one that lacks the
+        // stamp function: that is exactly the case it exists for.
+        if (!empty($code['stale']) && is_file(__DIR__ . '/_code_probe.php')) {
+            if (!is_array($code['diagnosis'] ?? null)) $code['diagnosis'] = ['backend' => 'php'];
+            try {
+                require_once __DIR__ . '/_code_probe.php';
+                $code['diagnosis']['probe'] = function_exists('lumen_probe_diagnose')
+                    ? lumen_probe_diagnose(dirname(__DIR__), $code['filesVersion'] ?? null, $code['codeVersion'] ?? null, true)
+                    : null;
+            } catch (\Throwable $e) {
+                // A host that disables a file function must not lose the whole version answer.
+                error_log('stale-code probe failed: ' . $e->getMessage());
+                $code['diagnosis']['probe'] = null;
+            }
+        }
         admin_json_out([
+            'reinstallSupported' => defined('LUMEN_UPDATE_REINSTALL') && LUMEN_UPDATE_REINSTALL === true,
             'web' => admin_max_version(changelog_dir()),
             'preprocess' => admin_preprocess_version(),
             'repo' => GITHUB_REPO,
@@ -290,7 +307,14 @@ switch ($action) {
         // extract → protected copy-over, synchronously. The response carries the
         // outcome directly (`applied`) — no status pipeline to poll, unlike the
         // Python server's Blue-Green swap.
-        [$code, $payload] = admin_update_apply_php();
+        // `reinstall` only reaches a library that declares it supports the argument.
+        $canReinstall = defined('LUMEN_UPDATE_REINSTALL') && LUMEN_UPDATE_REINSTALL === true;
+        // A library that cannot reinstall must refuse, not fall back to a normal update:
+        // that would install a newer release than the one the caller pinned.
+        if (!empty($body['reinstall']) && !$canReinstall) admin_json_out(['error' => 'reinstall_unsupported'], 409);
+        [$code, $payload] = $canReinstall
+            ? admin_update_apply_php(!empty($body['reinstall']), $body['version'] ?? '')
+            : admin_update_apply_php();
         admin_json_out($payload, $code);
     }
 

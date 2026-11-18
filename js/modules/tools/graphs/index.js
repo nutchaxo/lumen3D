@@ -267,22 +267,44 @@
       }
       let [lo, hi] = spec.xDomain || xv.dom || minMax(col);
       if (!(hi > lo)) hi = lo + 1;
-      let nb, w, round = false;
       const step = xv.step > 0 ? xv.step : 0;
-      if (step && (hi - lo) / step + 1 <= MAX_BINS) { nb = Math.round((hi - lo) / step) + 1; w = step; round = true; }
-      else { nb = clamp(spec.bins || xv.bins || 64, 2, MAX_BINS); w = (hi - lo) / nb; }
-      if (spec.bins && round && spec.bins < nb) { nb = spec.bins; w = (hi - lo) / nb; round = false; }
+      const nSteps = step ? Math.round((hi - lo) / step) + 1 : 0;
+      const want = clamp(spec.bins || xv.bins || 64, 2, MAX_BINS);
+      // 'round': one bin per natural step (a plane, a frame, an intensity level);
+      // 'group': a whole number of steps per bin, so every bin holds the same number of
+      //          planes (counts and volumes are not a sawtooth of n and n + 1);
+      // 'floor': a continuous variable cut in equal widths.
+      let mode = 'floor';
+      if (step && nSteps >= 2) mode = nSteps <= MAX_BINS && !(spec.bins && spec.bins < nSteps) ? 'round' : 'group';
+      let nb, w, per = 1;
+      if (mode === 'round') { nb = nSteps; w = step; }
+      else if (mode === 'group') { per = Math.ceil(nSteps / want); nb = Math.ceil(nSteps / per); w = per * step; }
+      else { nb = want; w = (hi - lo) / nb; }
       const idx = new Int16Array(n);                // nb ≤ MAX_BINS; −1 = outside
-      for (let i = 0; i < n; i++) {
-        const v = col[i];
-        let b;
-        if (round) b = Math.round((v - lo) / w);
-        else { b = Math.floor((v - lo) / w); if (v === hi) b = nb - 1; }
-        idx[i] = b >= 0 && b < nb ? b : -1;      // NaN fails both tests
+      if (mode === 'floor') {
+        // Columns are Float32 and the domain is not: a value a Float32 ulp outside
+        // [lo, hi] belongs to the end bin, not to nowhere.
+        const tol = Math.max(Math.abs(lo), Math.abs(hi), w) * 2.4e-7;
+        for (let i = 0; i < n; i++) {
+          const v = col[i];
+          let b = Math.floor((v - lo) / w);
+          if (v >= hi - tol && v <= hi + tol) b = nb - 1;
+          else if (b < 0 && v >= lo - tol) b = 0;
+          idx[i] = b >= 0 && b < nb ? b : -1;      // NaN fails both tests
+        }
+      } else {
+        for (let i = 0; i < n; i++) {
+          const k = Math.round((col[i] - lo) / step);
+          idx[i] = k >= 0 && k < nSteps ? (per === 1 ? k : (k / per) | 0) : -1;
+        }
       }
       const centers = new Array(nb);
-      for (let b = 0; b < nb; b++) centers[b] = round ? lo + b * w : lo + (b + 0.5) * w;
-      return { nb, idx, centers, cat: false, labels: null, w, lo, round };
+      for (let b = 0; b < nb; b++) {
+        if (mode === 'round') centers[b] = lo + b * step;
+        else if (mode === 'group') centers[b] = lo + ((b * per + Math.min(nSteps - 1, b * per + per - 1)) / 2) * step;
+        else centers[b] = lo + (b + 0.5) * w;
+      }
+      return { nb, idx, centers, cat: false, labels: null, w, lo, round: mode === 'round' };
     }
 
     function accumulate(n, idx, nb, gcol, G, ycol, useThr, thr) {
@@ -362,7 +384,7 @@
       if (mode === 'max') { base = -Infinity; for (const v of y) if (v !== null && v > base) base = v; }
       else if (mode === 'sum') { base = 0; for (const v of y) if (v !== null) base += v; }
       else if (mode === 'first') { base = NaN; for (const v of y) if (v !== null && v !== 0) { base = v; break; } }
-      if (!(base > 0) && !(base < 0)) return [y, 1];
+      if (!(base > 0)) return [y, 1];           // a zero or negative base would flip signs or divide by nothing
       return [y.map(v => (v === null ? null : v / base)), base];
     }
 
@@ -417,7 +439,7 @@
               sd[b] = s.agg === 'mean' && c ? Math.sqrt(Math.max(0, acc.sum2[k] / c - (acc.sum[k] / c) ** 2)) : null;
             }
             if (G > 1 && !groupRows) continue;
-            if (series.length >= MAX_SERIES) { notes.push('series-capped'); continue; }
+            if (series.length >= MAX_SERIES) { if (!notes.includes('series-capped')) notes.push('series-capped'); continue; }
             const parts = [];
             // With one Y the axis title already names it: the legend only says which group.
             if (s.x === INT) parts.push(xv.label);
@@ -426,7 +448,11 @@
             const [normed, base] = normalizeSeries(y, s.normalize);
             series.push({
               label: parts.join(' · ') || (COUNT_FAMILY.has(s.agg) ? '' : (yv?.label || '')),
-              color: (s.x === INT ? xv.color : seriesColor(table, yv, gv, g)) || null,
+              // Several Y variables: the colour is the channel's (the entity the eye follows),
+              // and the groups of one channel differ by dash. One Y: the group's colour.
+              color: (s.x === INT ? xv.color : (s.y.length > 1 && yv && yv.color ? yv.color : seriesColor(table, yv, gv, g))) || null,
+              gi: gv ? g : null,
+              multiY: s.y.length > 1,
               varId: s.x === INT ? xid : yid,
               group: gv ? gv.cats.names[g] : null,
               x: bins.cat ? bins.labels.slice() : bins.centers.slice(),
@@ -466,7 +492,10 @@
         const ycol = colOf(table, yid);
         const G = gv ? gv.cats.names.length : 1;
         const bucket = Array.from({ length: G }, () => ({ x: [], y: [] }));
-        for (let i = 0; i < table.n; i += stride) {
+        for (let i = 0; i < table.n; i++) {
+          // Every stride-th row would alias with the voxel / frame layout (an X scatter
+          // collapsing to a few columns): keep a pseudo-random 1 in `stride` instead.
+          if (stride > 1 && (Math.imul(i, 2654435761) >>> 0) % stride !== 0) continue;
           const a = xcol[i], b = ycol[i];
           if (a !== a || b !== b) continue;
           let g = 0;
@@ -500,6 +529,7 @@
       const xh = xh0 > xl ? xh0 : xl + 1, yh = yh0 > yl ? yh0 : yl + 1;
       const wx = (xh - xl) / nb, wy = (yh - yl) / nb;
       const z = new Float64Array(nb * nb);
+      const tx = Math.max(Math.abs(xl), Math.abs(xh), wx) * 2.4e-7, ty = Math.max(Math.abs(yl), Math.abs(yh), wy) * 2.4e-7;
       const both = Boolean(xv.intensity && yv.intensity);
       const thr = s.threshold;
       let m = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
@@ -508,18 +538,21 @@
         const a = xc[i], b = yc[i];
         if (a !== a || b !== b) continue;
         let bx = Math.floor((a - xl) / wx), by = Math.floor((b - yl) / wy);
-        if (a === xh) bx = nb - 1;
-        if (b === yh) by = nb - 1;
+        if (bx === nb && a <= xh + tx) bx = nb - 1; else if (bx < 0 && a >= xl - tx) bx = 0;
+        if (by === nb && b <= yh + ty) by = nb - 1; else if (by < 0 && b >= yl - ty) by = 0;
         if (bx >= 0 && bx < nb && by >= 0 && by < nb) z[by * nb + bx]++;
-        // Pearson over the voxels where either channel carries signal: the shared
-        // background would otherwise dominate the correlation.
-        if (both && !(a > thr || b > thr)) continue;
-        m++; sx += a; sy += b; sxx += a * a; syy += b * b; sxy += a * b;
+        // Manders: M1 = Σ a over the voxels where b is above its threshold / Σ a over ALL
+        // voxels (M2 the other way round) — textbook denominators, so a threshold does
+        // not change what the fraction is a fraction of.
         if (both) {
           sxT += a; syT += b;
           if (b > thr) sxIn += a;
           if (a > thr) syIn += b;
         }
+        // Pearson over the voxels where either channel carries signal: the shared
+        // background would otherwise dominate the correlation.
+        if (both && !(a > thr || b > thr)) continue;
+        m++; sx += a; sy += b; sxx += a * a; syy += b * b; sxy += a * b;
       }
       let pearson = null;
       if (m > 2) {
@@ -549,6 +582,7 @@
       if (s.agg === 'density') result = computeDensity(table, s);
       else if (s.agg === 'points') result = computePoints(table, s);
       else result = computeXY(table, s);
+      if (Array.isArray(table.notes) && table.notes.length) result.notes = [...new Set([...(result.notes || []), ...table.notes])];
       result.spec = s;
       result.table = table.id;
       result.measureUnit = table.measureUnit || '';
@@ -557,7 +591,10 @@
 
     function csvCell(v) {
       if (v === null || v === undefined || (typeof v === 'number' && !Number.isFinite(v))) return '';
-      const s = String(v);
+      let s = String(v);
+      // A text cell a spreadsheet would run as a formula (a dataset, channel or region name
+      // is operator data): the leading apostrophe makes it plain text.
+      if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
       return /[",\n\r;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     }
 
@@ -565,7 +602,7 @@
     function toCsv(result) {
       const lines = [];
       if (result.heats || result.heat) {
-        lines.push(['dataset', 'x', 'y', 'count'].join(','));
+        lines.push(['dataset', 'x', 'y', 'count'].map(csvCell).join(','));
         for (const h of result.heats || [{ ds: null, ...result.heat }]) {
           h.z.forEach((row, r) => row.forEach((c, i) => {
             if (c) lines.push([csvCell(h.ds?.name || ''), csvCell(h.x[i]), csvCell(h.y[r]), csvCell(c)].join(','));
@@ -573,7 +610,7 @@
         }
         return lines.join('\n') + '\n';
       }
-      lines.push(['dataset', 'series', result.x?.label || 'x', 'y', 'sd', 'n'].join(','));
+      lines.push(['dataset', 'series', result.x?.label || 'x', 'y', 'sd', 'n'].map(csvCell).join(','));
       for (const s of result.series) {
         s.x.forEach((x, i) => lines.push([
           csvCell(s.ds?.name || ''), csvCell(s.label), csvCell(x), csvCell(s.y[i]),
@@ -583,7 +620,24 @@
       return lines.join('\n') + '\n';
     }
 
-    return { varOf, colOf, fillAxis, normalizeSpec, makeBins, compute, toCsv, intensityIds, expandIds, ALL, INT };
+    /** Throws NO_VARIABLE when the spec names a variable the table does not have. normalizeSpec
+     *  repairs such a spec with the table's defaults — right for a page, wrong in Compare,
+     *  where that panel would answer another question than the others. `table` needs only
+     *  `vars`. The @int tokens are not variables (the caller resolves or the table expands). */
+    function checkSpec(table, spec) {
+      const ids = new Set(table.vars.map(v => v.id));
+      const isToken = (id) => id === INT || id === ALL || /^@int\[\d+\]$/.test(id);
+      const missing = [];
+      const need = (id) => { if (typeof id === 'string' && id && !isToken(id) && !ids.has(id)) missing.push(id); };
+      if (spec && typeof spec === 'object') {
+        need(spec.x);
+        if (Array.isArray(spec.y)) spec.y.forEach(need);
+        need(spec.group);
+      }
+      if (missing.length) throw gerr('NO_VARIABLE', `the table has no variable ${missing.join(', ')}`);
+    }
+
+    return { varOf, colOf, fillAxis, normalizeSpec, checkSpec, makeBins, compute, toCsv, intensityIds, expandIds, ALL, INT };
   })();
 
   // engine-worker.js loads this file for the engine alone: nothing below runs there.
@@ -592,13 +646,35 @@
     return;
   }
 
-  /** The channel variables a comparison can line up: those every dataset has (all of
-   *  them when no channel is shared). `tb.total` / `v.haveCount` come from the host. */
-  function commonChannels(tb) {
+  /** The channel variables every dataset of a comparison has (all of a lone dataset's). */
+  function sharedChannels(tb) {
     const ints = tb.vars.filter(v => v.ch);
     if (!(tb.total > 1)) return ints.map(v => v.id);
-    const common = ints.filter(v => v.haveCount === tb.total).map(v => v.id);
-    return common.length ? common : ints.map(v => v.id);
+    return ints.filter(v => v.haveCount === tb.total).map(v => v.id);
+  }
+
+  /** What the chips show as "every channel": the shared ones, or — when no channel is
+   *  shared — all of them, each dataset then drawing its own. */
+  function commonChannels(tb) {
+    const shared = sharedChannels(tb);
+    return shared.length ? shared : tb.vars.filter(v => v.ch).map(v => v.id);
+  }
+
+  /** The spec a Compare round sends to every panel: "every channel" and "@int[k]" become the
+   *  shared channels' ids, which are the same in every panel. With no shared channel the
+   *  "every channel" token stays (each panel expands its own) and an "@int[k]" cannot be
+   *  resolved (`unresolved`). */
+  function specForPanels(spec, tb) {
+    const shared = tb ? sharedChannels(tb) : [];
+    let unresolved = false;
+    const nth = (id) => {
+      const m = /^@int\[(\d+)\]$/.exec(typeof id === 'string' ? id : '');
+      if (!m) return id;
+      if (!shared[+m[1]]) unresolved = true;
+      return shared[+m[1]] || id;
+    };
+    const y = (spec.y || []).flatMap(id => (id === INT ? (shared.length ? shared : [INT]) : [nth(id)]));
+    return { sent: { ...spec, x: nth(spec.x), y, only: spec.x === INT && shared.length ? shared : null }, unresolved };
   }
 
   /** Names of datasets that differ in one token (…-E8-Em3-… / …-E8-Em6-…): keep what differs. */
@@ -619,6 +695,35 @@
 
   function axisTitle(label, unit) {
     return unit ? `${label} (${unit})` : label;
+  }
+
+  /** Plotly's `separators` (decimal then thousands) for a language: 0,25 in French, 0.25 in English. */
+  function separatorsFor(lang) {
+    try {
+      const parts = new Intl.NumberFormat(lang || undefined).formatToParts(1234567.5);
+      const dec = (parts.find(p => p.type === 'decimal') || {}).value || '.';
+      const grp = (parts.find(p => p.type === 'group') || {}).value || ',';
+      return dec + grp;
+    } catch (_) { return '.,'; }
+  }
+
+  /** (value, digits) → text in the language's own number format. */
+  function numberFormatter(lang) {
+    return (v, d) => {
+      try { return v.toLocaleString(lang || undefined, { minimumFractionDigits: d, maximumFractionDigits: d }); }
+      catch (_) { return v.toFixed(d); }
+    };
+  }
+
+  /** A binary data: URL as a Blob, without fetch(): the page's CSP (connect-src 'self') refuses
+   *  fetch of a data: URL, which is how Plotly hands over an image. */
+  function dataUrlToBlob(url) {
+    const m = /^data:([^;,]*)(;base64)?,([\s\S]*)$/.exec(String(url));
+    if (!m) throw new Error('not a data URL');
+    const bin = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: m[1] || 'application/octet-stream' });
   }
 
   function yTitle(result, t) {
@@ -643,6 +748,7 @@
     const dark = Boolean(o.dark);
     const pal = dark ? PALETTE.dark : PALETTE.light;
     const spec = result.spec || o.spec || {};
+    const nf = o.nf || ((v, d) => v.toFixed(d));
     const layout = {
       margin: { t: 14, l: 58, r: 16, b: 46 },
       paper_bgcolor: 'rgba(0,0,0,0)',
@@ -652,6 +758,7 @@
       hovermode: 'closest',
       autosize: true
     };
+    if (o.separators) layout.separators = o.separators;
     const grid = o.grid || (dark ? '#2f2f2d' : '#e3e2dd');
     const data = [];
 
@@ -675,15 +782,15 @@
           colorscale: dark ? [[0, '#1a1a19'], [0.35, '#1f4f8f'], [1, '#8ec0ff']] : [[0, '#f4f7fc'], [0.35, '#9cc2f0'], [1, '#0b3a8a']],
           showscale: i === N - 1,
           colorbar: i === N - 1 ? { title: { text: logZ ? 'log₁₀(1+n)' : 'n', side: 'right' }, thickness: 10, len: 0.8 } : undefined,
-          hovertemplate: `${h.xLabel}: %{x:.3g}<br>${h.yLabel}: %{y:.3g}<br>n = %{customdata}<extra></extra>`
+          hovertemplate: `${escapeHtml(h.xLabel)}: %{x:.3g}<br>${escapeHtml(h.yLabel)}: %{y:.3g}<br>n = %{customdata}<extra></extra>`
         });
-        layout['xaxis' + ax] = { domain: xd, anchor: 'y' + ax, title: { text: axisTitle(h.xLabel, h.xUnit), standoff: 6 }, gridcolor: grid, zeroline: false };
-        layout['yaxis' + ax] = { domain: yd, anchor: 'x' + ax, title: { text: axisTitle(h.yLabel, h.yUnit), standoff: 6 }, gridcolor: grid, zeroline: false };
+        layout['xaxis' + ax] = { domain: xd, anchor: 'y' + ax, title: { text: escapeHtml(axisTitle(h.xLabel, h.xUnit)), standoff: 6 }, gridcolor: grid, zeroline: false };
+        layout['yaxis' + ax] = { domain: yd, anchor: 'x' + ax, title: { text: escapeHtml(axisTitle(h.yLabel, h.yUnit)), standoff: 6 }, gridcolor: grid, zeroline: false };
         const st = h.stats;
         const bits = [];
         if (h.ds) bits.push(`<b>${escapeHtml(h.ds.name)}</b>`);
-        if (st && st.pearson !== null && st.pearson !== undefined) bits.push(`r = ${st.pearson.toFixed(3)}`);
-        if (st && st.both && st.m1 !== null) bits.push(`M1 = ${st.m1.toFixed(2)}, M2 = ${st.m2 === null ? '–' : st.m2.toFixed(2)}`);
+        if (st && st.pearson !== null && st.pearson !== undefined) bits.push(`r = ${nf(st.pearson, 3)}`);
+        if (st && st.both && st.m1 !== null) bits.push(`M1 = ${nf(st.m1, 2)}, M2 = ${st.m2 === null ? '–' : nf(st.m2, 2)}`);
         if (bits.length) {
           layout.annotations.push({
             xref: 'paper', yref: 'paper', x: xd[0], y: yd[1] + (N > 1 ? 0.045 : 0.0), xanchor: 'left', yanchor: 'bottom',
@@ -704,11 +811,12 @@
       return own || pal[i % pal.length];
     };
     const dashOf = (s) => {
-      if (!multi) return 'solid';
+      if (!multi) return s.multiY && s.gi !== null && s.gi !== undefined ? DASHES[s.gi % DASHES.length] : 'solid';
       if (colorBy === 'dataset') return DASHES[(s.ds?.local || 0) % DASHES.length];
       return DASHES[(s.ds?.slot || 0) % DASHES.length];
     };
-    const symOf = (s) => SYMBOLS[((multi ? (colorBy === 'dataset' ? s.ds?.local : s.ds?.slot) : 0) || 0) % SYMBOLS.length];
+    // Several series on one dataset differ by marker as well as by colour (red / green must not be the only cue).
+    const symOf = (s, i) => SYMBOLS[(((multi ? (colorBy === 'dataset' ? s.ds?.local : s.ds?.slot) : (series.length > 1 ? i : 0)) || 0)) % SYMBOLS.length];
 
     const logY = spec.yScale === 'log';
     const logX = spec.xScale === 'log' && result.kind !== 'bar';
@@ -716,13 +824,15 @@
 
     series.forEach((s, i) => {
       const color = colorOf(s, i);
-      const name = s.label || (result.y?.label || '');
+      // Plotly draws a subset of HTML in names and titles (links included): text from
+      // a dataset, a channel or a region is escaped.
+      const name = escapeHtml(s.label || (result.y?.label || ''));
       const y = s.y.map(pos);
       if (result.kind === 'bar') {
         data.push({
-          type: 'bar', name, x: s.x, y, marker: { color, line: { color: dark ? SURFACE.dark : SURFACE.light, width: 2 } },
+          type: 'bar', name, x: s.x.map(v => (typeof v === 'string' ? escapeHtml(v) : v)), y, marker: { color, line: { color: dark ? SURFACE.dark : SURFACE.light, width: 2 } },
           error_y: s.sd ? { type: 'data', array: s.sd.map(v => v || 0), visible: true, color: layout.font.color, thickness: 1, width: 3 } : undefined,
-          hovertemplate: `${escapeHtml(name)}<br>%{x}: %{y:.4g}<extra></extra>`
+          hovertemplate: `${name}<br>%{x}: %{y:.4g}<extra></extra>`
         });
         return;
       }
@@ -730,8 +840,8 @@
         data.push({
           type: s.x.length > 4000 ? 'scattergl' : 'scatter', mode: 'markers', name,
           x: logX ? s.x.map(v => (v > 0 ? v : null)) : s.x, y,
-          marker: { color, size: 5, opacity: 0.55, symbol: symOf(s) },
-          hovertemplate: `${escapeHtml(name)}<br>%{x:.4g}, %{y:.4g}<extra></extra>`
+          marker: { color, size: 5, opacity: 0.55, symbol: symOf(s, i) },
+          hovertemplate: `${name}<br>%{x:.4g}, %{y:.4g}<extra></extra>`
         });
         return;
       }
@@ -747,8 +857,8 @@
         type: 'scatter', mode: dense ? 'lines' : 'lines+markers', name, legendgroup: name,
         x: logX ? s.x.map(v => (v > 0 ? v : null)) : s.x, y, connectgaps: false,
         line: { color, width: 2, dash },
-        marker: { color, size: 7, symbol: symOf(s), line: { color: dark ? SURFACE.dark : SURFACE.light, width: 2 } },
-        hovertemplate: `${escapeHtml(name)}<br>%{x:.4g}: %{y:.4g}<extra></extra>`
+        marker: { color, size: 7, symbol: symOf(s, i), line: { color: dark ? SURFACE.dark : SURFACE.light, width: 2 } },
+        hovertemplate: `${name}<br>%{x:.4g}: %{y:.4g}<extra></extra>`
       });
     });
 
@@ -759,15 +869,15 @@
     if (result.kind === 'bar') layout.barmode = 'group';
     const xl = result.x?.id === INT ? t('var_intensity') : (result.x?.label ? axisTitle(result.x.label, result.x.unit) : '');
     layout.xaxis = {
-      title: { text: xl, standoff: 6 }, gridcolor: grid, zeroline: false, type: result.kind === 'bar' ? 'category' : (logX ? 'log' : 'linear'),
+      title: { text: escapeHtml(xl), standoff: 6 }, gridcolor: grid, zeroline: false, type: result.kind === 'bar' ? 'category' : (logX ? 'log' : 'linear'),
       showticklabels: !(result.x?.id === ALL)
     };
-    layout.yaxis = { title: { text: yTitle(result, t), standoff: 6 }, gridcolor: grid, zeroline: false, type: logY ? 'log' : 'linear', rangemode: logY ? undefined : 'tozero' };
+    layout.yaxis = { title: { text: escapeHtml(yTitle(result, t)), standoff: 6 }, gridcolor: grid, zeroline: false, type: logY ? 'log' : 'linear', rangemode: logY ? undefined : 'tozero' };
     if (result.y?.agg === 'mean' || result.y?.agg === 'median' || result.y?.agg === 'min' || result.y?.agg === 'max') layout.yaxis.rangemode = 'normal';
     if (result.kind === 'points') layout.yaxis.rangemode = 'normal';
     if (isNum(o.cursorX) && result.kind === 'xy') {
       layout.shapes = [{ type: 'line', xref: 'x', yref: 'paper', x0: o.cursorX, x1: o.cursorX, y0: 0, y1: 1, line: { color: layout.font.color, width: 1, dash: 'dot' } }];
-      layout.annotations = [{ xref: 'x', yref: 'paper', x: o.cursorX, y: 1, text: o.cursorLabel || '', showarrow: false, yanchor: 'bottom', font: { size: 10, color: layout.font.color } }];
+      layout.annotations = [{ xref: 'x', yref: 'paper', x: o.cursorX, y: 1, text: escapeHtml(o.cursorLabel || ''), showarrow: false, yanchor: 'bottom', font: { size: 10, color: layout.font.color } }];
       layout.margin.t = 26;
     }
     return { data, layout };
@@ -809,7 +919,150 @@
     return [mk('x', 0), mk('y', 1), mk('z', 2), pc('x', 0), pc('y', 1), pc('z', 2)];
   }
 
+  /** The distance measurements of the page that can be sampled: two picked points in µm. */
+  function measurementLines(ctx) {
+    let list = [];
+    try { list = ctx.measurements && ctx.measurements.list ? ctx.measurements.list('viewer') : []; } catch (_) { list = []; }
+    const out = [];
+    const ok = (q) => q && isNum(q.x) && isNum(q.y) && isNum(q.z);
+    for (const m of Array.isArray(list) ? list : []) {
+      if (!m || m.visible === false || !Array.isArray(m.points) || m.points.length !== 2) continue;
+      const a = m.points[0] && m.points[0].physicalUm, b = m.points[1] && m.points[1].physicalUm;
+      if (!ok(a) || !ok(b)) continue;
+      out.push({
+        id: String(m.id || out.length),
+        name: typeof m.label === 'string' && m.label ? m.label.slice(0, 80) : `#${out.length + 1}`,
+        color: safeColor(m.color),
+        a: [a.x, a.y, a.z], b: [b.x, b.y, b.z]
+      });
+      if (out.length >= 12) break;
+    }
+    return out;
+  }
+
+  const lineSignature = (ctx) => measurementLines(ctx).map(l => `${l.id}:${l.name}:${l.color}:${l.a.join(',')}:${l.b.join(',')}`).join('|');
+
   const Sources = {
+    // One row per sample along each measurement line, in the frame on screen: the trilinear
+    // value of every channel between the two picked points. The box around the lines is read
+    // lossless at the finest level that holds it, so a short line is sampled on native voxels.
+    line: {
+      id: 'line',
+      applies: (ctx, meta) => meta.type !== '2d' && Boolean(ctx.data) && measurementLines(ctx).length > 0,
+      schema(ctx, t) {
+        const meta = ctx.dataset.getMeta();
+        const C = Math.max(1, meta.dimensions?.c || meta.channels?.length || 1);
+        const lines = measurementLines(ctx);
+        const vars = [
+          { id: 'd', label: t('var_d'), unit: 'µm', kind: 'num' },
+          { id: 'dr', label: t('var_dr'), unit: '', kind: 'num', dom: [0, 100], bins: 50, rel: true },
+          { id: 'line', label: t('var_line'), unit: '', kind: 'cat', cats: { names: lines.map(l => l.name), colors: lines.map(l => l.color) } },
+          ...channelVars(meta, t, C)
+        ];
+        return {
+          id: 'line', label: t('table_line'), vars, measureUnit: '',
+          defaults: { x: 'd', y: [INT], agg: 'mean', group: 'line' },
+          presets: [
+            { id: 'lineProfile', spec: { x: 'd', y: [INT], agg: 'mean', group: 'line' } },
+            { id: 'lineProfileRel', spec: { x: 'dr', y: [INT], agg: 'mean', group: 'line' } }
+          ]
+        };
+      },
+      key(ctx) {
+        const id = ctx.dataset.getId();
+        let shown = null;
+        try { shown = ctx.data && typeof ctx.data.displayedTree === 'function' ? ctx.data.displayedTree() : null; } catch (_) { shown = null; }
+        return shown && shown.path ? `${id}|${String(shown.path).replace(/\/$/, '')}|${lineSignature(ctx)}` : null;
+      },
+      async build(ctx, schema, opts) {
+        const D = ctx.data;
+        const lines = measurementLines(ctx);
+        if (!lines.length) throw gerr('NO_DATA', 'no measurement to sample');
+        let info;
+        try { info = D.info(); } catch (err) { throw gerr('NOT_READY', 'no volume mounted'); }
+        const C = info.channels;
+        const levels = D.levels();
+        const AX = ['x', 'y', 'z'];
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        let maxLen = 0;
+        for (const l of lines) {
+          for (const q of [l.a, l.b]) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], q[k]); hi[k] = Math.max(hi[k], q[k]); }
+          l.len = Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1], l.b[2] - l.a[2]);
+          maxLen = Math.max(maxLen, l.len);
+        }
+        // The box of the lines at a level, one voxel of margin for the trilinear taps, clamped to the volume.
+        const boxAt = (L) => {
+          const b = {};
+          let n = 1;
+          AX.forEach((a, k) => {
+            const v = L.voxelSize[a], dim = L.dims[a];
+            const v0 = clamp(Math.floor(lo[k] / v) - 1, 0, dim - 1);
+            const v1 = clamp(Math.ceil(hi[k] / v) + 2, v0 + 1, dim);
+            b[a + '0'] = v0; b[a + '1'] = v1;
+            n *= v1 - v0;
+          });
+          return { b, n };
+        };
+        let pick = levels[levels.length - 1];
+        let box = null;
+        for (const L of levels) {
+          const c = boxAt(L);
+          if (c.n * C <= CHANNEL_BUDGET) { pick = L; box = c.b; break; }
+        }
+        if (!box) box = boxAt(pick).b;
+        let reg;
+        try {
+          reg = await D.readRegion(box, Array.from({ length: C }, (_, i) => i), { level: pick.level, signal: opts && opts.signal, onProgress: opts && opts.onProgress });
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          throw gerr(err && (err.code === 'NO_DATASET' || err.code === 'BRICKS_NOT_INITIALIZED') ? 'NOT_READY' : 'READ_FAILED', 'volume read failed');
+        }
+        const vs = pick.voxelSize;
+        const w = reg.dims.x, h = reg.dims.y, dd = reg.dims.z;
+        // Sampling step: the smallest voxel, coarser only to keep a line at ≤ MAX_BINS samples.
+        const stepUm = Math.max(Math.min(vs.x, vs.y, vs.z), maxLen / (MAX_BINS - 1), 1e-9);
+        const counts = lines.map(l => Math.floor(l.len / stepUm) + 1);
+        const n = counts.reduce((a, b) => a + b, 0);
+        const d = new Float32Array(n), dr = new Float32Array(n), lineIdx = new Uint8Array(n);
+        const chVars = schema.vars.filter(v => v.ch);
+        const cols = { d, dr, line: lineIdx };
+        chVars.forEach(v => { cols[v.id] = new Float32Array(n); });
+        const at = (c, x, y, z) => reg.data[c][(z * h + y) * w + x];
+        let r = 0;
+        lines.forEach((l, li) => {
+          for (let i = 0; i < counts[li]; i++, r++) {
+            const dist = i * stepUm;
+            const f = l.len > 0 ? dist / l.len : 0;
+            d[r] = dist; dr[r] = l.len > 0 ? f * 100 : 0; lineIdx[r] = li;
+            // Voxel centres sit at (i + 0.5) · size from the corner of voxel 0.
+            const ux = clamp(((l.a[0] + f * (l.b[0] - l.a[0])) / vs.x) - 0.5 - box.x0, 0, w - 1);
+            const uy = clamp(((l.a[1] + f * (l.b[1] - l.a[1])) / vs.y) - 0.5 - box.y0, 0, h - 1);
+            const uz = clamp(((l.a[2] + f * (l.b[2] - l.a[2])) / vs.z) - 0.5 - box.z0, 0, dd - 1);
+            const x0 = Math.floor(ux), y0 = Math.floor(uy), z0 = Math.floor(uz);
+            const x1 = Math.min(w - 1, x0 + 1), y1 = Math.min(h - 1, y0 + 1), z1 = Math.min(dd - 1, z0 + 1);
+            const tx = ux - x0, ty = uy - y0, tz = uz - z0;
+            chVars.forEach(v => {
+              const c = v.channelIndex;
+              const c00 = at(c, x0, y0, z0) * (1 - tx) + at(c, x1, y0, z0) * tx;
+              const c10 = at(c, x0, y1, z0) * (1 - tx) + at(c, x1, y1, z0) * tx;
+              const c01 = at(c, x0, y0, z1) * (1 - tx) + at(c, x1, y0, z1) * tx;
+              const c11 = at(c, x0, y1, z1) * (1 - tx) + at(c, x1, y1, z1) * tx;
+              cols[v.id][r] = (c00 * (1 - ty) + c10 * ty) * (1 - tz) + (c01 * (1 - ty) + c11 * ty) * tz;
+            });
+          }
+        });
+        const vars = schema.vars.map(v => ({ ...v }));
+        vars.forEach(v => {
+          if (v.id === 'd') { v.step = stepUm; v.dom = [0, (Math.max(...counts) - 1) * stepUm]; }
+          if (v.id === 'line') v.cats = { names: lines.map(l => l.name), colors: lines.map(l => l.color) };
+        });
+        return {
+          id: 'line', n, cols, vars, defaults: schema.defaults, measureUnit: '', unitSize: 1,
+          info: { level: pick.level, dims: reg.dims, voxelSize: vs, lines: lines.length, step: stepUm }
+        };
+      }
+    },
+
     voxels: {
       id: 'voxels',
       applies: (ctx, meta) => meta.type !== '2d' && Boolean(ctx.data),
@@ -993,14 +1246,15 @@
         const { unit } = dtOf(meta);
         const C = Math.max(1, meta.dimensions?.c || meta.channels?.length || 1);
         const chans = channelVars(meta, t, C, { prefix: '' });
-        const vars = [{ id: 't', label: t('var_t'), unit, kind: 'num', step: 0, time: true }];
+        const vars = [{ id: 't', label: t('var_t'), unit, kind: 'num', step: 0, time: true },
+          { id: 'tr', label: t('var_tr'), unit: '', kind: 'num', dom: [0, 100], bins: 50, rel: true }];
         chans.forEach(c => {
           vars.push({ id: 'sig_' + c.id, label: t('var_signal', { ch: c.label }), unit: '', kind: 'num', color: c.color, ci: c.channelIndex });
           vars.push({ id: 'rel_' + c.id, label: t('var_signalRel', { ch: c.label }), unit: '%', kind: 'num', color: c.color, ci: c.channelIndex, rel0: true });
         });
         return {
           id: 'frames', label: t('table_frames'), vars, measureUnit: '',
-          defaults: { x: 't', y: [vars[2] ? vars[2].id : vars[1].id], agg: 'mean' },
+          defaults: { x: 't', y: [(vars.find(v => v.rel0) || vars.find(v => v.ci !== undefined) || vars[0]).id], agg: 'mean' },
           presets: [
             { id: 'bleach', spec: { x: 't', y: vars.filter(v => v.rel0).map(v => v.id), agg: 'mean' } },
             { id: 'signalTime', spec: { x: 't', y: vars.filter(v => v.id.startsWith('sig_')).map(v => v.id), agg: 'mean' } }
@@ -1016,6 +1270,8 @@
         const vars = schema.vars.map(v => ({ ...v }));
         const cols = { t: new Float32Array(T) };
         for (let f = 0; f < T; f++) cols.t[f] = f * dt;
+        cols.tr = new Float32Array(T);
+        for (let f = 0; f < T; f++) cols.tr[f] = T > 1 ? (f / (T - 1)) * 100 : 0;
         vars.forEach(v => {
           if (v.ci === undefined) return;
           const a = new Float32Array(T).fill(NaN);
@@ -1079,18 +1335,23 @@
       c_fus[c] = data.flags[c] & 2 ? 1 : 0;
       c_dau[c] = data.daughterStart[c + 1] - data.daughterStart[c];
       if (data.firstFrame[c] < 0) continue;
-      let prevF = -2, px = 0, py = 0, pz = 0, ox = 0, oy = 0, oz = 0, path = 0, steps = 0, vmax = 0, sx = 0, sy = 0, sz = 0, cnt = 0, firstRow = -1, lastRow = -1;
+      let prevF = -2, px = 0, py = 0, pz = 0, ox = 0, oy = 0, oz = 0, path = 0, pathCons = 0, steps = 0, vmax = 0, sx = 0, sy = 0, sz = 0, cnt = 0, firstRow = -1, lastRow = -1;
       for (let f = data.firstFrame[c]; f <= data.lastFrame[c]; f++) {
         if (!T.positionUm(c, f, {}, um)) { prevF = -2; continue; }
         const x = um[0], y = um[1], z = um[2];
         cell[r] = c; frame[r] = f; tt[r] = f * dt; X[r] = x; Y[r] = y; Z[r] = z; reg[r] = data.regionIdx[c];
         age[r] = (f - data.firstFrame[c]) * dt;
         if (cnt === 0) { ox = x; oy = y; oz = z; firstRow = r; }
-        if (prevF === f - 1) {
+        if (cnt > 0) {
+          // The path counts the straight jump over a gap too (so net / path stays ≤ 1);
+          // speed only comes from steps between consecutive frames.
           const d = Math.hypot(x - px, y - py, z - pz);
-          const v = d / dt;
-          speed[r] = v; path += d; steps++;
-          if (v > vmax) vmax = v;
+          path += d;
+          if (prevF === f - 1) {
+            const v = d / dt;
+            speed[r] = v; pathCons += d; steps++;
+            if (v > vmax) vmax = v;
+          }
         }
         pathCum[r] = path;
         disp[r] = Math.hypot(x - ox, y - oy, z - oz);
@@ -1102,7 +1363,7 @@
         c_life[c] = (data.lastFrame[c] - data.firstFrame[c] + 1) * dt;
         c_path[c] = path; c_disp[c] = disp[lastRow];
         c_str[c] = path > 0 ? disp[lastRow] / path : NaN;
-        c_mean[c] = steps ? path / (steps * dt) : NaN;
+        c_mean[c] = steps ? pathCons / (steps * dt) : NaN;
         c_max[c] = steps ? vmax : NaN;
         c_x[c] = sx / cnt; c_y[c] = sy / cnt; c_z[c] = sz / cnt;
       }
@@ -1120,6 +1381,11 @@
     rowStart[NC] = r;
     const N = r;
     const trim = (a) => a.subarray(0, N);
+    // Time as a share of the acquisition: datasets with different frame counts or intervals line up.
+    const trel = new Float32Array(N);
+    for (let i = 0; i < N; i++) trel[i] = F > 1 ? (frame[i] / (F - 1)) * 100 : 0;
+    const c_divr = new Float32Array(NC).fill(NaN);
+    for (let c = 0; c < NC; c++) if (Number.isFinite(c_div[c]) && F > 1) c_divr[c] = (c_div[c] / ((F - 1) * dt)) * 100;
     const cats = {
       region: { names: Array.from(data.regionNames), colors: Array.from(data.regionColors) },
       yesno: { names: [t('no'), t('yes')], colors: null }
@@ -1127,40 +1393,68 @@
     const value = {
       N, NC, F, dt, unit, data, cats, rowStart,
       obs: {
-        cols: { t: trim(tt), frame: trim(frame), x: trim(X), y: trim(Y), z: trim(Z), speed: trim(speed), age: trim(age), disp: trim(disp), path: trim(pathCum), region: trim(reg), cell: trim(cell) }
+        cols: { t: trim(tt), tr: trel, frame: trim(frame), x: trim(X), y: trim(Y), z: trim(Z), speed: trim(speed), age: trim(age), disp: trim(disp), path: trim(pathCum), region: trim(reg), cell: trim(cell) }
       },
       cells: {
-        cols: { firstT: c_first, lastT: c_last, lifetime: c_life, path: c_path, disp: c_disp, straight: c_str, meanSpeed: c_mean, maxSpeed: c_max, x: c_x, y: c_y, z: c_z, region: c_reg, mitosis: c_mit, fusion: c_fus, daughters: c_dau, divT: c_div }
+        cols: { firstT: c_first, lastT: c_last, lifetime: c_life, path: c_path, disp: c_disp, straight: c_str, meanSpeed: c_mean, maxSpeed: c_max, divTr: c_divr, x: c_x, y: c_y, z: c_z, region: c_reg, mitosis: c_mit, fusion: c_fus, daughters: c_dau, divT: c_div }
       }
     };
     trackingMemo.key = k; trackingMemo.t = t; trackingMemo.value = value;
     return value;
   }
 
+  /** Cells within the inspector radius, per observation, in its own frame. The grid has
+   *  edge `radius`, so every neighbour lies in the 27 buckets around a cell; a bucket key is
+   *  an exact integer of the bucket's coordinates (a hash that collides would count the
+   *  same neighbours twice). */
   function neighbourColumn(ctx, tr) {
     const radius = ctx.tracking.getOptions().neighborThresholdUm;
     const r2 = radius * radius, size = Math.max(radius, 1e-6);
     const { N, F } = tr;
     const { frame, x, y, z } = tr.obs.cols;
     const out = new Float32Array(N).fill(NaN);
-    const byFrame = Array.from({ length: F }, () => []);
-    for (let i = 0; i < N; i++) byFrame[frame[i]].push(i);
-    const key = (a, b, c) => (a * 73856093) ^ (b * 19349663) ^ (c * 83492791);
+    const start = new Uint32Array(F + 1);
+    for (let i = 0; i < N; i++) start[frame[i] + 1]++;
+    for (let f = 0; f < F; f++) start[f + 1] += start[f];
+    const order = new Uint32Array(N);
+    const fill = start.slice(0, F);
+    for (let i = 0; i < N; i++) order[fill[frame[i]]++] = i;
+    const next = new Int32Array(N);
+    const head = new Map();
+    const cx = new Int32Array(N), cy = new Int32Array(N), cz = new Int32Array(N);
     for (let f = 0; f < F; f++) {
-      const rows = byFrame[f];
-      const buckets = new Map();
-      for (const i of rows) {
-        const kk = key(Math.floor(x[i] / size), Math.floor(y[i] / size), Math.floor(z[i] / size));
-        const b = buckets.get(kk);
-        if (b) b.push(i); else buckets.set(kk, [i]);
+      const s0 = start[f], s1 = start[f + 1];
+      if (s1 === s0) continue;
+      let ax = Infinity, bx = -Infinity, ay = Infinity, by = -Infinity, az = Infinity, bz = -Infinity;
+      for (let q = s0; q < s1; q++) {
+        const i = order[q];
+        const a = Math.floor(x[i] / size), b = Math.floor(y[i] / size), c = Math.floor(z[i] / size);
+        cx[i] = a; cy[i] = b; cz[i] = c;
+        if (a < ax) ax = a; if (a > bx) bx = a;
+        if (b < ay) ay = b; if (b > by) by = b;
+        if (c < az) az = c; if (c > bz) bz = c;
       }
-      for (const i of rows) {
-        const cx = Math.floor(x[i] / size), cy = Math.floor(y[i] / size), cz = Math.floor(z[i] / size);
+      // Spans padded by one on each side: a neighbour bucket outside the data still has a key.
+      const ny = by - ay + 3, nz = bz - az + 3;
+      const exact = (bx - ax + 3) * ny * nz < 2 ** 52;
+      const keyOf = exact
+        ? (a, b, c) => ((a - ax + 1) * ny + (b - ay + 1)) * nz + (c - az + 1)
+        : (a, b, c) => `${a},${b},${c}`;
+      head.clear();
+      for (let q = s0; q < s1; q++) {
+        const i = order[q];
+        const k = keyOf(cx[i], cy[i], cz[i]);
+        const h = head.get(k);
+        next[i] = h === undefined ? -1 : h;
+        head.set(k, i);
+      }
+      for (let q = s0; q < s1; q++) {
+        const i = order[q];
         let count = 0;
-        for (let a = cx - 1; a <= cx + 1; a++) for (let b = cy - 1; b <= cy + 1; b++) for (let c = cz - 1; c <= cz + 1; c++) {
-          const bk = buckets.get(key(a, b, c));
-          if (!bk) continue;
-          for (const j of bk) {
+        for (let a = cx[i] - 1; a <= cx[i] + 1; a++) for (let b = cy[i] - 1; b <= cy[i] + 1; b++) for (let c = cz[i] - 1; c <= cz[i] + 1; c++) {
+          const h = head.get(keyOf(a, b, c));
+          if (h === undefined) continue;
+          for (let j = h; j >= 0; j = next[j]) {
             if (j === i) continue;
             const dx = x[i] - x[j], dy = y[i] - y[j], dz = z[i] - z[j];
             if (dx * dx + dy * dy + dz * dz <= r2) count++;
@@ -1180,11 +1474,13 @@
     const OPS = 6e7;
     let ops = 0;
     for (let c = 0; c < NC; c++) ops += (rowStart[c + 1] - rowStart[c]) * maxLag;
-    if (ops > OPS) maxLag = Math.max(1, Math.floor(maxLag * OPS / ops));
-    const cap = NC * maxLag;
+    // Past the budget the sum runs over a regular sample of the cells, not over fewer lags:
+    // the long lags are where diffusive and directed motion part.
+    const cellStride = ops > OPS ? Math.ceil(ops / OPS) : 1;
+    const cap = Math.ceil(NC / cellStride) * maxLag;
     const lag = new Float32Array(cap), msd = new Float32Array(cap), reg = new Int16Array(cap), cl = new Uint32Array(cap);
     let n = 0;
-    for (let c = 0; c < NC; c++) {
+    for (let c = 0; c < NC; c += cellStride) {
       const a = rowStart[c], b = rowStart[c + 1];
       if (b - a < 2) continue;
       const f0 = frame[a], len = frame[b - 1] - f0 + 1;
@@ -1202,7 +1498,7 @@
         lag[n] = L * dt; msd[n] = sum / cnt; reg[n] = region[a]; cl[n] = c; n++;
       }
     }
-    return { n, lag: lag.subarray(0, n), msd: msd.subarray(0, n), region: reg.subarray(0, n), cell: cl.subarray(0, n) };
+    return { n, sampled: cellStride > 1, lag: lag.subarray(0, n), msd: msd.subarray(0, n), region: reg.subarray(0, n), cell: cl.subarray(0, n) };
   }
 
   function trackingSchemas(ctx, t) {
@@ -1216,10 +1512,11 @@
     const num = (id, label, u, extra) => ({ id, label, unit: u || '', kind: 'num', ...extra });
     const cat = (id, label, cats) => ({ id, label, unit: '', kind: 'cat', cats });
     const tvar = { id: 't', label: t('var_t'), unit, kind: 'num', step: dtOf(meta).dt, time: true };
+    const relvar = (id, label) => ({ id, label, unit: '', kind: 'num', dom: [0, 100], bins: 50, rel: true });
     return [
       {
         id: 'obs', label: t('table_obs'), measureUnit: '',
-        vars: [tvar, num('age', t('var_age'), unit), pos('x', t('var_x')), pos('y', t('var_y')), pos('z', t('var_z')),
+        vars: [tvar, relvar('tr', t('var_tr')), num('age', t('var_age'), unit), pos('x', t('var_x')), pos('y', t('var_y')), pos('z', t('var_z')),
           num('speed', t('var_speed'), speedUnit), num('disp', t('var_disp'), 'µm'), num('path', t('var_path'), 'µm'),
           num('neighbors', t('var_neighbors'), '', { lazyCost: true }), cat('region', t('var_region'), regionCats)],
         defaults: { x: 't', y: ['speed'], agg: 'mean', group: 'region' },
@@ -1239,7 +1536,7 @@
           num('path', t('var_path'), 'µm'), num('disp', t('var_dispEnd'), 'µm'), num('straight', t('var_straight'), ''),
           num('meanSpeed', t('var_meanSpeed'), speedUnit), num('maxSpeed', t('var_maxSpeed'), speedUnit),
           pos('x', t('var_cx')), pos('y', t('var_cy')), pos('z', t('var_cz')),
-          num('divT', t('var_divT'), unit, { step: dtOf(meta).dt }), num('daughters', t('var_daughters'), ''),
+          num('divT', t('var_divT'), unit, { step: dtOf(meta).dt }), relvar('divTr', t('var_divTr')), num('daughters', t('var_daughters'), ''),
           cat('region', t('var_region'), regionCats), cat('mitosis', t('var_mitosis'), yesno), cat('fusion', t('var_fusion'), yesno)],
         defaults: { x: 'region', y: ['meanSpeed'], agg: 'mean' },
         presets: [
@@ -1294,7 +1591,7 @@
       }
       const m = msdRows(tr);
       vars.forEach(v => { if (v.id === 'region') v.cats = tr.cats.region; if (v.id === 'lag') { let hi = tr.dt * 2; for (let i = 0; i < m.n; i++) if (m.lag[i] > hi) hi = m.lag[i]; v.dom = [tr.dt, hi]; } });
-      return { id: 'msd', n: m.n, cols: { lag: m.lag, msd: m.msd, region: m.region }, vars, defaults: schema.defaults, measureUnit: '', unitSize: 1 };
+      return { id: 'msd', n: m.n, cols: { lag: m.lag, msd: m.msd, region: m.region }, vars, defaults: schema.defaults, measureUnit: '', unitSize: 1, notes: m.sampled ? ['msd-sampled'] : [] };
     }
   };
 
@@ -1308,6 +1605,7 @@
       out.push(sc);
     };
     if (Sources.voxels.applies(ctx, meta)) add(Sources.voxels, Sources.voxels);
+    if (Sources.line.applies(ctx, meta)) add(Sources.line, Sources.line);
     if (Sources.pixels.applies(ctx, meta)) add(Sources.pixels, Sources.pixels);
     if (Sources.frames.applies(ctx, meta)) add(Sources.frames, Sources.frames);
     if (TrackingSources.applies(ctx, meta)) trackingSchemas(ctx, t).forEach(sc => { sc.source = TrackingSources; out.push(sc); });
@@ -1455,7 +1753,7 @@
     const lazy = {};
     for (const [id, L] of Object.entries(tb.lazy || {})) if (L && typeof L === 'object') lazy[id] = L;
     return {
-      table: { id: tb.id, n: tb.n, cols, lazy, vars: tb.vars, defaults: tb.defaults || null, measureUnit: tb.measureUnit || '', unitSize: tb.unitSize || 1 },
+      table: { id: tb.id, n: tb.n, cols, lazy, vars: tb.vars, defaults: tb.defaults || null, measureUnit: tb.measureUnit || '', unitSize: tb.unitSize || 1, notes: tb.notes || [] },
       transfer: [...buffers]
     };
   }
@@ -1489,7 +1787,13 @@
     const notReady = new Map();
     let schemasMemo = null;
     let serial = 0;
-    const schemas = () => (schemasMemo || (schemasMemo = allSchemas(ctx, t)));
+    let memoSig = null;
+    const schemaSig = () => { try { return lineSignature(ctx); } catch (_) { return ''; } };
+    const schemas = () => {
+      const sig = schemaSig();
+      if (!schemasMemo || sig !== memoSig) { schemasMemo = allSchemas(ctx, t); memoSig = sig; }
+      return schemasMemo;
+    };
 
     function describe() {
       const meta = ctx.dataset.getMeta() || {};
@@ -1641,6 +1945,10 @@
     }
 
     /** The key the table would be built for now (null without such a table). */
+    function check(id, spec) {
+      Engine.checkSpec(schemaOf(id), spec);
+    }
+
     function currentKey(id) {
       const sc = schemas().find(s => s.id === id);
       return sc ? keyOf(sc, id) : null;
@@ -1654,7 +1962,7 @@
     }
 
     return {
-      describe, table, touch, compute, stale, currentKey, cursorMinutes, reset,
+      describe, table, touch, compute, check, stale, currentKey, schemaSig, cursorMinutes, reset,
       dispose() { reset(); if (runner) runner.dispose(); }
     };
   }
@@ -1711,6 +2019,25 @@
     return document.documentElement.getAttribute('data-theme') === 'dark';
   }
 
+  // Rules the controls need on every host page (viewer, 2D, Compare): the chips. The style
+  // element is created by the registry with the page nonce; the rules are inserted into its sheet.
+  const STYLE_RULES = [
+    '.graphs-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:3px 10px;font:inherit;font-size:12px;line-height:1.35;text-align:left;white-space:normal;overflow-wrap:anywhere;border:1px solid var(--border-subtle,rgba(128,128,128,.45));border-radius:999px;background:transparent;color:var(--text-primary,inherit);cursor:pointer;--graphs-swatch-ring:var(--border-subtle,rgba(128,128,128,.45))}',
+    '.graphs-chip:hover{background:color-mix(in srgb,var(--text-primary,#888) 9%,transparent)}',
+    '.graphs-chip:focus-visible{outline:2px solid var(--color-primary,#4a8);outline-offset:2px}',
+    '.graphs-chip.is-on{background:var(--color-primary-strong,var(--color-primary,#2a78d6));border-color:var(--color-primary-strong,var(--color-primary,#2a78d6));color:var(--color-on-primary,#fff);font-weight:600;--graphs-swatch-ring:#fff}',
+    '.graphs-chip.is-on:hover{filter:brightness(1.08)}'
+  ];
+  function ensureStyles() {
+    try {
+      if (typeof PluginRegistry !== 'undefined' && PluginRegistry.ensureNoncedStyle) PluginRegistry.ensureNoncedStyle('graphs-plugin-style');
+      const el = document.getElementById('graphs-plugin-style');
+      if (!el || !el.sheet || el.dataset.filled) return;
+      for (const rule of STYLE_RULES) { try { el.sheet.insertRule(rule, el.sheet.cssRules.length); } catch (_) { /* a rule this browser refuses */ } }
+      el.dataset.filled = '1';
+    } catch (_) { /* no document (a test) or a page that forbids it: the controls stay usable, plainer */ }
+  }
+
   const FIELD = 'display:flex;flex-direction:column;gap:2px;min-width:0;font-size:11px;color:var(--text-secondary)';
   const CONTROL = 'width:100%;min-width:0;padding:4px 6px;font-size:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm,4px);background:var(--bg-surface,transparent);color:var(--text-primary)';
 
@@ -1749,6 +2076,7 @@
 
   function createUI(root, host) {
     const t = host.t;
+    ensureStyles();
     const st = {
       table: null, preset: null,
       spec: sanitizeUiSpec(null),
@@ -1760,6 +2088,17 @@
 
     const tableOf = (id) => desc.tables.find(x => x.id === id) || null;
     const varOf = (tb, id) => (tb ? tb.vars.find(v => v.id === id) : null) || null;
+
+    function presetAvailable(tb, p) {
+      let need = 0;
+      const spec = (p && p.spec) || {};
+      for (const id of [spec.x, ...(Array.isArray(spec.y) ? spec.y : [])]) {
+        const m = /^@int\[(\d+)\]$/.exec(typeof id === 'string' ? id : '');
+        if (m) need = Math.max(need, +m[1] + 1);
+      }
+      return sharedChannels(tb).length >= need;
+    }
+    const visiblePresets = (tb) => (tb.presets || []).filter(p => presetAvailable(tb, p));
 
     function opt(value, label, sel) { return `<option value="${escapeHtml(value)}"${sel ? ' selected' : ''}>${escapeHtml(label)}</option>`; }
 
@@ -1774,6 +2113,19 @@
     }
 
     function renderControls() {
+      const box = el('[data-g="controls"]');
+      if (!box) return;
+      const a = document.activeElement;
+      const focus = a && box.contains(a) ? { y: a.getAttribute('data-y'), g: a.getAttribute('data-g') } : null;
+      renderControlsInner();
+      if (!focus) return;
+      const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/["\\]/g, '\\$&'));
+      const sel = focus.y !== null ? `[data-y="${esc(focus.y)}"]` : (focus.g ? `[data-g="${esc(focus.g)}"]` : null);
+      const target = sel ? box.querySelector(sel) : null;
+      if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
+    }
+
+    function renderControlsInner() {
       const tb = tableOf(st.table);
       const box = el('[data-g="controls"]');
       if (!box) return;
@@ -1791,7 +2143,7 @@
       ];
       const showThr = tb.vars.some(v => v.intensity) && (COUNT_FAMILY.has(s.agg) || isHeat || s.signalOnly);
       const showSig = !isHeat && !isPts && !COUNT_FAMILY.has(s.agg) && tb.vars.some(v => v.intensity) && s.x !== INT;
-      const presets = (tb.presets || []);
+      const presets = visiblePresets(tb);
       const binsValue = cleanBins(s.bins) || '';
       const thr = cleanThreshold(s.threshold);
       box.innerHTML = `
@@ -1822,7 +2174,7 @@
             const partial = tb.total > 1 && v.haveCount !== undefined && v.haveCount < tb.total ? ` (${v.haveCount}/${tb.total})` : '';
             // In Compare the colour comes from a panel's answer: checked again here.
             const sw = readable(v.color, isDark()) || safeColor(v.color);
-            return `<button type="button" class="btn btn-outline btn-sm${on ? ' active' : ''}" data-y="${escapeHtml(v.id)}" aria-pressed="${on}" style="${on ? 'font-weight:600' : ''}">${sw ? `<span aria-hidden="true" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:${escapeHtml(sw)}"></span>` : ''}${escapeHtml(v.label + partial)}</button>`;
+            return `<button type="button" class="graphs-chip${on ? ' is-on' : ''}" data-y="${escapeHtml(v.id)}" aria-pressed="${on}">${sw ? `<span aria-hidden="true" style="flex:none;width:9px;height:9px;border-radius:50%;background:${escapeHtml(sw)};box-shadow:0 0 0 1.5px var(--graphs-swatch-ring,transparent)"></span>` : ''}<span>${escapeHtml(v.label + partial)}</span></button>`;
           }).join('')}</div></div>`}
         <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center;font-size:12px">
           ${showThr ? `<label style="display:flex;align-items:center;gap:6px"><span>${escapeHtml(t('threshold'))}</span><input type="range" min="0" max="254" step="1" value="${thr}" data-g="threshold" style="width:120px"><output data-g="thrOut">${thr}</output></label>` : ''}
@@ -1835,7 +2187,7 @@
       const e = el('[data-g="status"]');
       if (!e) return;
       e.textContent = msg || '';
-      e.style.color = kind === 'error' ? 'var(--color-danger, #e34948)' : 'var(--text-secondary)';
+      e.style.color = kind === 'error' ? 'color-mix(in srgb, var(--color-error, #e34948) 60%, var(--text-primary, #000))' : 'var(--text-secondary)';
     }
 
     function setNotes(list) {
@@ -1846,12 +2198,12 @@
 
     function applyPreset(id) {
       const tb = tableOf(st.table);
-      const p = tb && (tb.presets || []).find(x => x.id === id);
+      const p = tb && visiblePresets(tb).find(x => x.id === id);
       if (!p) return;
       st.preset = id;
       const spec = JSON.parse(JSON.stringify(p.spec));
       // "@int[k]" = the k-th channel every dataset has: the pickers show a real variable.
-      const nth = (tok) => { const m = /^@int\[(\d+)\]$/.exec(tok); return m ? (commonChannels(tb)[+m[1]] || tok) : tok; };
+      const nth = (tok) => { const m = /^@int\[(\d+)\]$/.exec(tok); return m ? (sharedChannels(tb)[+m[1]] || tok) : tok; };
       spec.x = nth(spec.x);
       spec.y = (spec.y || []).map(nth);
       st.spec = sanitizeUiSpec(spec, { ...UI_SPEC_DEFAULTS, threshold: st.spec.threshold });
@@ -1861,8 +2213,23 @@
       st.table = id;
       const tb = tableOf(id);
       st.preset = null;
-      if (tb && tb.presets && tb.presets.length) applyPreset(tb.presets[0].id);
+      const first = tb ? visiblePresets(tb)[0] : null;
+      if (first) applyPreset(first.id);
       else if (tb) st.spec = sanitizeUiSpec({ x: tb.defaults?.x || null, y: tb.defaults?.y || [], agg: tb.defaults?.agg || 'mean', group: tb.defaults?.group || null }, st.spec);
+    }
+
+    function reconcileSpec() {
+      const tb = tableOf(st.table);
+      if (!tb) return;
+      const ids = new Set(tb.vars.map(v => v.id));
+      const isToken = (id) => id === INT || id === ALL || /^@int(\[\d+\])?$/.test(String(id));
+      const s = st.spec;
+      let changed = false;
+      if (!(isToken(s.x) || ids.has(s.x))) { s.x = (tb.defaults && tb.defaults.x && ids.has(tb.defaults.x)) ? tb.defaults.x : (tb.vars[0] ? tb.vars[0].id : null); changed = true; }
+      const y = s.y.filter(id => isToken(id) || ids.has(id));
+      if (y.length !== s.y.length) { s.y = y; changed = true; }
+      if (s.group && !(ids.has(s.group) && varOf(tb, s.group).kind === 'cat')) { s.group = null; changed = true; }
+      if (changed) st.preset = null;
     }
 
     function schedule(delay = 90) {
@@ -1911,7 +2278,9 @@
         : !result.series.length;
       const cur = host.cursor ? host.cursor() : null;
       const isT = result.x && (result.x.id === 't');
+      const lang = (typeof I18n !== 'undefined' && I18n.getLanguage) ? I18n.getLanguage() : undefined;
       const plot = buildPlot(result, {
+        nf: numberFormatter(lang), separators: separatorsFor(lang),
         dark: isDark(), t, multi: host.multi && (result.datasets || 0) > 1, colorBy: st.colorBy,
         text: cssVar('--text-secondary', undefined), grid: cssVar('--border-subtle', undefined),
         cursorX: isT && cur ? cur.value : null,
@@ -1924,6 +2293,7 @@
         setStatus(t('err_plotly'), 'error');
         return;
       }
+      if (mine !== seq || destroyed) return;
       gd = target;
       setStatus(empty ? t('err_noData') : (result.statusText || ''));
       const notes = (result.notes || []).map(n => t(`note_${n}`, { n: result.stride || '' })).filter(x => x && !x.startsWith('note_'));
@@ -1934,6 +2304,7 @@
     function onChange(e) {
       const g = e.target.getAttribute && e.target.getAttribute('data-g');
       if (!g) return;
+      pending = null; // a choice made now outranks a restored one still waiting
       const s = st.spec;
       const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
       let structural = false;
@@ -2003,14 +2374,16 @@
       if (!gd || !window.Plotly) return;
       try {
         const url = await Plotly.toImage(gd, { format: 'png', width: 1600, height: 900, scale: 2 });
-        const blob = await (await fetch(url)).blob();
-        download(blob, `graph-${st.table}-${stamp()}.png`);
-      } catch (err) { console.error('[graphs] PNG export failed:', err); setStatus(t('err_generic'), 'error'); }
+        download(dataUrlToBlob(url), `graph-${st.table}-${stamp()}.png`);
+      } catch (err) { console.error('[graphs] PNG export failed:', err); setStatus(t('err_export'), 'error'); }
     }
 
     root.addEventListener('change', onChange);
     root.addEventListener('input', (e) => { if (e.target.getAttribute && e.target.getAttribute('data-g') === 'threshold') onChange(e); });
     root.addEventListener('click', onClick);
+    const offTheme = (typeof Theme !== 'undefined' && typeof Theme.onChange === 'function')
+      ? Theme.onChange(() => { if (destroyed) return; renderControls(); if (gd) schedule(0); })
+      : null;
 
     // A state restored before the host described its tables (a closed panel): applied
     // by the next description, so reopening shows the saved choices.
@@ -2026,9 +2399,14 @@
       /** Re-read what the host offers and redraw. */
       refreshDescription() {
         desc = host.describe();
-        if (pending && tableOf(pending.table)) applyState(pending);
-        pending = null;
+        // A description without tables yet (panels still loading) keeps the restored choices
+        // waiting; only a description that lacks the saved table drops them.
+        if (pending && (tableOf(pending.table) || desc.tables.length)) {
+          if (tableOf(pending.table)) applyState(pending);
+          pending = null;
+        }
         if (!tableOf(st.table)) chooseTable(desc.tables[0] ? desc.tables[0].id : null);
+        reconcileSpec();
         renderControls();
         schedule(0);
       },
@@ -2046,12 +2424,15 @@
        *  read a table it would then hold); the next refreshDescription draws them. */
       setState(s, { draw = true } = {}) {
         if (!s || typeof s !== 'object') return;
-        if (!draw && typeof s.table === 'string' && !tableOf(s.table)) {
+        // Before the description of the tables (a restored workspace, a Compare drawer that has not asked
+        // its panels yet) the choices wait for it: applying them now would be undone by the first table chosen.
+        if (typeof s.table === 'string' && !tableOf(s.table)) {
           pending = JSON.parse(JSON.stringify(s));
           return;
         }
         pending = null;
         applyState(s);
+        reconcileSpec();
         renderControls();
         if (draw) schedule(0);
       },
@@ -2073,6 +2454,7 @@
         clearTimeout(timer);
         root.removeEventListener('change', onChange);
         root.removeEventListener('click', onClick);
+        if (typeof offTheme === 'function') offTheme();
         purgePlot();
       }
     };
@@ -2110,8 +2492,8 @@
   // ════════════════════════════════════════════════════════════════════
 
   const plugin = {
-    Engine, buildPlot, mergeResults, shortNames, commonChannels, Sources, TrackingSources, trackingSchemas, buildTracking, msdRows, neighbourColumn, allSchemas, createProvider, readable, safeColor, PALETTE,
-    createUI, sanitizeUiSpec, latestOnly, createWorkerRunner, wireTable,
+    Engine, buildPlot, mergeResults, shortNames, commonChannels, sharedChannels, specForPanels, Sources, TrackingSources, trackingSchemas, buildTracking, msdRows, neighbourColumn, allSchemas, createProvider, readable, safeColor, PALETTE,
+    createUI, sanitizeUiSpec, latestOnly, createWorkerRunner, wireTable, dataUrlToBlob, separatorsFor, numberFormatter, measurementLines,
     _ctx: null, _t: null, _provider: null, _ui: null, _panel: null, _open: false, _mode: 'page',
     _unsubs: [], _pollTimer: null, _lastKey: null, _msgHandler: null, _host: null, _run: null,
 
@@ -2123,6 +2505,16 @@
       this._t = t;
       if (ctx.context === 'compare') { this._mode = 'compare'; return this._initHost(ctx); }
       this._provider = createProvider(ctx, t, { runner: createWorkerRunner(engineWorkerUrl()) });
+      // A photograph switched in place (the 2D page's own browser): its units, labels and
+      // tables are the new one's, not the schema the provider memoised for the old one.
+      if (ctx.dataset && typeof ctx.dataset.onChange === 'function') {
+        const off = ctx.dataset.onChange(() => {
+          this._run?.cancel();
+          this._provider.reset();
+          if (this._open) this._ui?.refreshDescription();
+        });
+        if (typeof off === 'function') this._unsubs.push(off);
+      }
       if (ctx.iframe && ctx.iframe.isIframe && ctx.iframe.isIframe()) { this._mode = 'panel'; this._bindPanel(ctx); return this; }
       this._mode = 'page';
       if (!ctx.ui || !ctx.ui.addCanvasPanel) return this;
@@ -2161,9 +2553,11 @@
     _statusText(r) {
       const info = r.info;
       if (!info) return '';
+      const nf = numberFormatter(languageOf(this._ctx));
+      if (info.lines) return this._t('lineInfo', { n: info.lines, size: nf(info.step, info.step < 10 ? 2 : 1) });
       if (info.voxelSize) {
         const v = info.voxelSize;
-        return this._t('scanInfo', { x: info.dims.x, y: info.dims.y, z: info.dims.z, size: [v.x, v.y, v.z].map(a => (+a).toFixed(a < 10 ? 2 : 1)).join(' × ') });
+        return this._t('scanInfo', { x: info.dims.x, y: info.dims.y, z: info.dims.z, size: [v.x, v.y, v.z].map(a => nf(+a, a < 10 ? 2 : 1)).join(' × ') });
       }
       if (info.scale !== undefined && info.scale < 1) return this._t('pixelInfo', { x: info.dims.x, y: info.dims.y });
       return '';
@@ -2190,8 +2584,10 @@
       clearInterval(this._pollTimer);
       this._pollTimer = null;
       this._lastKey = null;
+      this._lastSig = undefined;
       if (this._open) {
         this._ui?.refreshDescription();
+        this._lastSig = this._provider.schemaSig?.();
         // A timelapse: the volume on screen changes with the timepoint; follow it.
         this._pollTimer = setInterval(() => this._follow(), 800);
       } else {
@@ -2209,6 +2605,10 @@
      *  every frame it passed would otherwise start a lossless read of a whole level. */
     _follow() {
       if (!this._open || !this._ui) return;
+      // Measurements come and go: the "along a measurement" table with them.
+      const sig = this._provider.schemaSig?.();
+      if (this._lastSig !== undefined && sig !== this._lastSig) { this._lastSig = sig; this._ui.refreshDescription(); return; }
+      this._lastSig = sig;
       const tb = this._ui.getTable();
       const key = tb ? this._provider.currentKey(tb) : null;
       const settled = key !== null && key === this._lastKey;
@@ -2286,11 +2686,22 @@
         try {
           if (d.op === 'describe') {
             reply({ type: 'GRAPH_DATA', requestId, ok: true, description: plainResult(this._provider.describe()) });
+          } else if (d.op === 'release') {
+            // The drawer closed: a table is tens to hundreds of MB, kept for nobody.
+            this._run?.cancel();
+            this._provider.reset();
+            reply({ type: 'GRAPH_DATA', requestId, ok: true });
+          } else if (d.op === 'key') {
+            // What a table depends on now (the frame on screen of a timelapse), without reading it.
+            reply({ type: 'GRAPH_DATA', requestId, ok: true, key: this._provider.currentKey(String(d.table)) });
           } else if (d.op === 'compute') {
             const table = String(d.table);
+            const spec = d.spec && typeof d.spec === 'object' ? d.spec : {};
+            // This panel must answer THIS question or say it cannot: not another one of its own.
+            this._provider.check(table, spec);
             this._provider.touch(table);
-            run(table, d.spec && typeof d.spec === 'object' ? d.spec : {}).then(
-              (r) => reply({ type: 'GRAPH_DATA', requestId, ok: true, result: plainResult(r), statusText: this._statusText(r) }),
+            run(table, spec).then(
+              (r) => reply({ type: 'GRAPH_DATA', requestId, ok: true, result: plainResult(r), statusText: this._statusText(r), key: this._provider.currentKey(table) }),
               // An aborted read: the table was dropped for a newer state or language.
               (err) => (err && (err.code === 'SUPERSEDED' || err.name === 'AbortError')
                 ? reply({ type: 'GRAPH_DATA', requestId, ok: false, error: 'SUPERSEDED', code: 'SUPERSEDED' })
@@ -2317,6 +2728,8 @@
         return n;
       };
       const live = () => ctx.panels.list().filter(p => p.ready && !p.failed);
+      const lastKeys = new Map();            // panel index -> the state its last answer was computed for
+      const refused = new Map();             // panel index -> when it last failed to describe itself
 
       const fetchDescriptions = async () => {
         const ps = live();
@@ -2325,10 +2738,13 @@
           const known = descriptions.get(p.index);
           // Asked again after a language switch until the panel answers in the new language.
           if (known && known.id === p.id && (!known.lang || known.lang === languageOf(ctx))) return;
+          // A panel that did not answer (loaded without the plugin) is not waited for again at once.
+          if (!known && refused.has(p.index) && Date.now() - refused.get(p.index) < 30000) return;
           try {
             const a = await ctx.panels.request(p.index, 'REQUEST_GRAPH_DATA', { op: 'describe' }, { timeoutMs: 8000 });
             descriptions.set(p.index, { ...a.description, id: p.id });
-          } catch (err) { /* keep what this panel last said: a slow answer must not empty the pickers */ }
+            refused.delete(p.index);
+          } catch (err) { refused.set(p.index, Date.now()); /* keep what this panel last said: a slow answer must not empty the pickers */ }
         }));
       };
 
@@ -2365,8 +2781,8 @@
           if (!ps.length) throw gerr('NOT_READY', 'no panel offers this table');
           // Channels are lined up by name: a bare "every channel" means the ones all datasets have.
           const tb = union().tables.find(x => x.id === tableId);
-          const common = tb ? commonChannels(tb) : [];
-          const sent = { ...spec, y: (spec.y || []).flatMap(id => (id === INT ? common : [id])), only: spec.x === INT ? common : null };
+          const { sent, unresolved } = specForPanels(spec, tb);
+          if (unresolved) throw gerr('NO_VARIABLE', 'the datasets share too few channels for this graph');
           const settled = await Promise.allSettled(ps.map(p =>
             ctx.panels.request(p.index, 'REQUEST_GRAPH_DATA', { op: 'compute', table: tableId, spec: sent }, { timeoutMs: 180000 })));
           const results = [];
@@ -2375,7 +2791,7 @@
           // A panel's refusal arrives as a COMPARE_PANEL_ERROR carrying the panel's own code.
           const codeOf = (r) => (r.status === 'rejected' ? (r.reason?.panelCode || r.reason?.code || null) : (r.value?.ok ? null : r.value?.code || null));
           settled.forEach((r, i) => {
-            if (r.status === 'fulfilled' && r.value.ok) results.push({ p: ps[i], res: r.value.result });
+            if (r.status === 'fulfilled' && r.value.ok) { results.push({ p: ps[i], res: r.value.result }); if (r.value.key !== undefined) lastKeys.set(ps[i].index, r.value.key); }
             else if (codeOf(r) === 'SUPERSEDED') superseded++;
             else missing.push(ps[i].name);
           });
@@ -2389,9 +2805,43 @@
         })
       };
 
+      // A timelapse's panels move on by themselves (the time sync): ask what each table depends
+      // on now, and redraw once a new state has held for a whole tick — like the page does.
+      let pollTimer = null, polling = false;
+      const pending = new Map();
+      const poll = async () => {
+        if (!this._open || polling) return;
+        const table = ui.getTable();
+        if (!table) return;
+        polling = true;
+        try {
+          let fire = false;
+          await Promise.all(live().filter(p => descriptions.get(p.index)?.tables.some(x => x.id === table)).map(async (p) => {
+            try {
+              const a = await ctx.panels.request(p.index, 'REQUEST_GRAPH_DATA', { op: 'key', table }, { timeoutMs: 4000 });
+              const prev = lastKeys.get(p.index);
+              if (a.key !== null && prev !== undefined && a.key !== prev) {
+                if (pending.get(p.index) === a.key) fire = true; else pending.set(p.index, a.key);
+              } else pending.delete(p.index);
+            } catch (_) { /* a panel that does not answer is not a change */ }
+          }));
+          if (fire) { pending.clear(); ui.redraw(); }
+        } finally { polling = false; }
+      };
+      const releasePanels = () => {
+        lastKeys.clear();
+        pending.clear();
+        for (const p of live()) ctx.panels.request(p.index, 'REQUEST_GRAPH_DATA', { op: 'release' }, { timeoutMs: 5000 }).catch(() => {});
+      };
       const drawer = ctx.ui.addDrawer({
         id: 'graphs', title: t('title'), icon: 'line-chart', html: panelHtml(t, false),
-        onToggle: (open) => { this._open = open; if (open) ui.refreshDescription(); },
+        onToggle: (open) => {
+          this._open = open;
+          clearInterval(pollTimer);
+          pollTimer = null;
+          if (open) { ui.refreshDescription(); pollTimer = setInterval(poll, 1000); }
+          else { ui.release(); releasePanels(); }
+        },
         onResize: () => ui.resize()
       });
       if (!drawer) return this;
@@ -2417,7 +2867,7 @@
           if (window.lucide) lucide.createIcons({ nodes: [drawer.el] });
           if (this._open) { ui.refreshDescription().then(() => ui.setState(keep)); }
         },
-        dispose: () => { clearTimeout(panelsTimer); offPanels?.(); ui.destroy(); drawer.remove(); }
+        dispose: () => { clearTimeout(panelsTimer); clearInterval(pollTimer); offPanels?.(); ui.destroy(); drawer.remove(); }
       };
       return this;
     }
@@ -2426,8 +2876,9 @@
   /** One result per panel in, one overlay out: series tagged with their dataset. */
   function mergeResults(items, missing, slotOf, t) {
     const first = items[0].res;
-    const short = shortNames(items.map(i => i.p.name));
-    items.forEach((i, k) => { i.p = { ...i.p, full: i.p.name, name: short[k] }; });
+    // Names are shortened over every dataset of the question, answering or not: "Em3" / "Em6".
+    const names = shortNames([...items.map(i => i.p.name), ...missing]);
+    items.forEach((i, k) => { i.p = { ...i.p, full: i.p.name, name: names[k] }; });
     const out = {
       kind: first.kind, x: first.x, y: first.y, spec: first.spec, table: first.table, measureUnit: first.measureUnit,
       series: [], notes: [], datasets: items.length, extraNotes: []
@@ -2447,9 +2898,9 @@
       (res.notes || []).forEach(n => { if (!out.notes.includes(n)) out.notes.push(n); });
     });
     if (first.kind === 'heat') out.kind = 'heat';
-    if (missing.length) out.extraNotes.push(t('note_missing', { names: shortNames(missing).join(', ') }));
+    if (missing.length) out.extraNotes.push(t('note_missing', { names: names.slice(items.length).join(', ') }));
     if (out.x && out.x.unit === 'µm' && out.kind !== 'bar') out.extraNotes.push(t('note_rangesDiffer'));
-    out.statusText = t('comparing', { n: items.length });
+    out.statusText = items.length > 1 ? t('comparing', { n: items.length }) : '';
     return out;
   }
 

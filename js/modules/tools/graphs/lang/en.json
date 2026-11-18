@@ -142,6 +142,17 @@
   "preset_msdLog": "Mean squared displacement (log–log)",
   "note_subsampled": "Scatter drawn from one row in {n}.",
   "note_series-capped": "Only the first 24 curves are drawn.",
-  "note_missing": "No answer for this graph from: {names}.",
-  "note_rangesDiffer": "Positions in µm cover each dataset's own extent; use the % variables to line datasets up."
+  "note_missing": "Not drawn for: {names} (it lacks a variable of this graph, or did not answer).",
+  "note_rangesDiffer": "Positions in µm cover each dataset's own extent; use the % variables to line datasets up.",
+  "table_line": "Intensity along a measurement line",
+  "var_d": "Distance along the line",
+  "var_dr": "Position along the line (% of its length)",
+  "var_line": "Measurement",
+  "var_tr": "Time (% of the acquisition)",
+  "var_divTr": "Division time (% of the acquisition)",
+  "preset_lineProfile": "Intensity along the measurement lines",
+  "preset_lineProfileRel": "Intensity along the lines, as % of their length",
+  "lineInfo": "{n} measurement line(s) sampled every {size} µm on the voxels of the frame on screen, read losslessly.",
+  "err_export": "The image could not be saved.",
+  "note_msd-sampled": "The mean squared displacement uses a regular sample of the cells (the track set is large); every time lag is kept."
 }

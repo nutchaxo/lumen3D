@@ -1866,6 +1866,24 @@ const CompareApp = (() => {
   // their "panel" context and answer it. Nothing here knows what the plugin draws.
 
   let _panelListeners = [];
+  // What a workspace / #state= link says about the host plugins (Graphs' drawer): kept until
+  // the plugins are initialised, since the state is read before their modules have loaded.
+  let _hostPluginsReady = false;
+  let _pendingHostPlugins = null;
+
+  function _hostPluginState() {
+    if (_hostPluginsReady && typeof PluginRegistry !== 'undefined' && typeof PluginRegistry.getWorkspaceState === 'function') {
+      try { return PluginRegistry.getWorkspaceState(); } catch (err) { console.warn('[Compare] host plugin state unavailable:', err); }
+    }
+    return _pendingHostPlugins || {};
+  }
+
+  function _applyHostPlugins() {
+    if (!_hostPluginsReady || !_pendingHostPlugins || typeof PluginRegistry === 'undefined') return;
+    const state = _pendingHostPlugins;
+    _pendingHostPlugins = null;
+    try { PluginRegistry.setWorkspaceState(state); } catch (err) { console.warn('[Compare] host plugin state not restored:', err); }
+  }
 
   function _emitPanelsChanged() {
     _panelListeners.slice().forEach(fn => { try { fn(); } catch (err) { console.warn('[Compare] panel listener failed:', err); } });
@@ -1953,6 +1971,8 @@ const CompareApp = (() => {
       const paths = await PluginRegistry.discover('js/modules');
       await PluginRegistry.loadModules('js/modules', paths, { context: 'compare' });
       await PluginRegistry.initAll(_hostPluginCtx());
+      _hostPluginsReady = true;
+      _applyHostPlugins();
     } catch (err) {
       // A plugin must never cost the page: Compare works without them.
       console.warn('[Compare] Host plugins unavailable:', err);
@@ -2004,7 +2024,7 @@ const CompareApp = (() => {
   function _getWorkspaceState() {
     _refreshPanelStates();
     if (!_panels.length) {
-      return { ui: { panelCount: 0 }, compare: { panels: [], layoutMode: _layoutMode, sync: { ..._syncOptions }, tool: _tool, quality: _qualityMode } };
+      return { ui: { panelCount: 0 }, compare: { panels: [], layoutMode: _layoutMode, sync: { ..._syncOptions }, tool: _tool, quality: _qualityMode, hostPlugins: _hostPluginState() } };
     }
     // Half a comparison is not a workspace: wait for every panel that is still
     // loading. A panel that failed will never be ready; it is kept in the list
@@ -2030,6 +2050,7 @@ const CompareApp = (() => {
           slice: Number.isFinite(iframeStates[i]?.viewer?.zstackSlice) ? iframeStates[i].viewer.zstackSlice : 0
         })),
         panelSoloChannels: _panels.map(panel => panel.soloChannel),
+        hostPlugins: _hostPluginState(),
         iframeStates
       }
     };
@@ -2067,6 +2088,10 @@ const CompareApp = (() => {
     }
     _tool = compareState.tool || 'navigate';
     _syncToolChips();
+    // Input from a hash or a file: only a plain object is handed on, each plugin validates its own.
+    const hostPlugins = compareState.hostPlugins;
+    _pendingHostPlugins = hostPlugins && typeof hostPlugins === 'object' && !Array.isArray(hostPlugins) ? hostPlugins : null;
+    _applyHostPlugins();
 
     const iframeStates = Array.isArray(compareState.iframeStates) ? compareState.iframeStates : [];
     (compareState.panels || []).slice(0, MAX_PANELS).forEach((id, i) => {

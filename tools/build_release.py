@@ -101,6 +101,7 @@ API_RUNTIME_STATE = frozenset(
         ".plugin-hash-cache.json",
         ".update.lock",
         ".update-pending.json",
+        ".stale-recovery.json",
     }
 )
 # Runtime directories under api/ (PHP sessions, login throttle, file locks, page drafts).
@@ -401,6 +402,43 @@ def stamp_asset_versions(by_name, version):
     return by_name
 
 
+# The release version a server knows about itself. The shipped api/_admin_lib.php and
+# dev_server.py carry a placeholder in a checkout ("unstamped": every stale-code check
+# is skipped); the build replaces it with the version, so a host whose files are newer
+# than the code it executes (stale opcache, parked *.lumen-new, a server never
+# restarted) can say so. Each file holds the placeholder exactly once, or the build fails.
+CODE_VERSION_PLACEHOLDER = "@@LUMEN_CODE_VERSION@@"
+CODE_VERSION_FILES = ("api/_admin_lib.php", "dev_server.py")
+
+
+def stamp_code_version(by_name, version):
+    """Replace the placeholder by `version` in every file of CODE_VERSION_FILES.
+    Raises ValueError unless the placeholder is found exactly once in each file and
+    the stamped bytes then hold the version in its place (and no placeholder)."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError(f"malformed version {version!r}")
+    # The host reads its files' version from the newest changelog it holds; a stamp
+    # that differs would make every PHP host report (and refuse plugin installs) as stale.
+    shipped = [tuple(int(x) for x in m.groups()) for m in
+               (re.fullmatch(r"changelog/changelog_(\d+)\.(\d+)\.(\d+)\.md", arc) for arc in by_name) if m]
+    if shipped and ".".join(map(str, max(shipped))) != version:
+        raise ValueError(f"newest shipped changelog is {'.'.join(map(str, max(shipped)))}, not {version}")
+    marker = CODE_VERSION_PLACEHOLDER.encode("utf-8")
+    for arc in CODE_VERSION_FILES:
+        data = by_name.get(arc)
+        if data is None:
+            raise ValueError(f"{arc} is not part of the release")
+        n = data.count(marker)
+        if n != 1:
+            raise ValueError(f"{arc}: code-version placeholder found {n} times (expected exactly 1)")
+        stamped = data.replace(marker, version.encode("utf-8"))
+        if marker in stamped or stamped.count(version.encode("utf-8")) < 1:
+            raise ValueError(f"{arc}: code-version stamp did not take")
+        by_name[arc] = stamped
+    print(f"    stamped code version {version} in {len(CODE_VERSION_FILES)} files")
+    return by_name
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build the Lumen3D web release zip.")
     parser.add_argument("--version", required=True, help="platform version X.Y.Z")
@@ -439,6 +477,11 @@ def main():
     # Cache-bust: stamp ?v=<version> on every local css/js URL + admin ESM import
     # so the .htaccess long-cache can never serve stale admin/CSS after an update.
     stamp_asset_versions(by_name, args.version)
+    try:
+        stamp_code_version(by_name, args.version)
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        return 1
 
     file_hashes = {arc: sha256_hex(data) for arc, data in by_name.items()}
     entries = list(by_name.items())

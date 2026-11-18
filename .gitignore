@@ -77,6 +77,7 @@ api/.metadata-identity.sig
 api/.plugin-hash-cache.json
 api/.update.lock
 api/.update-pending.json
+api/.stale-recovery.json
 api/.tmp-*
 # Sources an update parks beside the live ones, and the copy of the previous root
 # .htaccess the PHP updater keeps

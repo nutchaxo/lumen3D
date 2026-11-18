@@ -14,6 +14,7 @@ import {
   throttleText, modalize,
 } from './shared.js';
 import { isDirty, discardDirty, setNavigator } from './bus.js';
+import { installErrorText } from './plugin-update.js';
 import * as UploadDock from './upload-dock.js';
 import * as Upload from './upload-manager.js';
 
@@ -323,13 +324,14 @@ async function _installWizardPlugins() {
   if (!boxes.length) return;
   const prog = el('setup-plugins-progress');
   if (prog) prog.style.display = '';
-  let done = 0, failed = 0;
+  let done = 0, failed = 0, refusal = '';
   for (let i = 0; i < boxes.length; i++) {
     if (prog) prog.textContent = `${t('wizard.installing2', 'Installation des plugins…')} (${i + 1}/${boxes.length})`;
     const r = await apiFetchStatus(`${API_ADMIN}?action=install_plugin`, { method: 'POST', body: JSON.stringify({ id: boxes[i].value, password: _wizPassword }) });
-    if ((r.ok && r.data?.ok) || r.data?.error === 'already_installed') done++; else failed++;
+    if ((r.ok && r.data?.ok) || r.data?.error === 'already_installed') done++;
+    else { failed++; refusal = refusal || installErrorText(r.data?.error, r.data); }
   }
-  if (prog) prog.textContent = t('wizard.installedN', '{n} plugin(s) installé(s).', { n: done }) + (failed ? ` (${failed} ${t('wizard.failed', 'échoué(s)')})` : '');
+  if (prog) prog.textContent = t('wizard.installedN', '{n} plugin(s) installé(s).', { n: done }) + (failed ? ` (${failed} ${t('wizard.failed', 'échoué(s)')})` : '') + (refusal ? ' ' + refusal : '');
 }
 
 // ── Login ──────────────────────────────────────────────────────

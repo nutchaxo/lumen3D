@@ -70,7 +70,7 @@ function load() {
     apiFetchStatus: async (url) => { calls.push(url); return env.applyResult; },
     toast: (msg, kind) => { calls.push(`toast:${kind}:${msg}`); },
     el, refreshIcons() {},
-    renderReleaseNotesTree: () => '',
+    renderReleaseNotesTree: () => '', describeStaleCode: () => null,
     fetchPluginUpdates: async () => ({ configured: true, list: [] }),
     runPluginUpdates: async () => ({}), updateAffordance: () => '',
     document: { querySelectorAll: () => [] },

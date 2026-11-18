@@ -14,6 +14,7 @@
 'use strict';
 
 import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, askPassword } from './shared.js';
+import { INSTALL_ERROR_KEYS } from './stale-code.js';
 
 let _busy = false;   // module-wide: two tabs must not swap plugin folders at once
 
@@ -34,7 +35,26 @@ export async function fetchPluginUpdates() {
   return { configured: !!data.configured, error: data.error || null, byPath, list };
 }
 
-export function pluginUpdateErrorText(err) {
+/** A refusal the server explains with fields (stale code, unsupported placement,
+ *  bad id) as a translated sentence; never the raw code alone. */
+export function installErrorText(err, data) {
+  const known = INSTALL_ERROR_KEYS[err];
+  if (!known) return '';
+  let [key, fields, fallback] = known;
+  // A server that cannot name its own version (library older than its entry point)
+  // sends null: say "older" rather than print a placeholder.
+  if (err === 'stale_server_code' && !(data && data.codeVersion)) {
+    key = 'staleServerCodeOlder';
+    fallback = 'The server still runs older code than its files (version {filesVersion}). Restart it, or ask the host to clear opcache, before installing plugins.';
+  }
+  let text = t('mkt.' + key, fallback);
+  for (const f of fields) text = text.split('{' + f + '}').join(String((data && data[f]) ?? '?'));
+  return text;
+}
+
+export function pluginUpdateErrorText(err, data) {
+  const explained = installErrorText(err, data);
+  if (explained) return explained;
   const map = {
     bad_password: t('mkt.badPassword', 'Mot de passe incorrect.'),
     not_installed: t('admin.pluginNotInstalled', "Ce plugin n'est plus installé."),
@@ -64,7 +84,7 @@ async function updateOne(id, password) {
   const r = await apiFetchStatus(`${API_ADMIN}?action=update_plugin`, {
     method: 'POST', body: JSON.stringify({ id, password }),
   });
-  return { ok: !!(r.ok && r.data?.ok), error: r.data?.error || 'error', version: r.data?.version };
+  return { ok: !!(r.ok && r.data?.ok), error: r.data?.error || 'error', version: r.data?.version, data: r.data };
 }
 
 /**
@@ -84,11 +104,13 @@ export async function runPluginUpdates(ids, { onBusy } = {}) {
 
   let done = 0;
   let lastError = null;
+  let lastData = null;
   for (const id of ids) {
     const r = await updateOne(id, pw);
     if (r.ok) done += 1;
     else {
       lastError = r.error;
+      lastData = r.data;
       if (r.error === 'bad_password') break;   // the rest would fail identically
     }
   }
@@ -96,6 +118,6 @@ export async function runPluginUpdates(ids, { onBusy } = {}) {
   _busy = false;
   if (onBusy) onBusy(false);
   if (done) toast(t('admin.pluginUpdated', '{n} plugin(s) mis à jour ✓', { n: done }).replace('{n}', done), 'success');
-  if (lastError) toast(pluginUpdateErrorText(lastError), 'error');
+  if (lastError) toast(pluginUpdateErrorText(lastError, lastData), 'error');
   return { done, lastError, cancelled: false };
 }

@@ -138,11 +138,13 @@ switch ($action) {
         admin_json_out(mkt_list());
 
     case 'install_plugin': {
+        if (!function_exists('mkt_stale_guard')) admin_json_out(['error' => 'stale_server_code', 'codeVersion' => null, 'filesVersion' => admin_max_version(changelog_dir())], 409);
         [$st, $pl] = mkt_install(lumen_str($body['id'] ?? null) ?? '', lumen_str($body['password'] ?? null) ?? '');
         admin_json_out($pl, $st);
     }
 
     case 'update_plugin': {
+        if (!function_exists('mkt_stale_guard')) admin_json_out(['error' => 'stale_server_code', 'codeVersion' => null, 'filesVersion' => admin_max_version(changelog_dir())], 409);
         [$st, $pl] = mkt_install(lumen_str($body['id'] ?? null) ?? '', lumen_str($body['password'] ?? null) ?? '', true);
         admin_json_out($pl, $st);
     }
@@ -177,10 +179,26 @@ switch ($action) {
     case 'version':
         // No dev-server version: it versions the serving tool, not the platform, and
         // has no meaning on this host at all (twin of dev_server.py:_version_info).
+        // codeVersion/filesVersion: the release the executing code was built as versus
+        // the one the files on disk are. A difference (stale opcache, update files
+        // parked as *.lumen-new) is reported with what was found and what was tried.
+        // A new entry point beside an older library (the library parked as *.lumen-new,
+        // or its bytecode evicted separately) lacks the function: that mix is itself the
+        // proof the code is older than the files, reported instead of a 500.
+        $code = function_exists('admin_code_status') ? admin_code_status() : [
+            'codeVersion' => null, 'filesVersion' => admin_max_version(changelog_dir()), 'stale' => true,
+            'diagnosis' => ['backend' => 'php', 'direction' => 'code_older', 'libraryOutdated' => true,
+                            'parked' => function_exists('admin_parked_update_files') ? admin_parked_update_files() : [],
+                            'opcache' => null, 'recovery' => null],
+        ];
         admin_json_out([
             'web' => admin_max_version(changelog_dir()),
             'preprocess' => admin_preprocess_version(),
             'repo' => GITHUB_REPO,
+            'codeVersion' => $code['codeVersion'],
+            'filesVersion' => $code['filesVersion'],
+            'codeStale' => $code['stale'],
+            'codeDiagnosis' => $code['diagnosis'],
         ]);
 
     case 'docs_list':

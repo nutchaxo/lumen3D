@@ -1808,7 +1808,7 @@ function lumen_count_download(string $rel, string $method, bool $hasRange): ?str
 // ── Plugins ─────────────────────────────────────────────────────────────────
 function admin_list_plugins(): array {
     $plugins = [];
-    foreach (['tools', 'channels', 'shaders', 'studio'] as $placement) {
+    foreach (LUMEN_PLUGIN_PLACEMENTS as $placement) {
         $base = modules_dir() . '/' . $placement;
         if (!is_dir($base)) continue;
         foreach (scandir($base) as $name) {
@@ -1833,6 +1833,163 @@ function admin_save_disabled(array $disabled): bool {
     $disabled = array_values(array_unique($disabled));
     sort($disabled);
     return admin_write_json(disabled_file(), ['disabled' => $disabled]);
+}
+
+// ── Version of the code that is EXECUTING ───────────────────────────────────
+// The platform version is read from the changelog filenames, i.e. from the files on
+// disk. On a host whose PHP keeps serving compiled bytecode (opcache with
+// validate_timestamps=0 and a blocked opcache_invalidate) or whose update parked
+// files as *.lumen-new, the files can be newer than the code that answers. The
+// release build writes the release version into this constant so the two can be
+// compared; a source checkout keeps the placeholder, which means "unstamped" and
+// switches every check below off (tools/build_release.py:stamp_code_version).
+const LUMEN_CODE_VERSION = '@@LUMEN_CODE_VERSION@@';
+
+/** The stamped version of the running code, or null when unstamped (a checkout).
+ *  $raw lets a test pass the value instead of the constant. */
+function admin_code_version(?string $raw = null): ?string {
+    $v = $raw ?? LUMEN_CODE_VERSION;
+    return preg_match('/^\d+\.\d+\.\d+$/D', $v) === 1 ? $v : null;
+}
+
+/** Plugin placements this platform can host (twin of dev_server.py PLUGIN_PLACEMENTS). */
+const LUMEN_PLUGIN_PLACEMENTS = ['tools', 'channels', 'shaders', 'studio'];
+
+/** Every PHP file the web server executes: api/*.php and the root entry points. */
+function admin_served_php_files(): array {
+    $root = admin_root();
+    $out = [];
+    foreach ([$root . '/api/*.php', $root . '/*.php'] as $pattern) {
+        foreach ((function_exists('glob') ? (array)@glob($pattern) : []) as $f) if (is_file($f)) $out[] = $f;
+    }
+    return $out;
+}
+
+/** Update files still parked beside their target (api/.update-pending.json and any
+ *  *.lumen-new left in api/ or the root), as paths relative to the web root. */
+function admin_parked_update_files(): array {
+    $root = admin_root();
+    $found = [];
+    $marker = $root . '/api/.update-pending.json';
+    if (is_file($marker)) {
+        $list = json_decode((string)@file_get_contents($marker), true);
+        if (is_array($list)) foreach ($list as $rel) if (is_string($rel) && $rel !== '') $found[$rel] = true;
+    }
+    foreach ([$root . '/api/*.lumen-new', $root . '/*.lumen-new'] as $pattern) {
+        foreach ((array)glob($pattern) as $f) {
+            $rel = ltrim(str_replace('\\', '/', substr($f, strlen($root))), '/');
+            $found[substr($rel, 0, -strlen('.lumen-new'))] = true;
+        }
+    }
+    $names = array_keys($found);
+    sort($names);
+    return $names;
+}
+
+/** What opcache is doing on this host, for the operator and the host's support:
+ *  never throws, every probe tolerates a function disabled by the host. */
+function admin_opcache_report(): array {
+    $ini = fn(string $k) => function_exists('ini_get') ? @ini_get($k) : false;
+    $enabled = function_exists('opcache_get_status') || function_exists('opcache_invalidate');
+    $iniEnabled = $ini('opcache.enable');
+    $restrict = $ini('opcache.restrict_api');
+    $validate = $ini('opcache.validate_timestamps');
+    $freq = $ini('opcache.revalidate_freq');
+    $status = function_exists('opcache_get_status') ? @opcache_get_status(false) : false;
+    return [
+        'available' => $enabled,
+        'enabled' => $status !== false && $status !== null ? (bool)($status['opcache_enabled'] ?? false)
+                     : ($iniEnabled !== false && $iniEnabled !== '' && $iniEnabled !== '0'),
+        'statusReadable' => is_array($status),
+        'restrictApi' => is_string($restrict) ? $restrict : '',
+        'validateTimestamps' => ($validate === false || $validate === '') ? null : ($validate !== '0'),
+        'revalidateFreq' => is_string($freq) && $freq !== '' ? (int)$freq : null,
+    ];
+}
+
+/** A recovery attempt that already ran in the last RECOVERY_INTERVAL seconds, or null.
+ *  A PHP request has no memory of the previous one, so the throttle lives in a file:
+ *  without it every Updates tab visit of a host whose mismatch opcache does not
+ *  explain would reset the whole opcache again. */
+const LUMEN_STALE_RECOVERY_INTERVAL = 60;
+function admin_stale_recovery_file(): string { return admin_root() . '/api/.stale-recovery.json'; }
+
+/** The recovery attempt: finalize parked files, invalidate every served PHP file,
+ *  and reset opcache only when per-file invalidation was unavailable or did nothing
+ *  (opcache_reset empties the pool's whole cache, so it is the last resort).
+ *  Bytecode is dropped for the NEXT request; this one keeps executing what it already
+ *  compiled. At most one attempt per LUMEN_STALE_RECOVERY_INTERVAL seconds: inside the
+ *  window the previous result is returned with `throttled: true`. */
+function admin_recover_stale_code(): array {
+    $file = admin_stale_recovery_file();
+    $prev = is_file($file) ? json_decode((string)@file_get_contents($file), true) : null;
+    if (is_array($prev) && isset($prev['at'], $prev['result']) && is_int($prev['at']) && is_array($prev['result'])
+        && time() - $prev['at'] >= 0 && time() - $prev['at'] < LUMEN_STALE_RECOVERY_INTERVAL) {
+        return array_merge($prev['result'], ['throttled' => true]);
+    }
+    $before = count(admin_parked_update_files());
+    $swapped = admin_update_finish_pending();
+    $files = admin_served_php_files();
+    $invalidated = 0;
+    if (function_exists('opcache_invalidate')) {
+        foreach ($files as $f) if (@opcache_invalidate($f, true)) $invalidated++;
+    }
+    $reset = false;
+    if ($invalidated === 0 && function_exists('opcache_reset')) $reset = (bool)@opcache_reset();
+    $result = ['parkedBefore' => $before, 'parkedAfter' => count(admin_parked_update_files()), 'swapped' => $swapped,
+               'invalidated' => $invalidated, 'filesTried' => count($files), 'opcacheReset' => $reset, 'throttled' => false];
+    @file_put_contents($file, json_encode(['at' => time(), 'result' => $result]));
+    return $result;
+}
+
+/** Compare the version of the code executing with the version of the files on disk.
+ *  Unstamped code or unknown files version ⇒ no verdict, no recovery. On a mismatch
+ *  `direction` says which side is older: `code_older` (the files were updated and the
+ *  code kept running: the recovery is tried, throttled) or `code_newer` (the update
+ *  stopped half-way: new code beside old changelogs, so re-running the update is the
+ *  remedy and no opcache action is taken).
+ *  @return array{codeVersion:?string,filesVersion:?string,stale:bool,diagnosis:?array} */
+function admin_code_status(?string $codeRaw = null, bool $recover = true): array {
+    $code = admin_code_version($codeRaw);
+    $files = admin_max_version(changelog_dir());
+    $out = ['codeVersion' => $code, 'filesVersion' => $files, 'stale' => false, 'diagnosis' => null];
+    if ($code === null || $files === null || $code === $files) return $out;
+    $out['stale'] = true;
+    $newer = admin_version_tuple($code) > admin_version_tuple($files);
+    $recovery = null;
+    if ($recover && !$newer) $recovery = admin_recover_stale_code();
+    $out['diagnosis'] = [
+        'backend' => 'php',
+        'direction' => $newer ? 'code_newer' : 'code_older',
+        'parked' => admin_parked_update_files(),
+        'opcache' => admin_opcache_report(),
+        'recovery' => $recovery,
+        'swappedEarlier' => (int)($GLOBALS['lumen_pending_swapped'] ?? 0),
+    ];
+    return $out;
+}
+
+/** Install and update refuse to run on code older than the files: it would judge
+ *  compatibility with the new version's rules and then execute the old rules.
+ *  @return ?array{0:int,1:array} [409, payload] or null */
+function mkt_stale_guard(?string $codeRaw = null): ?array {
+    $code = admin_code_version($codeRaw);
+    $files = admin_max_version(changelog_dir());
+    if ($code === null || $files === null || $code === $files) return null;
+    return [409, ['error' => 'stale_server_code', 'codeVersion' => $code, 'filesVersion' => $files]];
+}
+
+/** Why a catalog entry cannot be installed here, as [status, payload], or null.
+ *  A malformed id is `bad_plugin_id`; a well-formed entry for a placement this
+ *  platform does not know is `unsupported_placement`, which names it. */
+function mkt_entry_problem(array $entry): ?array {
+    $pid = (string)($entry['id'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $pid)) return [400, ['error' => 'bad_plugin_id']];
+    $placement = $entry['placement'] ?? null;
+    if (!is_string($placement) || !in_array($placement, LUMEN_PLUGIN_PLACEMENTS, true)) {
+        return [409, ['error' => 'unsupported_placement', 'placement' => is_string($placement) ? $placement : '']];
+    }
+    return null;
 }
 
 // ── Versioning ──────────────────────────────────────────────────────────────
@@ -2930,8 +3087,12 @@ function mkt_list(): array {
         if (!is_array($e)) continue;
         $pid = (string)($e['id'] ?? '');
         $placement = $e['placement'] ?? null;
-        $path = in_array($placement, ['tools', 'channels', 'shaders', 'studio'], true) ? "$placement/$pid" : null;
+        $knownPlacement = is_string($placement) && in_array($placement, LUMEN_PLUGIN_PLACEMENTS, true);
+        $path = $knownPlacement ? "$placement/$pid" : null;
         [$c, $cr] = admin_compat_satisfies($ver, $e['platformCompat'] ?? null);
+        // A placement this platform does not host can never be installed: say so here
+        // so the Install button is disabled instead of failing after the click.
+        if (!$knownPlacement) { $c = false; $cr = 'placement ' . (is_string($placement) ? "'" . $placement . "'" : '(none)') . ' is not supported by this platform'; }
         $local = ($path !== null && isset($installed[$path])) ? $installed[$path] : null;
         $cur = ($local && !empty($local['version'])) ? (string)$local['version'] : null;
         $latest = !empty($e['latestVersion']) ? (string)$e['latestVersion'] : null;
@@ -3001,6 +3162,7 @@ function mkt_extract_zip(string $zipPath, string $dest): ?string {
  *  version is restored rather than the operator losing the plugin.
  *  @return array{0:int,1:array} [httpStatus, payload] */
 function mkt_install(string $catalogId, string $password, bool $upgrade = false): array {
+    if (($stale = mkt_stale_guard()) !== null) return $stale;
     if (MARKETPLACE_CATALOG_URL === '') return [400, ['error' => 'marketplace_not_configured']];
     if (!admin_reauth($password)) return [401, ['error' => 'bad_password']];
     $rec = admin_credential();
@@ -3010,7 +3172,7 @@ function mkt_install(string $catalogId, string $password, bool $upgrade = false)
     foreach ($res as $e) { if (is_array($e) && (string)($e['id'] ?? '') === $catalogId) { $entry = $e; break; } }
     if (!$entry) return [404, ['error' => 'unknown_catalog_id']];
     $placement = $entry['placement'] ?? ''; $pid = (string)($entry['id'] ?? '');
-    if (!in_array($placement, ['tools', 'channels', 'shaders', 'studio'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $pid)) return [400, ['error' => 'bad_plugin_id']];
+    if (($problem = mkt_entry_problem($entry)) !== null) return $problem;
     $path = "$placement/$pid"; $targetDir = modules_dir() . "/$placement/$pid";
     if (is_dir($targetDir) && !$upgrade) return [409, ['error' => 'already_installed']];
     if ($upgrade && !is_dir($targetDir)) return [404, ['error' => 'not_installed']];
@@ -3126,7 +3288,7 @@ function admin_update_protected(string $rel): bool {
     // Runtime/operator state — never shipped in a release, but fail-safe anyway.
     static $stateFiles = ['api/admin_credential.json', 'api/config.json', 'api/stats.json',
                           'api/disabled-plugins.json', 'api/quarantined-plugins.json', 'api/plugin-trust.json',
-                          'api/.update-pending.json', 'api/trusted-proxies.json', 'api/marketplace-state.json'];
+                          'api/.update-pending.json', 'api/.stale-recovery.json', 'api/trusted-proxies.json', 'api/marketplace-state.json'];
     if (in_array($rel, $stateFiles, true)) return true;
     foreach (['config/pages/', 'api/page-drafts/', 'secrets/',
               'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {
@@ -3430,12 +3592,12 @@ function admin_opcache_flush(array $phpPaths): void {
  *  swap them into place once their handles are released. Cheap no-op when the
  *  marker is absent (the Linux path). Never touches the entry script currently
  *  executing; the next request through ANOTHER endpoint finalizes that one. */
-function admin_update_finish_pending(): void {
+function admin_update_finish_pending(): int {
     $root = admin_root();
     $marker = $root . '/api/.update-pending.json';
-    if (!is_file($marker)) return;
+    if (!is_file($marker)) return 0;
     $list = json_decode((string)@file_get_contents($marker), true);
-    if (!is_array($list)) { @unlink($marker); return; }
+    if (!is_array($list)) { @unlink($marker); return 0; }
     $self = str_replace('\\', '/', (string)@realpath((string)($_SERVER['SCRIPT_FILENAME'] ?? '')));
     $left = []; $swapped = [];
     foreach ($list as $rel) {
@@ -3452,11 +3614,14 @@ function admin_update_finish_pending(): void {
         admin_fix_file_mode($dst);
         @unlink($new);
         @unlink($dst . '.lumen-old');
-        if (substr($rel, -4) === '.php') $swapped[] = $dst;
+        $swapped[] = $dst;
     }
-    if ($swapped) admin_opcache_flush($swapped);
+    $php = array_values(array_filter($swapped, fn($p) => substr($p, -4) === '.php'));
+    if ($php) admin_opcache_flush($php);
     if ($left) @file_put_contents($marker, json_encode(array_values($left)));
     else @unlink($marker);
+    $GLOBALS['lumen_pending_swapped'] = (int)($GLOBALS['lumen_pending_swapped'] ?? 0) + count($swapped);
+    return count($swapped);
 }
 
 // ── One-shot migration: relocate inline page drafts out of the public tree ────

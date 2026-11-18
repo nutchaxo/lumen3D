@@ -95,8 +95,10 @@ try {
 // ── the install / approve / toggle routes name the placement (twin of dev_server.py) ─
 $lib = file_get_contents("$repo/api/_admin_lib.php");
 $adm = file_get_contents("$repo/api/admin.php");
-check('mkt_install accepts the studio placement',
-    substr_count($lib, "['tools', 'channels', 'shaders', 'studio']") >= 3);
+check('the hosted placements include studio, and install, list and the plugin scan all read them',
+    strpos($lib, "const LUMEN_PLUGIN_PLACEMENTS = ['tools', 'channels', 'shaders', 'studio'];") !== false
+    && substr_count($lib, 'LUMEN_PLUGIN_PLACEMENTS') >= 4
+    && strpos($lib, 'function mkt_entry_problem') !== false);
 check('mkt_install creates the placement folder before the rename (admin_make_dir(dirname($targetDir)))',
     strpos($lib, 'admin_make_dir(dirname($targetDir));') !== false);
 check('mkt_install never picks the sandbox lane for a studio plugin',

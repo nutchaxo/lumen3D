@@ -20,6 +20,7 @@
 import { API_ADMIN, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { fetchPluginUpdates, runPluginUpdates, updateAffordance } from './plugin-update.js';
 import { renderReleaseNotesTree } from './markdown.js';
+import { describeStaleCode } from './stale-code.js';
 
 let _versions = null;
 let _check = null;
@@ -382,6 +383,49 @@ function pipelinePackBlock() {
     ${link}`;
 }
 
+/** Fill `{name}` tokens whether or not the translator did it. */
+function fill(text, vars) {
+  let out = String(text);
+  for (const [k, v] of Object.entries(vars)) out = out.split('{' + k + '}').join(String(v));
+  return out;
+}
+
+/** Warning shown when the code the server executes differs from its files. Not shown
+ *  while an update runs: the process is about to be replaced and the numbers are moving. */
+function staleCodeBlock() {
+  if (_updating) return '';
+  const s = describeStaleCode(_versions);
+  if (!s) return '';
+  const vars = { code: s.code ?? '?', files: s.files, seconds: s.waitSeconds, details: s.details };
+  const remedyText = {
+    parked: ['admin.staleCodeRemedyParked', 'Update files are parked beside their target ({files}): rename each *.lumen-new file over its target, then re-check.'],
+    restart: ['admin.staleCodeRemedyRestart', 'Restart the server (stop and start dev_server.py), then re-check.'],
+    recheck: ['admin.staleCodeRemedyRecheck', 'The server has just dropped its cached code. Re-check: the next request runs the new files.'],
+    wait: ['admin.staleCodeRemedyWait', 'PHP re-reads changed files every {seconds} s. Wait that long, then re-check.'],
+    incomplete: ['admin.staleCodeRemedyIncomplete', 'Run the update again (Verify, then update) so that every file reaches version {code}.'],
+    reupload: ['admin.staleCodeRemedyReupload', 'Upload the files of version {files} again over the existing ones (the api/ folder first), or ask your host to restart PHP, then re-check.'],
+    opcache: ['admin.staleCodeRemedyOpcache', 'Restart PHP or ask your host to clear opcache, then re-check.'],
+  }[s.remedy];
+  // t() interpolates {files} itself, so the parked list must be in the params it receives.
+  const remedyVars = s.remedy === 'parked' ? { ...vars, files: (s.parked || []).join(', ') } : vars;
+  const remedy = fill(t(remedyText[0], remedyText[1], remedyVars), remedyVars);
+  const bodyKey = s.remedy === 'incomplete' ? ['admin.staleCodeBodyNewer', 'The server code is version {code} but its files are only version {files}: an update stopped half-way. Plugin installs are refused until this is fixed.']
+    : s.code ? ['admin.staleCodeBody', 'The server still runs the code of version {code} while its files are version {files}. Plugin installs are refused until this is fixed.']
+      : ['admin.staleCodeBodyOlder', 'The server still runs code older than its files (version {files}). Plugin installs are refused until this is fixed.'];
+  const body = fill(t(bodyKey[0], bodyKey[1], vars), vars);
+  const details = s.details ? fill(t('admin.staleCodeDetails', 'Details for your host: {details}', vars), vars) : '';
+  return `
+    <div class="adm-card" style="margin-top:18px" id="stale-code-card">
+      <div class="adm-card-body">
+        <div class="adm-update-state adm-warn" role="status"><i data-lucide="alert-triangle"></i> <b>${escHtml(t('admin.staleCodeTitle', 'The server runs older code than its files'))}</b></div>
+        <p style="margin:8px 0">${escHtml(body)}</p>
+        <p class="adm-muted" style="margin:8px 0 ${details ? '4px' : '12px'}">${escHtml(remedy)}</p>
+        ${details ? `<p class="adm-muted" style="margin:0 0 12px;font-size:.85em">${escHtml(details)}</p>` : ''}
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-stale-recheck"><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.staleCodeRecheck', 'Re-check'))}</button>
+      </div>
+    </div>`;
+}
+
 function render(lastOutcome) {
   const root = el('updates-root');
   if (!root) return;
@@ -394,6 +438,8 @@ function render(lastOutcome) {
       </div>
       ${_updating ? '' : `<button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-recheck"><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.checkUpdates', 'Vérifier'))}</button>`}
     </div>
+
+    ${staleCodeBlock()}
 
     ${lastOutcomeBlock(lastOutcome)}
 
@@ -432,6 +478,7 @@ function render(lastOutcome) {
     </div>`;
 
   el('btn-recheck')?.addEventListener('click', recheck);
+  el('btn-stale-recheck')?.addEventListener('click', recheck);
   el('btn-ack-update')?.addEventListener('click', ackOutcome);
   bindUpdateBody(root);
   bindPluginUpdates(root);
@@ -439,9 +486,22 @@ function render(lastOutcome) {
   if (_updating) paintProgress();
 }
 
+let _staleRetried = false;
+
 async function loadVersions() {
   const v = await apiFetch(`${API_ADMIN}?action=version`);
   if (v) _versions = v;
+  // When the server dropped its cached code during that very request, the answer still
+  // came from the old bytecode: ask once more before telling the operator anything.
+  const s = describeStaleCode(_versions);
+  if (s && s.retry && !_staleRetried) {
+    _staleRetried = true;
+    await new Promise((r) => setTimeout(r, 800));
+    const again = await apiFetch(`${API_ADMIN}?action=version`);
+    if (again) _versions = again;
+  } else if (!s) {
+    _staleRetried = false;
+  }
 }
 
 async function loadCheck() {
@@ -470,6 +530,7 @@ async function loadPipelinePack() {
 
 function recheck() {
   if (_updating) return;
+  loadVersions().then(() => render());
   loadCheck(); loadPluginUpdates(); loadPipelinePack();
 }
 

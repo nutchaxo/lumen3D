@@ -74,6 +74,13 @@ import dataset_trash
 
 __version__ = "0.16.0"
 
+# The platform release this code was BUILT as. tools/build_release.py writes it into
+# the shipped file; a source checkout keeps the placeholder, which means "unstamped"
+# and switches the stale-code checks off. The platform version itself is read from
+# the changelog filenames (the files on disk), so a process that kept running after
+# an update has code older than its files: _code_status() reports it.
+_CODE_VERSION = "@@LUMEN_CODE_VERSION@@"
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parent
 DATA_WEB   = ROOT / "DATA_WEB"
@@ -2603,6 +2610,52 @@ def _preprocess_version():
     return _max_version(ROOT / "preprocess" / "changelog")
 
 
+def _code_version(raw=None):
+    """Stamped release of the running code, or None when unstamped (a checkout).
+    `raw` lets a test pass the value instead of the module constant."""
+    v = _CODE_VERSION if raw is None else raw
+    return v if isinstance(v, str) and re.fullmatch(r"\d+\.\d+\.\d+", v) else None
+
+
+def _code_status(raw=None) -> dict:
+    """Version of the code executing vs the version of the files on disk. Unstamped
+    code, or an unreadable files version, gives no verdict. A mismatch on the
+    Python server means the process was not restarted after its files changed:
+    reported, never auto-restarted."""
+    code, files = _code_version(raw), _max_version(CHANGELOG_DIR)
+    stale = bool(code and files and code != files)
+    diagnosis = None
+    if stale:
+        newer = tuple(int(x) for x in code.split(".")) > tuple(int(x) for x in files.split("."))
+        # code_older: the files changed under a running process (restart it);
+        # code_newer: the files were rolled back or an update stopped half-way.
+        diagnosis = {"backend": "python", "action": "restart",
+                     "direction": "code_newer" if newer else "code_older"}
+    return {"codeVersion": code, "filesVersion": files, "stale": stale, "diagnosis": diagnosis}
+
+
+def _stale_code_problem(raw=None):
+    """409 payload for install/update when the code is older than its files."""
+    st = _code_status(raw)
+    if not st["stale"]:
+        return None
+    return {"error": "stale_server_code", "codeVersion": st["codeVersion"], "filesVersion": st["filesVersion"]}
+
+
+def _entry_install_problem(entry: dict):
+    """(status, payload) when a catalog entry cannot be installed here, else None.
+    A malformed id is `bad_plugin_id`; a well-formed entry for a placement this
+    platform does not host is `unsupported_placement`, which names the placement."""
+    pid = str(entry.get("id", ""))
+    if not _SAFE_FOLDER_RE.match(pid):
+        return 400, {"error": "bad_plugin_id"}
+    placement = entry.get("placement")
+    if not isinstance(placement, str) or placement not in PLUGIN_PLACEMENTS:
+        return 409, {"error": "unsupported_placement",
+                     "placement": placement if isinstance(placement, str) else ""}
+    return None
+
+
 def _version_info() -> dict:
     """Web platform version = newest changelog/changelog_X.Y.Z.md (the convention's
     single source of truth — no constant introduced).
@@ -2612,10 +2665,15 @@ def _version_info() -> dict:
     PHP host — an operator reading two unrelated numbers side by side can only
     conclude one of them is wrong.
     """
+    code = _code_status()
     return {
         "web": _max_version(CHANGELOG_DIR),
         "preprocess": _preprocess_version(),
         "repo": GITHUB_REPO,
+        "codeVersion": code["codeVersion"],
+        "filesVersion": code["filesVersion"],
+        "codeStale": code["stale"],
+        "codeDiagnosis": code["diagnosis"],
     }
 
 
@@ -3649,8 +3707,14 @@ def _marketplace_list() -> dict:
             continue
         pid = str(e.get("id", ""))
         placement = e.get("placement")
-        path = f"{placement}/{pid}" if placement in PLUGIN_PLACEMENTS else None
+        known_placement = isinstance(placement, str) and placement in PLUGIN_PLACEMENTS
+        path = f"{placement}/{pid}" if known_placement else None
         ok_c, reason_c = _compat_satisfies(ver, e.get("platformCompat"))
+        if not known_placement:
+            # Can never be installed here: disable the button instead of failing after the click.
+            ok_c = False
+            reason_c = (f"placement '{placement}' is not supported by this platform"
+                        if isinstance(placement, str) else "placement (none) is not supported by this platform")
         card = {k: e.get(k) for k in _MARKETPLACE_CARD_KEYS}
         local = installed.get(path) if path else None
         cur = str(local.get("version")) if local and local.get("version") else None
@@ -3735,6 +3799,9 @@ def _install_marketplace_plugin(catalog_id: str, password: str, upgrade: bool = 
     version is put back rather than the operator being left with no plugin. The
     plugin lands as an operator-approved (server-recomputed hash) plugin the existing
     loadModules trust gate re-verifies. Returns (ok, status, payload)."""
+    stale = _stale_code_problem()
+    if stale:
+        return False, 409, stale
     if not _MARKETPLACE_CATALOG_URL:
         return False, 400, {"error": "marketplace_not_configured"}
     if not _verify_password(password or "", (_load_credential() or {}).get("password_pbkdf2") or ""):
@@ -3748,9 +3815,10 @@ def _install_marketplace_plugin(catalog_id: str, password: str, upgrade: bool = 
     entry = next((e for e in entries if isinstance(e, dict) and str(e.get("id")) == str(catalog_id)), None)
     if not entry:
         return False, 404, {"error": "unknown_catalog_id"}
+    problem = _entry_install_problem(entry)
+    if problem:
+        return False, problem[0], problem[1]
     placement, pid = entry.get("placement"), str(entry.get("id", ""))
-    if placement not in PLUGIN_PLACEMENTS or not _SAFE_FOLDER_RE.match(pid):
-        return False, 400, {"error": "bad_plugin_id"}
     path = f"{placement}/{pid}"
     target_dir = MODULES_DIR / placement / pid
     if target_dir.exists() and not upgrade:
@@ -7811,7 +7879,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""),
                                                             upgrade=(action == "update_plugin"))
-                if st2 != 401:
+                # The throttle is reset only by an answer that checked the password: a
+                # refusal that comes before the check proves nothing about the caller.
+                if st2 != 401 and pl2.get("error") not in ("stale_server_code", "marketplace_not_configured"):
                     _brute_clear(ip)
                 self._json(st2, pl2)
             elif action == "uninstall_plugin":

@@ -7,6 +7,7 @@
  *   IJImage    images, channel images, display state
  *   IJLuts     ImageJ look-up tables (256 × RGB)
  *   IJRoi      region-of-interest geometry (masks, areas, perimeters, RLE)
+ *   IJOpRegistry  the operation registry both the page and the worker read (PLAN-wave2 §2.1)
  *   IJOps      statistics, histogram, contrast, conversion, maths, geometry
  *   IJProject  band-based streaming Z projector (six methods)
  *   IJTiff     ImageJ-hyperstack TIFF writer + uncompressed TIFF reader
@@ -289,9 +290,17 @@
   // ---------------------------------------------------------------- IJRoi
   const IJRoi = (() => {
     const EPS = 1e-9;
+    const RUN_ENDS = new WeakMap();
 
     function badRoi(msg) { return fail('IJ_BAD_ROI', msg || 'roi'); }
     function finite(v) { return typeof v === 'number' && isFinite(v); }
+
+    // Caps (PLAN-wave2 §2.2): a selection of a noisy image can hold millions of runs / vertices;
+    // beyond these the journal, the storage and the hit tests stop being usable.
+    const MAX_RUNS = 2000000;
+    const MAX_VERTS = 1000000;
+
+    function tooComplex(msg) { return fail('IJ_ROI_TOO_COMPLEX', msg || 'selection too complex'); }
 
     function validate(roi) {
       if (!roi || typeof roi !== 'object') throw badRoi('not an object');
@@ -299,9 +308,13 @@
         case 'rect': case 'oval':
           if (!(finite(roi.x) && finite(roi.y) && finite(roi.w) && finite(roi.h) && roi.w >= 0 && roi.h >= 0)) throw badRoi('box');
           break;
-        case 'polygon': case 'freehand': case 'point': {
-          const need = roi.type === 'point' ? 1 : 3;
+        case 'polygon': case 'freehand': case 'point': case 'polyline': case 'angle': {
+          // polyline = a segmented line (open, not an area); angle = exactly three points
+          // (arm end, vertex, arm end); a multi-point selection stays a `point` with n >= 1 points.
+          const need = roi.type === 'point' ? 1 : roi.type === 'polyline' ? 2 : 3;
           if (!Array.isArray(roi.points) || roi.points.length < need) throw badRoi('points');
+          if (roi.type === 'angle' && roi.points.length !== 3) throw badRoi('angle points');
+          if (roi.points.length > MAX_VERTS) throw tooComplex('vertices');
           for (const p of roi.points) if (!Array.isArray(p) || !finite(p[0]) || !finite(p[1])) throw badRoi('point');
           break;
         }
@@ -311,7 +324,8 @@
           break;
         case 'mask': {
           if (!(finite(roi.x) && finite(roi.y) && Number.isInteger(roi.w) && Number.isInteger(roi.h) && roi.w >= 0 && roi.h >= 0)) throw badRoi('mask box');
-          if (!Array.isArray(roi.rle) && !(roi.rle instanceof Uint32Array)) throw badRoi('rle');
+          if (!Array.isArray(roi.rle) && !(ArrayBuffer.isView(roi.rle) && roi.rle.constructor && roi.rle.constructor.name === 'Uint32Array')) throw badRoi('rle');
+          if (roi.rle.length > MAX_RUNS) throw tooComplex('runs');
           let s = 0;
           for (let i = 0; i < roi.rle.length; i++) { const r = roi.rle[i]; if (!Number.isInteger(r) || r < 0) throw badRoi('run'); s += r; }
           if (s !== roi.w * roi.h) throw badRoi('rle length');
@@ -350,11 +364,11 @@
       return { x: bx, y: by, w: Math.ceil(x1) - bx, h: Math.ceil(y1) - by };
     }
 
-    /* Even-odd scanline fill, ImageJ's PolygonFiller rule: a pixel is inside
-     * when its CENTRE is. Crossings use half-open edges (y1 ≤ yc < y2) and the
-     * span is [ceil(xa − ½), ceil(xb − ½)) so left/top edges are inclusive and
-     * right/bottom exclusive. Writes into `out` for the box (bx, by, bw, bh). */
-    function fillPolygon(pts, bx, by, bw, bh, out) {
+    /* The fill rule of journals written before the PolygonFiller port (plugin 1.0.0): a pixel is inside when its
+     * centre is, crossings use half-open edges (y1 <= yc < y2) and the span is [ceil(xa - 1/2), ceil(xb - 1/2)), so
+     * left/top edges are inclusive and right/bottom exclusive. Kept ONLY so such a journal replays to the pixels it
+     * was recorded with: an entry carries `maskRule: 2` since 1.1.0, an entry without it replays with `fillRule: 1`. */
+    function fillPolygonLegacy(pts, bx, by, bw, bh, out) {
       const n = pts.length;
       const xs = [];
       for (let row = 0; row < bh; row++) {
@@ -372,6 +386,50 @@
           if (s < 0) s = 0;
           if (e > bw) e = bw;
           for (let x = s; x < e; x++) out[row * bw + x] = 1;
+        }
+      }
+    }
+
+    /* ij.process.PolygonFiller, ported: an even-odd scanline fill where "outline and pixel coordinates are shifted by
+     * 0.5" (pixel (i, j) is the square [i, i+1) x [j, j+1)). Quotes of the source that settle the tie rules:
+     *   "int y1 = (int)Math.round(y1f); ... if (y1==y2) continue;"                  a horizontal edge is ignored; an edge
+     *                                                                                covers the rows [round(y1), round(y2))
+     *   "ex[edges] = x1f + (y1 - y1f + 0.5)*slope + 1e-8;"                          its x at the CENTRE of its first row
+     *   "x1 = (int)(ex[aedge[i]]+0.5); x2 = (int)(ex[aedge[i+1]]+0.5); for (x=x1; x<x2; x++)"
+     * so a pixel is inside when its centre lies in (left edge, right edge]: a centre exactly on a left boundary is
+     * outside, exactly on a right boundary inside; vertically (top, bottom]. Writes 1 into `out` for the box
+     * (bx, by, bw, bh); the active edges are kept sorted per row, so the cost is O(rows * active edges). */
+    function fillPolygon(pts, bx, by, bw, bh, out) {
+      const n = pts.length;
+      const edges = [];
+      for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[i + 1 === n ? 0 : i + 1];
+        let x1f = a[0], y1f = a[1], x2f = b[0], y2f = b[1];
+        let y1 = Math.floor(y1f + 0.5), y2 = Math.floor(y2f + 0.5);
+        if (y1 === y2) continue;
+        if (y1 > y2) { let t = y1; y1 = y2; y2 = t; t = y1f; y1f = y2f; y2f = t; t = x1f; x1f = x2f; x2f = t; }
+        const slope = (x2f - x1f) / (y2f - y1f);
+        edges.push({ y1, y2, ex: x1f + (y1 - y1f + 0.5) * slope + 1e-8, slope });
+      }
+      if (!edges.length) return;
+      edges.sort((p, q) => p.y1 - q.y1);
+      let active = [], next = 0;
+      let yMax = edges[0].y2;
+      for (let i = 1; i < edges.length; i++) if (edges[i].y2 > yMax) yMax = edges[i].y2;
+      const yEnd = Math.min(by + bh, yMax);
+      let y = Math.max(by, edges[0].y1);
+      for (; y < yEnd; y++) {
+        while (next < edges.length && edges[next].y1 <= y) { active.push(edges[next]); next++; }
+        active = active.filter((e) => y < e.y2);
+        if (active.length < 2) continue;
+        const xs = active.map((e) => e.ex + (y - e.y1) * e.slope);
+        xs.sort((p, q) => p - q);
+        const row = (y - by) * bw;
+        for (let k = 0; k + 1 < xs.length; k += 2) {
+          let s = Math.floor(xs[k] + 0.5) - bx, e2 = Math.floor(xs[k + 1] + 0.5) - bx;
+          if (s < 0) s = 0;
+          if (e2 > bw) e2 = bw;
+          for (let x = s; x < e2; x++) out[row + x] = 1;
         }
       }
     }
@@ -416,8 +474,8 @@
           }
           break;
         }
-        case 'polygon': case 'freehand': fillPolygon(roi.points, b.x, b.y, b.w, b.h, data); break;
-        case 'line': fillPolygon(lineCorners(roi), b.x, b.y, b.w, b.h, data); break;
+        case 'polygon': case 'freehand': (roi.fillRule === 1 ? fillPolygonLegacy : fillPolygon)(roi.points, b.x, b.y, b.w, b.h, data); break;
+        case 'line': (roi.fillRule === 1 ? fillPolygonLegacy : fillPolygon)(lineCorners(roi), b.x, b.y, b.w, b.h, data); break;
         case 'point':
           for (const p of roi.points) {
             const i = Math.floor(p[0]) - b.x, j = Math.floor(p[1]) - b.y;
@@ -466,9 +524,20 @@
           const i = Math.floor(x) - roi.x, j = Math.floor(y) - roi.y;
           if (i < 0 || j < 0 || i >= roi.w || j >= roi.h) return false;
           const k = j * roi.w + i;
-          let pos = 0, bit = 0;
-          for (let r = 0; r < roi.rle.length; r++) { pos += roi.rle[r]; if (k < pos) return bit === 1; bit ^= 1; }
-          return false;
+          // Cumulative run ends, cached per run array (immutable once published): a binary search
+          // instead of a walk over up to 2 M runs on every pointer move.
+          const rle = roi.rle;
+          let cum = RUN_ENDS.get(rle);
+          if (!cum) {
+            cum = new Float64Array(rle.length);
+            let pos = 0;
+            for (let r = 0; r < rle.length; r++) { pos += rle[r]; cum[r] = pos; }
+            RUN_ENDS.set(rle, cum);
+          }
+          let lo = 0, hi = cum.length - 1;
+          if (!(hi >= 0) || k >= cum[hi]) return false;
+          while (lo < hi) { const mid = (lo + hi) >> 1; if (k < cum[mid]) hi = mid; else lo = mid + 1; }
+          return (lo & 1) === 1;
         }
         default: return false;
       }
@@ -543,7 +612,89 @@
 
     function lineLength(roi, cal) {
       const pw = (cal && cal.pixelWidth) || 1, ph = (cal && cal.pixelHeight) || 1;
+      if (roi.type === 'polyline') {
+        let len = 0;
+        for (let i = 1; i < roi.points.length; i++) len += Math.hypot((roi.points[i][0] - roi.points[i - 1][0]) * pw, (roi.points[i][1] - roi.points[i - 1][1]) * ph);
+        return len;
+      }
       return Math.hypot((roi.x2 - roi.x1) * pw, (roi.y2 - roi.y1) * ph);
+    }
+
+    /* Dense 0/1 pixels of a mask ROI inside its own box. */
+    function maskDense(roi) {
+      const d = new Uint8Array(roi.w * roi.h);
+      let pos = 0, bit = 0;
+      for (let r = 0; r < roi.rle.length; r++) {
+        const run = roi.rle[r];
+        if (bit) d.fill(1, pos, pos + run);
+        pos += run; bit ^= 1;
+      }
+      return d;
+    }
+
+    /* Outline loops of a mask ROI, in image coordinates, as the vertex lists of an ImageJ traced
+     * (wand / ThresholdToSelection style) selection: vertices only where the direction changes,
+     * foreground kept on the right of the travel direction. At a vertex where two pixels touch
+     * diagonally the path turns RIGHT first, so diagonal neighbours are separate outlines (the
+     * foreground is 4-connected, holes 8-connected). The outer loops and the holes all appear.
+     * Golden fixtures of ImageJ 1.54f's ThresholdToSelection will confirm this rule. */
+    // Tracing a mask costs O(box) memory (a dense copy + a visited map): the loops are cached per run array (immutable once
+    // published), and a box beyond MAX_OUTLINE_PIXELS is refused instead of exhausting the memory of the worker.
+    const OUTLINE_CACHE = new WeakMap();
+    const MAX_OUTLINE_PIXELS = 1 << 27;
+    function outlines(roi) {
+      if (roi.type !== 'mask') {
+        if (roi.type === 'polygon' || roi.type === 'freehand') return [roi.points.map((p) => [p[0], p[1]])];
+        return [];
+      }
+      const w = roi.w, h = roi.h;
+      if (!(w > 0 && h > 0)) return [];
+      const hit = OUTLINE_CACHE.get(roi.rle);
+      if (hit && hit.x === roi.x && hit.y === roi.y && hit.w === w && hit.h === h) return hit.loops;
+      if (w * h > MAX_OUTLINE_PIXELS) throw tooComplex('outline of a very large mask');
+      const loops = traceOutlines(roi, w, h);
+      OUTLINE_CACHE.set(roi.rle, { x: roi.x, y: roi.y, w, h, loops });
+      return loops;
+    }
+
+    function traceOutlines(roi, w, h) {
+      const dense = maskDense(roi);
+      const fg = (x, y) => x >= 0 && y >= 0 && x < w && y < h && dense[y * w + x] === 1;
+      const W1 = w + 1;
+      const seen = new Uint8Array(W1 * (h + 1));
+      const DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];
+      // boundary edge leaving vertex (x, y) in direction d: foreground on its right, background on its left
+      const edge = (x, y, d) => {
+        switch (d) {
+          case 0: return fg(x, y) && !fg(x, y - 1);
+          case 1: return fg(x - 1, y) && !fg(x, y);
+          case 2: return fg(x - 1, y - 1) && !fg(x - 1, y);
+          default: return fg(x, y - 1) && !fg(x - 1, y - 1);
+        }
+      };
+      const turns = [1, 0, 3];
+      const loops = [];
+      for (let y = 0; y <= h; y++) {
+        for (let x = 0; x <= w; x++) {
+          for (let d0 = 0; d0 < 4; d0++) {
+            if (((seen[y * W1 + x] >> d0) & 1) || !edge(x, y, d0)) continue;
+            const pts = [];
+            let cx = x, cy = y, d = d0;
+            for (;;) {
+              seen[cy * W1 + cx] |= 1 << d;
+              const nx = cx + DX[d], ny = cy + DY[d];
+              // next direction: right turn, straight, left turn
+              let nd = -1;
+              for (let t = 0; t < 3; t++) { const c = (d + turns[t]) & 3; if (edge(nx, ny, c)) { nd = c; break; } }
+              if (nd !== d) pts.push([nx + roi.x, ny + roi.y]);
+              cx = nx; cy = ny; d = nd;
+              if (d < 0 || (cx === x && cy === y && d === d0)) break;
+            }
+            if (pts.length) loops.push(pts);
+          }
+        }
+      }
+      return loops;
     }
 
     /* Perimeter in pixels. rect 2(w+h); oval Ramanujan's first approximation
@@ -551,7 +702,9 @@
      * (traced polygons — `traced: true`, e.g. particle outlines, and any polygon
      * of integer vertices with only horizontal / vertical edges, as ImageJ's
      * Roi.isTraced — get the corner correction); freehand ImageJ's smoothed length; line its length;
-     * point / mask 0. */
+     * point / angle 0; polyline its length; mask the sum of the traced perimeters of every
+     * outline (outer loops and holes) of its pixels, which is what ImageJ reports for the
+     * ShapeRoi of a traced mask. */
     function perimeter(roi) {
       switch (roi.type) {
         case 'rect': return 2 * (roi.w + roi.h);
@@ -561,7 +714,12 @@
         }
         case 'polygon': return roi.traced || isRectilinearInt(roi.points) ? tracedPerimeter(roi.points) : polygonPerimeter(roi.points);
         case 'freehand': return smoothedPerimeter(roi.points);
-        case 'line': return lineLength(roi);
+        case 'line': case 'polyline': return lineLength(roi);
+        case 'mask': {
+          let sum = 0;
+          for (const loop of outlines(roi)) sum += tracedPerimeter(loop);
+          return sum;
+        }
         default: return 0;
       }
     }
@@ -593,11 +751,13 @@
           if (maskData[y * w + x]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
         }
       }
-      if (x1 < 0) return { type: 'mask', x: 0, y: 0, w: 0, h: 0, rle: [] };
+      if (x1 < 0) return { type: 'mask', x: 0, y: 0, w: 0, h: 0, rle: new Uint32Array(0) };
       const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
       const sub = new Uint8Array(bw * bh);
       for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) sub[y * bw + x] = maskData[(y + y0) * w + x + x0] ? 1 : 0;
-      return { type: 'mask', x: x0, y: y0, w: bw, h: bh, rle: rleEncode(sub) };
+      const runs = rleEncode(sub);
+      if (runs.length > MAX_RUNS) throw tooComplex('runs');
+      return { type: 'mask', x: x0, y: y0, w: bw, h: bh, rle: Uint32Array.from(runs) };
     }
 
     /* Complement of an ROI inside the w×h image, as a mask ROI. */
@@ -608,15 +768,49 @@
       return fromMask(full, w, h);
     }
 
+    /* Copy moved by (dx, dy). Typed arrays (a mask's runs) are copied as typed arrays: a JSON
+     * round trip would turn them into plain objects that validate() rejects. */
     function translate(roi, dx, dy) {
-      const r = JSON.parse(JSON.stringify(roi));
-      if (r.points) r.points = r.points.map((p) => [p[0] + dx, p[1] + dy]);
+      const r = Object.assign({}, roi);
+      if (roi.points) r.points = roi.points.map((p) => [p[0] + dx, p[1] + dy]);
+      if (roi.rle) r.rle = roi.rle.slice();
       if (r.type === 'line') { r.x1 += dx; r.x2 += dx; r.y1 += dy; r.y2 += dy; }
       if ('x' in r) { r.x += dx; r.y += dy; }
       return r;
     }
 
-    return { validate, isArea, bounds, mask, contains, area, perimeter, lineLength, lineAngle, inverse, fromMask, translate, tracedPerimeter, smoothedPerimeter, rleEncode };
+    /* Approximate serialized size in bytes (what a journal entry would carry). */
+    function byteSize(roi) {
+      if (!roi) return 0;
+      if (roi.rle) return roi.rle.length * 4 + 64;
+      if (roi.points) return roi.points.length * 16 + 64;
+      return 96;
+    }
+
+    /* FNV-1a (32 bit) over a canonical byte stream of the ROI, plus its size: the key under which
+     * a large ROI is journaled once per document (`roiRef`). */
+    // Two independent 32-bit lanes (FNV-1a, and a multiply-xorshift one) + the byte size: a stored body is
+    // shared by every entry with the same reference, so a collision would replay the wrong selection silently.
+    function hash(roi) {
+      let h = 0x811c9dc5, g = 0x9e3779b9;
+      const f64 = new Float64Array(1), u8 = new Uint8Array(f64.buffer);
+      const byte = (b) => {
+        h ^= b; h = Math.imul(h, 0x01000193) >>> 0;
+        g = Math.imul(g ^ b, 0x5bd1e995) >>> 0; g = (g ^ (g >>> 15)) >>> 0;
+      };
+      const str = (t) => { for (let i = 0; i < t.length; i++) byte(t.charCodeAt(i) & 255); byte(0); };
+      const num = (v) => { f64[0] = v; for (let i = 0; i < 8; i++) byte(u8[i]); };
+      str(roi.type);
+      for (const k of ['x', 'y', 'w', 'h', 'x1', 'y1', 'x2', 'y2', 'width']) if (typeof roi[k] === 'number') { str(k); num(roi[k]); }
+      if (roi.points) { str('p'); for (const p of roi.points) { num(p[0]); num(p[1]); } }
+      if (roi.rle) {
+        str('r');
+        for (let i = 0; i < roi.rle.length; i++) { const v = roi.rle[i]; byte(v & 255); byte((v >>> 8) & 255); byte((v >>> 16) & 255); byte((v >>> 24) & 255); }
+      }
+      return (h >>> 0).toString(16).padStart(8, '0') + (g >>> 0).toString(16).padStart(8, '0') + '-' + byteSize(roi);
+    }
+
+    return { validate, isArea, bounds, mask, contains, area, perimeter, lineLength, lineAngle, inverse, fromMask, translate, tracedPerimeter, smoothedPerimeter, rleEncode, outlines, maskDense, byteSize, hash, MAX_RUNS, MAX_VERTS };
   })();
 
   // ---------------------------------------------------------------- IJOps
@@ -1490,10 +1684,95 @@
     return { write, read };
   })();
 
+  // ---------------------------------------------------------------- IJOpRegistry
+  /* The operation registry of the Advanced Studio (PLAN-wave2 §2.1). Page and worker both load
+   * this file, so both see the same names; a package registers its operations in its own
+   * `ij-proc-<pkg>.js`. The engine (ij-engine.js) is the only consumer that RUNS a spec.
+   *
+   *   IJOpRegistry.define(name, spec)  idempotent for the same spec object; IJ_BAD_ARGS for a
+   *                                    different spec under the same name or a malformed spec
+   *   IJOpRegistry.get(name) → spec | null
+   *   IJOpRegistry.list(kind?) → [name]
+   *   IJOpRegistry.unregister(name)    (the worker's package loader only)
+   *
+   * spec = {
+   *   kind:       'pixel' | 'size' | 'newdoc' | 'compute'
+   *   version:    positive integer, written in the journal entry; a replay of an entry whose
+   *               version differs from the registered one stops (IJ_REPLAY_STOPPED, the stored journal is kept)
+   *   bitDepths:  [8, 16, 32] (default all) — another depth fails with IJ_BAD_TYPE
+   *   channels:   'each' | 'one' | 'all'   (pixel: per channel / the one channel the request names, else the
+   *               active one, journaled as such / every channel as one step; compute + newdoc: 'one' = the
+   *               channel the request names, in io.channel; default 'each' for pixel, 'one' otherwise)
+   *   roi:        'mask' | 'bounds' | 'ignore'   what a selection means (default 'mask')
+   *   preview:    false | 'region' | 'reduced'  (default 'region' for pixel, false otherwise)
+   *   validate(params, info)            throws IJ_BAD_ARGS. info = { width, height, bitDepth, channels, region,
+   *                                     docs: [{ width, height, bitDepth, channels }] of the other documents named in docIds }
+   *   resolve(view, params, chans)      → params with the non-journaled state (display range, threshold…) copied in.
+   *                                     Called ONCE, when the request is accepted (the result is what the journal
+   *                                     stores); NEVER on a replay, where the state is not the one of that moment.
+   *                                     Keep it idempotent: fill what is missing, keep what the caller gave.
+   *   scratchBytes(info, params)        → bytes the algorithm allocates. pixel: BESIDE the new arrays and the undo
+   *                                     patch the engine counts itself. size / newdoc / compute: the op's whole peak,
+   *                                     its output included. The engine reserves it BEFORE run (IJ_OVER_BUDGET, run
+   *                                     never starts) and releases it when run returns; io.reserve(n) draws on it first.
+   *   prepare(view, c, params, ctx)     (pixel)  → { apron:{x,y}, fn(src) | region(full, rect), whole? }; fn / region
+   *                                     may be async. ctx = { scale, range(c), dep, check(), tick(f, stepKey?) }
+   *   run(view, params, roi, io)        (size | newdoc | compute)
+   * }
+   * v1 flags kept for the built-in operations: outside, needsRoi, display, whole. */
+  const IJOpRegistry = (() => {
+    const specs = new Map();
+    const KINDS = ['pixel', 'size', 'newdoc', 'compute'];
+
+    function bad(msg) { return fail('IJ_BAD_ARGS', msg); }
+
+    function normalize(name, spec) {
+      if (typeof name !== 'string' || !/^[A-Za-z][A-Za-z0-9]*$/.test(name)) throw bad('op name');
+      if (!spec || typeof spec !== 'object') throw bad('op spec ' + name);
+      if (KINDS.indexOf(spec.kind) < 0) throw bad('op kind ' + name);
+      if (!Number.isInteger(spec.version) || spec.version < 1) throw bad('op version ' + name);
+      if (spec.bitDepths === undefined) spec.bitDepths = [8, 16, 32];
+      if (!Array.isArray(spec.bitDepths) || !spec.bitDepths.length || spec.bitDepths.some((b) => b !== 8 && b !== 16 && b !== 32)) throw bad('op bitDepths ' + name);
+      if (spec.channels === undefined) spec.channels = spec.kind === 'pixel' ? 'each' : 'one';
+      if (['each', 'one', 'all'].indexOf(spec.channels) < 0) throw bad('op channels ' + name);
+      if (spec.roi === undefined) spec.roi = 'mask';
+      if (['mask', 'bounds', 'ignore'].indexOf(spec.roi) < 0) throw bad('op roi ' + name);
+      if (spec.preview === undefined) spec.preview = spec.kind === 'pixel' ? 'region' : false;
+      if (spec.preview !== false && spec.preview !== 'region' && spec.preview !== 'reduced') throw bad('op preview ' + name);
+      if (spec.kind !== 'pixel' && spec.preview !== false) throw bad('only a pixel op previews ' + name);
+      for (const f of ['validate', 'resolve', 'scratchBytes']) if (spec[f] !== undefined && typeof spec[f] !== 'function') throw bad('op ' + f + ' ' + name);
+      if (spec.kind === 'pixel') { if (typeof spec.prepare !== 'function') throw bad('op prepare ' + name); }
+      else if (typeof spec.run !== 'function') throw bad('op run ' + name);
+      return spec;
+    }
+
+    function define(name, spec) {
+      const old = specs.get(name);
+      if (old) {
+        if (old === spec) return spec;
+        throw bad('op ' + name + ' is already defined');
+      }
+      normalize(name, spec);
+      specs.set(name, spec);
+      return spec;
+    }
+    function get(name) { return specs.get(name) || null; }
+    function list(kind) {
+      const out = [];
+      for (const [n, sp] of specs) if (!kind || sp.kind === kind) out.push(n);
+      return out;
+    }
+    // Only the worker's package loader uses this: the ops a package registered before it threw are
+    // withdrawn, so a half-loaded package cannot leave half its commands working.
+    function unregister(name) { return specs.delete(name); }
+    return { define, get, list, unregister };
+  })();
+
   root.IJImage = IJImage;
   root.IJLuts = IJLuts;
   root.IJRoi = IJRoi;
   root.IJOps = IJOps;
   root.IJProject = IJProject;
   root.IJTiff = IJTiff;
+  root.IJOpRegistry = IJOpRegistry;
 })(typeof self !== 'undefined' ? self : globalThis);

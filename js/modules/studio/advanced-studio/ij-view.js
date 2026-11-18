@@ -7,7 +7,8 @@
      IJViewPure  pure helpers (zoom ladder, transforms, tile maths, LRU, menu model,
                  value parsing, ROI geometry, formatting) — testable in Node
      IJDisplay   tiled WebGL2 renderer
-     IJWindows   dialogs, floating windows, confirm
+     IJWindows   dialogs (field types: see IJViewPure.FIELD_TYPES), floating windows, confirm
+     IJPlot      the generic plot window's drawing (draw, extent, niceTicks) and CSV text
      IJShell     ImageJ chrome + pointer handling
 
    Text: every string goes through t(key, fallback) supplied by the controller; a `t`
@@ -18,7 +19,7 @@
      view.tool.rect|oval|polygon|freehand|line|point|zoom|hand
      view.ok  view.cancel  view.preview  view.previewBadge  view.channel
      view.cancelOp  view.close  view.invalid.nan|range|integer
-     view.menubar  view.toolbar  view.statusbar  view.stage  view.progress
+     view.menubar  view.toolbar  view.statusbar  view.stage  view.progress  view.unavailable
 
    CSS classes (styles written by W6 in ij-style.css). `[hidden]` is used for every
    show/hide: the stylesheet needs `.ij-shell [hidden], .ij-dialog-backdrop [hidden]
@@ -296,18 +297,31 @@ const IJViewPure = (() => {
   /**
    * Menu tree from the command registry.
    * command = { id, menu: ['Image','Adjust'], label?, labelKey?, shortcut?, enabled?(state),
-   *             separatorBefore? }  — an entry { separator: true, menu } adds a separator.
+   *             order?, separatorBefore?, unavailable?() }  — an entry { separator: true, menu } adds a
+   *             separator.
+   * Inside one (sub)menu the entries are sorted by `order` (a number; entries without one follow the
+   * ordered ones, in the order they were registered). A submenu has no command of its own: its
+   * position comes from `groups`, a table { 'Image/Zoom': { order, separatorBefore } } keyed by the
+   * path of menu names. A command or a group with `separatorBefore` gets a separator above it.
+   * An `unavailable()` command (its package failed to load) is disabled and says so in `title`.
    * Returns [{ name, label, items }] with items = { type:'item', id, label, shortcut,
-   * disabled, command } | { type:'group', name, label, children, disabled } |
+   * disabled, title?, command } | { type:'group', name, label, children, disabled } |
    * { type:'separator' }, tops in ImageJ order (File, Edit, Image, Process, Analyze,
    * Window, Help) then any other in first-appearance order. Empty tops are dropped.
    */
-  function buildMenuTree(commands, { t = (k, f) => f ?? k, state = null } = {}) {
+  function buildMenuTree(commands, { t = (k, f) => f ?? k, state = null, groups = null } = {}) {
     const tops = new Map();
+    const meta = groups || {};
     const tr = (key, fb) => { const v = t(key, fb); return typeof v === 'string' && v && v !== key ? v : fb; };
-    const groupFor = (list, name) => {
+    const groupFor = (list, name, path) => {
       let g = list.find((i) => i.type === 'group' && i.name === name);
-      if (!g) { g = { type: 'group', name, label: tr('view.menu.' + name, name), children: [], disabled: false }; list.push(g); }
+      if (!g) {
+        const m = meta[path] || {};
+        g = { type: 'group', name, label: tr('view.menu.' + name, name), children: [], disabled: false, path };
+        if (typeof m.order === 'number') g.order = m.order;
+        if (m.separatorBefore) { g.sepBefore = true; }
+        list.push(g);
+      }
       return g;
     };
     for (const c of commands || []) {
@@ -315,18 +329,55 @@ const IJViewPure = (() => {
       const [topName, ...rest] = c.menu;
       if (!tops.has(topName)) tops.set(topName, { name: topName, label: tr('view.menu.' + topName, topName), items: [] });
       let list = tops.get(topName).items;
-      for (const g of rest) list = groupFor(list, g).children;
+      let path = topName;
+      for (const g of rest) { path += '/' + g; list = groupFor(list, g, path).children; }
       if (c.separator) {
         if (list.length && list[list.length - 1].type !== 'separator') list.push({ type: 'separator' });
         continue;
       }
-      if (c.separatorBefore && list.length && list[list.length - 1].type !== 'separator') list.push({ type: 'separator' });
       let disabled = false;
       if (typeof c.enabled === 'function') { try { disabled = !c.enabled(state); } catch (e) { disabled = true; } }
+      let title;
+      if (typeof c.unavailable === 'function') {
+        let gone = false;
+        try { gone = !!c.unavailable(); } catch (e) { gone = false; }
+        if (gone) { disabled = true; title = t('view.unavailable', 'Unavailable'); }
+      }
       const label = c.label || (c.labelKey ? tr(c.labelKey, c.labelKey) : c.id);
       const sc = Array.isArray(c.shortcut) ? c.shortcut[0] : c.shortcut;
-      list.push({ type: 'item', id: c.id, label, shortcut: sc ? shortcutLabel(sc) : '', disabled, command: c });
+      const item = { type: 'item', id: c.id, label, shortcut: sc ? shortcutLabel(sc) : '', disabled, command: c };
+      if (title) item.title = title;
+      if (typeof c.order === 'number') item.order = c.order;
+      if (c.separatorBefore) item.sepBefore = true;
+      list.push(item);
     }
+    // Order inside every list: separators become a flag of the entry that follows them, the entries
+    // are sorted (stable, unordered ones last), then the separators come back above the flagged ones.
+    const arrange = (list) => {
+      const flat = [];
+      let sep = false;
+      for (const it of list) {
+        if (it.type === 'separator') { sep = true; continue; }
+        if (sep) it.sepBefore = true;
+        sep = false;
+        flat.push(it);
+      }
+      flat.forEach((it, i) => { it._i = i; });
+      flat.sort((a, b) => {
+        const ao = typeof a.order === 'number' ? a.order : Infinity, bo = typeof b.order === 'number' ? b.order : Infinity;
+        if (ao !== bo) return ao < bo ? -1 : 1;
+        return a._i - b._i;
+      });
+      const out = [];
+      for (const it of flat) {
+        delete it._i;
+        if (it.sepBefore && out.length) out.push({ type: 'separator' });
+        delete it.sepBefore;
+        if (it.type === 'group') { it.children = arrange(it.children); delete it.path; }
+        out.push(it);
+      }
+      return out;
+    };
     const markDisabled = (items) => {
       for (const it of items) if (it.type === 'group') {
         markDisabled(it.children);
@@ -338,7 +389,7 @@ const IJViewPure = (() => {
     for (const n of order) {
       const top = tops.get(n);
       if (!top) continue;
-      // trim leading / trailing / doubled separators left by disabled-free construction
+      // trim leading / trailing / doubled separators
       const clean = (items) => {
         const r = [];
         for (const it of items) {
@@ -349,7 +400,7 @@ const IJViewPure = (() => {
         while (r.length && r[r.length - 1].type === 'separator') r.pop();
         return r;
       };
-      top.items = clean(top.items);
+      top.items = clean(arrange(top.items));
       markDisabled(top.items);
       if (top.items.length) out.push(top);
     }
@@ -467,21 +518,102 @@ const IJViewPure = (() => {
     return String(Number(v.toPrecision(10)));
   }
 
-  /** Values of a dialog: raw = { [id]: string | boolean } as read from the controls. */
-  function collectFields(fields, raw) {
+  // --- Dialog field schema (PLAN-wave2 §2.5). The real list: a spec naming another type is refused.
+  // The values a callback receives (enabledIf, visibleIf, validate, onChange, preview params) hold ONLY the
+  // fields that parse: a field whose text is invalid (or hidden by visibleIf) is ABSENT, never NaN. validate and
+  // onChange are called only when every field is valid; a derived field's set({ id: NaN }) is ignored.
+  //   number    { min, max, step, integer, decimals, units | unitsKey }       value: number
+  //   slider    { min, max, step }                                            value: number
+  //   check     value: boolean
+  //   choice    { options:[value | {value, label | labelKey}] }               value: the option's value
+  //   radio     { options }  (same as choice, drawn as a group of radio buttons)
+  //   string    value: string      textarea { rows, monospace }  value: string
+  //   doc       { options:[{ value: docId, label }] }  an open document      value: the docId
+  //   channel   { options | (docField: id of a sibling `doc` field + optionsByDoc: { [docId]: options }) }  value: the option's value
+  //   message   { label | labelKey }  (text only, no value)
+  // Every field: id, label | labelKey (a message too), optional value, enabledIf(values), visibleIf(values).
+  // Dialog-level: validate(values) → { fieldId: errKey } | null; onChange(values, set); preview.
+  const FIELD_TYPES = ['number', 'slider', 'check', 'choice', 'radio', 'string', 'textarea', 'doc', 'channel', 'message'];
+  const CHOICE_LIKE = new Set(['choice', 'radio', 'doc', 'channel']);
+
+  /** The problems of a dialog spec's field list ([] when sound): the stand-ins of the tests fail on any. */
+  function fieldProblems(fields) {
+    const out = [];
+    if (!Array.isArray(fields)) return ['fields is not an array'];
+    const ids = new Set();
+    for (const f of fields) {
+      if (!f || typeof f !== 'object') { out.push('field is not an object'); continue; }
+      const id = f.id;
+      if (typeof id !== 'string' || !id) out.push('field without id');
+      else if (ids.has(id)) out.push('duplicate field id ' + id);
+      else ids.add(id);
+      if (FIELD_TYPES.indexOf(f.type) < 0) { out.push('unknown field type ' + f.type + ' (' + id + ')'); continue; }
+      if (!f.label && !f.labelKey && !(f.type === 'message' && f.value)) out.push('field ' + id + ' has no label / labelKey');
+      if ((f.type === 'number' || f.type === 'slider') && f.min !== undefined && f.max !== undefined && !(f.min <= f.max)) out.push('field ' + id + ' min > max');
+      if (CHOICE_LIKE.has(f.type)) {
+        const hasOpts = Array.isArray(f.options) && f.options.length > 0;
+        const hasByDoc = f.type === 'channel' && f.optionsByDoc && typeof f.optionsByDoc === 'object' && typeof f.docField === 'string';
+        if (!hasOpts && !hasByDoc) out.push('field ' + id + ' has no options');
+        for (const o of (hasOpts ? f.options : [])) {
+          if (o && typeof o === 'object' && (o.value === undefined || !(o.label !== undefined || o.labelKey))) out.push('option of ' + id + ' needs value and label | labelKey');
+        }
+      }
+      for (const fn of ['enabledIf', 'visibleIf']) if (f[fn] !== undefined && typeof f[fn] !== 'function') out.push(id + '.' + fn + ' is not a function');
+    }
+    for (const f of fields) {
+      if (f && f.type === 'channel' && f.docField !== undefined && !ids.has(f.docField)) out.push('channel field ' + f.id + ' names the missing doc field ' + f.docField);
+    }
+    return out;
+  }
+
+  /** Options of a choice-like field as they are now (a channel field follows its doc field). */
+  function effectiveOptions(f, raw) {
+    if (f.type === 'channel' && f.docField && f.optionsByDoc) {
+      const o = f.optionsByDoc[String(raw[f.docField])];
+      if (Array.isArray(o)) return o;
+    }
+    return f.options || [];
+  }
+
+  /**
+   * Whether a DOM event of a dialog control must reach spec.onChange. A user change fires `input` then `change` on a
+   * checkbox / radio / select, and `input` per keystroke then `change` on commit for text-like controls; a handler that
+   * applies a toggle delta (Centered, Pixel units...) must run once per change. Discrete controls report on `change`
+   * only; text-like ones on `input`, and on `change` only when the value differs from the last one reported.
+   * `memo` is a Map/WeakMap element -> last reported value.
+   */
+  function dialogEventDecision(evType, el, memo) {
+    if (!el) return false;
+    const tag = String(el.tagName || '').toUpperCase(), type = String(el.type || '').toLowerCase();
+    const discrete = tag === 'SELECT' || type === 'checkbox' || type === 'radio' || type === 'select-one' || type === 'select-multiple';
+    if (discrete) return evType === 'change';
+    if (evType === 'input') { memo.set(el, el.value); return true; }
+    if (evType !== 'change') return false;
+    if (memo.get(el) === el.value) return false;
+    memo.set(el, el.value);
+    return true;
+  }
+
+  /** Values of a dialog: raw = { [id]: string | boolean } as read from the controls.
+   *  opts.hidden = ids of hidden fields: not validated, they keep their initial value. */
+  function collectFields(fields, raw, opts) {
     const values = {}, errors = {};
+    const hidden = (opts && opts.hidden) || null;
     for (const f of fields) {
       if (f.type === 'message') continue;
+      if (hidden && hidden.has(f.id)) { if (f.value !== undefined) values[f.id] = f.value; continue; }
       const r = raw[f.id];
       if (f.type === 'number' || f.type === 'slider') {
         const p = parseNumber(r, { min: f.min, max: f.max, integer: !!f.integer });
         if (p.ok) values[f.id] = p.value; else errors[f.id] = p.code;
       } else if (f.type === 'check') {
         values[f.id] = !!r;
-      } else if (f.type === 'choice') {
-        const opts = (f.options || []).map((o) => (typeof o === 'object' ? o.value : o));
-        const hit = opts.find((o) => String(o) === String(r));
-        if (hit === undefined) errors[f.id] = 'choice'; else values[f.id] = hit;
+      } else if (CHOICE_LIKE.has(f.type)) {
+        // A `disabled` option is a placeholder ("no open image"), never an answer: a doc field with no
+        // document to pick must not commit an empty id.
+        const opts2 = effectiveOptions(f, raw).filter((o) => !(o && typeof o === 'object' && o.disabled)).map((o) => (o && typeof o === 'object' ? o.value : o));
+        const hit = opts2.find((o) => String(o) === String(r));
+        if (hit === undefined || (hit === '' && (f.type === 'doc' || f.type === 'channel'))) errors[f.id] = 'choice'; else values[f.id] = hit;
       } else {
         values[f.id] = String(r ?? '');
       }
@@ -538,7 +670,7 @@ const IJViewPure = (() => {
         const x = Math.min(roi.x1, roi.x2), y = Math.min(roi.y1, roi.y2);
         return { x, y, w: Math.abs(roi.x2 - roi.x1), h: Math.abs(roi.y2 - roi.y1) };
       }
-      case 'polygon': case 'freehand': case 'point': {
+      case 'polygon': case 'freehand': case 'point': case 'polyline': case 'angle': {
         const pts = roi.points || [];
         if (!pts.length) return null;
         let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -551,6 +683,7 @@ const IJViewPure = (() => {
 
   function translateRoi(roi, dx, dy) {
     const r = { ...roi };
+    if (roi.rle) r.rle = roi.rle.slice();
     if ('x' in r) { r.x += dx; r.y += dy; }
     if ('x1' in r) { r.x1 += dx; r.y1 += dy; r.x2 += dx; r.y2 += dy; }
     if (Array.isArray(r.points)) r.points = r.points.map(([x, y]) => [x + dx, y + dy]);
@@ -601,7 +734,7 @@ const IJViewPure = (() => {
       return _RECT_HANDLES.map(([id, fx, fy]) => ({ id, x: roi.x + roi.w * fx, y: roi.y + roi.h * fy }));
     }
     if (roi.type === 'line') return [{ id: 'p1', x: roi.x1, y: roi.y1 }, { id: 'p2', x: roi.x2, y: roi.y2 }];
-    if (roi.type === 'polygon' || roi.type === 'point') {
+    if (roi.type === 'polygon' || roi.type === 'point' || roi.type === 'polyline' || roi.type === 'angle') {
       const pts = roi.points || [];
       if (pts.length > 400) return [];
       return pts.map(([x, y], i) => ({ id: 'v' + i, x, y }));
@@ -647,6 +780,17 @@ const IJViewPure = (() => {
       }
       case 'point':
         return (roi.points || []).some(([px, py]) => Math.hypot(px - x, py - y) <= tol);
+      case 'polyline': case 'angle': {
+        // a segmented line / the two arms of an angle: within a click's reach of any segment
+        const pts = roi.points || [], reach = Math.max(tol, 0.75) + (roi.type === 'polyline' ? (roi.width || 1) / 2 : 0);
+        for (let i = 1; i < pts.length; i++) {
+          const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1], l2 = dx * dx + dy * dy;
+          let t = l2 ? ((x - pts[i - 1][0]) * dx + (y - pts[i - 1][1]) * dy) / l2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          if (Math.hypot(x - (pts[i - 1][0] + t * dx), y - (pts[i - 1][1] + t * dy)) <= reach) return true;
+        }
+        return false;
+      }
       default: return false;
     }
   }
@@ -672,10 +816,11 @@ const IJViewPure = (() => {
         ? { ...roi, x1: moved.x2, y1: moved.y2 }
         : { ...roi, x2: moved.x2, y2: moved.y2 };
     }
-    if (roi.type === 'polygon' || roi.type === 'point') {
+    if (roi.type === 'polygon' || roi.type === 'point' || roi.type === 'polyline' || roi.type === 'angle') {
       const i = Number(id.slice(1));
       const pts = roi.points.map((p) => p.slice());
-      if (pts[i]) pts[i] = roi.type === 'point' ? [_f(px) + 0.5, _f(py) + 0.5] : [Math.round(px), Math.round(py)];
+      // a point is marked by its pixel centre, a segmented line / an angle by integer pixel-centre coordinates (as a line), a polygon by corners
+      if (pts[i]) pts[i] = roi.type === 'point' ? [_f(px) + 0.5, _f(py) + 0.5] : (roi.type === 'polyline' || roi.type === 'angle') ? [_f(px), _f(py)] : [Math.round(px), Math.round(py)];
       return { ...roi, points: pts };
     }
     return roi;
@@ -750,6 +895,24 @@ const IJViewPure = (() => {
         if (ang < 0) ang += 360;
         return `angle=${_fmtCal(Math.round(ang * 100) / 100)}, length=${_fmtCal(len)}${cal ? ' ' + cal.unit : ''}`;
       }
+      case 'angle': {
+        // PolygonRoi.getAngleAsString: "degrees = Math.abs(180-Math.abs(angle1-angle2)); if (degrees>180.0) degrees = 360.0-degrees;"
+        const q = roi.points || [];
+        if (q.length === 3) {
+          const pw = cal ? cal.pixelWidth : 1, ph = cal ? cal.pixelHeight : 1;
+          const ang = (a, b) => (180.0 / Math.PI) * Math.atan2((a[1] - b[1]) * ph, (b[0] - a[0]) * pw);
+          let deg = Math.abs(180 - Math.abs(ang(q[0], q[1]) - ang(q[1], q[2])));
+          if (deg > 180) deg = 360 - deg;
+          return `angle=${_fmtCal(Math.round(deg * 100) / 100)}`;
+        }
+        return `n=${q.length}`;
+      }
+      case 'polyline': {
+        const q = roi.points || [];
+        let len = 0;
+        for (let i = 1; i < q.length; i++) len += Math.hypot((q[i][0] - q[i - 1][0]) * (cal ? cal.pixelWidth : 1), (q[i][1] - q[i - 1][1]) * (cal ? cal.pixelHeight : 1));
+        return `n=${q.length}, length=${_fmtCal(len)}${cal ? ' ' + cal.unit : ''}`;
+      }
       case 'polygon': case 'freehand': case 'point': {
         const b = roiBounds(roi);
         return `n=${(roi.points || []).length}` + (b ? `, x=${_f(b.x)}, y=${_f(b.y)}, w=${_f(b.w)}, h=${_f(b.h)}` : '');
@@ -766,7 +929,7 @@ const IJViewPure = (() => {
     visibleTiles, parentTile, createLru, tileBudgetBytes, wheelSteps,
     shortcutFromEvent, normalizeShortcut, shortcutLabel,
     TOP_ORDER, buildMenuTree, menuKey, menuListAt, nextSelectable, firstSelectable, lastSelectable,
-    parseNumber, formatNumber, collectFields, clampWindowPos,
+    parseNumber, formatNumber, collectFields, dialogEventDecision, clampWindowPos, FIELD_TYPES, fieldProblems, effectiveOptions,
     numberStep, clampPopupX, clampPopupY, submenuX, centreX,
     roiBounds, translateRoi, isAreaRoi, roiFromDrag, lineFromDrag, roiHandles, handleAt, hitRoi, moveHandle, handleCursor,
     formatZoomPct, formatSize, formatSubtitle, formatStatus, describeRoi
@@ -1343,6 +1506,42 @@ void main() {
     }
 
     // ---- ROI overlay ----------------------------------------------------------------------
+    // Items a tool draws above the selection (Find Maxima points, Rotate's grid, …), in image
+    // coordinates: { kind:'points', pts:[x, y, x, y …], color } | { kind:'polyline', pts, color, closed? } |
+    // { kind:'grid', lines:[[x1, y1, x2, y2], …], color } | { kind:'rect', x, y, w, h, color }.
+    let overlayItems = null;
+    function setOverlay(items) {
+      overlayItems = Array.isArray(items) && items.length ? items.slice(0, 64) : null;
+      requestRender();
+    }
+    function drawItems(X, Y, z) {
+      if (!overlayItems) return;
+      for (const it of overlayItems) {
+        if (!it || typeof it !== 'object') continue;
+        const color = typeof it.color === 'string' ? it.color : '#00ffff';
+        octx.strokeStyle = color; octx.fillStyle = color; octx.lineWidth = 1; octx.lineJoin = 'round';
+        if (it.kind === 'points' && it.pts) {
+          // one marker per point, drawn as a dot; capped so a noisy image cannot freeze the page
+          const n = Math.min(it.pts.length >> 1, 200000);
+          for (let i = 0; i < n; i++) {
+            const sx = X(it.pts[2 * i]), sy = Y(it.pts[2 * i + 1]);
+            if (sx < -4 || sy < -4 || sx > overlay.width + 4 || sy > overlay.height + 4) continue;
+            octx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+          }
+        } else if (it.kind === 'polyline' && it.pts && it.pts.length >= 4) {
+          octx.beginPath();
+          for (let i = 0; i + 1 < it.pts.length; i += 2) (i ? octx.lineTo(X(it.pts[i]), Y(it.pts[i + 1])) : octx.moveTo(X(it.pts[i]), Y(it.pts[i + 1])));
+          if (it.closed) octx.closePath();
+          octx.stroke();
+        } else if (it.kind === 'grid' && Array.isArray(it.lines)) {
+          octx.beginPath();
+          for (const l of it.lines.slice(0, 4096)) { octx.moveTo(X(l[0]), Y(l[1])); octx.lineTo(X(l[2]), Y(l[3])); }
+          octx.stroke();
+        } else if (it.kind === 'rect' && Number.isFinite(it.x)) {
+          octx.strokeRect(X(it.x), Y(it.y), it.w * z, it.h * z);
+        }
+      }
+    }
     function drawOverlay() {
       if (!octx) return;
       const dpr = size.dpr;
@@ -1365,6 +1564,11 @@ void main() {
             return true;
           }
           case 'line': octx.moveTo(X(roi.x1), Y(roi.y1)); octx.lineTo(X(roi.x2), Y(roi.y2)); return false;
+          case 'polyline': case 'angle': {
+            const pts = roi.points || [];
+            pts.forEach(([x, y], i) => (i ? octx.lineTo(X(x), Y(y)) : octx.moveTo(X(x), Y(y))));
+            return false;
+          }
           default: return false;
         }
       };
@@ -1434,6 +1638,7 @@ void main() {
           }
         }
       }
+      drawItems(X, Y, z);
       if (draft) {
         const pts = draft.points || [];
         octx.beginPath();
@@ -1727,7 +1932,7 @@ void main() {
 
     return {
       element: host, glCanvas, overlayCanvas: overlay,
-      setImage, setTileProvider, invalidate, setDisplay, setThresholdOverlay, setPreview, setRois, setDraft,
+      setImage, setTileProvider, invalidate, setDisplay, setThresholdOverlay, setPreview, setRois, setDraft, setOverlay,
       zoomAt, setZoom, fit, view100, zoomToRect, pan, setCursor,
       screenToImage: (x, y) => P.screenToImage(view, x, y),
       imageToScreen: (x, y) => P.imageToScreen(view, x, y),
@@ -1841,26 +2046,42 @@ const IJWindows = (() => {
 
     // ---- GenericDialog ----------------------------------------------------------------------
     /**
-     * dialog({ title | titleKey, fields, preview?: { onChange(values|null) }, okLabel, cancelLabel })
-     * field = { type:'number'|'choice'|'check'|'slider'|'string'|'message', id, label | labelKey,
-     *   value, min, max, step, integer, decimals, units, options:[value | {value,label}] }
-     * -> Promise<values | null>. preview.onChange gets the values (valid, debounced) while
-     * the Preview box is ticked and null when it is unticked / the dialog closes.
+     * dialog({ title | titleKey, fields, preview?, validate?, onChange?, okLabel, cancelLabel, nonModal? })
+     *   field   = { type, id, label | labelKey, value, enabledIf?, visibleIf?, ... } — the types and
+     *             their options are listed above IJViewPure.FIELD_TYPES; a spec with an unknown type,
+     *             a missing id / label or an option-less choice is REFUSED (rejects IJ_BAD_DIALOG).
+     *   validate(values) → { fieldId: errKey } | null   cross-field check; the key is a lang key, the
+     *             message shows under the fields and OK stays refused.
+     *   onChange(values, set, changedId)   after every edit of the operator (changedId = the field he edited);
+     *             set({ id: value }) updates the other fields (a derived field: pixels ↔ unit).
+     *   preview = { onChange(values | null, ctl) }  adds a Preview box; values while it is ticked (valid,
+     *             debounced), null when it is unticked or the dialog closes; ctl.note(text | null)
+     *             shows a line under the box ("zoom in to preview").
+     * A dialog with a preview (or nonModal: true) does not block the image behind it: it is draggable
+     * and the operator can pan and zoom the image while previewing. -> Promise<values | null>.
      */
     function dialog(spec = {}) {
       if (destroyed) return Promise.resolve(null);
       const d = doc();
       const fields = spec.fields || [];
+      const problems = P.fieldProblems(fields);
+      if (problems.length) {
+        console.error('IJWindows.dialog: refused spec', problems);
+        return Promise.reject(Object.assign(new Error('bad dialog spec'), { code: 'IJ_BAD_DIALOG', details: problems }));
+      }
+      const nonModal = !!(spec.preview || spec.nonModal);
       const title = spec.titleKey ? t(spec.titleKey, spec.title || spec.titleKey) : (spec.title || '');
       const id = 'ij-dlg-' + (++uid);
       const previous = d.activeElement;
 
       const backdrop = newBackdrop();
+      if (nonModal) { backdrop.style.pointerEvents = 'none'; backdrop.classList.add('ij-dialog-backdrop--clear'); }
       const box = d.createElement('div');
       box.className = 'ij-dialog';
       box.style.position = 'absolute';
+      if (nonModal) box.style.pointerEvents = 'auto';
       box.setAttribute('role', 'dialog');
-      box.setAttribute('aria-modal', 'true');
+      box.setAttribute('aria-modal', nonModal ? 'false' : 'true');
       box.setAttribute('aria-labelledby', id + '-title');
       box.tabIndex = -1;
       const head = d.createElement('div');
@@ -1870,25 +2091,48 @@ const IJWindows = (() => {
       const body = d.createElement('div');
       body.className = 'ij-dialog-body';
 
-      const controls = {};
-      const fieldEls = {};
+      const labelOf = (f) => (f.labelKey ? t(f.labelKey, f.label || f.labelKey) : (f.label || ''));
+      const optValue = (o) => (o && typeof o === 'object' ? o.value : o);
+      const optLabel = (o) => (o && typeof o === 'object' ? (o.labelKey ? t(o.labelKey, o.label || String(o.value)) : (o.label ?? String(o.value))) : String(o));
+      const clear = (el) => { if (el.firstChild !== undefined) { while (el.firstChild) el.removeChild(el.firstChild); } else el.textContent = ''; };
+      const fillSelect = (sel, options, value) => {
+        clear(sel);
+        for (const o of options) {
+          const opt = d.createElement('option');
+          opt.value = String(optValue(o));
+          opt.textContent = optLabel(o);
+          if (o && typeof o === 'object' && o.disabled) opt.disabled = true;
+          sel.appendChild(opt);
+        }
+        sel.value = String(value ?? '');
+      };
+      const initialRaw = () => {
+        const raw = {};
+        for (const f of fields) if (f.type !== 'message') raw[f.id] = f.value;
+        return raw;
+      };
+
+      const controls = {};   // id → the control (a radio group: its container)
+      const radios = {};     // id → [radio inputs]
+      const fieldEls = {};   // id → the row
+      const outputs = {};    // id → the <output> of a slider
       fields.forEach((f, i) => {
         const fid = `${id}-f${i}`;
         const row = d.createElement('div');
         row.className = 'ij-field ij-field--' + f.type;
+        fieldEls[f.id] = row;
         if (f.type === 'message') {
           const p = d.createElement('p');
           p.className = 'ij-dialog-message';
-          p.textContent = f.labelKey ? t(f.labelKey, f.label || '') : (f.label || f.value || '');
+          p.textContent = labelOf(f) || String(f.value || '');
           row.appendChild(p);
           body.appendChild(row);
           return;
         }
-        const labelText = f.labelKey ? t(f.labelKey, f.label || f.labelKey) : (f.label || '');
         const label = d.createElement('label');
         label.className = 'ij-field-label';
         label.htmlFor = fid;
-        label.textContent = labelText;
+        label.textContent = labelOf(f);
         const wrap = d.createElement('span');
         wrap.className = 'ij-field-control';
         let ctrl;
@@ -1912,21 +2156,37 @@ const IJWindows = (() => {
               ctrl.dispatchEvent(new Event('input', { bubbles: true }));
             });
           }
+        } else if (f.type === 'textarea') {
+          ctrl = d.createElement('textarea');
+          ctrl.rows = f.rows > 0 ? f.rows : 4;
+          ctrl.value = String(f.value ?? '');
+          ctrl.spellcheck = false;
+          if (f.monospace) ctrl.classList.add('ij-mono');
         } else if (f.type === 'slider') {
           ctrl = d.createElement('input');
           ctrl.type = 'range';
           ctrl.min = String(f.min ?? 0); ctrl.max = String(f.max ?? 100); ctrl.step = String(f.step ?? 1);
           ctrl.value = String(f.value ?? f.min ?? 0);
-        } else if (f.type === 'choice') {
+        } else if (f.type === 'choice' || f.type === 'doc' || f.type === 'channel') {
           ctrl = d.createElement('select');
-          for (const o of f.options || []) {
-            const opt = d.createElement('option');
-            const value = typeof o === 'object' ? o.value : o;
-            opt.value = String(value);
-            opt.textContent = typeof o === 'object' ? (o.labelKey ? t(o.labelKey, o.label || String(value)) : (o.label ?? String(value))) : String(o);
-            ctrl.appendChild(opt);
-          }
-          ctrl.value = String(f.value ?? '');
+          fillSelect(ctrl, P.effectiveOptions(f, initialRaw()), f.value);
+        } else if (f.type === 'radio') {
+          ctrl = d.createElement('span');
+          ctrl.className = 'ij-radio-group';
+          ctrl.setAttribute('role', 'radiogroup');
+          radios[f.id] = [];
+          (f.options || []).forEach((o, k) => {
+            const lab = d.createElement('label');
+            lab.className = 'ij-radio';
+            const r = d.createElement('input');
+            r.type = 'radio'; r.name = fid; r.value = String(optValue(o)); r.id = fid + '-r' + k;
+            r.checked = String(optValue(o)) === String(f.value ?? '');
+            const txt = d.createElement('span');
+            txt.textContent = optLabel(o);
+            lab.appendChild(r); lab.appendChild(txt);
+            ctrl.appendChild(lab);
+            radios[f.id].push(r);
+          });
         } else if (f.type === 'check') {
           ctrl = d.createElement('input');
           ctrl.type = 'checkbox';
@@ -1937,7 +2197,6 @@ const IJWindows = (() => {
         ctrl.id = fid;
         ctrl.name = f.id;
         controls[f.id] = ctrl;
-        fieldEls[f.id] = row;
         wrap.appendChild(ctrl);
         if (f.type === 'slider') {
           const out = d.createElement('output');
@@ -1945,12 +2204,13 @@ const IJWindows = (() => {
           out.htmlFor = fid;
           out.textContent = ctrl.value;
           ctrl.addEventListener('input', () => { out.textContent = ctrl.value; });
+          outputs[f.id] = out;
           wrap.appendChild(out);
         }
-        if (f.units) {
+        if (f.units || f.unitsKey) {
           const u = d.createElement('span');
           u.className = 'ij-field-units';
-          u.textContent = f.unitsKey ? t(f.unitsKey, f.units) : f.units;
+          u.textContent = f.unitsKey ? t(f.unitsKey, f.units || f.unitsKey) : f.units;
           wrap.appendChild(u);
         }
         if (f.type === 'check') { row.appendChild(wrap); row.appendChild(label); }
@@ -1958,7 +2218,13 @@ const IJWindows = (() => {
         body.appendChild(row);
       });
 
-      let previewBox = null;
+      const errorEl = d.createElement('div');
+      errorEl.className = 'ij-dialog-error';
+      errorEl.setAttribute('role', 'alert');
+      errorEl.hidden = true;
+      body.appendChild(errorEl);
+
+      let previewBox = null, noteEl = null;
       if (spec.preview && typeof spec.preview.onChange === 'function') {
         const row = d.createElement('div');
         row.className = 'ij-field ij-field--check ij-field--preview';
@@ -1970,7 +2236,12 @@ const IJWindows = (() => {
         const wrap = d.createElement('span'); wrap.className = 'ij-field-control'; wrap.appendChild(previewBox);
         row.appendChild(wrap); row.appendChild(lab);
         body.appendChild(row);
+        noteEl = d.createElement('p');
+        noteEl.className = 'ij-dialog-note';
+        noteEl.hidden = true;
+        body.appendChild(noteEl);
       }
+      const previewCtl = { note(text) { if (!noteEl) return; noteEl.textContent = text || ''; noteEl.hidden = !text; } };
 
       const buttons = d.createElement('div');
       buttons.className = 'ij-dialog-buttons';
@@ -1987,48 +2258,135 @@ const IJWindows = (() => {
         for (const f of fields) {
           const c = controls[f.id];
           if (!c) continue;
-          raw[f.id] = f.type === 'check' ? c.checked : c.value;
+          if (f.type === 'check') raw[f.id] = c.checked;
+          else if (f.type === 'radio') { const on = (radios[f.id] || []).find((r) => r.checked); raw[f.id] = on ? on.value : ''; }
+          else raw[f.id] = c.value;
         }
         return raw;
       };
+      const setControl = (fid, v) => {
+        const f = fields.find((x) => x.id === fid), c = controls[fid];
+        if (!f || !c) return;
+        if (f.type === 'number') { if (Number.isFinite(Number(v))) c.value = P.formatNumber(Number(v), f.decimals); }
+        else if (f.type === 'check') c.checked = !!v;
+        else if (f.type === 'radio') (radios[fid] || []).forEach((r) => { r.checked = r.value === String(v); });
+        else { c.value = String(v ?? ''); if (outputs[fid]) outputs[fid].textContent = c.value; }
+      };
+
+      // A channel field lists the channels of the document its doc field names now.
+      const syncChannelOptions = () => {
+        const raw = readRaw();
+        for (const f of fields) {
+          if (f.type !== 'channel' || !f.docField || !f.optionsByDoc || !controls[f.id]) continue;
+          const wanted = P.effectiveOptions(f, raw);
+          const sel = controls[f.id];
+          const sig = wanted.map((o) => String(optValue(o))).join('|');
+          if (sel._sig === sig) continue;
+          const keep = sel.value;
+          sel._sig = sig;
+          fillSelect(sel, wanted, wanted.some((o) => String(optValue(o)) === keep) ? keep : (wanted[0] ? optValue(wanted[0]) : ''));
+        }
+      };
+
+      // enabledIf / visibleIf: a hidden field is not validated and keeps its initial value.
+      const hiddenIds = new Set();
+      const applyConditions = () => {
+        for (let pass = 0; pass < 2; pass++) {
+          const r = P.collectFields(fields, readRaw(), { hidden: hiddenIds });
+          let changed = false;
+          for (const f of fields) {
+            const row = fieldEls[f.id];
+            if (f.visibleIf && row) {
+              let vis = true;
+              try { vis = !!f.visibleIf(r.values); } catch (e) { console.error('IJWindows visibleIf', e); }
+              if (vis === hiddenIds.has(f.id)) { changed = true; if (vis) hiddenIds.delete(f.id); else hiddenIds.add(f.id); }
+              row.hidden = !vis;
+            }
+            if (f.enabledIf && controls[f.id]) {
+              let on = true;
+              try { on = !!f.enabledIf(r.values); } catch (e) { console.error('IJWindows enabledIf', e); }
+              controls[f.id].disabled = !on;
+              (radios[f.id] || []).forEach((rb) => { rb.disabled = !on; });
+            }
+          }
+          if (!changed) break;
+        }
+      };
+
       const validate = () => {
-        const r = P.collectFields(fields, readRaw());
+        syncChannelOptions();
+        applyConditions();
+        const r = P.collectFields(fields, readRaw(), { hidden: hiddenIds });
+        const msgs = {};
+        for (const k of Object.keys(r.errors)) msgs[k] = t('view.invalid.' + r.errors[k], r.errors[k]);
+        let ok = r.ok;
+        if (r.ok && typeof spec.validate === 'function') {
+          let v = null;
+          try { v = spec.validate(r.values); } catch (e) { console.error('IJWindows validate', e); }
+          if (v && typeof v === 'object') {
+            for (const k of Object.keys(v)) { msgs[k] = t(v[k], String(v[k])); ok = false; }
+          }
+        }
         for (const f of fields) {
           const c = controls[f.id];
           if (!c) continue;
-          const bad = !!r.errors[f.id];
+          const bad = msgs[f.id] !== undefined;
           c.classList.toggle('ij-invalid', bad);
-          if (bad) { c.setAttribute('aria-invalid', 'true'); c.title = t('view.invalid.' + r.errors[f.id], r.errors[f.id]); }
+          if (bad) { c.setAttribute('aria-invalid', 'true'); c.title = msgs[f.id]; }
           else { c.removeAttribute('aria-invalid'); c.removeAttribute('title'); }
         }
-        return r;
+        const first = Object.keys(msgs)[0];
+        errorEl.textContent = first !== undefined && ok === false && r.ok ? msgs[first] : '';
+        errorEl.hidden = !errorEl.textContent;
+        return { ok, values: r.values, errors: msgs };
       };
 
-      let previewTimer = 0, closed = false, resolveFn;
+      let previewTimer = 0, closed = false, resolveFn, inSet = false;
       const firePreview = () => {
         if (!previewBox || !previewBox.checked) return;
-        const r = P.collectFields(fields, readRaw());
-        if (r.ok) spec.preview.onChange(r.values);
+        const r = P.collectFields(fields, readRaw(), { hidden: hiddenIds });
+        if (r.ok) spec.preview.onChange(r.values, previewCtl);
       };
       const schedulePreview = () => {
         if (!previewBox) return;
         clearTimeout(previewTimer);
         previewTimer = setTimeout(firePreview, 100);
       };
-      const onInput = () => { validate(); schedulePreview(); };
+      const set = (patch) => {
+        inSet = true;
+        try { for (const k of Object.keys(patch || {})) setControl(k, patch[k]); } finally { inSet = false; }
+      };
+      const idOfEl = new Map();
+      for (const f of fields) {
+        if (controls[f.id]) idOfEl.set(controls[f.id], f.id);
+        for (const rb of radios[f.id] || []) idOfEl.set(rb, f.id);
+      }
+      const reported = new WeakMap();
+      const onInput = (ev) => {
+        const fresh = !!ev && P.dialogEventDecision(ev.type, ev.target, reported);
+        if (fresh && !inSet && typeof spec.onChange === 'function') {
+          syncChannelOptions();
+          const r = P.collectFields(fields, readRaw(), { hidden: hiddenIds });
+          const changed = ev && ev.target ? idOfEl.get(ev.target) : undefined;
+          // Not while a field is invalid: a derived field computed from a half-typed number would print NaN.
+          if (r.ok) { try { spec.onChange(r.values, set, changed); } catch (e) { console.error('IJWindows onChange', e); } }
+        }
+        validate();
+        schedulePreview();
+      };
       body.addEventListener('input', onInput);
       body.addEventListener('change', onInput);
       if (previewBox) {
         previewBox.addEventListener('change', () => {
           if (previewBox.checked) firePreview();
-          else spec.preview.onChange(null);
+          else { spec.preview.onChange(null, previewCtl); previewCtl.note(null); }
         });
       }
 
       function commit() {
         const r = validate();
         if (!r.ok) {
-          const firstBad = fields.find((f) => r.errors[f.id]);
+          const firstBad = fields.find((f) => r.errors[f.id] !== undefined);
           if (firstBad && controls[firstBad.id]) controls[firstBad.id].focus();
           return;
         }
@@ -2043,7 +2401,7 @@ const IJWindows = (() => {
         const idx = modalStack.indexOf(handle);
         if (idx >= 0) modalStack.splice(idx, 1);
         cleanupDrag();
-        if (previewBox && spec.preview) { try { spec.preview.onChange(null); } catch (e) { console.error('IJWindows preview', e); } }
+        if (previewBox && spec.preview) { try { spec.preview.onChange(null, previewCtl); } catch (e) { console.error('IJWindows preview', e); } }
         if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
         if (previous && previous.focus && d.contains(previous)) { try { previous.focus(); } catch (e) { /* gone */ } }
         resolveFn(values);
@@ -2051,6 +2409,8 @@ const IJWindows = (() => {
 
       function onKey(e) {
         if (modalStack[modalStack.length - 1] !== handle) return;
+        // A dialog that leaves the image usable (preview) only takes the keys typed inside it.
+        if (nonModal && box.contains && e.target && !box.contains(e.target)) return;
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); return; }
         if (e.key === 'Tab') { e.stopPropagation(); trapTab(box, e); return; }
         if (e.key === 'Enter') {
@@ -2076,7 +2436,9 @@ const IJWindows = (() => {
       handle.place = place;
       const cleanupDrag = makeDraggable(box, head, null);
       d.addEventListener('keydown', onKey, true);
-      const firstCtrl = fields.map((f) => controls[f.id]).find(Boolean);
+      validate();
+      errorEl.hidden = true; errorEl.textContent = '';
+      const firstCtrl = fields.map((f) => controls[f.id]).find((c) => c && !c.disabled);
       (firstCtrl || okBtn).focus();
       if (firstCtrl && firstCtrl.select && firstCtrl.type === 'text') firstCtrl.select();
       return new Promise((resolve) => { resolveFn = resolve; });
@@ -2269,6 +2631,203 @@ const IJWindows = (() => {
 })();
 
 /* ============================================================
+   IJPlot — the generic plot window's drawing and export
+   ============================================================ */
+/* openPlot(spec) of the extension API (ij-app.js) draws through this module. Pure except draw().
+ *
+ * spec = { title?, xLabel?, yLabel?,
+ *   series:  [{ kind: 'line' | 'bars' | 'points', x: ArrayLike, y: ArrayLike, color?, label? }],
+ *   image?:  { w, h, data: Float32Array (w·h, row 0 = the LOWEST y), logScale?, lut?: Uint8Array(768) | LUT name,
+ *              xRange?: [x0, x1], yRange?: [y0, y1] }   a raster behind the series (a 2D histogram)
+ *   overlays?: [{ kind: 'line', x1, y1, x2, y2, color? }]   in data coordinates (a regression line, a threshold)
+ *   xRange?, yRange?: [lo, hi]   fixed axes
+ *   csv?:    { columns: [name], rows: [[value]] }   what the CSV button saves (default: the series) }
+ * Bars are centred on x, as wide as the smallest step between two x values (1 for one bar). */
+const IJPlot = (() => {
+  'use strict';
+
+  const COLORS = ['#4e9bff', '#ff6b4e', '#46c46f', '#e0b43a', '#b070e0', '#38c8c8'];
+
+  /** About `count` round tick values covering [lo, hi] (Heckbert's nice numbers). */
+  function niceTicks(lo, hi, count) {
+    const n = count > 1 ? count : 6;
+    if (!(isFinite(lo) && isFinite(hi))) return [];
+    if (hi < lo) { const t = lo; lo = hi; hi = t; }
+    if (hi === lo) return [lo];
+    const nice = (range, round) => {
+      const exp = Math.floor(Math.log10(range)), f = range / Math.pow(10, exp);
+      let nf;
+      if (round) nf = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+      else nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+      return nf * Math.pow(10, exp);
+    };
+    const step = nice(nice(hi - lo, false) / (n - 1), true);
+    const out = [];
+    const first = Math.ceil(lo / step - 1e-9) * step;
+    for (let v = first; v <= hi + step * 1e-9 && out.length < 200; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : Number(v.toPrecision(12)));
+    return out;
+  }
+
+  function barWidth(x) {
+    let w = Infinity;
+    for (let i = 1; i < x.length; i++) { const d = Math.abs(x[i] - x[i - 1]); if (d > 0 && d < w) w = d; }
+    return isFinite(w) ? w : 1;
+  }
+
+  /** Data extent of a spec: { x0, x1, y0, y1 } (fixed ranges win; bars include 0; never empty). */
+  function extent(spec) {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    const add = (x, y) => {
+      if (isFinite(x)) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+      if (isFinite(y)) { if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    };
+    for (const sr of spec.series || []) {
+      const n = Math.min(sr.x ? sr.x.length : 0, sr.y ? sr.y.length : 0);
+      const half = sr.kind === 'bars' ? barWidth(sr.x) / 2 : 0;
+      for (let i = 0; i < n; i++) {
+        add(sr.x[i] - half, sr.y[i]);
+        if (half) add(sr.x[i] + half, 0);
+      }
+    }
+    if (spec.image) {
+      const im = spec.image, xr = im.xRange || [0, im.w], yr = im.yRange || [0, im.h];
+      add(xr[0], yr[0]); add(xr[1], yr[1]);
+    }
+    for (const o of spec.overlays || []) { add(o.x1, o.y1); add(o.x2, o.y2); }
+    if (spec.xRange) { x0 = spec.xRange[0]; x1 = spec.xRange[1]; }
+    if (spec.yRange) { y0 = spec.yRange[0]; y1 = spec.yRange[1]; }
+    if (!(x0 <= x1)) { x0 = 0; x1 = 1; }
+    if (!(y0 <= y1)) { y0 = 0; y1 = 1; }
+    if (x0 === x1) { x0 -= 0.5; x1 += 0.5; }
+    if (y0 === y1) { y0 -= 0.5; y1 += 0.5; }
+    return { x0, x1, y0, y1 };
+  }
+
+  function csvCell(v) {
+    const s = v === undefined || v === null ? '' : (typeof v === 'number' ? String(v) : String(v));
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  /** The CSV the Save button writes: spec.csv, else the series (one table when they share their x). */
+  function csvText(spec) {
+    let columns, rows;
+    if (spec.csv && Array.isArray(spec.csv.columns) && Array.isArray(spec.csv.rows)) { columns = spec.csv.columns; rows = spec.csv.rows; }
+    else {
+      const ser = (spec.series || []).filter((x) => x && x.x && x.y);
+      const sameX = ser.length > 0 && ser.every((x) => x.x.length === ser[0].x.length && x.x.every((v, i) => v === ser[0].x[i]));
+      if (sameX) {
+        columns = [spec.xLabel || 'x'].concat(ser.map((x, i) => x.label || spec.yLabel || ('y' + (i + 1))));
+        rows = Array.from(ser[0].x, (v, i) => [v].concat(ser.map((x) => x.y[i])));
+      } else {
+        columns = ['series', spec.xLabel || 'x', spec.yLabel || 'y'];
+        rows = [];
+        ser.forEach((x, k) => { for (let i = 0; i < Math.min(x.x.length, x.y.length); i++) rows.push([x.label || ('y' + (k + 1)), x.x[i], x.y[i]]); });
+      }
+    }
+    return [columns.map(csvCell).join(',')].concat(rows.map((r) => Array.from(r, csvCell).join(','))).join('\n') + '\n';
+  }
+
+  const fmt = (v) => (Math.abs(v) >= 1e5 || (Math.abs(v) < 1e-3 && v !== 0) ? v.toExponential(1) : String(Number(v.toPrecision(5))));
+
+  /** Draws the spec on a 2D canvas (device pixels = canvas.width × canvas.height).
+   *  opts = { fg, grid, bg, font, lut(name) → Uint8Array(768), dpr }. Returns the plot box. */
+  function draw(canvas, spec, opts) {
+    const o = opts || {};
+    const g = canvas.getContext('2d');
+    const dpr = o.dpr > 0 ? o.dpr : 1;
+    const W = canvas.width, H = canvas.height;
+    const fg = o.fg || '#ccc', grid = o.grid || 'rgba(128,128,128,0.35)';
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, W, H);
+    if (o.bg) { g.fillStyle = o.bg; g.fillRect(0, 0, W, H); }
+    const fs = Math.round(11 * dpr);
+    g.font = fs + 'px sans-serif';
+    const L = Math.round(54 * dpr), R = Math.round(12 * dpr), T = Math.round((spec.title ? 26 : 10) * dpr), B = Math.round(36 * dpr);
+    const pw = W - L - R, ph = H - T - B;
+    const box = { x: L, y: T, w: pw, h: ph };
+    if (!(pw > 20 && ph > 20)) return box;
+    const e = extent(spec);
+    const X = (v) => L + ((v - e.x0) / (e.x1 - e.x0)) * pw;
+    const Y = (v) => T + (1 - (v - e.y0) / (e.y1 - e.y0)) * ph;
+    // the raster
+    if (spec.image && spec.image.w > 0 && spec.image.h > 0 && spec.image.data && typeof document !== 'undefined') {
+      const im = spec.image, xr = im.xRange || [0, im.w], yr = im.yRange || [0, im.h];
+      let max = 0;
+      for (let i = 0; i < im.data.length; i++) if (im.data[i] > max) max = im.data[i];
+      const lut = im.lut instanceof Uint8Array ? im.lut : (o.lut ? o.lut(typeof im.lut === 'string' ? im.lut : 'Fire') : null);
+      const off = document.createElement('canvas');
+      off.width = im.w; off.height = im.h;
+      const og = off.getContext('2d');
+      const px = og.createImageData(im.w, im.h);
+      const den = im.logScale ? Math.log1p(max) : max;
+      for (let j = 0; j < im.h; j++) {
+        for (let i = 0; i < im.w; i++) {
+          const v = im.data[j * im.w + i];
+          const k = ((im.h - 1 - j) * im.w + i) * 4; // row 0 is the lowest y: flip for the screen
+          if (!(v > 0) || !(den > 0)) { px.data[k + 3] = 0; continue; }
+          const q = Math.min(255, Math.max(0, Math.round(((im.logScale ? Math.log1p(v) : v) / den) * 255)));
+          px.data[k] = lut ? lut[q * 3] : q; px.data[k + 1] = lut ? lut[q * 3 + 1] : q; px.data[k + 2] = lut ? lut[q * 3 + 2] : q; px.data[k + 3] = 255;
+        }
+      }
+      og.putImageData(px, 0, 0);
+      g.save();
+      g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+      g.imageSmoothingEnabled = false;
+      g.drawImage(off, X(xr[0]), Y(yr[1]), X(xr[1]) - X(xr[0]), Y(yr[0]) - Y(yr[1]));
+      g.restore();
+    }
+    // grid + ticks
+    g.lineWidth = 1; g.strokeStyle = grid; g.fillStyle = fg;
+    g.textBaseline = 'middle'; g.textAlign = 'right';
+    for (const v of niceTicks(e.y0, e.y1, 5)) { const y = Math.round(Y(v)) + 0.5; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(fmt(v), L - 4 * dpr, y); }
+    g.textBaseline = 'top'; g.textAlign = 'center';
+    for (const v of niceTicks(e.x0, e.x1, 6)) { const x = Math.round(X(v)) + 0.5; g.beginPath(); g.moveTo(x, T); g.lineTo(x, T + ph); g.stroke(); g.fillText(fmt(v), x, T + ph + 4 * dpr); }
+    g.strokeStyle = fg; g.strokeRect(L + 0.5, T + 0.5, pw, ph);
+    // series
+    g.save();
+    g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+    (spec.series || []).forEach((sr, k) => {
+      const col = sr.color || COLORS[k % COLORS.length];
+      const n = Math.min(sr.x ? sr.x.length : 0, sr.y ? sr.y.length : 0);
+      g.strokeStyle = col; g.fillStyle = col; g.lineWidth = Math.max(1, dpr);
+      if (sr.kind === 'bars') {
+        const hw = barWidth(sr.x) / 2;
+        const y0 = Y(Math.max(e.y0, Math.min(e.y1, 0)));
+        for (let i = 0; i < n; i++) {
+          const xa = X(sr.x[i] - hw), xb = X(sr.x[i] + hw), ya = Y(sr.y[i]);
+          g.fillRect(xa, Math.min(ya, y0), Math.max(1, xb - xa), Math.abs(y0 - ya));
+        }
+      } else if (sr.kind === 'points') {
+        const r = Math.max(1.5, 2 * dpr);
+        for (let i = 0; i < n; i++) g.fillRect(X(sr.x[i]) - r / 2, Y(sr.y[i]) - r / 2, r, r);
+      } else {
+        g.beginPath();
+        let pen = false;
+        for (let i = 0; i < n; i++) {
+          if (!isFinite(sr.y[i])) { pen = false; continue; }
+          if (pen) g.lineTo(X(sr.x[i]), Y(sr.y[i])); else { g.moveTo(X(sr.x[i]), Y(sr.y[i])); pen = true; }
+        }
+        g.stroke();
+      }
+    });
+    for (const ov of spec.overlays || []) {
+      if (ov.kind !== 'line') continue;
+      g.strokeStyle = ov.color || '#ffd400'; g.lineWidth = Math.max(1, dpr);
+      g.beginPath(); g.moveTo(X(ov.x1), Y(ov.y1)); g.lineTo(X(ov.x2), Y(ov.y2)); g.stroke();
+    }
+    g.restore();
+    // labels
+    g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+    if (spec.title) { g.font = 'bold ' + fs + 'px sans-serif'; g.fillText(String(spec.title), L + pw / 2, T - 8 * dpr); g.font = fs + 'px sans-serif'; }
+    if (spec.xLabel) g.fillText(String(spec.xLabel), L + pw / 2, H - 4 * dpr);
+    if (spec.yLabel) { g.save(); g.translate(10 * dpr, T + ph / 2); g.rotate(-Math.PI / 2); g.fillText(String(spec.yLabel), 0, 0); g.restore(); }
+    return box;
+  }
+
+  return { niceTicks, extent, csvText, draw, barWidth, COLORS };
+})();
+
+/* ============================================================
    IJShell — ImageJ chrome and pointer handling
    ============================================================ */
 const IJShell = (() => {
@@ -2277,19 +2836,22 @@ const IJShell = (() => {
   const SVGNS = 'http://www.w3.org/2000/svg';
 
   const DEFAULT_TOOLS = [
-    { id: 'rect' }, { id: 'oval' }, { id: 'polygon' }, { id: 'freehand' }, { id: 'line' }, { id: 'point' },
+    { id: 'rect' }, { id: 'oval' }, { id: 'polygon' }, { id: 'freehand' }, { id: 'line' }, { id: 'polyline' }, { id: 'angle' }, { id: 'point' }, { id: 'wand' },
     { separator: true },
     { id: 'zoom' }, { id: 'hand' }
   ];
-  const TOOL_FALLBACK = { rect: 'Rectangle', oval: 'Oval', polygon: 'Polygon', freehand: 'Freehand', line: 'Straight line', point: 'Point', zoom: 'Magnifying glass', hand: 'Scrolling hand' };
-  const ROI_TOOLS = new Set(['rect', 'oval', 'polygon', 'freehand', 'line', 'point']);
+  const TOOL_FALLBACK = { rect: 'Rectangle', oval: 'Oval', polygon: 'Polygon', freehand: 'Freehand', line: 'Straight line', polyline: 'Segmented line', angle: 'Angle', point: 'Point', wand: 'Wand', zoom: 'Magnifying glass', hand: 'Scrolling hand' };
+  const ROI_TOOLS = new Set(['rect', 'oval', 'polygon', 'freehand', 'line', 'polyline', 'angle', 'point', 'wand']);
   const ICONS = {
     rect: '<rect x="3.5" y="5.5" width="13" height="9"/>',
     oval: '<ellipse cx="10" cy="10" rx="7" ry="5"/>',
     polygon: '<path d="M4 14.5L6.5 5l8 1.5 2 7z"/>',
     freehand: '<path d="M3 13c2-7 4 3 6-2s3-5 5-1 2 3 3 2"/>',
     line: '<path d="M3.5 16L16.5 4"/>',
+    polyline: '<path d="M3.5 15.5L8 7l4.5 6L16.5 4.5"/><circle cx="3.5" cy="15.5" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="16.5" cy="4.5" r="1" fill="currentColor" stroke="none"/>',
+    angle: '<path d="M16 15.5H4.5L14.5 5"/><path d="M10.5 15.5a6 6 0 00-1.7-4.2"/>',
     point: '<circle cx="10" cy="10" r="2"/><path d="M10 3v4M10 13v4M3 10h4M13 10h4"/>',
+    wand: '<path d="M4 16L13 7"/><path d="M13 3v3M13 10v3M9.5 6.5h3M13.5 6.5h3M10.5 3.9l1.6 1.6M14 7.5l1.6 1.6M15.6 3.9l-1.6 1.6"/>',
     zoom: '<circle cx="8.5" cy="8.5" r="4.5"/><path d="M12 12l5 5"/>',
     hand: '<path d="M6.5 10.5V5.5a1 1 0 012 0V9V4a1 1 0 012 0v5V5a1 1 0 012 0v5V7a1 1 0 012 0v5.5a5 5 0 01-5 5h-1.5a4 4 0 01-3-1.5L3.5 12.5a1 1 0 011.5-1.3z"/>'
   };
@@ -2432,7 +2994,7 @@ const IJShell = (() => {
       listen(b, 'click', () => setTool(td.id, true));
       listen(b, 'dblclick', () => {
         if (td.id === 'zoom') display.view100();
-        else if ((td.id === 'line' || td.id === 'point') && opts.onToolOptions) opts.onToolOptions(td.id);
+        else if ((td.id === 'line' || td.id === 'point' || td.id === 'wand') && opts.onToolOptions) opts.onToolOptions(td.id);
       });
       toolbar.appendChild(b);
       toolButtons.set(td.id, b);
@@ -2458,7 +3020,7 @@ const IJShell = (() => {
     let armed = false; // a click opened a menu: hovering another title switches
 
     function buildTree() {
-      tree = P.buildMenuTree(opts.commands || [], { t, state: opts.getState ? opts.getState() : null });
+      tree = P.buildMenuTree(opts.commands || [], { t, state: opts.getState ? opts.getState() : null, groups: opts.menuGroups || null });
     }
 
     // title listeners are released on every rebuild instead of piling up in `cleanups`
@@ -2529,6 +3091,7 @@ const IJShell = (() => {
           if (it.type === 'separator') { const s = el('div', 'ij-menu-sep'); s.setAttribute('role', 'separator'); panel.appendChild(s); return; }
           const row = el('div', 'ij-menu-item');
           row.setAttribute('role', 'menuitem');
+          if (it.title) row.title = it.title;
           row.appendChild(el('span', 'ij-menu-label', it.label));
           if (it.type === 'item' && it.shortcut) row.appendChild(el('span', 'ij-menu-shortcut', it.shortcut));
           if (it.type === 'group') { row.classList.add('has-children'); row.setAttribute('aria-haspopup', 'true'); row.appendChild(el('span', 'ij-menu-arrow', '▸')); }
@@ -2628,6 +3191,14 @@ const IJShell = (() => {
       display.setImage(info);
       updateTitle(display.getView());
       statusPos.textContent = '';
+    }
+    /** The image description changed without its pixels moving (a new calibration, a new name): the
+     *  title lines follow, the view, the selection and the tiles stay. */
+    function updateInfo(imgInfo) {
+      if (!imgInfo || !info) return;
+      info = imgInfo;
+      titleName.textContent = info.name || '';
+      subtitle.textContent = P.formatSubtitle(info);
     }
     function clearImage() {
       info = null;
@@ -2736,10 +3307,15 @@ const IJShell = (() => {
 
     function finishPolygon(close) {
       if (!polyDraft) return;
-      const pts = polyDraft.points;
+      const pts = polyDraft.points, kind = polyDraft.kind;
       polyDraft = null;
       display.setDraft(null);
-      if (close && pts.length >= 3) commitRoi({ type: 'polygon', points: pts }, 'draw');
+      // a segmented line (finished by a double click / Enter) and an angle (its third click) are open: the Enter / double click of a polygon closes it
+      if (kind === 'polyline') {
+        if (pts.length >= 2) commitRoi({ type: 'polyline', points: pts, width: lineWidth }, 'draw'); else commitRoi(null, 'clear');
+      } else if (kind === 'angle') {
+        if (pts.length === 3) commitRoi({ type: 'angle', points: pts }, 'draw'); else commitRoi(null, 'clear');
+      } else if (close && pts.length >= 3) commitRoi({ type: 'polygon', points: pts }, 'draw');
       else if (pts.length === 2 && !close) commitRoi({ type: 'line', x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1], width: 1 }, 'draw');
       else commitRoi(null, 'clear');
     }
@@ -2765,7 +3341,22 @@ const IJShell = (() => {
       }
       if (e.button !== 0 || !ROI_TOOLS.has(tool)) return;
 
+      // the wand traces what is under the click: the controller does it (the engine owns the pixels)
+      if (tool === 'wand') {
+        if (opts.onWand) opts.onWand(Math.floor(p.x), Math.floor(p.y), { shift: e.shiftKey, alt: e.altKey });
+        return;
+      }
       const tol = tolImg();
+      // segmented line / angle in progress: a vertex per click (pixel-centre integers, as a line); an angle ends at its third
+      if ((tool === 'polyline' || tool === 'angle') && polyDraft) {
+        const pt = [Math.floor(p.x), Math.floor(p.y)];
+        const last = polyDraft.points[polyDraft.points.length - 1];
+        if (tool === 'polyline' && e.detail >= 2 && last && last[0] === pt[0] && last[1] === pt[1]) { finishPolygon(false); return; }
+        polyDraft.points.push(pt);
+        if (tool === 'angle' && polyDraft.points.length === 3) { finishPolygon(false); return; }
+        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+        return;
+      }
       // polygon in progress: add a vertex (close on the first one / double click)
       if (tool === 'polygon' && polyDraft) {
         const pt = [Math.round(p.x), Math.round(p.y)];
@@ -2785,7 +3376,7 @@ const IJShell = (() => {
           stage.setPointerCapture(e.pointerId);
           return;
         }
-        if (!(tool === 'point' && !e.shiftKey) && P.hitRoi(activeRoi, p.x, p.y, activeRoi.type === 'line' ? tol : 0)) {
+        if (!(tool === 'point' && !e.shiftKey) && P.hitRoi(activeRoi, p.x, p.y, (activeRoi.type === 'line' || activeRoi.type === 'polyline' || activeRoi.type === 'angle') ? tol : 0)) {
           drag = { kind: 'move', start: activeRoi, p0: p, moved: false, id: e.pointerId };
           stage.setPointerCapture(e.pointerId);
           return;
@@ -2798,8 +3389,15 @@ const IJShell = (() => {
         commitRoi({ type: 'point', points: pts }, 'draw');
         return;
       }
+      if (tool === 'polyline' || tool === 'angle') {
+        polyDraft = { kind: tool, points: [[Math.floor(p.x), Math.floor(p.y)]], rubber: null };
+        activeRoi = null; pushRois();
+        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+        emitRoi(null, false, 'clear');
+        return;
+      }
       if (tool === 'polygon') {
-        polyDraft = { points: [[Math.round(p.x), Math.round(p.y)]], rubber: null };
+        polyDraft = { kind: 'polygon', points: [[Math.round(p.x), Math.round(p.y)]], rubber: null };
         activeRoi = null; pushRois();
         display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
         emitRoi(null, false, 'clear');
@@ -2915,6 +3513,7 @@ const IJShell = (() => {
     listen(stage, 'contextmenu', (e) => { if (tool === 'zoom') e.preventDefault(); });
     listen(stage, 'dblclick', (e) => {
       if (tool === 'polygon' && polyDraft && polyDraft.points.length >= 3) { e.preventDefault(); finishPolygon(true); }
+      else if (tool === 'polyline' && polyDraft && polyDraft.points.length >= 2) { e.preventDefault(); finishPolygon(false); }
     });
     listen(stage, 'wheel', (e) => {
       if (!info) return;
@@ -2949,7 +3548,7 @@ const IJShell = (() => {
         return;
       }
       if (polyDraft) {
-        if (e.key === 'Enter') { e.preventDefault(); finishPolygon(true); return; }
+        if (e.key === 'Enter') { e.preventDefault(); finishPolygon(polyDraft.kind === 'polygon'); return; }
         if (e.key === 'Escape') { e.preventDefault(); cancelPolygon(); commitRoi(null, 'clear'); return; }
         if (e.key === 'Backspace') {
           e.preventDefault();
@@ -2999,7 +3598,7 @@ const IJShell = (() => {
 
     return {
       el: shell, stage, display, windows, menubar, statusBar: statusbar,
-      setImage, clearImage, setTitle, setDisplayState,
+      setImage, clearImage, setTitle, setDisplayState, updateInfo,
       setTool: (id) => setTool(id, false), getTool: () => tool,
       setActiveRoi(roi) { activeRoi = roi || null; cancelPolygon(); pushRois(); setStatus(roi ? P.describeRoi(roi, info && info.calibration) : ''); },
       getActiveRoi: () => activeRoi,

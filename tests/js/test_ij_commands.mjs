@@ -1,15 +1,22 @@
-// Command registry of the Advanced Studio controller (js/modules/studio/advanced-studio/ij-app.js).
+// Command registry of the Advanced Studio controller (js/modules/studio/advanced-studio/ij-app.js)
+// and of the packages that extend it (ij-cmds-<pkg>.js, through IJApp.extend).
 //
-// Checks, without a browser: every command has a menu path in ImageJ's menu order and a label
-// in all four plugin lang files, shortcuts are unique and none is a key the browser keeps,
-// every run() reaches a method of the app facade, enabled() follows the state (no image,
-// 32-bit Apply, no selection, busy), every literal lang key the controller reads exists, and
-// the pure helpers (shortcut matching, level plan, slice range, B&C slider arithmetic).
+// Checks, without a browser: every command (v1 and package) has a menu path, a unique `order` in
+// its (sub)menu and a label in all four plugin lang files — the lang files being merged with the
+// `lang-parts/<pkg>.json` of the packages while those exist (format: { en: {…}, fr: {…}, es: {…},
+// nl: {…} }; a key defined twice with another value fails) — shortcuts are unique and none is a
+// key the browser keeps, every v1 run() reaches a method of the app facade and every package
+// run() only calls members of the documented extension API (against a recording api), enabled()
+// follows the state (no image, 32-bit Apply, no selection, busy), every literal lang key the
+// controller and the package files read exists (namespaces cmd. op. menu. meas. tool. res. err.
+// dlg.<prefix>.), and the pure helpers (shortcut matching, level plan, slice range, B&C slider
+// arithmetic).
 //
 // Run: node tests/js/test_ij_commands.mjs
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { loadModule, ROOT } from './harness.mjs';
 
 // Values built inside the vm context come from another realm: compare them as JSON.
@@ -17,12 +24,36 @@ const same = (a, b, msg) => assert.equal(JSON.stringify(a), JSON.stringify(b), m
 
 const DIR = path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio');
 const SRC = readFileSync(path.join(DIR, 'ij-app.js'), 'utf8');
-const IJApp = loadModule('js/modules/studio/advanced-studio/ij-app.js', 'IJApp', {});
+// One context: the controller, then every package's command file (they call IJApp.extend at load).
+const CMD_FILES = readdirSync(DIR).filter((f) => /^ij-cmds-[a-z0-9]+\.js$/.test(f)).sort();
+const PROC_FILES = readdirSync(DIR).filter((f) => /^ij-proc-[a-z0-9]+\.js$/.test(f)).sort();
+const ctx = vm.createContext({ console, setTimeout, clearTimeout });
+vm.runInContext(SRC + '\n;globalThis.__IJApp = IJApp;', ctx, { filename: 'ij-app.js' });
+for (const f of CMD_FILES) vm.runInContext(readFileSync(path.join(DIR, f), 'utf8'), ctx, { filename: f });
+const IJApp = ctx.__IJApp;
 assert.ok(IJApp, 'IJApp loads without a DOM');
 
 const readJson = (f) => JSON.parse(readFileSync(path.join(DIR, f), 'utf8'));
 const LANGS = ['en', 'fr', 'es', 'nl'];
 const lang = Object.fromEntries(LANGS.map((c) => [c, readJson(`lang/${c}.json`)]));
+const baseLang = JSON.parse(JSON.stringify(lang));
+// lang-parts/<pkg>.json: { en: {...}, fr: {...}, es: {...}, nl: {...} } merged under the base dictionaries.
+const PARTS_DIR = path.join(DIR, 'lang-parts');
+if (existsSync(PARTS_DIR)) {
+  const merge = (dst, src, where) => {
+    for (const k of Object.keys(src)) {
+      if (src[k] && typeof src[k] === 'object') { if (dst[k] === undefined) dst[k] = {}; assert.ok(typeof dst[k] === 'object', `${where}.${k} is a section`); merge(dst[k], src[k], `${where}.${k}`); }
+      else {
+        if (dst[k] !== undefined) assert.equal(dst[k], src[k], `lang key ${where}.${k} is defined twice with another value`);
+        dst[k] = src[k];
+      }
+    }
+  };
+  for (const f of readdirSync(PARTS_DIR).filter((x) => x.endsWith('.json')).sort()) {
+    const part = JSON.parse(readFileSync(path.join(PARTS_DIR, f), 'utf8'));
+    for (const c of LANGS) { assert.ok(part[c], `lang-parts/${f} has the language ${c}`); merge(lang[c], part[c], `${c}`); }
+  }
+}
 const resolve = (o, k) => k.split('.').reduce((a, c) => (a && a[c] !== undefined ? a[c] : undefined), o);
 const leafKeys = (o, prefix = '', out = new Set()) => {
   for (const k of Object.keys(o)) {
@@ -37,7 +68,12 @@ const pj = readJson('plugin.json');
 assert.equal(pj.id, 'advanced-studio');
 assert.equal(pj.placement, 'studio');
 assert.deepEqual(pj.i18nLanguages, LANGS);
-assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-view.js', 'ij-app.js']);
+assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-proc-bg.js', 'ij-proc-filters.js', 'ij-proc-seg.js', 'ij-proc-multi.js',
+  'ij-proc-geom.js', 'ij-proc-roi.js', 'ij-proc-coloc.js', 'ij-view.js', 'ij-app.js', 'ij-cmds-bg.js', 'ij-cmds-filters.js', 'ij-cmds-seg.js', 'ij-cmds-multi.js',
+  'ij-cmds-geom.js', 'ij-cmds-roi.js', 'ij-cmds-coloc.js'], 'plugin.json#scripts: the final order');
+for (const f of pj.scripts) assert.ok(existsSync(path.join(DIR, f)), `${f} exists`);
+same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc'].map((k) => `ij-proc-${k}.js`)],
+  'the worker loads the mandatory scripts, then every package file');
 assert.deepEqual(pj.styles, ['ij-style.css']);
 assert.deepEqual(pj.contexts, ['page']);
 assert.ok(pj.platformCompat.includes('1.83.0'));
@@ -58,6 +94,8 @@ for (const k of enKeys) {
 // ── registry shape ──
 const COMMANDS = IJApp.COMMANDS;
 assert.ok(COMMANDS.length >= 80, 'the registry holds every PLAN §2.1/§2.2 entry');
+const V1 = COMMANDS.filter((c) => !c.ext);
+assert.ok(V1.length >= 80);
 const ids = new Set();
 for (const c of COMMANDS) {
   assert.ok(!ids.has(c.id), `duplicate command id ${c.id}`);
@@ -65,10 +103,33 @@ for (const c of COMMANDS) {
   assert.ok(/^[A-Za-z0-9]+$/.test(c.id), `${c.id}: ids carry no dot (they are lang keys)`);
   assert.ok(Array.isArray(c.menu) && c.menu.length >= 1 && c.menu.every((s) => typeof s === 'string' && s), `${c.id}: menu path`);
   assert.equal(c.labelKey, `cmd.${c.id}`);
+  assert.ok(typeof c.order === 'number' && Number.isFinite(c.order), `${c.id}: a numeric menu order`);
   assert.equal(typeof c.enabled, 'function', `${c.id}: enabled()`);
   assert.equal(typeof c.run, 'function', `${c.id}: run()`);
   for (const code of LANGS) assert.ok(typeof resolve(lang[code], c.labelKey) === 'string', `${code}: ${c.labelKey}`);
   for (const seg of c.menu) for (const code of LANGS) assert.ok(typeof resolve(lang[code], `menu.${seg}`) === 'string', `${code}: menu.${seg}`);
+}
+
+// Menu positions: inside one (sub)menu the orders (commands and submenus together) are unique, and every
+// submenu a command sits in has its position in GROUP_META (the frozen table of PLAN-wave2 §1).
+{
+  const lists = new Map(); // path → [[label, order]]
+  const add = (p, label, order) => { if (!lists.has(p)) lists.set(p, []); lists.get(p).push([label, order]); };
+  for (const c of COMMANDS) {
+    add(c.menu.join('/'), c.id, c.order);
+    for (let k = 2; k <= c.menu.length; k++) {
+      const gp = c.menu.slice(0, k).join('/');
+      assert.ok(IJApp.GROUP_META[gp] && typeof IJApp.GROUP_META[gp].order === 'number', `${c.id}: submenu ${gp} has a position in GROUP_META`);
+    }
+  }
+  for (const [gp, meta] of Object.entries(IJApp.GROUP_META)) add(gp.split('/').slice(0, -1).join('/'), 'group ' + gp, meta.order);
+  for (const [p, list] of lists) {
+    const seenOrder = new Map();
+    for (const [label, order] of list) {
+      assert.ok(!seenOrder.has(order), `menu ${p}: ${label} and ${seenOrder.get(order)} share the order ${order}`);
+      seenOrder.set(order, label);
+    }
+  }
 }
 
 // Top-level menus appear in ImageJ's order.
@@ -145,13 +206,42 @@ const apiBlock = /const API = \{([\s\S]*?)\n  \};/.exec(SRC);
 assert.ok(apiBlock, 'API facade found');
 const apiNames = new Set();
 for (const m of (apiBlock[1] + ' ,').matchAll(/(?:^|[\s,{])(\w+)(?=\s*[:,}\n])/g)) apiNames.add(m[1]);
-for (const c of COMMANDS) {
+for (const c of V1) {
   const called = [];
   const app = new Proxy({}, { get: (_, name) => (...args) => { called.push(String(name)); return undefined; } });
   c.run(app);
   assert.equal(called.length, 1, `${c.id}: run() makes exactly one call on the app`);
   assert.ok(apiNames.has(called[0]), `${c.id}: app.${called[0]} is in the API facade`);
 }
+// A package command talks to the documented extension API, nothing else.
+const EXT_MEMBERS = new Set(IJApp.EXT_API_MEMBERS);
+for (const m of ['tr', 'state', 'dialog', 'run', 'compute', 'estimate', 'preview', 'cancelPreview', 'overlay', 'clearOverlay', 'setRoi', 'addResults', 'openTable', 'openPlot', 'openTool', 'setDisplay', 'toast', 'error', 'rename']) {
+  assert.ok(EXT_MEMBERS.has(m), `the extension API has ${m}`);
+}
+// Runs a package command against a recording api. A member that is not documented throws an AssertionError
+// from inside the Proxy — also from an async command, after its first await: that rejection is NOT swallowed.
+async function runRecorded(c) {
+  const called = [];
+  const state = { doc: null, docs: [], roi: null, busy: false, activeChannel: 0, threshold: null, measurements: [], lineWidth: 1, roiList: [], resultsCount: 0 };
+  const api = new Proxy({}, { get: (_, name) => {
+    assert.ok(EXT_MEMBERS.has(String(name)), `${c.id}: api.${String(name)} is not a documented member of the extension API`);
+    return (...args) => {
+      called.push(String(name));
+      if (name === 'state') return state;
+      if (name === 'tr') return String(args[0]);
+      return Promise.resolve(null);
+    };
+  } });
+  try { await c.run(api); } catch (err) { if (err && err.code === 'ERR_ASSERTION') throw err; /* the recording api answers null: a command may fail on it */ }
+  return called;
+}
+for (const c of COMMANDS.filter((x) => x.ext)) {
+  const called = await runRecorded(c);
+  assert.ok(called.length >= 1, `${c.id}: run() calls the extension API at least once`);
+}
+// the check itself can fail: a sync call and an async call (after an await) on an undocumented member
+await assert.rejects(runRecorded({ id: 'fakeSync', run: (api) => api.bogus() }), /not a documented member/);
+await assert.rejects(runRecorded({ id: 'fakeAsync', run: async (api) => { await api.dialog({}); api.bogus(); } }), /not a documented member/);
 
 // ── enabled() rules ──
 const img = (bitDepth, extra) => Object.assign({ docId: 1, name: 'x', width: 10, height: 10, bitDepth, channels: [{ name: 'a' }], calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'µm' } }, extra);
@@ -161,7 +251,7 @@ const en = (id, st) => by[id].enabled(st);
 
 // no image
 const none = state({});
-const needsImage = COMMANDS.filter((c) => !['fileOpen', 'fileRecover', 'fileSimple', 'fileCloseStudio', 'stackProject', 'analyzeSetMeasurements', 'toolsRoiManager',
+const needsImage = V1.filter((c) => !['fileOpen', 'fileRecover', 'fileSimple', 'fileCloseStudio', 'stackProject', 'analyzeSetMeasurements', 'toolsRoiManager',
   'windowResults', 'windowRoiManager', 'helpAbout', 'helpShortcuts', 'windowNext', 'windowPrevious', 'analyzeClearResults', 'fileSaveResults'].includes(c.id));
 for (const c of needsImage) assert.equal(c.enabled(none), false, `${c.id} is disabled without an image`);
 for (const id of ['fileOpen', 'fileRecover', 'fileSimple', 'fileCloseStudio', 'stackProject', 'analyzeSetMeasurements', 'toolsRoiManager', 'helpAbout', 'helpShortcuts']) {
@@ -224,7 +314,7 @@ assert.equal(en('fileRevert', withDoc(null, { dirty: true })), true);
 
 // a running operation disables every document command (Cancel is the only way out)
 const busy = withDoc(rect, { busy: true, canUndo: true, canRedo: true, dirty: true, hasResults: true, nDocs: 3 });
-for (const c of COMMANDS) {
+for (const c of V1) {
   if (['fileSimple', 'fileCloseStudio', 'analyzeSetMeasurements', 'toolsRoiManager', 'windowResults', 'windowRoiManager', 'helpAbout', 'helpShortcuts', 'windowNext', 'windowPrevious', 'analyzeClearResults'].includes(c.id)) continue;
   assert.equal(c.enabled(busy), false, `${c.id} is disabled while an operation runs`);
 }
@@ -233,6 +323,27 @@ for (const c of COMMANDS) {
 const used = new Set();
 for (const m of SRC.matchAll(/\btr\('([a-zA-Z0-9_.]+)'(?!\s*\+)/g)) used.add(m[1]);
 for (const m of SRC.matchAll(/labelKey: '([a-zA-Z0-9_.]+)'/g)) used.add(m[1]);
+// The package files: tr('…') / api.tr('…'), labelKey / stepKey, tick(…, 'op.x'), 'op.' + name. Their keys live in the
+// namespaces cmd. op. menu. meas. tool. res. err. dlg.<prefix>. — or are keys the base dictionaries already hold.
+const PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc' };
+const NAMESPACES = ['cmd.', 'op.', 'menu.', 'meas.', 'tool.', 'res.', 'err.'];
+for (const f of [...CMD_FILES, ...PROC_FILES]) {
+  const pkg = /^ij-(?:cmds|proc)-([a-z0-9]+)\.js$/.exec(f)[1];
+  const text = readFileSync(path.join(DIR, f), 'utf8');
+  const keys = new Set();
+  for (const m of text.matchAll(/\b(?:api\.)?tr\('([a-zA-Z0-9_.]+)'(?!\s*\+)/g)) keys.add(m[1]);
+  for (const m of text.matchAll(/\b(?:labelKey|stepKey|titleKey): '([a-zA-Z0-9_.]+)'/g)) keys.add(m[1]);
+  for (const m of text.matchAll(/\btick\([^)]*?'(op\.[A-Za-z0-9]+)'/g)) keys.add(m[1]);
+  // Every other string literal that LOOKS like a key of the namespaces: the messages a dialog's validate() returns,
+  // unitsKey, option labels... (comments are dropped first).
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '')).join('\n');
+  for (const m of code.matchAll(/'((?:cmd|op|menu|meas|tool|res|err|dlg\.[a-z]+)\.[A-Za-z0-9_.]*[A-Za-z0-9_])'/g)) keys.add(m[1]);
+  for (const k of keys) {
+    const ok = NAMESPACES.some((n) => k.startsWith(n)) || k.startsWith('dlg.' + PREFIX[pkg] + '.') || resolve(baseLang.en, k) !== undefined;
+    assert.ok(ok, `${f}: key ${k} is outside the namespaces a package may use`);
+    used.add(k);
+  }
+}
 for (const m of SRC.matchAll(/ERROR_KEYS = \{([\s\S]*?)\};/g)) for (const k of m[1].matchAll(/'(err\.[A-Za-z0-9]+)'/g)) used.add(k[1]);
 used.delete('cmd.'); // prefix of a computed key
 for (const k of used) {
@@ -344,9 +455,11 @@ for (const m of createCall[1].matchAll(/(?:^|[\s,{])(commands|getState|t|tools|o
 assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW), 'the shell exposes its windows');
 
 // ── the error codes the controller maps are codes the engine / pure modules really throw ──
-const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js'].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
+const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
+// IJ_SIZE_MISMATCH is mapped by W0 for the packages that compare two images (Image Calculator, Coloc): they throw it.
+const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH']); // the client raises its own crash code
 for (const code of Object.keys(IJApp.ERROR_KEYS)) {
-  if (!code.startsWith('IJ_') || code === 'IJ_WORKER_CRASHED') continue; // the client raises its own crash code
+  if (!code.startsWith('IJ_') || PACKAGE_THROWN.has(code)) continue;
   assert.ok(CODE_SRC.includes(`'${code}'`), `ERROR_KEYS maps ${code}, which no engine module throws`);
 }
 for (const code of ['IJ_CANCELLED', 'IJ_EMPTY_ROI', 'IJ_NEEDS_ROI', 'IJ_NOTHING_TO_UNDO', 'IJ_NOT_BINARY', 'IJ_STORAGE_QUOTA', 'IJ_STORAGE_FAILED', 'IJ_BAD_ARGS']) {

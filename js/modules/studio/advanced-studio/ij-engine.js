@@ -14,6 +14,22 @@
  * Protocol (PLAN §3.5): request { id, cmd, args } → { id, ok:true, result } |
  * { id, ok:false, error:{ code, message, details? } }; events { event, … }.
  *
+ * Operations (PLAN-wave2 §2.1): every `doc.run` / `doc.preview` / `doc.compute` operation is a
+ * spec in IJOpRegistry (ij-core.js). The v1 operations are defined here, at module load, outside
+ * createEngine; the packages add theirs in ij-proc-<pkg>.js. An op reads a FROZEN view of the
+ * document (makeView) and NEVER writes into its arrays; the engine commits what it returns.
+ * Commands added in wave 2: doc.compute, doc.estimate, doc.rename; `doc.run` takes `noUndo`. The spec fields, the
+ * view, `ctx` (pixel) and `io` (size / newdoc / compute) are listed in the IJOpRegistry header of ij-core.js and
+ * in DOCS/studio-advanced/PLAN-wave2.md §2; the rules the engine enforces on top:
+ *   - `resolve` runs when a request is accepted, never on a replay; `scratchBytes` is reserved before `run`;
+ *   - a size op that returns a channel without `display` keeps the display of the old channel holding the same
+ *     array (same bit depth), else the default; names / colours follow the same rule;
+ *   - undoing a size step restores the name only when that step renamed the document, and the display of a channel
+ *     whose array the document still holds is left as it is;
+ *   - a restore whose replay stops on something a later start could cure (unknown op, version, budget) HOLDS the
+ *     stored session: nothing is written over its journal, the page is told (`storageError` IJ_REPLAY_HELD);
+ *   - option `verifyInputs` (tests): the engine hashes the arrays an op was given and fails an op that wrote in them.
+ *
  * Conventions
  *   - A channel's `data` array is IMMUTABLE once published: an operation builds a new
  *     array and swaps the reference at commit. That makes the undo record a plain
@@ -48,6 +64,8 @@ const IJEngine = (() => {
   const IDLE_MS = 3000;
   const MAX_UNDO = 100;
   const MAX_BAND_PIXELS = 4 * 1048576;
+  // Replay stops that a later start could cure: the stored journal is kept as it is (doc.held).
+  const REPLAY_HOLD_CODES = new Set(['IJ_UNKNOWN_OP', 'IJ_VERSION_MISMATCH', 'IJ_MODULE_MISSING', 'IJ_OVER_BUDGET', 'IJ_NOTHING_TO_UNDO']);
   const ROOT = (typeof globalThis !== 'undefined') ? globalThis : self;
 
   // ---------------------------------------------------------------------------
@@ -163,6 +181,300 @@ const IJEngine = (() => {
   }
 
   // ---------------------------------------------------------------------------
+  // Display defaults, frozen document views, the built-in operations
+  // ---------------------------------------------------------------------------
+
+  function dataRange(data) {
+    const IJImage = ROOT.IJImage;
+    if (IJImage && IJImage.dataRange) return IJImage.dataRange(data);
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < data.length; i++) { const v = data[i]; if (v === v) { if (v < min) min = v; if (v > max) max = v; } }
+    return min > max ? { min: 0, max: 0 } : { min, max };
+  }
+
+  function defaultDisplay(ch, bd) {
+    let d = null;
+    try { d = dep('IJImage').defaultDisplay(ch, bd); } catch (e) { d = null; }
+    if (!d || !(d.max >= d.min)) {
+      d = bd === 8 ? { min: 0, max: 255 } : dataRange(ch.data);
+    }
+    return { min: d.min, max: d.max, lut: d.lut == null ? null : d.lut, invert: !!d.invert };
+  }
+
+  function makeChannel(name, color, data, bd, display) {
+    const ch = { name: name || '', color: color || '#ffffff', data };
+    if (display) ch.display = Object.assign({}, display);
+    else {
+      ch.display = defaultDisplay(ch, bd);
+      // A new channel shows in its own colour, as IJImage.create does.
+      try { ch.display.lut = dep('IJLuts').forColor(ch.color); } catch (e) { /* keeps the default LUT */ }
+    }
+    return ch;
+  }
+
+  function needNumber(v, what) {
+    if (typeof v !== 'number' || !isFinite(v)) throw ijError('IJ_BAD_ARGS', what);
+    return v;
+  }
+
+  // Pixel size of a document or of its frozen view.
+  function calOf(doc) {
+    const c = doc.calibration || {};
+    return { pw: c.pixelWidth > 0 ? c.pixelWidth : 1, ph: c.pixelHeight > 0 ? c.pixelHeight : 1 };
+  }
+
+  function cropRect(view, params, roi) {
+    let r;
+    if (params && params.w > 0 && params.h > 0) r = { x: params.x | 0, y: params.y | 0, w: params.w | 0, h: params.h | 0 };
+    else if (roi) {
+      const IJRoi = dep('IJRoi');
+      IJRoi.validate(roi);
+      r = IJRoi.bounds(roi);
+    } else throw ijError('IJ_NEEDS_ROI', 'crop needs a rectangle');
+    const x0 = Math.max(0, Math.floor(r.x)), y0 = Math.max(0, Math.floor(r.y));
+    const x1 = Math.min(view.width, Math.ceil(r.x + r.w)), y1 = Math.min(view.height, Math.ceil(r.y + r.h));
+    if (!(x1 > x0) || !(y1 > y0)) throw ijError('IJ_EMPTY_ROI', 'the selection is outside the image');
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  // The document as an operation sees it (PLAN-wave2 §2.1): the arrays are the live ones, so an op
+  // must NEVER write into them. Only the wrappers are frozen (a typed array cannot be).
+  function makeView(doc) {
+    const channels = doc.channels.map((c) => Object.freeze({ data: c.data, name: c.name, color: c.color, display: Object.freeze(Object.assign({}, c.display)) }));
+    return Object.freeze({
+      id: doc.id, name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth,
+      calibration: doc.calibration ? Object.freeze(Object.assign({}, doc.calibration)) : doc.calibration,
+      provenance: doc.provenance ? Object.freeze(Object.assign({}, doc.provenance)) : doc.provenance,
+      channels: Object.freeze(channels), active: doc.active, mode: doc.mode
+    });
+  }
+
+  // The v1 operations, in the registry. `prepare` returns { apron, fn(src) | region(full, rect), whole? };
+  // ctx = { scale, range(c) } (the whole-channel data range, cached per revision).
+  function defineBuiltinOps() {
+    const reg = ROOT.IJOpRegistry;
+    if (!reg) return;
+    // Tests load this file into one context more than once: the first definition stays.
+    const def = (name, spec) => { if (!reg.get(name)) reg.define(name, spec); };
+    const noApron = () => ({ x: 0, y: 0 });
+
+    def('invert', {
+      kind: 'pixel', version: 1,
+      prepare(view, c, p, ctx) {
+        if (view.bitDepth === 32) {
+          // ImageJ inverts a float image about the data range: v' = max + min - v.
+          const r = ctx.range(c);
+          const s = r.max + r.min;
+          return { apron: noApron(), fn(src) { const d = src.data, o = new Float32Array(d.length); for (let i = 0; i < d.length; i++) o[i] = s - d[i]; return o; } };
+        }
+        return { apron: noApron(), fn: (src) => dep('IJOps').invert(src) };
+      }
+    });
+    def('math', {
+      kind: 'pixel', version: 1,
+      prepare(view, c, p) {
+        if (typeof p.op !== 'string') throw ijError('IJ_BAD_ARGS', 'math op');
+        if (p.op !== 'abs') needNumber(p.value, 'math value');
+        return { apron: noApron(), fn: (src) => dep('IJOps').math(src, p.op, p.value, null) };
+      }
+    });
+    def('fill', {
+      kind: 'pixel', version: 1,
+      prepare(view, c, p) { needNumber(p.value, 'fill value'); return { apron: noApron(), fn: (src) => dep('IJOps').fill(src, null, p.value) }; }
+    });
+    def('clear', {
+      kind: 'pixel', version: 1,
+      prepare(view, c, p) { needNumber(p.value, 'clear value'); return { apron: noApron(), fn: (src) => dep('IJOps').clear(src, null, p.value) }; }
+    });
+    def('clearOutside', {
+      kind: 'pixel', version: 1, outside: true, needsRoi: true,
+      prepare(view, c, p) { needNumber(p.value, 'clear value'); return { apron: noApron(), fn: (src) => dep('IJOps').fill(src, null, p.value) }; }
+    });
+    def('applyLut', {
+      kind: 'pixel', version: 1, display: true,
+      // The display range is not journaled: copy it into the params so a replay gives the same pixels.
+      resolve(view, params, chans) {
+        const p = Object.assign({}, params);
+        p.ranges = Object.assign({}, p.ranges);
+        for (const c of chans) {
+          if (!p.ranges[c]) {
+            const d = view.channels[c].display;
+            p.ranges[c] = { min: p.min != null ? p.min : d.min, max: p.max != null ? p.max : d.max };
+          }
+        }
+        return p;
+      },
+      prepare(view, c, p) {
+        const r = p.ranges && p.ranges[c];
+        if (!r) throw ijError('IJ_BAD_ARGS', 'applyLut range');
+        return { apron: noApron(), fn: (src) => dep('IJOps').applyLut(src, r.min, r.max) };
+      }
+    });
+    def('gaussian', {
+      kind: 'pixel', version: 1, preview: 'reduced',
+      prepare(view, c, p, o) {
+        const IJFilters = dep('IJFilters');
+        const sigma = needNumber(p.sigma, 'sigma');
+        if (!(sigma > 0)) throw ijError('IJ_BAD_ARGS', 'sigma');
+        const cal = calOf(view);
+        const s = (o && o.scale) || 1;
+        const sx = (p.scaled ? sigma / cal.pw : sigma) / s;
+        const sy = (p.scaled ? sigma / cal.ph : sigma) / s;
+        const accuracy = view.bitDepth === 8 ? 0.002 : 0.0002;
+        return {
+          apron: { x: IJFilters.gaussianApron(sx, accuracy, view.bitDepth), y: IJFilters.gaussianApron(sy, accuracy, view.bitDepth) },
+          region: (full, r) => IJFilters.gaussian(full, sx, sy, { accuracy, region: { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h } })
+        };
+      }
+    });
+    def('rank', {
+      kind: 'pixel', version: 1, preview: 'reduced',
+      prepare(view, c, p, o) {
+        const IJFilters = dep('IJFilters');
+        const type = String(p.type || '').toLowerCase();
+        if (!['median', 'mean', 'min', 'max'].includes(type)) throw ijError('IJ_BAD_ARGS', 'rank type');
+        const s = (o && o.scale) || 1;
+        const radius = needNumber(p.radius, 'radius') / s;
+        if (!(radius >= 0)) throw ijError('IJ_BAD_ARGS', 'radius');
+        return {
+          apron: { x: IJFilters.rankApron(radius), y: IJFilters.rankApron(radius) },
+          region: (full, r) => IJFilters.rank(full, radius, type, { region: { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h } })
+        };
+      }
+    });
+    def('binary', {
+      kind: 'pixel', version: 1,
+      prepare(view, c, p) {
+        if (view.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'binary operations need an 8-bit mask');
+        const IJBinary = dep('IJBinary');
+        const op = p.op;
+        if (!['erode', 'dilate', 'open', 'close', 'fillHoles', 'outline'].includes(op)) throw ijError('IJ_BAD_ARGS', 'binary op');
+        const o = { iterations: p.iterations > 0 ? Math.floor(p.iterations) : 1, count: p.count > 0 ? Math.floor(p.count) : 1 };
+        // Rows a result pixel depends on: erode/dilate 1 per iteration, open/close
+        // twice that, outline 1. fillHoles is a global flood fill: one whole band.
+        const reach = op === 'fillHoles' ? 0 : (op === 'open' || op === 'close' ? 2 * o.iterations : (op === 'outline' ? 1 : o.iterations));
+        return { whole: op === 'fillHoles', apron: { x: reach, y: reach }, fn: (src) => IJBinary[op](src, o) };
+      }
+    });
+    def('flipH', { kind: 'pixel', version: 1, preview: false, prepare() { return { whole: true, apron: noApron(), fn: (src) => dep('IJOps').flipH(src) }; } });
+    def('flipV', { kind: 'pixel', version: 1, preview: false, prepare() { return { whole: true, apron: noApron(), fn: (src) => dep('IJOps').flipV(src) }; } });
+
+    // ---- size operations: the document gets new arrays, possibly another shape
+    def('crop', {
+      kind: 'size', version: 1,
+      scratchBytes: (info, params) => { const b = cropRect(info, params, info.roi); return b.w * b.h * info.channels * (info.bitDepth / 8); },
+      async run(view, params, roi, io) {
+        const W = view.width, bd = view.bitDepth;
+        const box = cropRect(view, params, roi);
+        const n = view.channels.length;
+        io.reserve(n * box.w * box.h * (bd / 8));
+        const channels = [];
+        for (let i = 0; i < n; i++) {
+          const ch = view.channels[i];
+          channels.push({ data: copyRect(ch.data, W, box.x, box.y, box.w, box.h), name: ch.name, color: ch.color, display: Object.assign({}, ch.display) });
+          await io.tick((i + 1) / n, 'op.crop');
+        }
+        io.check();
+        const pv = Object.assign({}, view.provenance);
+        const o = pv.cropOrigin || { x: 0, y: 0 };
+        pv.cropOrigin = { x: o.x + box.x, y: o.y + box.y };
+        return { width: box.w, height: box.h, bitDepth: bd, channels, provenance: pv };
+      }
+    });
+    def('rotate90', {
+      kind: 'size', version: 1,
+      scratchBytes: (info) => info.width * info.height * info.channels * (info.bitDepth / 8),
+      async run(view, params, roi, io) {
+        const W = view.width, H = view.height, bd = view.bitDepth;
+        const n = view.channels.length;
+        io.reserve(n * W * H * (bd / 8));
+        const channels = [];
+        for (let i = 0; i < n; i++) {
+          const ch = view.channels[i];
+          channels.push({ data: unwrap(dep('IJOps').rotate90(chImg(W, H, bd, ch.data), params.dir), W * H), name: ch.name, color: ch.color, display: Object.assign({}, ch.display) });
+          await io.tick((i + 1) / n, 'op.rotate90');
+        }
+        io.check();
+        const out = { width: H, height: W, bitDepth: bd, channels };
+        if (view.calibration) {
+          const cal = Object.assign({}, view.calibration);
+          const t = cal.pixelWidth; cal.pixelWidth = cal.pixelHeight; cal.pixelHeight = t;
+          out.calibration = cal;
+        }
+        return out;
+      }
+    });
+    def('convert', {
+      kind: 'size', version: 1,
+      resolve(view, params) {
+        const p = Object.assign({}, params);
+        p.ranges = Object.assign({}, p.ranges);
+        view.channels.forEach((ch, c) => { if (!p.ranges[c]) p.ranges[c] = { min: ch.display.min, max: ch.display.max }; });
+        return p;
+      },
+      scratchBytes: (info, params) => info.width * info.height * info.channels * ((params && params.bitDepth ? params.bitDepth : 32) / 8),
+      async run(view, params, roi, io) {
+        const W = view.width, H = view.height, bd = view.bitDepth;
+        const newBd = params.bitDepth;
+        if (![8, 16, 32].includes(newBd)) throw ijError('IJ_BAD_ARGS', 'bitDepth');
+        if (newBd === bd) return null;
+        const n = view.channels.length;
+        io.reserve(n * W * H * (newBd / 8));
+        const channels = [];
+        for (let i = 0; i < n; i++) {
+          const ch = view.channels[i];
+          const r = params.ranges[i];
+          const data = unwrap(dep('IJOps').convert(chImg(W, H, bd, ch.data), newBd, { min: r.min, max: r.max, scale: params.scale !== false }), W * H);
+          channels.push({ data, name: ch.name, color: ch.color });
+          await io.tick((i + 1) / n, 'op.convert');
+        }
+        io.check();
+        return { width: W, height: H, bitDepth: newBd, channels };
+      }
+    });
+
+    // ---- new-document operations
+    def('toMask', {
+      kind: 'newdoc', version: 1,
+      scratchBytes: (info) => info.width * info.height,
+      async run(view, params, roi, io) {
+        const W = view.width, H = view.height;
+        const c = isInt(io.channel) ? io.channel : (view.active || 0);
+        if (!isInt(c) || c < 0 || c >= view.channels.length) throw ijError('IJ_BAD_ARGS', 'channel');
+        needNumber(params.lower, 'lower'); needNumber(params.upper, 'upper');
+        io.reserve(W * H);
+        const mask = dep('IJThreshold').toMask(chImg(W, H, view.bitDepth, view.channels[c].data), params.lower, params.upper);
+        io.check();
+        return [{
+          name: view.name.replace(/\.[A-Za-z0-9]+$/, '') + '-mask', width: W, height: H, bitDepth: 8,
+          channels: [{ name: view.channels[c].name, color: '#ffffff', data: unwrap(mask, W * H) }]
+        }];
+      }
+    });
+    def('cropToNew', {
+      kind: 'newdoc', version: 1,
+      scratchBytes: (info, params) => { const b = cropRect(info, params, info.roi); return b.w * b.h * info.channels * (info.bitDepth / 8); },
+      async run(view, params, roi, io) {
+        const W = view.width, bd = view.bitDepth;
+        const box = cropRect(view, params, roi);
+        const sel = (params && Array.isArray(params.channels)) ? params.channels : view.channels.map((c, i) => i);
+        for (const c of sel) if (!isInt(c) || c < 0 || c >= view.channels.length) throw ijError('IJ_BAD_ARGS', 'channel');
+        io.reserve(sel.length * box.w * box.h * (bd / 8));
+        const channels = sel.map((c) => {
+          const src = view.channels[c];
+          return { name: src.name, color: src.color, data: copyRect(src.data, W, box.x, box.y, box.w, box.h), display: Object.assign({}, src.display) };
+        });
+        io.check();
+        const provenance = Object.assign({}, view.provenance);
+        const o = provenance.cropOrigin || { x: 0, y: 0 };
+        provenance.cropOrigin = { x: o.x + box.x, y: o.y + box.y };
+        return [{ name: (params && params.name) || (view.name + '-crop'), width: box.w, height: box.h, bitDepth: bd, channels, provenance }];
+      }
+    });
+  }
+  defineBuiltinOps();
+
+  // ---------------------------------------------------------------------------
   // Storage — one interface, an in-memory and an IndexedDB implementation.
   //
   //   putSnapshot(key, rec)   rec.kind 'baseline' | 'snapshot', rec.docId. A 'snapshot'
@@ -194,7 +506,7 @@ const IJEngine = (() => {
     }
     function docRec(s, id) {
       let d = s.docs.get(id);
-      if (!d) { d = { baseline: null, snapshot: null, journal: [] }; s.docs.set(id, d); }
+      if (!d) { d = { baseline: null, snapshot: null, journal: [], rois: {} }; s.docs.set(id, d); }
       return d;
     }
     return {
@@ -207,15 +519,19 @@ const IJEngine = (() => {
         else {
           d.snapshot = rec;
           d.journal = d.journal.filter((e) => e.seq > snap.journalSeq);
+          // The engine writes a large selection again, after a snapshot, with the first entry that needs it.
+          d.rois = {};
         }
       },
       // A journal entry or a meta patch never creates a session: only a stored document does,
       // so a session that lists is always one that can be restored. A journal entry for a
       // session that is gone fails, which leaves the document unprotected until its next snapshot.
-      async putJournal(key, entry) {
+      async putJournal(key, entry, roiBody) {
         const s = sess(key, false);
         if (!s) throw ijError('IJ_STORAGE_FAILED', 'no such session');
-        docRec(s, entry.docId).journal.push(cloneValue(entry));
+        const d = docRec(s, entry.docId);
+        d.journal.push(cloneValue(entry));
+        if (roiBody) d.rois[roiBody.hash] = cloneValue(roiBody.roi);
       },
       async putMeta(key, patch) {
         const s = sess(key, false, patch && patch.datasetId);
@@ -238,7 +554,8 @@ const IJEngine = (() => {
           docs[id] = {
             baseline: parts.includes('baseline') ? cloneValue(d.baseline) : null,
             snapshot: parts.includes('snapshot') ? cloneValue(d.snapshot) : null,
-            journal: parts.includes('journal') ? cloneValue(d.journal) : []
+            journal: parts.includes('journal') ? cloneValue(d.journal) : [],
+            rois: parts.includes('journal') ? cloneValue(d.rois) : {}
           };
         }
         return { key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: cloneValue(s.meta), docs };
@@ -260,7 +577,7 @@ const IJEngine = (() => {
           if (ArrayBuffer.isView(v)) { usage += v.byteLength; return; }
           for (const k of Object.keys(v)) count(v[k]);
         };
-        for (const s of sessions.values()) for (const d of s.docs.values()) { count(d.baseline); count(d.snapshot); count(d.journal); }
+        for (const s of sessions.values()) for (const d of s.docs.values()) { count(d.baseline); count(d.snapshot); count(d.journal); count(d.rois); }
         return { usage, quota: null };
       }
     };
@@ -355,13 +672,16 @@ const IJEngine = (() => {
           tx.objectStore('docs').put(stored, [key, snap.docId, snap.kind]);
           if (snap.kind === 'snapshot') {
             tx.objectStore('journal').delete(range([key, snap.docId, 0], [key, snap.docId, snap.journalSeq]));
+            // large selections of the entries just covered (stored under 'roi:<hash>' keys)
+            tx.objectStore('journal').delete(range([key, snap.docId, 'roi:'], [key, snap.docId, 'roi:\uffff']));
           }
           touchSession(tx.objectStore('sessions'), key, snap.provenance && snap.provenance.datasetId, null, true);
         });
       },
-      putJournal(key, entry) {
+      putJournal(key, entry, roiBody) {
         return run(['sessions', 'journal'], 'readwrite', (tx, out) => {
           tx.objectStore('journal').put(entry, [key, entry.docId, entry.seq]);
+          if (roiBody) tx.objectStore('journal').put({ kind: 'roi', docId: entry.docId, hash: roiBody.hash, roi: roiBody.roi }, [key, entry.docId, 'roi:' + roiBody.hash]);
           touchSession(tx.objectStore('sessions'), key, null, null, false, () => {
             out.err = ijError('IJ_STORAGE_FAILED', 'no such session');
             tx.abort();
@@ -412,9 +732,9 @@ const IJEngine = (() => {
             const s = sg.result;
             if (!s) { out.v = null; return; }
             const docs = {};
-            const slot = (id) => docs[id] || (docs[id] = { baseline: null, snapshot: null, journal: [] });
+            const slot = (id) => docs[id] || (docs[id] = { baseline: null, snapshot: null, journal: [], rois: {} });
             if (docsReq) for (const r of docsReq.result) if (parts.includes(r.kind)) slot(r.docId)[r.kind] = r;
-            if (jReq) for (const e of jReq.result) slot(e.docId).journal.push(e);
+            if (jReq) for (const e of jReq.result) { if (e.kind === 'roi') slot(e.docId).rois[e.hash] = e.roi; else slot(e.docId).journal.push(e); }
             for (const id of Object.keys(docs)) docs[id].journal.sort((a, b) => a.seq - b.seq);
             out.v = { key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: s.meta || {}, docs };
           };
@@ -534,6 +854,7 @@ const IJEngine = (() => {
         const code = storageErrorCode(err);
         if (doc) {
           doc.protected = false; doc.dirty = true;
+          doc.roiWritten = new Set();
           // Whatever was being written is not in storage: a later snapshot may only vouch for
           // the document once it covers this revision.
           doc.unjournaledRev = doc.rev;
@@ -568,6 +889,11 @@ const IJEngine = (() => {
 
     // ---- budget -------------------------------------------------------------
 
+    // The documents the budget counts: the registered ones and the one a session restore is replaying
+    // (not registered until the replay ends, but its arrays and undo steps are already in memory).
+    const replaying = new Set();
+    function budgetDocs() { return replaying.size ? Array.from(docs.values()).concat(Array.from(replaying)) : docs.values(); }
+
     function usedBytes() {
       const seen = new Set();
       let total = 0;
@@ -576,7 +902,7 @@ const IJEngine = (() => {
         if (r.patches) for (const p of r.patches) add(p.data);
         if (r.full) for (const c of r.full.channels) add(c.data);
       };
-      for (const d of docs.values()) {
+      for (const d of budgetDocs()) {
         for (const c of d.channels) add(c.data);
         for (const r of d.undo) addRec(r);
         for (const r of d.redo) addRec(r);
@@ -608,11 +934,24 @@ const IJEngine = (() => {
     // Free `extra` bytes of headroom: tile cache first, then the oldest undo/redo
     // steps of any document. Refuses (IJ_OVER_BUDGET) without touching anything when
     // even that would not be enough.
+    // Only what dropping the tile cache and every undo / redo step would really FREE: an array an undo
+    // step shares with a live channel (a calibration-only step, an Arrange) or with the baseline kept in
+    // RAM stays in memory, and an array two steps share is freed once.
     function reclaimableBytes() {
+      const seen = new Set();
+      for (const d of budgetDocs()) {
+        for (const c of d.channels) seen.add(c.data);
+        if (d.baselineData) for (const a of d.baselineData) seen.add(a);
+      }
       let reclaimable = tiles.bytes;
-      for (const d of docs.values()) {
-        for (const r of d.undo) reclaimable += r.bytes;
-        for (const r of d.redo) reclaimable += r.bytes;
+      const add = (a) => { if (a && !seen.has(a)) { seen.add(a); reclaimable += a.byteLength; } };
+      const addRec = (r) => {
+        if (r.patches) for (const p of r.patches) add(p.data);
+        if (r.full) for (const c of r.full.channels) add(c.data);
+      };
+      for (const d of budgetDocs()) {
+        for (const r of d.undo) addRec(r);
+        for (const r of d.redo) addRec(r);
       }
       return reclaimable;
     }
@@ -642,7 +981,7 @@ const IJEngine = (() => {
       dropTiles();
       while (usedBytes() + extra > budgetBytes) {
         let best = null;
-        for (const d of docs.values()) {
+        for (const d of budgetDocs()) {
           for (const stack of [d.undo, d.redo]) {
             if (stack.length && (!best || stack[0].at < best.stack[0].at)) best = { stack, doc: d };
           }
@@ -676,36 +1015,6 @@ const IJEngine = (() => {
       return t;
     }
 
-    // ---- display defaults -------------------------------------------------------
-
-    function dataRange(data) {
-      const IJImage = ROOT.IJImage;
-      if (IJImage && IJImage.dataRange) return IJImage.dataRange(data);
-      let min = Infinity, max = -Infinity;
-      for (let i = 0; i < data.length; i++) { const v = data[i]; if (v === v) { if (v < min) min = v; if (v > max) max = v; } }
-      return min > max ? { min: 0, max: 0 } : { min, max };
-    }
-
-    function defaultDisplay(ch, bd) {
-      let d = null;
-      try { d = dep('IJImage').defaultDisplay(ch, bd); } catch (e) { d = null; }
-      if (!d || !(d.max >= d.min)) {
-        d = bd === 8 ? { min: 0, max: 255 } : dataRange(ch.data);
-      }
-      return { min: d.min, max: d.max, lut: d.lut == null ? null : d.lut, invert: !!d.invert };
-    }
-
-    function makeChannel(name, color, data, bd, display) {
-      const ch = { name: name || '', color: color || '#ffffff', data };
-      if (display) ch.display = Object.assign({}, display);
-      else {
-        ch.display = defaultDisplay(ch, bd);
-        // A new channel shows in its own colour, as IJImage.create does.
-        try { ch.display.lut = dep('IJLuts').forColor(ch.color); } catch (e) { /* keeps the default LUT */ }
-      }
-      return ch;
-    }
-
     function newId() {
       idCounter++;
       return 'd' + Date.now().toString(36).slice(-5) + Math.floor(Math.random() * 1679616).toString(36) + idCounter.toString(36);
@@ -723,15 +1032,23 @@ const IJEngine = (() => {
       return s;
     }
 
+    // What the channel layout of a document is: the session meta stamps its display with it and the
+    // restore applies that display only when the layout it finds is the one the display was made for
+    // (a journaled Arrange whose meta write never happened would otherwise shift every LUT).
+    function channelSig(doc) {
+      return doc.channels.length + '|' + doc.channels.map((c) => c.name).join('\u0001') + '|' + (doc.layoutRev || 0);
+    }
+
     function displayStateOf(doc) {
       return {
+        sig: channelSig(doc),
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
         channels: doc.channels.map((c) => ({ min: c.display.min, max: c.display.max, lut: c.display.lut, invert: c.display.invert }))
       };
     }
 
     function markMeta(doc) {
-      if (!storageOn) return;
+      if (!storageOn || doc.held) return;
       const s = sessions.get(doc.sessionKey);
       if (!s) return;
       s.docs[doc.id] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
@@ -754,7 +1071,8 @@ const IJEngine = (() => {
         active: (p.display && p.display.active) || 0,
         visible: (p.display && p.display.visible) || new Array(n).fill(true),
         undo: [], redo: [], chain: Promise.resolve(),
-        baselineSet: new WeakSet(), baselineData: null, baselineShape: null, baselineStored: false,
+        baselineIndex: new WeakMap(), baselineData: null, baselineShape: null, baselineMeta: null, baselineProvenance: null, baselineStored: false,
+        layoutRev: p.layoutRev || 0, roiWritten: new Set(),
         journalSeq: p.journalSeq || 0, snapshotRev: 0, dirty: false, protected: storageOn,
         unjournaledRev: -1, pendingBaseline: null,
         rangeCache: null
@@ -779,15 +1097,22 @@ const IJEngine = (() => {
       const same = kind === 'snapshot' && doc.baselineStored && doc.baselineShape &&
         doc.baselineShape.w === doc.width && doc.baselineShape.h === doc.height && doc.baselineShape.bd === doc.bitDepth;
       return {
-        kind, docId: doc.id, rev: doc.rev, journalSeq: doc.journalSeq, savedRev: doc.savedRev,
+        kind, docId: doc.id, rev: doc.rev, journalSeq: doc.journalSeq, savedRev: doc.savedRev, layoutRev: doc.layoutRev,
         name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth,
         calibration: plainClone(doc.calibration), provenance: plainClone(doc.provenance),
         display: displayStateOf(doc),
-        channels: doc.channels.map((c) => ({
-          name: c.name, color: c.color, display: Object.assign({}, c.display),
-          sameAsBaseline: !!(same && doc.baselineSet.has(c.data)),
-          data: (same && doc.baselineSet.has(c.data)) ? null : c.data
-        }))
+        // A channel that still IS one of the baseline's arrays is stored as a reference to that
+        // baseline channel (baseIndex) — never by its own index: an Arrange / reorder keeps the
+        // arrays but moves them.
+        channels: doc.channels.map((c) => {
+          const bi = same ? doc.baselineIndex.get(c.data) : undefined;
+          const isBase = bi !== undefined;
+          return {
+            name: c.name, color: c.color, display: Object.assign({}, c.display),
+            sameAsBaseline: isBase, baseIndex: isBase ? bi : undefined,
+            data: isBase ? null : c.data
+          };
+        })
       };
     }
 
@@ -798,7 +1123,10 @@ const IJEngine = (() => {
     }
 
     function writeBaseline(doc) {
-      doc.baselineSet = new WeakSet(doc.channels.map((c) => c.data));
+      doc.baselineIndex = new WeakMap();
+      doc.channels.forEach((c, i) => doc.baselineIndex.set(c.data, i));
+      doc.baselineMeta = doc.channels.map((c) => ({ name: c.name, color: c.color }));
+      doc.baselineProvenance = plainClone(doc.provenance);
       doc.baselineShape = { w: doc.width, h: doc.height, bd: doc.bitDepth };
       doc.baselineData = doc.channels.map((c) => c.data);
       doc.baselineDisplays = doc.channels.map((c) => Object.assign({}, c.display));
@@ -833,9 +1161,15 @@ const IJEngine = (() => {
     // `force`: the document has just left `docs` (doc.close keeps it for later) but its last
     // state still has to be written.
     function snapshotNow(doc, force) {
+      // A held document (its stored session could not be replayed) never overwrites that session; a caller
+      // that waits for the answer (doc.close "keep for later") is told nothing was kept.
+      if (doc.held) return Promise.resolve(false);
       if (!storageOn || (!force && !docs.has(doc.id))) return queue;
       const rec = recordOf(doc, 'snapshot');
       const bytes = recDataBytes(rec);
+      // The snapshot drops the stored selections of the entries it covers: the entries committed
+      // from now on write the bodies they need again.
+      doc.roiWritten = new Set();
       doc.snapshotRev = doc.rev;
       doc.dirty = false;
       for (const r of doc.undo) r.replayable = false;
@@ -875,17 +1209,29 @@ const IJEngine = (() => {
       return [...docs.values()].filter((d) => d.dirty || !d.protected || (d.pendingBaseline && !d.baselineStored)).map((d) => d.id);
     }
 
+    const ROI_REF_BYTES = 65536;
+
     function noteCommit(doc, entry) {
       doc.dirty = true;
       doc.journalSeq++;
+      if (entry && entry.kind === 'run' && entry.maskRule == null) entry.maskRule = 2;
       if (entry && storageOn && doc.protected) {
         entry.docId = doc.id;
         entry.seq = doc.journalSeq;
         entry.at = Date.now();
         entry.rev = doc.rev;
+        // A large selection is stored once per document, under its hash, beside the entries.
+        let body = null;
+        const IJRoi = ROOT.IJRoi;
+        if (entry.roi && IJRoi && IJRoi.byteSize(entry.roi) > ROI_REF_BYTES) {
+          const ref = IJRoi.hash(entry.roi);
+          if (!doc.roiWritten.has(ref)) { doc.roiWritten.add(ref); body = { hash: ref, roi: entry.roi }; }
+          entry.roiRef = ref;
+          entry.roi = null;
+        }
         enqueue(async () => {
-          if (!doc.protected) { doc.unjournaledRev = Math.max(doc.unjournaledRev, entry.rev); return; }
-          await storage.putJournal(doc.sessionKey, entry);
+          if (!doc.protected) { doc.unjournaledRev = Math.max(doc.unjournaledRev, entry.rev); doc.roiWritten = new Set(); return; }
+          await storage.putJournal(doc.sessionKey, entry, body);
         }, doc);
       } else if (storageOn) {
         doc.unjournaledRev = doc.rev;
@@ -902,9 +1248,9 @@ const IJEngine = (() => {
         channels: doc.channels.map((c) => ({ name: c.name, color: c.color, display: Object.assign({}, c.display) })),
         calibration: doc.calibration, provenance: doc.provenance,
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
-        undoDepth: doc.undo.length, redoDepth: doc.redo.length,
+        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev,
         bytes, levels: levelCount(doc.width, doc.height), tileSize: TILE,
-        unsaved: doc.savedRev !== doc.rev, protected: !!(storageOn && doc.protected),
+        unsaved: doc.savedRev !== doc.rev || !!doc.held, protected: !!(storageOn && doc.protected),
         loading: false, memory: { usedBytes: usedBytes(), budgetBytes }
       };
     }
@@ -969,108 +1315,14 @@ const IJEngine = (() => {
       return doc.rangeCache.r;
     }
 
-    function needNumber(v, what) {
-      if (typeof v !== 'number' || !isFinite(v)) throw ijError('IJ_BAD_ARGS', what);
-      return v;
-    }
-
-    function calOf(doc) {
-      const c = doc.calibration || {};
-      return { pw: c.pixelWidth > 0 ? c.pixelWidth : 1, ph: c.pixelHeight > 0 ? c.pixelHeight : 1 };
-    }
-
-    const PIXEL_OPS = {
-      invert: {
-        prepare(doc, c) {
-          if (doc.bitDepth === 32) {
-            // ImageJ inverts a float image about the data range: v' = max + min - v.
-            const r = rangeOf(doc, c);
-            const s = r.max + r.min;
-            return { apron: { x: 0, y: 0 }, fn(src) { const d = src.data, o = new Float32Array(d.length); for (let i = 0; i < d.length; i++) o[i] = s - d[i]; return o; } };
-          }
-          return { apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').invert(src) };
-        }
-      },
-      math: {
-        prepare(doc, c, p) {
-          if (typeof p.op !== 'string') throw ijError('IJ_BAD_ARGS', 'math op');
-          if (p.op !== 'abs') needNumber(p.value, 'math value');
-          return { apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').math(src, p.op, p.value, null) };
-        }
-      },
-      fill: {
-        prepare(doc, c, p) { needNumber(p.value, 'fill value'); return { apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').fill(src, null, p.value) }; }
-      },
-      clear: {
-        prepare(doc, c, p) { needNumber(p.value, 'clear value'); return { apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').clear(src, null, p.value) }; }
-      },
-      clearOutside: {
-        outside: true, needsRoi: true,
-        prepare(doc, c, p) { needNumber(p.value, 'clear value'); return { apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').fill(src, null, p.value) }; }
-      },
-      applyLut: {
-        display: true,
-        prepare(doc, c, p) {
-          const r = p.ranges && p.ranges[c];
-          if (!r) throw ijError('IJ_BAD_ARGS', 'applyLut range');
-          return { apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').applyLut(src, r.min, r.max) };
-        }
-      },
-      gaussian: {
-        scalable: true,
-        prepare(doc, c, p, o) {
-          const IJFilters = dep('IJFilters');
-          const sigma = needNumber(p.sigma, 'sigma');
-          if (!(sigma > 0)) throw ijError('IJ_BAD_ARGS', 'sigma');
-          const cal = calOf(doc);
-          const s = (o && o.scale) || 1;
-          const sx = (p.scaled ? sigma / cal.pw : sigma) / s;
-          const sy = (p.scaled ? sigma / cal.ph : sigma) / s;
-          const accuracy = doc.bitDepth === 8 ? 0.002 : 0.0002;
-          return {
-            apron: { x: IJFilters.gaussianApron(sx, accuracy, doc.bitDepth), y: IJFilters.gaussianApron(sy, accuracy, doc.bitDepth) },
-            region: (full, r) => IJFilters.gaussian(full, sx, sy, { accuracy, region: { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h } })
-          };
-        }
-      },
-      rank: {
-        scalable: true,
-        prepare(doc, c, p, o) {
-          const IJFilters = dep('IJFilters');
-          const type = String(p.type || '').toLowerCase();
-          if (!['median', 'mean', 'min', 'max'].includes(type)) throw ijError('IJ_BAD_ARGS', 'rank type');
-          const s = (o && o.scale) || 1;
-          const radius = needNumber(p.radius, 'radius') / s;
-          if (!(radius >= 0)) throw ijError('IJ_BAD_ARGS', 'radius');
-          return {
-            apron: { x: IJFilters.rankApron(radius), y: IJFilters.rankApron(radius) },
-            region: (full, r) => IJFilters.rank(full, radius, type, { region: { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h } })
-          };
-        }
-      },
-      binary: {
-        prepare(doc, c, p) {
-          if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'binary operations need an 8-bit mask');
-          const IJBinary = dep('IJBinary');
-          const op = p.op;
-          if (!['erode', 'dilate', 'open', 'close', 'fillHoles', 'outline'].includes(op)) throw ijError('IJ_BAD_ARGS', 'binary op');
-          const o = { iterations: p.iterations > 0 ? Math.floor(p.iterations) : 1, count: p.count > 0 ? Math.floor(p.count) : 1 };
-          // Rows a result pixel depends on: erode/dilate 1 per iteration, open/close
-          // twice that, outline 1. fillHoles is a global flood fill: one whole band.
-          const reach = op === 'fillHoles' ? 0 : (op === 'open' || op === 'close' ? 2 * o.iterations : (op === 'outline' ? 1 : o.iterations));
-          return { whole: op === 'fillHoles', apron: { x: reach, y: reach }, fn: (src) => IJBinary[op](src, o) };
-        }
-      },
-      flipH: { whole: true, prepare() { return { whole: true, apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').flipH(src) }; } },
-      flipV: { whole: true, prepare() { return { whole: true, apron: { x: 0, y: 0 }, fn: (src) => dep('IJOps').flipV(src) }; } }
-    };
-
     // One channel through one pixel operation, in bands. Returns the new array.
     //   old     the channel as it is
     //   reg     bounds {x,y,w,h} of what may change
     //   mask    mask box or null; outside = modify the pixels NOT in the mask
     //   prog    (fraction in this channel) → overall fraction callback
-    async function pixelPass(task, W, H, bd, old, prep, mask, reg, outside, prog, stepKey) {
+    // `gate` ({ lo, hi }, optional) is told which share of the channel the current band is, so the
+    // `ctx.tick(f)` a whole-image op calls inside its fn / region maps into the right part of the bar.
+    async function pixelPass(task, W, H, bd, old, prep, mask, reg, outside, prog, stepKey, gate) {
       const out = old.slice();
       const ax = prep.apron ? prep.apron.x : 0, ay = prep.apron ? prep.apron.y : 0;
       const full = prep.region ? chImg(W, H, bd, old) : null;
@@ -1081,10 +1333,11 @@ const IJEngine = (() => {
       while (y < yEnd) {
         const t0 = now();
         const y1 = Math.min(yEnd, y + rows);
+        if (gate) { gate.lo = (y - reg.y) / reg.h; gate.hi = (y1 - reg.y) / reg.h; }
         let res, rx, ry, rw;
         if (prep.region) {
           const rect = { x: reg.x, y, w: reg.w, h: y1 - y };
-          const r = prep.region(full, rect);
+          const r = await prep.region(full, rect);
           rx = reg.x; ry = y; rw = rect.w;
           res = unwrap(r, rect.w * rect.h);
         } else {
@@ -1092,7 +1345,7 @@ const IJEngine = (() => {
           const sy = Math.max(0, y - ay), sy1 = Math.min(H, y1 + ay);
           const sw = sx1 - sx, sh = sy1 - sy;
           const src = chImg(sw, sh, bd, copyRect(old, W, sx, sy, sw, sh));
-          res = unwrap(prep.fn(src), sw * sh);
+          res = unwrap(await prep.fn(src), sw * sh);
           rx = sx; ry = sy; rw = sw;
         }
         for (let yy = y; yy < y1; yy++) {
@@ -1122,9 +1375,23 @@ const IJEngine = (() => {
     }
 
     // ---- run: operations that edit the document ---------------------------------------
+    //
+    // kind 'pixel'  one array per channel replaced, undo = patches (cropped to the selection) or the old array
+    // kind 'size'   the document gets new arrays / shape / channel list; undo = the whole previous state
+    // kind 'newdoc' new documents appear (not journaled: each registers its own baseline)
+    // kind 'compute' read-only (doc.compute)
 
-    const SIZE_OPS = ['crop', 'rotate90', 'convert'];
-    const NEWDOC_OPS = ['toMask', 'cropToNew'];
+    function specOf(op, kinds) {
+      const reg = ROOT.IJOpRegistry;
+      const spec = reg && typeof op === 'string' ? reg.get(op) : null;
+      if (!spec) throw ijError('IJ_UNKNOWN_OP', 'unknown operation');
+      if (kinds && !kinds.includes(spec.kind)) throw ijError('IJ_BAD_ARGS', 'operation kind');
+      return spec;
+    }
+
+    function checkBitDepth(spec, doc) {
+      if (!spec.bitDepths.includes(doc.bitDepth)) throw ijError('IJ_BAD_TYPE', 'this operation does not support ' + doc.bitDepth + '-bit images');
+    }
 
     function channelList(doc, channel) {
       if (channel === 'all' || channel == null) return doc.channels.map((c, i) => i);
@@ -1132,29 +1399,42 @@ const IJEngine = (() => {
       return [channel];
     }
 
-    // Fill in what an op reads from state that is not journaled (display ranges), so
-    // replaying the entry gives the same pixels.
-    function resolveParams(doc, op, params, chans) {
-      const p = Object.assign({}, params || {});
-      if (op === 'applyLut') {
-        p.ranges = Object.assign({}, p.ranges);
-        for (const c of chans) {
-          if (!p.ranges[c]) {
-            const d = doc.channels[c].display;
-            p.ranges[c] = { min: p.min != null ? p.min : d.min, max: p.max != null ? p.max : d.max };
-          }
-        }
-      } else if (op === 'convert') {
-        p.ranges = Object.assign({}, p.ranges);
-        doc.channels.forEach((ch, c) => {
-          if (!p.ranges[c]) p.ranges[c] = { min: ch.display.min, max: ch.display.max };
-        });
-      }
-      return p;
+    function pixelChannels(doc, spec, channel) {
+      if (spec.channels === 'all') return doc.channels.map((c, i) => i);
+      if (spec.channels === 'one') { const c = isInt(channel) ? channel : doc.active; getChannel(doc, c); return [c]; }
+      return channelList(doc, channel);
+    }
+
+    // What validate / scratchBytes are told: the primary document's shape, the region a pixel op touches
+    // and `docs` = the shape of the other documents the request names (Image Calculator, Merge, Coloc).
+    function infoFor(doc, chans, reg, others, roi) {
+      return {
+        width: doc.width, height: doc.height, bitDepth: doc.bitDepth, channels: chans.length, region: reg || null, roi: roi || null,
+        docs: (others || []).map((d) => ({ width: d.width, height: d.height, bitDepth: d.bitDepth, channels: d.channels.length }))
+      };
+    }
+
+    // The scratch an op declares, 0 when it declares none. Pixel op: bytes BESIDE the new arrays and the undo
+    // patch the engine already counts. Size / newdoc / compute op: the op's whole peak, its output included.
+    function scratchOf(spec, info, params) {
+      return spec.scratchBytes ? Math.max(0, Number(spec.scratchBytes(info, params)) || 0) : 0;
+    }
+
+    // Validate + resolve the params of a request. `resolve` copies the state that is not journaled
+    // (display range, threshold) into the params BEFORE the entry is journaled, so a replay gives
+    // the same pixels.
+    // A replayed entry already holds its resolved params, and the state `resolve` reads (display range,
+    // threshold) is not the state of the moment the entry was written: resolve is NOT called on a replay
+    // (it must still be idempotent — fill what is missing — because a page may send resolved params).
+    function resolvedParams(doc, spec, args, chans, replay, others) {
+      let params = Object.assign({}, args.params || {});
+      if (spec.validate) spec.validate(params, infoFor(doc, chans, null, others));
+      if (spec.resolve && !replay) { const r = spec.resolve(makeView(doc), params, chans); if (r) params = r; }
+      return params;
     }
 
     function newRecord(doc, op) {
-      return { op, at: Date.now(), replayable: true, bytes: 0, patches: null, full: null, display: null };
+      return { op, at: Date.now(), replayable: true, bytes: 0, patches: null, full: null, display: null, calOnly: false };
     }
 
     // Push the undo record of a committed change; the redo stack is dead.
@@ -1165,47 +1445,232 @@ const IJEngine = (() => {
       doc.redo.length = 0;
     }
 
+    // Everything a size-kind step changes (arrays are kept by reference).
     function fullState(doc) {
       return {
         width: doc.width, height: doc.height, bitDepth: doc.bitDepth, calibration: plainClone(doc.calibration),
-        channels: doc.channels.map((c) => ({ data: c.data, display: Object.assign({}, c.display) }))
+        name: doc.name, provenance: plainClone(doc.provenance), mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
+        channels: doc.channels.map((c) => ({ data: c.data, display: Object.assign({}, c.display), name: c.name, color: c.color }))
       };
     }
 
-    async function executeRun(doc, args, task, replay) {
-      const op = args.op;
-      const roi = args.roi || null;
+    // After the channel list changed: visibility, the active channel and the mode follow the channels
+    // BY NAME (an Arrange moves a channel, its visibility moves with it). `old` is the previous list,
+    // `vis` / `act` the previous values. A channel the previous list did not have (an undo brings a
+    // dropped one back) takes what `rec` — the state being restored — says about it, else it is shown.
+    function remapDisplay(doc, old, vis, act, rec) {
+      const n = doc.channels.length;
+      const used = new Set();
+      const from = doc.channels.map((c) => {
+        for (let j = 0; j < old.length; j++) if (!used.has(j) && old[j].name === c.name) { used.add(j); return j; }
+        return -1;
+      });
+      const recIndex = (name) => (rec && Array.isArray(rec.channels) ? rec.channels.findIndex((c) => c.name === name) : -1);
+      doc.visible = from.map((j, i) => {
+        if (j >= 0 && vis[j] !== undefined) return !!vis[j];
+        const k = recIndex(doc.channels[i].name);
+        return k >= 0 && rec.visible && rec.visible[k] !== undefined ? !!rec.visible[k] : true;
+      });
+      let a = from.indexOf(act);
+      if (a < 0 && rec && Number.isInteger(rec.active) && rec.channels && rec.channels[rec.active]) a = doc.channels.findIndex((c) => c.name === rec.channels[rec.active].name);
+      doc.active = a >= 0 ? a : Math.max(0, Math.min(n - 1, act | 0));
+      if (n === 1) doc.mode = 'gray';
+      else if (doc.mode === 'gray' && old.length === 1) doc.mode = 'composite';
+    }
+
+    function checkOutput(r, what) {
+      if (!r || !isInt(r.width) || r.width < 1 || !isInt(r.height) || r.height < 1 || ![8, 16, 32].includes(r.bitDepth) ||
+        !Array.isArray(r.channels) || !r.channels.length) throw ijError('IJ_BAD_RESULT', 'result of ' + what);
+      const Ctor = ctorFor(r.bitDepth);
+      for (const c of r.channels) {
+        if (!c || !ArrayBuffer.isView(c.data) || c.data.constructor.name !== Ctor.name || c.data.length !== r.width * r.height) throw ijError('IJ_BAD_RESULT', 'channel of ' + what);
+      }
+    }
+
+    // Test aid (engine option verifyInputs): an op must never write into the arrays it reads. The engine
+    // hashes them before the op and compares afterwards; a changed array is an IJ_INTERNAL failure.
+    const verifyInputs = opts.verifyInputs === true;
+    function hashArray(a) {
+      const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      let h = 0x811c9dc5;
+      for (let i = 0; i < u.length; i++) { h ^= u[i]; h = Math.imul(h, 16777619) >>> 0; }
+      return h;
+    }
+    function guardInputs(list, what) {
+      if (!verifyInputs) return () => {};
+      const arrays = [];
+      for (const d of list) for (const c of d.channels) arrays.push(c.data);
+      const before = arrays.map(hashArray);
+      return () => {
+        for (let i = 0; i < arrays.length; i++) {
+          if (hashArray(arrays[i]) !== before[i]) throw ijError('IJ_INTERNAL', (what || 'operation') + ' wrote into an input array');
+        }
+      };
+    }
+
+    // The `io` an operation receives (PLAN-wave2 §2.1). `docList[0]` is the primary document; the
+    // others were named in the request (`docIds`) and are locked with it.
+    // `o.scratch` = what the op declared (scratchBytes): reserved HERE, before `run`, so a step that does
+    // not fit is refused (IJ_OVER_BUDGET) without ever starting and two concurrent steps on two documents
+    // see each other's peak. `io.reserve(n)` counts against that declaration first (declaring AND
+    // reserving the same bytes is safe); only what exceeds it is reserved on top. `done()` gives it all back.
+    function makeIo(task, docList, o) {
+      const ids = new Set(docList.map((d) => d.id));
+      const primary = docList[0];
+      const declared = Math.max(0, (o && o.scratch) || 0);
+      if (declared) { ensureRoom(declared); transientBytes += declared; }
+      let held = declared, used = 0;
+      return {
+        channel: o && o.channel !== undefined ? o.channel : null,
+        region: (o && o.region) || null,
+        docIds: docList.map((d) => d.id),
+        tick: (f, stepKey, detail) => task.tick(f, stepKey, detail),
+        check: () => task.check(),
+        reserve(bytes) {
+          if (!(bytes >= 0)) throw ijError('IJ_BAD_ARGS', 'reserve');
+          const need = used + bytes;
+          if (need > held) { const extra = need - held; ensureRoom(extra); transientBytes += extra; held = need; }
+          used = need;
+        },
+        release(bytes) {
+          used = Math.max(0, used - Math.max(0, bytes || 0));
+          const keep = Math.max(declared, used);
+          if (keep < held) { transientBytes -= held - keep; held = keep; }
+        },
+        dep,
+        channelImage: (c) => channelImage(primary, c),
+        readDoc(id) {
+          if (!ids.has(id)) throw ijError('IJ_BAD_ARGS', 'document not listed in docIds');
+          const d = docs.get(id);
+          if (!d) throw ijError('IJ_NO_DOC', 'no such document');
+          return makeView(d);
+        },
+        range: (c) => rangeOf(primary, c),
+        roiMask: (roi) => roiMask(roi, primary.width, primary.height),
+        transfer: (buf) => { if (o && o.transfer) o.transfer.push(buf); },
+        done() { if (held) { transientBytes -= held; held = 0; used = 0; } }
+      };
+    }
+
+    // What a pixel op touches: the channels, the selection as the op sees it, the region that may change.
+    function planPixel(doc, spec, args) {
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
-      if (NEWDOC_OPS.includes(op)) return runNewDoc(doc, args, task, replay);
-      if (SIZE_OPS.includes(op)) return runSize(doc, args, task, replay);
-      const spec = PIXEL_OPS[op];
-      if (!spec) throw ijError('IJ_UNKNOWN_OP', 'unknown operation');
-      const chans = channelList(doc, args.channel);
-      const params = resolveParams(doc, op, args.params, chans);
-      let mask = roiMask(roi, W, H);
+      checkBitDepth(spec, doc);
+      const chans = pixelChannels(doc, spec, args.channel);
+      let mask = roiMask(args.roi || null, W, H);
       if (spec.needsRoi && !mask) throw ijError('IJ_NEEDS_ROI', 'this operation needs an area selection');
+      if (spec.roi === 'ignore') mask = null;
+      const passMask = spec.roi === 'bounds' ? null : mask;
       const outside = !!spec.outside;
       const reg = outside ? { x: 0, y: 0, w: W, h: H } : boundsOf(mask, W, H);
       const fullReg = reg.x === 0 && reg.y === 0 && reg.w === W && reg.h === H;
       const chBytes = W * H * (bd / 8);
       const patchBytes = fullReg ? 0 : reg.w * reg.h * (bd / 8);
-      const preps = chans.map((c) => spec.prepare(doc, c, params, null));
-      const need = chans.length * (chBytes + patchBytes);
+      return { chans, mask, passMask, outside, reg, fullReg, chBytes, patchBytes };
+    }
+
+    // Bytes of one run: the new arrays, the patch copy of an undo step on a partial region, and
+    // what the algorithm allocates besides (scratchBytes). `oneChannel` = what a run needs when
+    // each channel is committed as soon as it is computed (noUndo).
+    function pixelNeed(doc, spec, plan, params) {
+      const scratch = spec.scratchBytes ? Math.max(0, Number(spec.scratchBytes(infoFor(doc, plan.chans, plan.reg), params)) || 0) : 0;
+      return {
+        need: plan.chans.length * (plan.chBytes + plan.patchBytes) + scratch,
+        oneChannel: plan.chBytes + plan.patchBytes + scratch
+      };
+    }
+
+    async function executeRun(doc, args, task, replay, extraDocs) {
+      const spec = specOf(args.op);
+      if (spec.kind === 'compute') throw ijError('IJ_BAD_ARGS', 'a compute operation runs through doc.compute');
+      // An entry written under another version of the operation cannot be replayed faithfully.
+      if (replay && (args.version || 1) !== spec.version) throw ijError('IJ_VERSION_MISMATCH', 'operation version changed');
+      // Selection masks follow ImageJ's PolygonFiller since 1.1.0 (`maskRule: 2` on the entry); a journal entry written
+      // before that replays a polygon / freehand / wide-line selection with the fill rule it was recorded with.
+      if (replay && args.roi && args.maskRule !== 2) args = Object.assign({}, args, { roi: Object.assign({}, args.roi, { fillRule: 1 }) });
+      if (spec.kind === 'newdoc') return runNewDoc(doc, spec, args, task, extraDocs || []);
+      if (spec.kind === 'size') return runSize(doc, spec, args, task, replay);
+      return runPixel(doc, spec, args, task, replay);
+    }
+
+    async function runPixel(doc, spec, args, task, replay) {
+      const op = args.op;
+      const roi = args.roi || null;
+      const W = doc.width, H = doc.height, bd = doc.bitDepth;
+      const plan = planPixel(doc, spec, args);
+      const { chans, passMask, outside, reg, fullReg } = plan;
+      const params = resolvedParams(doc, spec, args, chans, replay);
+      const view = makeView(doc);
+      // ctx.check() / ctx.tick(f, stepKey?) are for a whole-image op: f in [0,1] is the progress of the
+      // fn / region call in progress; the engine maps it into the band and the channel and yields.
+      const gates = chans.map(() => ({ lo: 0, hi: 1 }));
+      const preps = chans.map((c, i) => {
+        const gate = gates[i], base = i / chans.length, span = 1 / chans.length;
+        return spec.prepare(view, c, params, {
+          scale: 1, range: (cc) => rangeOf(doc, cc), dep,
+          check: () => task.check(),
+          tick: (f, key) => task.tick(base + span * (gate.lo + (gate.hi - gate.lo) * Math.min(1, Math.max(0, Number(f) || 0))), key || ('op.' + op))
+        });
+      });
+      const noUndo = !!args.noUndo;
+      const n = pixelNeed(doc, spec, plan, params);
+      const need = noUndo ? n.oneChannel : n.need;
       ensureRoom(need);
       // Reserved while the operation runs, so an operation on another document sees the
       // headroom this one is about to take; released at commit (the new arrays are counted then).
       transientBytes += need;
       const outs = [];
+      let swapped = false;
+      const swappedChans = [];
+      const guard = guardInputs([doc], op);
+      const swapChannel = (c, out) => {
+        const ch = doc.channels[c];
+        ch.data = out;
+        // A step that resets the display range (resetMinAndMax) keeps the channel's lookup table and its
+        // inverted flag: only min and max come from the new data.
+        if (spec.display) {
+          const d = defaultDisplay(ch, bd), old = ch.display || {};
+          ch.display = { min: d.min, max: d.max, lut: old.lut != null ? old.lut : d.lut, invert: old.invert != null ? !!old.invert : d.invert };
+        }
+      };
       try {
         for (let i = 0; i < chans.length; i++) {
           const base = i / chans.length, span = 1 / chans.length;
-          const out = await pixelPass(task, W, H, bd, doc.channels[chans[i]].data, preps[i], mask, reg, outside,
-            (f) => base + span * f, 'op.' + op);
-          outs.push(out);
+          const out = await pixelPass(task, W, H, bd, doc.channels[chans[i]].data, preps[i], passMask, reg, outside,
+            (f) => base + span * f, 'op.' + op, gates[i]);
+          if (noUndo) {
+            // No undo step: each channel replaces its old array at once, which is what lets the
+            // step fit. A cancel after the first one leaves the channels already processed changed.
+            task.check();
+            if (!swapped) { swapped = true; doc.undo.length = 0; doc.redo.length = 0; }
+            swapChannel(chans[i], out);
+            swappedChans.push(chans[i]);
+          } else outs.push(out);
         }
+        guard();
         task.check();
+      } catch (err) {
+        if (swapped) {
+          doc.rev++; purgeTiles(doc.id); noteCommit(doc, null); if (storageOn) snapshotNow(doc);
+          // The channels already swapped changed for good and the undo history is gone: the page is told
+          // (an invalidate now, the document's info with the error) instead of keeping the old pixels.
+          post({ event: 'invalidate', docId: doc.id, channels: swappedChans.slice(), sizeChanged: false });
+          err.details = Object.assign({}, err.details, { info: infoOf(doc), changed: { channels: swappedChans.slice(), sizeChanged: false } });
+        }
+        throw err;
       } finally { transientBytes -= need; }
       // Commit (synchronous: nothing can interleave from here on).
+      // The channel a replay must see: a `one`-channel op journals the channel it ran on (the active one
+      // may differ at replay time), the others what the request said ('all' when it said nothing).
+      const entry = { kind: 'run', op, version: spec.version, params, roi,
+        channel: spec.channels === 'one' ? chans[0] : (args.channel == null ? 'all' : args.channel) };
+      if (noUndo) {
+        entry.noUndo = true;
+        doc.rev++;
+        purgeTiles(doc.id);
+        if (!replay) { noteCommit(doc, entry); if (storageOn) snapshotNow(doc); } else doc.journalSeq++;
+        return { changed: { channels: chans, sizeChanged: false }, newDocIds: [] };
+      }
       const rec = newRecord(doc, op);
       rec.patches = chans.map((c) => ({
         c, rect: Object.assign({}, reg),
@@ -1215,136 +1680,104 @@ const IJEngine = (() => {
         rec.display = {};
         for (const c of chans) rec.display[c] = Object.assign({}, doc.channels[c].display);
       }
-      chans.forEach((c, i) => {
-        const ch = doc.channels[c];
-        ch.data = outs[i];
-        if (spec.display) ch.display = defaultDisplay(ch, bd);
-      });
+      chans.forEach((c, i) => swapChannel(c, outs[i]));
       pushUndo(doc, rec);
       doc.rev++;
       purgeTiles(doc.id);
-      if (!replay) noteCommit(doc, { kind: 'run', op, params, roi, channel: args.channel == null ? 'all' : args.channel });
+      if (!replay) noteCommit(doc, entry);
       else doc.journalSeq++;
       return { changed: { channels: chans, sizeChanged: false }, newDocIds: [] };
     }
 
-    async function runSize(doc, args, task, replay) {
+    async function runSize(doc, spec, args, task, replay) {
       const op = args.op;
+      checkBitDepth(spec, doc);
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
-      const IJOps = dep('IJOps');
       const all = doc.channels.map((c, i) => i);
-      const params = resolveParams(doc, op, args.params, all);
-      let newW = W, newH = H, newBd = bd;
-      let cropBox = null;
-      if (op === 'crop') {
-        cropBox = cropRect(doc, params, args.roi);
-        newW = cropBox.w; newH = cropBox.h;
-      } else if (op === 'rotate90') {
-        newW = H; newH = W;
-      } else if (op === 'convert') {
-        newBd = params.bitDepth;
-        if (![8, 16, 32].includes(newBd)) throw ijError('IJ_BAD_ARGS', 'bitDepth');
-        if (newBd === bd) return { changed: { channels: [], sizeChanged: false }, newDocIds: [], noop: true };
-      }
-      const need = all.length * newW * newH * (newBd / 8);
-      ensureRoom(need);
-      transientBytes += need;
-      const outs = [];
-      try {
-        for (let i = 0; i < all.length; i++) {
-          const ch = doc.channels[i];
-          let data;
-          if (op === 'crop') {
-            data = copyRect(ch.data, W, cropBox.x, cropBox.y, cropBox.w, cropBox.h);
-          } else if (op === 'rotate90') {
-            data = unwrap(IJOps.rotate90(chImg(W, H, bd, ch.data), params.dir), W * H);
-          } else {
-            const r = params.ranges[i];
-            data = unwrap(IJOps.convert(chImg(W, H, bd, ch.data), newBd, { min: r.min, max: r.max, scale: params.scale !== false }), W * H);
-          }
-          outs.push(data);
-          await task.tick((i + 1) / all.length, 'op.' + op);
-        }
-        task.check();
-      } finally { transientBytes -= need; }
+      const params = resolvedParams(doc, spec, args, all, replay);
+      const io = makeIo(task, [doc], { channel: args.channel, scratch: scratchOf(spec, infoFor(doc, all, null, [], args.roi), params) });
+      let res;
+      const guard = guardInputs([doc]);
+      try { res = await spec.run(makeView(doc), params, args.roi || null, io); } finally { io.done(); }
+      guard();
+      task.check();
+      if (!res) return { changed: { channels: [], sizeChanged: false }, newDocIds: [], noop: true };
+      checkOutput(res, op);
+      const old = doc.channels;
+      const oldVisible = doc.visible.slice(), oldActive = doc.active;
+      // Same shape and the very same arrays: only metadata (calibration, names) changed — the page
+      // keeps its selection and its view.
+      const calOnly = res.width === W && res.height === H && res.bitDepth === bd && res.channels.length === old.length &&
+        res.channels.every((c, i) => c.data === old[i].data);
       const rec = newRecord(doc, op);
       rec.full = fullState(doc);
+      rec.calOnly = calOnly;
+      // Undo gives the old name back only when THIS step renamed the document (a later Rename is not undoable).
+      rec.nameChanged = res.name !== undefined && String(res.name) !== doc.name;
       pushUndo(doc, rec);
-      doc.width = newW; doc.height = newH; doc.bitDepth = newBd;
-      if (op === 'rotate90' && doc.calibration) {
-        const cal = Object.assign({}, doc.calibration);
-        const t = cal.pixelWidth; cal.pixelWidth = cal.pixelHeight; cal.pixelHeight = t;
-        doc.calibration = cal;
-      }
-      if (op === 'crop') {
-        const pv = Object.assign({}, doc.provenance);
-        const o = pv.cropOrigin || { x: 0, y: 0 };
-        pv.cropOrigin = { x: o.x + cropBox.x, y: o.y + cropBox.y };
-        doc.provenance = pv;
-      }
-      doc.channels.forEach((ch, i) => {
-        ch.data = outs[i];
-        if (op === 'convert') ch.display = defaultDisplay(ch, newBd);
+      doc.width = res.width; doc.height = res.height; doc.bitDepth = res.bitDepth;
+      if (res.calibration !== undefined) doc.calibration = plainClone(res.calibration);
+      if (res.name !== undefined) doc.name = String(res.name);
+      if (res.provenance !== undefined) doc.provenance = plainClone(res.provenance);
+      // A result channel that omits name / colour / display keeps those of the old channel holding the very
+      // same array (an Arrange moves arrays), else of the old channel at its index. A display is only kept
+      // while the bit depth is unchanged (B&C of a 16-bit range means nothing on 8 bits).
+      const oldByData = new Map(old.map((c) => [c.data, c]));
+      doc.channels = res.channels.map((c, i) => {
+        const prev = oldByData.get(c.data) || old[i];
+        const ch = { name: c.name !== undefined ? c.name : ((prev && prev.name) || ''), color: c.color !== undefined ? c.color : ((prev && prev.color) || '#ffffff'), data: c.data };
+        if (c.display) ch.display = Object.assign({}, c.display);
+        else if (prev && oldByData.get(c.data) === prev && res.bitDepth === bd) ch.display = Object.assign({}, prev.display);
+        else ch.display = defaultDisplay(ch, res.bitDepth);
+        return ch;
       });
+      remapDisplay(doc, old, oldVisible, oldActive);
+      if (Array.isArray(res.visible) && res.visible.length === doc.channels.length) doc.visible = res.visible.map(Boolean);
+      if (isInt(res.active) && res.active >= 0 && res.active < doc.channels.length) doc.active = res.active;
       doc.rev++;
+      doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
-      if (!replay) noteCommit(doc, { kind: 'run', op, params, roi: args.roi || null, channel: 'all' });
+      // The journal records what `io.channel` was live, so a replay hands the op the same one.
+      if (!replay) noteCommit(doc, { kind: 'run', op, version: spec.version, params, roi: args.roi || null, channel: args.channel === undefined ? null : args.channel });
       else doc.journalSeq++;
-      return { changed: { channels: all, sizeChanged: true }, newDocIds: [] };
+      const changed = calOnly
+        ? { channels: [], sizeChanged: false, calibration: true }
+        : { channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: res.width === W && res.height === H && res.bitDepth === bd && res.channels.every((c) => oldByData.has(c.data)) };
+      return { changed, newDocIds: [] };
     }
 
-    function cropRect(doc, params, roi) {
-      let r;
-      if (params && params.w > 0 && params.h > 0) r = { x: params.x | 0, y: params.y | 0, w: params.w | 0, h: params.h | 0 };
-      else if (roi) {
-        const IJRoi = dep('IJRoi');
-        IJRoi.validate(roi);
-        r = IJRoi.bounds(roi);
-      } else throw ijError('IJ_NEEDS_ROI', 'crop needs a rectangle');
-      const x0 = Math.max(0, Math.floor(r.x)), y0 = Math.max(0, Math.floor(r.y));
-      const x1 = Math.min(doc.width, Math.ceil(r.x + r.w)), y1 = Math.min(doc.height, Math.ceil(r.y + r.h));
-      if (!(x1 > x0) || !(y1 > y0)) throw ijError('IJ_EMPTY_ROI', 'the selection is outside the image');
-      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-    }
-
-    async function runNewDoc(doc, args, task, replay) {
-      const op = args.op;
-      const W = doc.width, H = doc.height, bd = doc.bitDepth;
-      let channels, name, nbd = bd, nw, nh, provenance = Object.assign({}, doc.provenance);
-      if (op === 'toMask') {
-        const c = isInt(args.channel) ? args.channel : (doc.active || 0);
-        const p = args.params || {};
-        needNumber(p.lower, 'lower'); needNumber(p.upper, 'upper');
-        ensureRoom(W * H);
-        const mask = dep('IJThreshold').toMask(channelImage(doc, c), p.lower, p.upper);
-        channels = [makeChannel(doc.channels[c].name, '#ffffff', unwrap(mask, W * H), 8)];
-        nbd = 8; nw = W; nh = H; name = doc.name.replace(/\.[A-Za-z0-9]+$/, '') + '-mask';
-      } else {
-        const box = cropRect(doc, args.params, args.roi);
-        const sel = (args.params && Array.isArray(args.params.channels)) ? args.params.channels : doc.channels.map((c, i) => i);
-        ensureRoom(sel.length * box.w * box.h * (bd / 8));
-        channels = sel.map((c) => {
-          const src = getChannel(doc, c);
-          return makeChannel(src.name, src.color, copyRect(src.data, W, box.x, box.y, box.w, box.h), bd, src.display);
-        });
-        nw = box.w; nh = box.h; name = (args.params && args.params.name) || (doc.name + '-crop');
-        const o = provenance.cropOrigin || { x: 0, y: 0 };
-        provenance.cropOrigin = { x: o.x + box.x, y: o.y + box.y };
-      }
+    async function runNewDoc(doc, spec, args, task, extraDocs) {
+      checkBitDepth(spec, doc);
+      const all = doc.channels.map((c, i) => i);
+      const params = resolvedParams(doc, spec, args, all, false, extraDocs);
+      const list = [doc].concat(extraDocs);
+      const io = makeIo(task, list, { channel: args.channel, scratch: scratchOf(spec, infoFor(doc, all, null, extraDocs, args.roi), params) });
+      let res;
+      const guard = guardInputs(list);
+      try { res = await spec.run(makeView(doc), params, args.roi || null, io); } finally { io.done(); }
+      guard();
       task.check();
-      const nd = buildDoc({
-        id: newId(), sessionKey: doc.sessionKey, name, width: nw, height: nh, bitDepth: nbd, channels,
-        calibration: plainClone(doc.calibration), provenance
-      });
-      registerDoc(nd, { baseline: true });
-      return { changed: { channels: [], sizeChanged: false }, newDocIds: [nd.id], newInfos: [infoOf(nd)] };
+      if (!Array.isArray(res) || !res.length) throw ijError('IJ_BAD_RESULT', 'result of ' + args.op);
+      for (const r of res) checkOutput(r, args.op);
+      const created = [];
+      for (const r of res) {
+        const channels = r.channels.map((c) => makeChannel(c.name, c.color, c.data, r.bitDepth, c.display));
+        const nd = buildDoc({
+          id: newId(), sessionKey: doc.sessionKey, name: r.name || (doc.name + '-1'), width: r.width, height: r.height, bitDepth: r.bitDepth, channels,
+          calibration: plainClone(r.calibration !== undefined ? r.calibration : doc.calibration),
+          provenance: r.provenance !== undefined ? plainClone(r.provenance) : Object.assign({}, doc.provenance)
+        });
+        registerDoc(nd, { baseline: true });
+        created.push(nd);
+      }
+      return { changed: { channels: [], sizeChanged: false }, newDocIds: created.map((d) => d.id), newInfos: created.map(infoOf) };
     }
 
     // ---- undo / redo / revert ------------------------------------------------------------
 
     // Apply a record to the document and return the inverse record (swap semantics).
     function swapRecord(doc, rec) {
-      const inv = { op: rec.op, at: Date.now(), replayable: rec.replayable, patches: null, full: null, display: null, bytes: 0 };
+      const inv = { op: rec.op, at: Date.now(), replayable: rec.replayable, patches: null, full: null, display: null, bytes: 0, calOnly: !!rec.calOnly };
       if (rec.patches) {
         const W = doc.width, H = doc.height;
         inv.patches = [];
@@ -1372,9 +1805,27 @@ const IJEngine = (() => {
       } else {
         inv.full = fullState(doc);
         const f = rec.full;
+        const old = doc.channels;
+        const oldVisible = doc.visible.slice(), oldActive = doc.active;
+        const bdBefore = doc.bitDepth;
         doc.width = f.width; doc.height = f.height; doc.bitDepth = f.bitDepth;
         doc.calibration = f.calibration;
-        doc.channels.forEach((ch, i) => { ch.data = f.channels[i].data; ch.display = Object.assign({}, f.channels[i].display); });
+        // A Rename is not an undo step: the name comes back only when the step itself renamed the document.
+        if (f.name !== undefined && rec.nameChanged) { doc.name = f.name; inv.nameChanged = true; }
+        if (f.provenance !== undefined) doc.provenance = f.provenance;
+        // The channel list is REBUILT: a step may have dropped, added or reordered channels. A channel whose
+        // array is one the document holds now keeps its CURRENT display (a Set Scale undone must not undo the
+        // brightness the operator set since); the arrays an undo brings back carry the display they had.
+        const curByData = new Map(old.map((c) => [c.data, c]));
+        doc.channels = f.channels.map((c, i) => {
+          const cur = curByData.get(c.data);
+          return {
+            name: c.name !== undefined ? c.name : ((old[i] && old[i].name) || ''),
+            color: c.color !== undefined ? c.color : ((old[i] && old[i].color) || '#ffffff'),
+            data: c.data, display: Object.assign({}, cur && f.bitDepth === bdBefore ? cur.display : c.display)
+          };
+        });
+        remapDisplay(doc, old, oldVisible, oldActive, f);
       }
       inv.bytes = recBytes(inv);
       return inv;
@@ -1389,10 +1840,22 @@ const IJEngine = (() => {
       return n;
     }
 
+    // Every channel of `now` holds an array that `before` also held: the channels were only reordered or dropped.
+    function sameArrays(before, now) {
+      if (!Array.isArray(before)) return false;
+      const set = new Set(before.map((c) => c.data));
+      return now.every((c) => set.has(c.data));
+    }
+
     function changedOf(rec, beforeSize, doc) {
-      const sizeChanged = !!rec.full;
-      const channels = sizeChanged ? doc.channels.map((c, i) => i) : rec.patches.map((p) => p.c);
-      return { channels, sizeChanged };
+      if (rec.full) {
+        if (rec.calOnly) return { channels: [], sizeChanged: false, calibration: true };
+        // `sameGeometry`: the width, height and bit depth did not move and every array is one the document already held (an Arrange reordered the channels): the page
+        // refreshes its channel layout but keeps the selection and the view.
+        const f = beforeSize && beforeSize.full;
+        return { channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: !!(f && f.width === doc.width && f.height === doc.height && f.bitDepth === doc.bitDepth && sameArrays(f.channels, doc.channels)) };
+      }
+      return { channels: rec.patches.map((p) => p.c), sizeChanged: false };
     }
 
     async function doUndoRedo(doc, which, replay) {
@@ -1405,8 +1868,9 @@ const IJEngine = (() => {
       const inv = swapRecord(doc, top);
       to.push(inv);
       doc.rev++;
+      if (top.full) doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
-      const changed = changedOf(top, null, doc);
+      const changed = changedOf(top, inv, doc);
       if (replay) { doc.journalSeq++; return changed; }
       if (top.replayable && storageOn && doc.protected) noteCommit(doc, { kind: which });
       else {
@@ -1434,25 +1898,28 @@ const IJEngine = (() => {
       const bytes = b.rec ? b.arrays.reduce((n, a) => n + a.byteLength, 0) : 0;
       ensureRoom(bytes);
       const cal = b.rec ? plainClone(b.rec.calibration) : plainClone(doc.baselineCal);
+      const metaOf = (i) => (b.rec ? { name: b.rec.channels[i].name, color: b.rec.channels[i].color } : (doc.baselineMeta && doc.baselineMeta[i]) || {});
       const synthetic = {
         op: 'revert', replayable: false,
         full: {
           width: b.width, height: b.height, bitDepth: b.bitDepth, calibration: cal,
-          channels: b.arrays.map((a, i) => ({
+          provenance: b.rec ? plainClone(b.rec.provenance) : plainClone(doc.baselineProvenance),
+          channels: b.arrays.map((a, i) => Object.assign({
             data: a,
             display: b.rec ? Object.assign({}, b.rec.channels[i].display) : Object.assign({}, doc.baselineDisplays[i])
-          }))
+          }, metaOf(i)))
         }
       };
-      if (!b.rec && b.arrays.every((a, i) => a === doc.channels[i].data)) {
+      if (!b.rec && b.arrays.length === doc.channels.length && b.arrays.every((a, i) => a === doc.channels[i].data)) {
         return { changed: { channels: [], sizeChanged: false }, noop: true };
       }
       const inv = swapRecord(doc, synthetic);
       inv.replayable = false;
-      for (const a of b.arrays) doc.baselineSet.add(a);
+      b.arrays.forEach((a, i) => doc.baselineIndex.set(a, i));
       doc.undo.push(inv);
       doc.redo.length = 0;
       doc.rev++;
+      doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
       noteCommit(doc, null);
       if (storageOn) snapshotNow(doc);
@@ -1485,69 +1952,142 @@ const IJEngine = (() => {
 
     // ---- statistics ------------------------------------------------------------------------------
 
-    function lineStats(doc, c, roi) {
+    // owner: P6 (wave 2) — measureRow, particleImageStats and the doc.stats / doc.particles /
+    // doc.profile handlers are the measurement code; no other package edits this file. The maths is in
+    // ij-proc-roi.js (IJRoiTools, Analyzer.saveResults / measureLength / measurePoint / measureAngle of ImageJ 1.54p);
+    // when that package did not load, the basic statistics of the pixels below are still answered.
+    const BASE_KEYS = ['area', 'mean', 'stdDev', 'mode', 'min', 'max', 'xCentroid', 'yCentroid', 'xCenterOfMass', 'yCenterOfMass',
+      'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis'];
+
+    // The pixels a measurement reads: the image itself or the "Redirect to" image (same size, ImageJ: "Redirect image
+    // is not the same size as the current image").
+    function measureSource(doc, c, redirect) {
+      if (!redirect || redirect.docId === undefined || redirect.docId === null) return { img: channelImage(doc, c), doc };
+      const src = getDoc(redirect.docId);
+      if (src.width !== doc.width || src.height !== doc.height) throw ijError('IJ_ROI_REDIRECT_SIZE', 'redirect image size');
+      const rc = isInt(redirect.channel) ? redirect.channel : 0;
+      return { img: channelImage(src, rc), doc: src };
+    }
+    function finiteNum(v) { return typeof v === 'number' && isFinite(v); }
+
+    // → [row]; one row, except a multi-point selection (one row per point). `keys` are the short keys of IJRoiTools.
+    function measureRows(doc, c, roi, keys, opts) {
       const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
-      const cal = calOf(doc);
-      const prof = IJOps.profile(channelImage(doc, c), roi, roi.width > 0 ? roi.width : 1);
-      const v = prof.values;
-      const n = v.length;
-      let sum = 0, min = Infinity, max = -Infinity;
-      for (let i = 0; i < n; i++) { sum += v[i]; if (v[i] < min) min = v[i]; if (v[i] > max) max = v[i]; }
-      const mean = n ? sum / n : NaN;
-      let ss = 0;
-      for (let i = 0; i < n; i++) ss += (v[i] - mean) * (v[i] - mean);
-      const sorted = Array.from(v).sort((a, b) => a - b);
-      const median = n ? (n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2) : NaN;
-      const dx = (roi.x2 - roi.x1) * cal.pw, dy = (roi.y2 - roi.y1) * cal.ph;
-      const length = Math.sqrt(dx * dx + dy * dy);
-      return {
-        n, mean, min, max, median, stdDev: n > 1 ? Math.sqrt(ss / (n - 1)) : 0,
-        length, angle: IJRoi.lineAngle(roi), area: length * (roi.width > 0 ? roi.width : 1) * cal.pw, intDen: sum
-      };
+      const o = opts || {};
+      const want = Array.isArray(keys) && keys.length ? keys : BASE_KEYS;
+      const src = measureSource(doc, c, o.redirect);
+      const T = ROOT.IJRoiTools;
+      if (roi) IJRoi.validate(roi);
+      if (!T) {
+        const cl = calOf(doc);
+        if (roi && (roi.type === 'line' || roi.type === 'polyline')) {
+          const len = IJRoi.lineLength(roi, doc.calibration);
+          return [roi.type === 'line' ? { length: len, angle: IJRoi.lineAngle(roi) } : { length: len }];
+        }
+        if (roi && roi.type === 'point') {
+          // the basic row: the pixel under the first point, X / Y = the point as drawn (pixel centre) in calibrated units
+          const x = Math.floor(roi.points[0][0]), y = Math.floor(roi.points[0][1]);
+          if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) throw ijError('IJ_EMPTY_ROI', 'point outside the image');
+          const v = src.img.data[y * doc.width + x], px = roi.points[0][0] * cl.pw, py = roi.points[0][1] * cl.ph;
+          return [{ n: 1, mean: v, min: v, max: v, median: v, mode: v, stdDev: 0, area: 0, intDen: 0, rawIntDen: v, xCentroid: px, yCentroid: py, xCenterOfMass: px, yCenterOfMass: py }];
+        }
+        if (roi && !IJRoi.isArea(roi)) throw ijError('IJ_MODULE_MISSING', 'module IJRoiTools is not loaded');
+        const mask = roiMask(roi, doc.width, doc.height);
+        const row = Object.assign({}, IJOps.statistics(src.img, mask, { calibration: doc.calibration }));
+        const b = boundsOf(mask, doc.width, doc.height);
+        row.bx = b.x * cl.pw; row.by = b.y * cl.ph; row.bw = b.w * cl.pw; row.bh = b.h * cl.ph;
+        if (roi && IJRoi.isArea(roi)) row.perim = IJRoi.perimeter(roi) * cl.pw;
+        if (Array.isArray(keys) && keys.length) { const out = {}; for (const k of keys) if (k in row) out[k] = row[k]; return [out]; }
+        return [row];
+      }
+      const thr = o.thr && finiteNum(o.thr.lower) && finiteNum(o.thr.upper) ? { lower: o.thr.lower, upper: o.thr.upper } : null;
+      // ImageJ Analyzer.getRedirectStats: "ImageStatistics stats = redirectImp.getStatistics(...)" with redirectImp's
+      // calibration (and its threshold, which the page sends): the measured image brings its own.
+      const a = { img: src.img, roi: roi || null, cal: src.doc.calibration, keys: want, thr, limit: !!o.limit };
+      if (roi && roi.type === 'point') return T.measurePoints(a);
+      if (roi && roi.type === 'angle') return [T.measureAngle(a)];
+      if (roi && (roi.type === 'line' || roi.type === 'polyline')) return [T.measureLine(a)];
+      return [T.measureArea(a)];
     }
 
-    function measureRow(doc, c, roi, keys) {
+    // The document a "Redirect to" names, or null; it must be locked together with the measured one.
+    function redirectDoc(redirect, doc) {
+      if (!redirect || redirect.docId === undefined || redirect.docId === null) return null;
+      const src = getDoc(redirect.docId);
+      if (src.width !== doc.width || src.height !== doc.height) throw ijError('IJ_ROI_REDIRECT_SIZE', 'redirect image size');
+      return src;
+    }
+
+    function measureRow(doc, c, roi, keys, opts) { return measureRows(doc, c, roi, keys, opts)[0]; }
+
+    // Image measurements of one particle: the Set Measurements columns (Mean, Min, Max, IntDen...)
+    // of the analysed channel over the particle's own outline, which is a traced polygon
+    // (ImageJ perimeter rules). The particle's own area / perimeter / circularity are kept.
+    const PARTICLE_OWN = new Set(['area', 'perimeter', 'circularity', 'n', 'xCentroid', 'yCentroid']);
+    // Without "Include holes" ImageJ measures only the particle's own pixels: the filled
+    // outline limited to the foreground (ParticleAnalyzer measures with the threshold as a
+    // LIMIT), so a hole inside the outline never enters Mean / Min / IntDen.
+    // owner: P6 (wave 2)
+    function particleImageStats(doc, c, outline, includeHoles, keys, redirect) {
       const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
-      const cal = calOf(doc);
-      let row;
-      if (roi && roi.type === 'line') {
-        row = lineStats(doc, c, roi);
-        row.bx = Math.min(roi.x1, roi.x2) * cal.pw; row.by = Math.min(roi.y1, roi.y2) * cal.ph;
-        row.bw = Math.abs(roi.x2 - roi.x1) * cal.pw; row.bh = Math.abs(roi.y2 - roi.y1) * cal.ph;
-      } else if (roi && roi.type === 'point') {
-        IJRoi.validate(roi);
-        const pts = roi.points;
-        const x = Math.floor(pts[0][0]), y = Math.floor(pts[0][1]);
-        if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) throw ijError('IJ_EMPTY_ROI', 'point outside the image');
-        const v = doc.channels[c].data[y * doc.width + x];
-        // ImageJ prints a point's X / Y: the Centroid and Center of Mass columns of its row.
-        const px = pts[0][0] * cal.pw, py = pts[0][1] * cal.ph;
-        row = {
-          n: 1, mean: v, min: v, max: v, median: v, mode: v, stdDev: 0, area: 0, intDen: 0, rawIntDen: v,
-          x: px, y: py, xCentroid: px, yCentroid: py, xCenterOfMass: px, yCenterOfMass: py
-        };
-      } else {
-        const mask = roiMask(roi, doc.width, doc.height);
-        row = Object.assign({}, IJOps.statistics(channelImage(doc, c), mask, { calibration: doc.calibration }));
-        const b = boundsOf(mask, doc.width, doc.height);
-        row.bx = b.x * cal.pw; row.by = b.y * cal.ph; row.bw = b.w * cal.pw; row.bh = b.h * cal.ph;
-        if (roi && IJRoi.isArea(roi)) row.perim = IJRoi.perimeter(roi) * cal.pw;
-      }
-      if (Array.isArray(keys) && keys.length) {
-        const out = {};
-        for (const k of keys) if (k in row) out[k] = row[k];
+      const roi = { type: 'polygon', points: outline, traced: true };
+      const T = ROOT.IJRoiTools;
+      const out = {};
+      if (redirect && T) {
+        // ParticleAnalyzer: "ImageProcessor ip2 = redirectIP!=null?redirectIP:ip;" and "redirectImp.getCalibration()": the
+        // particle's pixels are measured in the redirect image; without "Include holes" the particle's own mask (the
+        // analysed image's foreground inside the outline) decides which pixels count, not a value range of the redirect.
+        let r2 = roi;
+        if (!includeHoles) {
+          const m = IJRoi.mask(roi, doc.width, doc.height);
+          if (m && m.data && m.w > 0 && m.h > 0) {
+            const sub = new Uint8Array(m.w * m.h), own = doc.channels[c].data;
+            for (let yy = 0; yy < m.h; yy++) for (let xx = 0; xx < m.w; xx++) {
+              const k = yy * m.w + xx;
+              if (m.data[k] && own[(m.y + yy) * doc.width + m.x + xx] !== 0) sub[k] = 1;
+            }
+            r2 = { type: 'mask', x: m.x, y: m.y, w: m.w, h: m.h, rle: Uint32Array.from(IJRoi.rleEncode(sub)) };
+          }
+        }
+        const row = T.measureArea({ img: redirect.img, roi: r2, cal: redirect.doc.calibration, keys: Array.isArray(keys) && keys.length ? keys.filter((k) => !PARTICLE_OWN.has(k)) : BASE_KEYS.filter((k) => !PARTICLE_OWN.has(k)), thr: null, limit: false });
+        for (const k of Object.keys(row)) out[k] = row[k];
         return out;
       }
-      return row;
+      if (T && Array.isArray(keys) && keys.length) {
+        // the columns Set Measurements ticked, computed as Analyze > Measure computes them on the particle's outline
+        const row = T.measureArea({ img: channelImage(doc, c), roi, cal: doc.calibration, keys: keys.filter((k) => !PARTICLE_OWN.has(k)),
+          thr: includeHoles ? null : { lower: 1, upper: 255 }, limit: !includeHoles });
+        for (const k of Object.keys(row)) out[k] = row[k];
+        return out;
+      }
+      const box = IJRoi.mask(roi, doc.width, doc.height);
+      if (!includeHoles && box && box.data) {
+        const src = doc.channels[c].data, w = doc.width;
+        for (let yy = 0; yy < box.h; yy++) {
+          for (let xx = 0; xx < box.w; xx++) {
+            const k = yy * box.w + xx;
+            if (box.data[k] && src[(box.y + yy) * w + box.x + xx] === 0) box.data[k] = 0;
+          }
+        }
+      }
+      const st = IJOps.statistics(channelImage(doc, c), box, { calibration: doc.calibration });
+      for (const k of Object.keys(st)) if (!PARTICLE_OWN.has(k)) out[k] = st[k];
+      return out;
     }
 
     // ---- commands ----------------------------------------------------------------------------------
 
-    function lockDoc(doc, fn) {
-      const p = doc.chain.then(fn);
-      doc.chain = p.then(() => undefined, () => undefined);
+    // One promise chain per document. `fn` starts once every named document's chain has settled and
+    // every one of them queues behind it (append-only chains cannot deadlock, whatever the order the
+    // callers name their documents in). Inside `fn` the caller re-reads each id from `docs`: a
+    // doc.close queued earlier may have removed it (IJ_NO_DOC).
+    function lockDocs(list, fn) {
+      const p = Promise.all(list.map((d) => d.chain)).then(fn);
+      const settled = p.then(() => undefined, () => undefined);
+      for (const d of list) d.chain = settled;
       return p;
     }
+    function lockDoc(doc, fn) { return lockDocs([doc], fn); }
 
     function finishMutation() { emitBudget(); }
 
@@ -1686,7 +2226,7 @@ const IJEngine = (() => {
       if (pr && !docs.has(a.docId)) { projects.delete(a.docId); finishMutation(); return {}; }
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
-        const clean = doc.savedRev === doc.rev;
+        const clean = doc.savedRev === doc.rev && !doc.held;
         const s = sessions.get(doc.sessionKey);
         let ok = true;
         if (storageOn && (clean || a.discard)) {
@@ -1741,17 +2281,80 @@ const IJEngine = (() => {
 
     handlers['doc.run'] = (a, ctx) => {
       const doc = getDoc(a.docId);
-      return lockDoc(doc, async () => {
+      const extraIds = Array.isArray(a.docIds) ? a.docIds.filter((id) => id !== a.docId) : [];
+      const extra = extraIds.map(getDoc);
+      return lockDocs([doc].concat(extra), async () => {
         ctx.task.check();
-        const before = doc.rev;
-        const r = await executeRun(doc, a, ctx.task, false);
-        if (r.newDocIds && r.newDocIds.length) { finishMutation(); return { rev: doc.rev, info: infoOf(doc), changed: r.changed, newDocIds: r.newDocIds, newInfos: r.newInfos }; }
-        if (doc.rev !== before) {
-          post({ event: 'invalidate', docId: doc.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged });
+        // A queued doc.close may have removed one of them while this request waited.
+        const live = getDoc(a.docId);
+        const others = extraIds.map(getDoc);
+        const before = live.rev;
+        const r = await executeRun(live, a, ctx.task, false, others);
+        if (r.newDocIds && r.newDocIds.length) { finishMutation(); return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: r.newDocIds, newInfos: r.newInfos }; }
+        if (live.rev !== before) {
+          post({ event: 'invalidate', docId: live.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged, sameGeometry: !!r.changed.sameGeometry, calibration: !!r.changed.calibration });
         }
         finishMutation();
-        return { rev: doc.rev, info: infoOf(doc), changed: r.changed, newDocIds: [] };
+        return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: [] };
       });
+    };
+
+    // doc.compute { docId, docIds?, op, params, roi, channel, region? } → the op's JSON-able result.
+    // Locks every named document, so it runs after any operation already accepted for them.
+    handlers['doc.compute'] = (a, ctx) => {
+      const spec = specOf(a.op, ['compute']);
+      const ids = [a.docId].concat(Array.isArray(a.docIds) ? a.docIds : []).filter((v, i, arr) => arr.indexOf(v) === i);
+      const list = ids.map(getDoc);
+      return lockDocs(list, async () => {
+        const live = ids.map(getDoc);
+        const doc = live[0];
+        ctx.task.check();
+        checkBitDepth(spec, doc);
+        const chans = isInt(a.channel) ? [a.channel] : [];
+        const others = live.slice(1);
+        const params = resolvedParams(doc, spec, { params: a.params }, chans, false, others);
+        const io = makeIo(ctx.task, live, { channel: a.channel, region: a.region, transfer: ctx.transfer,
+          scratch: scratchOf(spec, infoFor(doc, doc.channels.map((c, i) => i), null, others, a.roi), params) });
+        const guard = guardInputs(live, a.op);
+        let out;
+        try { out = await spec.run(makeView(doc), params, a.roi || null, io); } finally { io.done(); }
+        guard();
+        return out;
+      });
+    };
+
+    // doc.estimate { docId, op, params, roi?, channel? } → { needBytes, fits, fitsWithoutUndo, usedBytes, budgetBytes }.
+    // A size / newdoc / compute op reports what its scratchBytes says (which includes its output).
+    handlers['doc.estimate'] = (a) => {
+      const doc = getDoc(a.docId);
+      const spec = specOf(a.op);
+      checkBitDepth(spec, doc);
+      let need, one;
+      if (spec.kind === 'pixel') {
+        const plan = planPixel(doc, spec, a);
+        const params = resolvedParams(doc, spec, a, plan.chans);
+        const n = pixelNeed(doc, spec, plan, params);
+        need = n.need; one = n.oneChannel;
+      } else {
+        const others = (Array.isArray(a.docIds) ? a.docIds : []).filter((id) => id !== a.docId).map(getDoc);
+        const all = doc.channels.map((c, i) => i);
+        const params = resolvedParams(doc, spec, a, all, false, others);
+        need = scratchOf(spec, infoFor(doc, all, null, others, a.roi), params);
+        one = need;
+      }
+      return { needBytes: need, fits: couldFit(need), fitsWithoutUndo: couldFit(one), usedBytes: usedBytes(), budgetBytes };
+    };
+
+    // Renaming is not an edit: no undo step, no journal entry; the name travels with the next snapshot and the meta.
+    handlers['doc.rename'] = (a) => {
+      const doc = getDoc(a.docId);
+      const name = typeof a.name === 'string' ? a.name.trim() : '';
+      if (!name) throw ijError('IJ_BAD_ARGS', 'name');
+      doc.name = name;
+      doc.dirty = true;
+      markMeta(doc);
+      scheduleIdle();
+      return { info: infoOf(doc) };
     };
 
     handlers['doc.duplicate'] = (a) => {
@@ -1790,7 +2393,7 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const changed = await doUndoRedo(doc, 'undo', false);
-        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged });
+        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed };
       });
@@ -1800,7 +2403,7 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const changed = await doUndoRedo(doc, 'redo', false);
-        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged });
+        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed };
       });
@@ -1821,12 +2424,28 @@ const IJEngine = (() => {
     // read that overtook it would answer from the pixels it is about to replace. Display reads
     // (doc.tile, doc.pixel, doc.preview) stay outside the queue on purpose: they must answer
     // between two slices of a running operation, and 'invalidate' tells the page to redraw.
+    // owner: P6 (wave 2)
+    // doc.stats { docId, roi, channel, measurements: [short key], redirect?: { docId, channel }, threshold?: { lower, upper },
+    //   limit? } → { row, rows } (rows = one per point of a multi-point selection)
     handlers['doc.stats'] = (a) => {
       const doc = getDoc(a.docId);
-      return lockDoc(doc, async () => {
+      const red = redirectDoc(a.redirect, doc);
+      return lockDocs(red && red !== doc ? [doc, red] : [doc], async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
         getChannel(doc, c);
-        return { row: measureRow(doc, c, a.roi || null, a.measurements) };
+        // memory: the selection's mask, the threshold-limited mask and the ellipse / hull buffers are box-sized byte
+        // arrays (+ the traced vertices of a mask) — declared against the budget before they exist
+        let need = 65536;
+        if (a.roi && a.roi.type !== 'point' && a.roi.type !== 'angle') {
+          const b = dep('IJRoi').bounds(a.roi);
+          need += Math.min(Math.max(0, b.w), doc.width) * Math.min(Math.max(0, b.h), doc.height) * 4;
+        } else if (!a.roi) need += doc.width * doc.height * 3;
+        ensureRoomNoEvict(need);
+        transientBytes += need;
+        try {
+          const rows = measureRows(doc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit });
+          return { row: rows[0], rows };
+        } finally { transientBytes -= need; }
       });
     };
 
@@ -1842,15 +2461,32 @@ const IJEngine = (() => {
       });
     };
 
+    // owner: P6 (wave 2)
+    // doc.profile { docId, line, channel } → { values, stepUm }: a straight line (any width) or a segmented line
+    // (ProfilePlot.getProfile). The step is ImageJ's xInc: the pixel width, or the calibrated over the pixel length of a
+    // straight line when the pixels are not square.
     handlers['doc.profile'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
         const line = a.line;
-        if (!line || line.type !== 'line') throw ijError('IJ_BAD_ROI', 'a straight line is needed');
+        if (!line || (line.type !== 'line' && line.type !== 'polyline')) throw ijError('IJ_BAD_ROI', 'a line selection is needed');
+        dep('IJRoi').validate(line);
+        const T = ROOT.IJRoiTools;
         const cal = calOf(doc);
-        const prof = dep('IJOps').profile(channelImage(doc, c), line, line.width > 0 ? line.width : 1);
-        return { values: prof.values, stepUm: prof.step * (cal.pw + cal.ph) / 2 };
+        if (!T) {
+          // package P6 not loaded: the straight line of width W as the core samples it
+          if (line.type !== 'line') throw ijError('IJ_MODULE_MISSING', 'module IJRoiTools is not loaded');
+          const prof = dep('IJOps').profile(channelImage(doc, c), line, line.width > 0 ? line.width : 1);
+          return { values: prof.values, stepUm: prof.step * (cal.pw + cal.ph) / 2 };
+        }
+        const values = T.profile(channelImage(doc, c), line);
+        let step = cal.pw;
+        if (line.type === 'line' && cal.pw !== cal.ph) {
+          const dx = line.x2 - line.x1, dy = line.y2 - line.y1, pixelLength = Math.sqrt(dx * dx + dy * dy);
+          if (pixelLength > 0) step = Math.sqrt((dx * cal.pw) ** 2 + (dy * cal.ph) ** 2) / pixelLength;
+        }
+        return { values, stepUm: step };
       });
     };
 
@@ -1869,35 +2505,13 @@ const IJEngine = (() => {
       });
     };
 
-    // Image measurements of one particle: the Set Measurements columns (Mean, Min, Max, IntDen...)
-    // of the analysed channel over the particle's own outline, which is a traced polygon
-    // (ImageJ perimeter rules). The particle's own area / perimeter / circularity are kept.
-    const PARTICLE_OWN = new Set(['area', 'perimeter', 'circularity', 'n', 'xCentroid', 'yCentroid']);
-    // Without "Include holes" ImageJ measures only the particle's own pixels: the filled
-    // outline limited to the foreground (ParticleAnalyzer measures with the threshold as a
-    // LIMIT), so a hole inside the outline never enters Mean / Min / IntDen.
-    function particleImageStats(doc, c, outline, includeHoles) {
-      const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
-      const box = IJRoi.mask({ type: 'polygon', points: outline, traced: true }, doc.width, doc.height);
-      if (!includeHoles && box && box.data) {
-        const src = doc.channels[c].data, w = doc.width;
-        for (let yy = 0; yy < box.h; yy++) {
-          for (let xx = 0; xx < box.w; xx++) {
-            const k = yy * box.w + xx;
-            if (box.data[k] && src[(box.y + yy) * w + box.x + xx] === 0) box.data[k] = 0;
-          }
-        }
-      }
-      const st = IJOps.statistics(channelImage(doc, c), box, { calibration: doc.calibration });
-      const out = {};
-      for (const k of Object.keys(st)) if (!PARTICLE_OWN.has(k)) out[k] = st[k];
-      return out;
-    }
-
+    // owner: P6 (wave 2)
     handlers['doc.particles'] = (a, ctx) => {
       const doc = getDoc(a.docId);
-      return lockDoc(doc, async () => {
+      const red = redirectDoc(a.redirect, doc);
+      return lockDocs(red && red !== doc ? [doc, red] : [doc], async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
+        const redirectSrc = a.redirect && a.redirect.docId !== undefined && a.redirect.docId !== null ? measureSource(doc, c, a.redirect) : null;
         if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'particle analysis needs an 8-bit mask');
         const o = Object.assign({}, a.opts || {});
         const cal = calOf(doc);
@@ -1919,7 +2533,7 @@ const IJEngine = (() => {
             n: i + 1, area: p.area, areaPx: p.areaPx, perimeter: p.perimeter, circularity: p.circularity,
             bx: p.bx, by: p.by, bw: p.bw, bh: p.bh, xCentroid: p.xCentroid, yCentroid: p.yCentroid
           };
-          if (measure && p.outline && p.outline.length >= 3) Object.assign(row, particleImageStats(doc, c, p.outline, !!o.includeHoles));
+          if (measure && p.outline && p.outline.length >= 3) Object.assign(row, particleImageStats(doc, c, p.outline, !!o.includeHoles, a.keys, redirectSrc));
           rows.push(row);
           if ((i & 63) === 63) await ctx.task.tick(0.1 + 0.9 * (i + 1) / r.particles.length, 'op.particles');
         }
@@ -2053,6 +2667,12 @@ const IJEngine = (() => {
       const datasetId = row.datasetId;
       const ids = [], warnings = [], registered = [];
       const dm = (row.meta && row.meta.display) || {};
+      // The meta is written whole (docs + display of every document the session knows): seed it with what
+      // is stored, so the first document restored does not wipe the display stamp of the ones still to come.
+      const s0 = sessionOf(a.key, datasetId);
+      const storedDocs = (row.meta && row.meta.docs) || {};
+      for (const id of Object.keys(dm)) if (!s0.display[id]) s0.display[id] = dm[id];
+      for (const id of Object.keys(storedDocs)) if (!s0.docs[id]) s0.docs[id] = storedDocs[id];
       try {
         for (const docId of docIds) {
           if (docs.has(docId)) { ids.push(docId); continue; }
@@ -2064,7 +2684,10 @@ const IJEngine = (() => {
           if (!src) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
           let missing = false;
           const arrays = src.channels.map((c, i) => {
-            const d = c.data || (base && base.channels[i] && base.channels[i].data);
+            // A channel that was the baseline's array points at it by baseIndex (never by its own
+            // index: a reorder keeps the arrays but moves them); old records carry no baseIndex.
+            const bi = c.baseIndex !== undefined && c.baseIndex !== null ? c.baseIndex : i;
+            const d = c.data || (base && base.channels[bi] && base.channels[bi].data);
             if (!d) missing = true;
             return d;
           });
@@ -2079,17 +2702,24 @@ const IJEngine = (() => {
             doc = buildDoc({
               id: docId, sessionKey: a.key, name: src.name, width: src.width, height: src.height, bitDepth: src.bitDepth,
               channels: chans, calibration: src.calibration, provenance: src.provenance, rev: src.rev,
-              savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0
+              savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0,
+              layoutRev: src.layoutRev || 0
             });
           } finally { transientBytes -= loadedBytes; }
           if (base) {
-            doc.baselineSet = new WeakSet(base.channels.map((c) => c.data));
+            doc.baselineIndex = new WeakMap();
+            base.channels.forEach((c, i) => doc.baselineIndex.set(c.data, i));
+            doc.baselineMeta = base.channels.map((c) => ({ name: c.name, color: c.color }));
+            doc.baselineProvenance = plainClone(base.provenance);
             doc.baselineShape = { w: base.width, h: base.height, bd: base.bitDepth };
             doc.baselineStored = true;
           }
           const entries = (rec.journal || []).filter((e) => e.seq > doc.journalSeq).sort((x, y) => x.seq - y.seq);
           const replayTask = makeTask(null);
-          for (const e of entries) {
+          let held = false;
+          replaying.add(doc);
+          try {
+          for (let e of entries) {
             // The journal is only a faithful history while it is contiguous: a hole means an
             // entry was never written, and what follows would be applied to the wrong state.
             if (e.seq !== doc.journalSeq + 1) {
@@ -2097,16 +2727,27 @@ const IJEngine = (() => {
               break;
             }
             try {
+              // A large selection was journaled once, under its hash.
+              if (e.roiRef) {
+                const body = rec.rois && rec.rois[e.roiRef];
+                if (!body) throw ijError('IJ_NO_ROI', 'stored selection missing');
+                e = Object.assign({}, e, { roi: body });
+              }
               if (e.kind === 'run') await executeRun(doc, e, replayTask, true);
               else if (e.kind === 'undo' || e.kind === 'redo') await doUndoRedo(doc, e.kind, true);
               doc.journalSeq = e.seq;
             } catch (err) {
               console.error('[IJEngine] journal replay stopped', err);
-              warnings.push({ docId, code: 'IJ_REPLAY_STOPPED', seq: e.seq });
+              // A stop another start could cure (a package that failed to load, an op whose version changed,
+              // too small a budget) HOLDS the stored session: nothing is written over its journal.
+              held = REPLAY_HOLD_CODES.has(err && err.code);
+              warnings.push({ docId, code: 'IJ_REPLAY_STOPPED', seq: e.seq, cause: String((err && err.code) || ''), held });
               break;
             }
           }
-          if (dm[docId]) {
+          } finally { replaying.delete(doc); }
+          // The display state of the session meta belongs to the channel layout it was stamped with.
+          if (dm[docId] && (dm[docId].sig === undefined || dm[docId].sig === channelSig(doc))) {
             const ds = dm[docId];
             if (ds.mode) doc.mode = ds.mode;
             if (isInt(ds.active)) doc.active = ds.active;
@@ -2114,23 +2755,27 @@ const IJEngine = (() => {
             if (Array.isArray(ds.channels)) ds.channels.forEach((d, i) => { if (doc.channels[i] && d) doc.channels[i].display = Object.assign({}, doc.channels[i].display, d); });
           }
           doc.snapshotRev = doc.rev;
-          if (!doc.baselineStored) writeBaseline(doc);
+          if (held) {
+            // Held: the stored baseline, snapshot and journal stay exactly as they are (a later start that
+            // can replay them restores everything); what the operator does meanwhile is unprotected, and
+            // the page says so.
+            doc.held = true; doc.protected = false; doc.dirty = false;
+            emitStorageError('IJ_REPLAY_HELD', docId);
+          } else if (!doc.baselineStored) writeBaseline(doc);
           docs.set(docId, doc);
           registered.push(docId);
-          const s = sessionOf(a.key, datasetId);
           activeSessionKey = a.key;
-          s.docs[docId] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
           ids.push(docId);
-          // A replay that stopped early leaves the document at an earlier state than the stored
-          // journal describes. The sequence number moves past every stored entry, so a later
-          // commit can never collide with one that was not applied; the next snapshot of the
-          // document (scheduled below) then replaces that journal with the state the operator
-          // was told about (the warning above).
-          if (warnings.some((w) => w.docId === docId && w.code === 'IJ_REPLAY_STOPPED') && entries.length) {
+          // A replay that stopped early (and cannot be retried) leaves the document at an earlier state than
+          // the stored journal describes. The sequence number moves past every stored entry, so a later
+          // commit can never collide with one that was not applied; the snapshot that follows (scheduled
+          // after the loop, once the warning is on its way to the page) replaces that journal with the state
+          // the operator was told about.
+          if (!held && warnings.some((w) => w.docId === docId && w.code === 'IJ_REPLAY_STOPPED') && entries.length) {
             doc.journalSeq = Math.max(doc.journalSeq, entries[entries.length - 1].seq);
           }
-          doc.dirty = entries.length > 0;
-          if (doc.dirty) scheduleIdle();
+          if (!held) doc.dirty = entries.length > 0;
+          markMeta(doc);
           post({ event: 'invalidate', docId, channels: doc.channels.map((c, i) => i), sizeChanged: true });
           await ctx.task.tick(ids.length / Math.max(1, docIds.length), 'session.restore');
         }
@@ -2139,6 +2784,9 @@ const IJEngine = (() => {
         for (const id of registered) { docs.delete(id); purgeTiles(id); }
         throw err;
       }
+      // The idle snapshot starts only now: a restore of several documents can outlast its 3 s, and the
+      // warning of a stopped replay must be on its way to the page before the snapshot replaces the journal.
+      if (registered.some((id) => docs.get(id) && docs.get(id).dirty)) scheduleIdle();
       finishMutation();
       return { docIds: ids, meta: (row.meta && row.meta.ui) || null, warnings };
     };
@@ -2165,29 +2813,56 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       latestPreview.set(doc.id, a.seq);
       const superseded = () => latestPreview.get(doc.id) !== a.seq;
-      const spec = PIXEL_OPS[a.op];
-      if (!spec || a.op === 'flipH' || a.op === 'flipV') throw ijError('IJ_PREVIEW_UNSUPPORTED', 'no preview for this operation');
+      const spec = ROOT.IJOpRegistry && typeof a.op === 'string' ? ROOT.IJOpRegistry.get(a.op) : null;
+      if (!spec || spec.kind !== 'pixel' || spec.preview === false) throw ijError('IJ_PREVIEW_UNSUPPORTED', 'no preview for this operation');
+      checkBitDepth(spec, doc);
+      const scalable = spec.preview === 'reduced';
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
       const vx0 = Math.max(0, Math.floor(a.x0)), vy0 = Math.max(0, Math.floor(a.y0));
       const vx1 = Math.min(W, Math.ceil(a.x1)), vy1 = Math.min(H, Math.ceil(a.y1));
       if (!(vx1 > vx0) || !(vy1 > vy0)) throw ijError('IJ_BAD_ARGS', 'region');
       let level = Math.max(0, a.level | 0);
-      if (!spec.scalable) level = 0;
-      const chans = channelList(doc, a.channel);
-      const params = resolveParams(doc, a.op, a.params, chans);
-      // Keep the working region within 6 Mpx at the level it is computed at.
-      while (level < 12 && ((vx1 - vx0) >> level) * ((vy1 - vy0) >> level) > 6e6) {
-        if (!spec.scalable) throw ijError('IJ_PREVIEW_TOO_LARGE', 'preview region too large');
+      if (!scalable) level = 0;
+      const chans = pixelChannels(doc, spec, a.channel);
+      const params = resolvedParams(doc, spec, a, chans);
+      const view = makeView(doc);
+      const gates = chans.map(() => ({ lo: 0, hi: 1 }));
+      const prepareAt = (lv) => chans.map((c, i) => spec.prepare(view, c, params, {
+        scale: 1 << lv, range: (cc) => rangeOf(doc, cc), dep,
+        check: () => ctx.task.check(),
+        tick: async (f, key) => {
+          if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded');
+          await ctx.task.tick((i + gates[i].lo + (gates[i].hi - gates[i].lo) * Math.min(1, Math.max(0, Number(f) || 0))) / chans.length, key || ('preview.' + a.op));
+        }
+      }));
+      // The lowest level whose visible region is ≤ 6 Mpx AND whose work window (the region plus the op's apron,
+      // which can be far larger than the view: Rotate's is the whole diagonal) is ≤ 12 Mpx. A scalable op
+      // climbs until both fit — zoomed in or not; a region op that does not fit asks the operator to zoom in.
+      let preps;
+      for (;;) {
+        const sc = 1 << level;
+        preps = prepareAt(level);
+        const visible = ((vx1 - vx0) >> level) * ((vy1 - vy0) >> level);
+        const lvl = levelDims(W, H, level);
+        let window = 0;
+        for (const prep of preps) {
+          const ax = prep.apron ? prep.apron.x : 0, ay = prep.apron ? prep.apron.y : 0;
+          const ww = Math.min(lvl.w, Math.ceil(vx1 / sc) + ax) - Math.max(0, Math.floor(vx0 / sc) - ax);
+          const wh = Math.min(lvl.h, Math.ceil(vy1 / sc) + ay) - Math.max(0, Math.floor(vy0 / sc) - ay);
+          window = Math.max(window, ww * wh);
+        }
+        if (visible <= 6e6 && window <= 12e6) break;
+        if (!scalable || level >= 12) throw ijError('IJ_PREVIEW_TOO_LARGE', 'preview region too large');
         level++;
       }
       const s = 1 << level;
-      const full0 = roiMask(a.roi || null, W, H);
+      const full0 = spec.roi === 'ignore' ? null : roiMask(a.roi || null, W, H);
       const result = { event: 'preview', seq: a.seq, docId: doc.id, level, channels: {}, bitDepth: bd };
       const transfer = [];
       let outBox = null;
       for (let i = 0; i < chans.length; i++) {
         const c = chans[i];
-        const prep = spec.prepare(doc, c, params, { scale: s });
+        const prep = preps[i];
         const ax = prep.apron ? prep.apron.x : 0, ay = prep.apron ? prep.apron.y : 0;
         // Work region at level coordinates, aligned to the 2^level grid so it matches the tiles.
         const lx0 = Math.floor(vx0 / s), ly0 = Math.floor(vy0 / s);
@@ -2230,7 +2905,7 @@ const IJEngine = (() => {
           } else mask = { x: 0, y: 0, w: 1, h: 1, data: new Uint8Array(1) };
         }
         const reg = { x: lx0 - wx0, y: ly0 - wy0, w: Math.min(lx1, wx1) - lx0, h: Math.min(ly1, wy1) - ly0 };
-        const pmask = mask;
+        const pmask = spec.roi === 'bounds' ? null : mask;
         let rreg = reg;
         if (mask && !spec.outside) {
           const x0 = Math.max(reg.x, mask.x), y0 = Math.max(reg.y, mask.y);
@@ -2240,7 +2915,7 @@ const IJEngine = (() => {
         let out = work;
         if (rreg) {
           const t = { tick: async (f, k) => { if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded'); await ctx.task.tick(f, k); }, check: () => ctx.task.check() };
-          out = await pixelPass(t, ww, wh, bd, work, prep, pmask, rreg, !!spec.outside, (f) => (i + f) / chans.length, 'preview.' + a.op);
+          out = await pixelPass(t, ww, wh, bd, work, prep, pmask, rreg, !!spec.outside, (f) => (i + f) / chans.length, 'preview.' + a.op, gates[i]);
         }
         if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded');
         const rect = { x: reg.x, y: reg.y, w: reg.w, h: reg.h };

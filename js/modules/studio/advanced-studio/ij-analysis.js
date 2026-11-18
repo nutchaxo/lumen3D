@@ -1108,9 +1108,77 @@
       return a[k];
     }
 
+    /* RankFilters.findNthLowestNumber (Hoare's find, contributed by Heinz Klar), verbatim. */
+    function findNth(buf, len, n) {
+      let l = 0, m = len - 1;
+      let med = buf[n];
+      while (l < m) {
+        let i = l, j = m;
+        do {
+          while (buf[i] < med) i++;
+          while (med < buf[j]) j--;
+          const dum = buf[j]; buf[j] = buf[i]; buf[i] = dum;
+          i++; j--;
+        } while (j >= n && i <= n);
+        if (j < n) l = i;
+        if (n < i) m = j;
+        med = buf[n];
+      }
+      return med;
+    }
+
+    /* The float median of ij.plugin.filter.RankFilters (filterType MEDIAN, isFloat), the NaN rule 2 of `rank`:
+     *     median = Float.isNaN(values[p]) ? Float.NaN : values[p];          // the first guess is the pixel itself
+     *     median = getNaNAwareMedian(cache, x, cachePointers, above, below, kNPoints, median);
+     * with getNaNAwareMedian: NaNs are not counted (kNPoints--), values above / below the guess are collected, and
+     *     if (kNPoints == 0) return NaN;  half = kNPoints/2;
+     *     if (nAbove>half) return findNthLowestNumber(above, nAbove, nAbove-half-1);
+     *     else if (nBelow>half) return findNthLowestNumber(below, nBelow, half);  else return guess;
+     * A NaN pixel keeps its NaN (every `v > NaN` / `v < NaN` is false, so both sides stay empty and the guess comes
+     * back); with an even number of numbers left the answer is a lower middle, an upper middle or the pixel's own
+     * value, whichever ImageJ's split gives. Without NaN the count is odd and the answer is the exact median. */
+    function medianIJ(src, w, h, k, reg, out, tick) {
+      const rw = reg.x1 - reg.x0, rh = reg.y1 - reg.y0;
+      const above = new Float32Array(k.nPixels), below = new Float32Array(k.nPixels);
+      const kR = k.kRadius, dxs = k.dxs;
+      for (let oy = 0; oy < rh; oy++) {
+        const y = reg.y0 + oy;
+        for (let ox = 0; ox < rw; ox++) {
+          const x = reg.x0 + ox;
+          const guess = src[y * w + x];
+          let kN = k.nPixels, nA = 0, nB = 0;
+          for (let r = 0; r <= 2 * kR; r++) {
+            const base = clamp(y + r - kR, 0, h - 1) * w;
+            const dx = dxs[r];
+            for (let xx = x - dx; xx <= x + dx; xx++) {
+              const v = src[base + (xx < 0 ? 0 : (xx > w - 1 ? w - 1 : xx))];
+              if (v !== v) kN--;
+              else if (v > guess) above[nA++] = v;
+              else if (v < guess) below[nB++] = v;
+            }
+          }
+          let res;
+          if (kN === 0) res = NaN;
+          else {
+            const half = kN >> 1;
+            if (nA > half) res = findNth(above, nA, nA - half - 1);
+            else if (nB > half) res = findNth(below, nB, half);
+            else res = guess;
+          }
+          out[oy * rw + ox] = res;
+        }
+        if (tick) tick(1);
+      }
+    }
+
     // Any bit depth; the only path for 32-bit data. NaN pixels are ignored
     // (all-NaN window → NaN), the median of an even count takes the upper middle.
-    function rankGeneric(src, w, h, type, k, reg, out, tick) {
+    // `nanRule` 2 (median only): medianIJ, ImageJ's own NaN handling; anything else is the rule every journal entry
+    // recorded before it replays with. Without NaN both rules give the same value; the sign of a zero may differ
+    // (medianIJ returns ImageJ's guess / partition order, this function sorts). No command passes rule 2 until the
+    // engine forwards `nanRule` under a bumped op version.
+    function rankGeneric(src, w, h, type, k, reg, out, tick, nanRule) {
+      if (type === 'median' && nanRule === 2) return medianIJ(src, w, h, k, reg, out, tick);
       const rw = reg.x1 - reg.x0, rh = reg.y1 - reg.y0;
       const buf = new Float64Array(k.nPixels);
       const kR = k.kRadius, dxs = k.dxs;
@@ -1180,6 +1248,75 @@
                 fine[add]++; coarse[add >> shift]++;
               }
             }
+          }
+        }
+        if (tick) tick(1);
+      }
+    }
+
+    /* 16-bit median: the same exact n-th smallest of the replicated window as medianHist, with three histogram levels
+     * (32 bins of 2^11 values, 1024 bins of 2^6, the 65536 values) instead of two (256 + 256). The search for the
+     * (target+1)-th element walks at most 32 + 32 + 64 bins instead of up to 256 + 256, for one more counter per update;
+     * a row ends by taking its last window out again (kN decrements) instead of clearing 67 000 counters. Window
+     * moves inside the image skip the edge clamps. A counter can reach the kernel size, which exceeds 65 535 from
+     * radius 145 on: all counters are Int32. */
+    function medianHist16(src, w, h, k, reg, out, tick) {
+      const rw = reg.x1 - reg.x0, rh = reg.y1 - reg.y0;
+      const fine = new Int32Array(65536), mid = new Int32Array(1024), top = new Int32Array(32);
+      const kR = k.kRadius, dxs = k.dxs, rows = 2 * kR + 1;
+      const target = (k.nPixels - 1) >> 1;
+      const base = new Int32Array(rows);
+      const wm = w - 1;
+      for (let oy = 0; oy < rh; oy++) {
+        const y = reg.y0 + oy;
+        for (let r = 0; r < rows; r++) {
+          base[r] = clamp(y + r - kR, 0, h - 1) * w;
+          const dx = dxs[r];
+          for (let xx = reg.x0 - dx; xx <= reg.x0 + dx; xx++) {
+            const v = src[base[r] + (xx < 0 ? 0 : (xx > wm ? wm : xx))];
+            fine[v]++; mid[v >> 6]++; top[v >> 11]++;
+          }
+        }
+        for (let ox = 0; ox < rw; ox++) {
+          const x = reg.x0 + ox;
+          let acc = 0, c = 0;
+          while (acc + top[c] <= target) { acc += top[c]; c++; }
+          c <<= 5;
+          while (acc + mid[c] <= target) { acc += mid[c]; c++; }
+          let v = c << 6;
+          while (acc + fine[v] <= target) { acc += fine[v]; v++; }
+          out[oy * rw + ox] = v;
+          if (ox + 1 < rw) {
+            if (x >= kR && x + kR + 1 <= wm) {
+              for (let r = 0; r < rows; r++) {
+                const dx = dxs[r], b0 = base[r] + x;
+                const rem = src[b0 - dx], add = src[b0 + dx + 1];
+                if (rem !== add) {
+                  fine[rem]--; mid[rem >> 6]--; top[rem >> 11]--;
+                  fine[add]++; mid[add >> 6]++; top[add >> 11]++;
+                }
+              }
+            } else {
+              for (let r = 0; r < rows; r++) {
+                const dx = dxs[r];
+                const a = x - dx, b = x + dx + 1;
+                const rem = src[base[r] + (a < 0 ? 0 : (a > wm ? wm : a))];
+                const add = src[base[r] + (b < 0 ? 0 : (b > wm ? wm : b))];
+                if (rem !== add) {
+                  fine[rem]--; mid[rem >> 6]--; top[rem >> 11]--;
+                  fine[add]++; mid[add >> 6]++; top[add >> 11]++;
+                }
+              }
+            }
+          }
+        }
+        // take the last window out: every counter is zero again for the next row
+        const xl = reg.x0 + rw - 1;
+        for (let r = 0; r < rows; r++) {
+          const dx = dxs[r];
+          for (let xx = xl - dx; xx <= xl + dx; xx++) {
+            const v = src[base[r] + (xx < 0 ? 0 : (xx > wm ? wm : xx))];
+            fine[v]--; mid[v >> 6]--; top[v >> 11]--;
           }
         }
         if (tick) tick(1);
@@ -1259,7 +1396,7 @@
     // out-of-image pixels are the nearest edge pixels. Median/min/max return
     // values present in the window, mean is rounded half up for 8/16 bits.
     // opts: region {x0,y0,x1,y1} (computed alone; result carries x0/y0),
-    // yieldEvery. 32-bit data takes the generic per-pixel path (NaN aware).
+    // yieldEvery, nanRule (2 = ImageJ's NaN-aware float median, see medianIJ). 32-bit data takes the generic per-pixel path (NaN aware).
     function rank(ch, radius, type, opts) {
       checkChannel(ch);
       opts = opts || {};
@@ -1271,8 +1408,8 @@
       const rw = reg.x1 - reg.x0, rh = reg.y1 - reg.y0;
       const out = typedFor(bd, rw * rh);
       const tick = makeTick(opts, rh);
-      if (bd === 32) rankGeneric(src, w, h, t, k, reg, out, tick);
-      else if (t === 'median') medianHist(src, w, h, bd, k, reg, out, tick);
+      if (bd === 32) rankGeneric(src, w, h, t, k, reg, out, tick, opts.nanRule);
+      else if (t === 'median') (bd === 16 ? medianHist16(src, w, h, k, reg, out, tick) : medianHist(src, w, h, bd, k, reg, out, tick));
       else if (t === 'mean') meanSliding(src, w, h, k, reg, out, tick);
       else extremeFilter(src, w, h, t === 'max', k, reg, out, tick);
       return { width: rw, height: rh, bitDepth: bd, data: out, x0: reg.x0, y0: reg.y0 };

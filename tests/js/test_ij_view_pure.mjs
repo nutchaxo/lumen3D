@@ -953,6 +953,111 @@ function makeGl() {
   const okBtn = byClass(shell.el, 'ij-btn--primary')[0];
   okBtn.fire('click');
   deq({ ...(await p3) }, { n: 1 });
+
+  // ── wave-0 dialog features (PLAN-wave2 §2.5): every field type, conditions, cross-field validate, derived fields, preview note, no backdrop ──
+  {
+    const notes = [], derived = [];
+    const byName = (root2, out = {}) => {
+      for (const c of root2.children) { if (['INPUT', 'SELECT', 'TEXTAREA'].includes(c.tagName) && c.name) (out[c.name] = out[c.name] || []).push(c); byName(c, out); }
+      return out;
+    };
+    const dlg = shell.windows.dialog({
+      title: 'All', nonModal: true,
+      fields: [
+        { type: 'number', id: 'px', label: 'Pixels', value: 10, min: 0 },
+        { type: 'number', id: 'um', label: 'Unit', value: 5, min: 0 },
+        { type: 'radio', id: 'mode', label: 'Mode', value: 'a', options: ['a', { value: 'b', label: 'B' }] },
+        { type: 'textarea', id: 'k', label: 'Kernel', value: '1 2', rows: 3, monospace: true },
+        { type: 'doc', id: 'd', label: 'Image', options: [{ value: 'i1', label: 'one' }, { value: 'i2', label: 'two' }], value: 'i1' },
+        { type: 'channel', id: 'c', label: 'Channel', docField: 'd', value: 0, options: [{ value: 0, label: '1' }],
+          optionsByDoc: { i1: [{ value: 0, label: '1' }], i2: [{ value: 0, label: '1' }, { value: 1, label: '2' }] } },
+        { type: 'check', id: 'on', label: 'On', value: true, enabledIf: (v) => v.mode === 'a', visibleIf: (v) => v.px > 0 },
+        { type: 'slider', id: 's', label: 'S', min: 0, max: 10, step: 1, value: 3 }
+      ],
+      validate: (v) => (v.um > 100 ? { um: 'err.badArgs' } : null),
+      onChange: (v, set, id) => { derived.push(id); if (id === 'px') set({ um: v.px / 2 }); },
+      preview: { onChange: (v, ctl) => { notes.push(v ? 'v' : 'null'); ctl.note(v ? 'zoom in to preview' : null); } }
+    });
+    const bd = byClass(shell.el, 'ij-dialog-backdrop')[0];
+    assert.equal(bd.style.pointerEvents, 'none', 'a dialog with a preview does not block the image behind it');
+    assert.ok(bd.classList.contains('ij-dialog-backdrop--clear'));
+    const els = byName(bd);
+    const radios = [];
+    const findRadios = (n) => { for (const c of n.children) { if (c.type === 'radio') radios.push(c); findRadios(c); } };
+    findRadios(bd);
+    const dbody = byClass(bd, 'ij-dialog-body')[0];
+    assert.equal(radios.length, 2); assert.deepEqual(radios.map((r) => r.value), ['a', 'b']);
+    assert.equal(els.k[0].tagName, 'TEXTAREA'); assert.equal(els.k[0].rows, 3);
+    assert.equal(els.c[0].children.length, 1, 'the channel field starts with the channels of its image');
+    els.d[0].value = 'i2'; dbody.fire('change');
+    assert.equal(els.c[0].children.length, 2, 'the channel field follows its document field');
+    els.c[0].value = '1';
+    // conditions
+    const rowOf = (inp) => inp.parentNode.parentNode;
+    radios[0].checked = false; radios[1].checked = true; dbody.fire('change');
+    assert.equal(els.on[0].disabled, true, 'enabledIf');
+    els.px[0].value = '0'; dbody.fire('input', { target: els.px[0] });
+    assert.equal(rowOf(els.on[0]).hidden, true, 'visibleIf');
+    els.px[0].value = '4'; dbody.fire('input', { target: els.px[0] });
+    assert.equal(rowOf(els.on[0]).hidden, false);
+    // derived field
+    assert.equal(els.um[0].value, '2', 'onChange(values, set, changedId) updates another field');
+    assert.equal(derived.includes('px'), true);
+    // cross-field validation blocks OK and says why
+    els.um[0].value = '500'; dbody.fire('input', { target: els.um[0] });
+    assert.ok(els.um[0].classList.contains('ij-invalid'));
+    const errEl = byClass(bd, 'ij-dialog-error')[0];
+    assert.equal(errEl.hidden, false); assert.equal(errEl.textContent, 'err.badArgs');
+    doc.fire('keydown', { key: 'Enter', target: els.um[0] });
+    assert.equal(shell.windows.hasModal(), true, 'still open');
+    els.um[0].value = '8'; dbody.fire('input', { target: els.um[0] });
+    assert.equal(errEl.hidden, true);
+    // the preview note
+    const pbx = Object.values(els).flat().find((i) => String(i.id).endsWith('-preview')) || byClass(bd, 'ij-field--preview')[0].children[0].children[0];
+    pbx.checked = true; pbx.fire('change');
+    const noteEl = byClass(bd, 'ij-dialog-note')[0];
+    assert.equal(noteEl.hidden, false); assert.equal(noteEl.textContent, 'zoom in to preview');
+    // keys pressed elsewhere on the page are not swallowed by a dialog that leaves the image usable
+    const outside = doc.fire('keydown', { key: 'm', target: doc.body });
+    assert.equal(outside.stopped, undefined, 'a key typed outside a non-modal dialog goes on to the image');
+    doc.fire('keydown', { key: 'Enter', target: els.um[0] });
+    const got = await dlg;
+    deq({ ...got }, { px: 4, um: 8, mode: 'b', k: '1 2', d: 'i2', c: 1, on: true, s: 3 });
+    assert.equal(notes[notes.length - 1], 'null', 'the preview is cleared on close');
+    // a refused spec rejects instead of silently dropping fields
+    await assert.rejects(shell.windows.dialog({ title: 'x', fields: [{ type: 'color', id: 'z', label: 'Z' }] }), (e) => e.code === 'IJ_BAD_DIALOG');
+    await assert.rejects(shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'z', value: 1 }] }), (e) => e.code === 'IJ_BAD_DIALOG');
+    assert.equal(shell.windows.hasModal(), false);
+
+    // Review fixes: onChange is not called while a field is invalid (a derived field would print NaN), a derived
+    // value that is not a finite number is ignored, and a doc field with no open image cannot be committed.
+    {
+      const calls = [];
+      const d2 = shell.windows.dialog({ title: 'Derived', fields: [
+        { type: 'number', id: 'w', label: 'W', value: 10, min: 1 },
+        { type: 'number', id: 'h', label: 'H', value: 20, min: 1 }],
+      onChange: (v, set) => { calls.push({ ...v }); set({ h: v.w === 7 ? NaN : v.w * 2 }); } });
+      const bd2 = byClass(shell.el, 'ij-dialog-backdrop')[0];
+      const e2 = byName(bd2);
+      const body2 = byClass(bd2, 'ij-dialog-body')[0];
+      e2.w[0].value = 'abc'; body2.fire('input', { target: e2.w[0] });
+      assert.equal(calls.length, 0, 'onChange does not run while a field is invalid');
+      assert.ok(e2.w[0].classList.contains('ij-invalid'));
+      e2.w[0].value = '4'; body2.fire('input', { target: e2.w[0] });
+      assert.equal(calls.length, 1); assert.equal(e2.h[0].value, '8');
+      e2.w[0].value = '7'; body2.fire('input', { target: e2.w[0] });
+      assert.equal(e2.h[0].value, '8', 'set({ h: NaN }) is ignored: the field never shows NaN');
+      doc.fire('keydown', { key: 'Escape', target: doc.body });
+      assert.equal(await d2, null);
+      const d3 = shell.windows.dialog({ title: 'No image', fields: [{ type: 'doc', id: 'd', label: 'Image', options: [{ value: '', label: 'no image', disabled: true }], value: '' }] });
+      const e3 = byName(byClass(shell.el, 'ij-dialog-backdrop')[0]);
+      doc.fire('keydown', { key: 'Enter', target: e3.d[0] });
+      assert.equal(shell.windows.hasModal(), true, 'OK is refused: the doc field has no image to answer with');
+      assert.ok(e3.d[0].classList.contains('ij-invalid'));
+      doc.fire('keydown', { key: 'Escape', target: doc.body });
+      assert.equal(await d3, null);
+    }
+  }
   // confirm (no platform Dialog in this sandbox -> own dialog)
   const pc = shell.windows.confirm({ title: 'Leave?', message: 'Unsaved', options: [{ id: 'save', label: 'Save' }, { id: 'discard', label: 'Discard', variant: 'danger' }], dismissId: 'cancel' });
   const cbtns = byClass(shell.el, 'ij-btn');
@@ -1030,3 +1135,18 @@ function makeGl() {
 }
 
 console.log('ij-view (pure helpers, IJDisplay on a fake WebGL2, IJShell + IJWindows on a fake DOM): OK');
+
+// ── dialog events: onChange exactly once per user change ──────────────────────
+{
+  const run = (el, seq) => { const memo = new Map(); let n = 0; for (const e of seq) if (P.dialogEventDecision(e, el, memo)) n++; return n; };
+  assert.equal(run({ tagName: 'INPUT', type: 'checkbox', value: 'on' }, ['input', 'change']), 1);
+  assert.equal(run({ tagName: 'INPUT', type: 'radio', value: 'a' }, ['input', 'change']), 1);
+  assert.equal(run({ tagName: 'SELECT', type: 'select-one', value: 'a' }, ['input', 'change']), 1);
+  const text = { tagName: 'INPUT', type: 'text', value: '' };
+  const memo = new Map(); let n = 0;
+  for (const [e, v] of [['input', '1'], ['input', '12'], ['change', '12']]) { text.value = v; if (P.dialogEventDecision(e, text, memo)) n++; }
+  assert.equal(n, 2);
+  text.value = '13';                                    // a commit with no preceding input (autofill)
+  assert.equal(P.dialogEventDecision('change', text, memo), true);
+  assert.equal(P.dialogEventDecision('change', text, memo), false);
+}

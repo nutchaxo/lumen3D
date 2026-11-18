@@ -120,6 +120,10 @@ def build(plugin_dir: Path, out_dir: Path, seed_hex: str | None) -> dict:
     problem = asset_lists_problem(meta, plugin_dir)
     if problem:
         raise SystemExit(f"ERROR: {problem} ({meta_path})")
+    # lang-parts/ is a development scaffold (per-package dictionaries merged into lang/ at integration):
+    # a release that still carries it would ship translations the plugin never reads.
+    if (plugin_dir / "lang-parts").exists():
+        raise SystemExit(f"ERROR: {plugin_dir / 'lang-parts'} must be merged into lang/ and deleted before a release")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     zip_name = f"plugin-{pid}-{version}.zip"

@@ -104,6 +104,25 @@ class StampedTests(_Fixture):
             self.assertEqual(status, 409)
             self.assertEqual(payload, {"error": "stale_server_code", "codeVersion": "1.2.0", "filesVersion": "1.3.0"})
 
+    def test_stale_fix_answer_shape(self):
+        # The Python server cannot restart itself: stale code is answered `restart`, fresh code `none`,
+        # in the same shape as the PHP answer (steps list empty, nothing was applied).
+        ds._CODE_VERSION = "1.2.0"
+        fix = ds._stale_fix()
+        self.assertEqual(fix, {"stale": True, "codeStale": True, "codeVersion": "1.2.0", "filesVersion": "1.3.0",
+                               "reinstallSupported": False, "actions": [], "waitSeconds": 0, "reasons": [],
+                               "next": "restart"})
+        ds._CODE_VERSION = "1.3.0"
+        fix = ds._stale_fix()
+        self.assertEqual((fix["stale"], fix["next"], fix["actions"]), (False, "none", []))
+        ds._CODE_VERSION = "@@LUMEN_CODE_VERSION@@"
+        self.assertEqual(ds._stale_fix()["next"], "none")
+
+    def test_stale_fix_is_routed_and_gated_as_a_write(self):
+        src = Path(ds.__file__).read_text(encoding="utf-8")
+        self.assertIn("stale_fix", ds.AdminHandler._WRITE_ACTIONS["/api/admin.php"])
+        self.assertIn('elif action == "stale_fix":', src)
+
     def test_malformed_stamp_is_unstamped(self):
         for bad in ("1.2", "x.y.z", "", "@@LUMEN_CODE_VERSION@@"):
             self.assertIsNone(ds._code_version(bad), bad)

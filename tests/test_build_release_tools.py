@@ -50,6 +50,50 @@ class TestAllowlist(unittest.TestCase):
             else:
                 os.environ["SOURCE_DATE_EPOCH"] = old
 
+    def _with_epoch(self, value, fn):
+        old = os.environ.get("SOURCE_DATE_EPOCH")
+        if value is None:
+            os.environ.pop("SOURCE_DATE_EPOCH", None)
+        else:
+            os.environ["SOURCE_DATE_EPOCH"] = value
+        try:
+            return fn()
+        finally:
+            if old is None:
+                os.environ.pop("SOURCE_DATE_EPOCH", None)
+            else:
+                os.environ["SOURCE_DATE_EPOCH"] = old
+
+    def test_zip_entry_dates_follow_the_release_moment(self):
+        import zipfile
+        self.assertEqual(self._with_epoch("1700000000", br.zip_entry_date), (2023, 11, 14, 22, 13, 20))
+        # DOS resolution is 2 s
+        self.assertEqual(self._with_epoch("1700000001", br.zip_entry_date), (2023, 11, 14, 22, 13, 20))
+        # two releases never share a date (PHP >= 8 restores it as the file mtime; opcache compares mtimes)
+        self.assertNotEqual(self._with_epoch("1700000000", br.zip_entry_date), self._with_epoch("1700086400", br.zip_entry_date))
+        with tempfile.TemporaryDirectory() as tmp:
+            def build(name):
+                path = Path(tmp) / name
+                br.write_zip(path, [("a.php", b"<?php"), ("b/c.js", b"x")])
+                return path
+            a = self._with_epoch("1700000000", lambda: build("a.zip"))
+            b = self._with_epoch("1700000000", lambda: build("b.zip"))
+            self.assertEqual(a.read_bytes(), b.read_bytes())
+            with zipfile.ZipFile(a) as zf:
+                for info in zf.infolist():
+                    self.assertEqual(info.date_time, (2023, 11, 14, 22, 13, 20))
+
+    def test_zip_entry_date_is_clamped_to_the_dos_range(self):
+        self.assertEqual(self._with_epoch("0", br.zip_entry_date), (1980, 1, 1, 0, 0, 0))
+        self.assertEqual(self._with_epoch("315532800", br.zip_entry_date), (1980, 1, 1, 0, 0, 0))
+        self.assertEqual(self._with_epoch("99999999999", br.zip_entry_date), br.ZIP_DATE_MAX)
+
+    def test_zip_entry_date_falls_back_to_now(self):
+        import time
+        d = self._with_epoch(None, br.zip_entry_date)
+        self.assertGreaterEqual(d[0], time.gmtime().tm_year - 1)
+        self.assertGreater(d, (2024, 1, 1, 0, 0, 0))
+
 
 class TestSignatureGate(unittest.TestCase):
     def _tree(self, tmp, py_key, php_key, sums, sig_hex, upd_key=None):

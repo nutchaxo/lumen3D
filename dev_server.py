@@ -2699,6 +2699,19 @@ def _version_info() -> dict:
     }
 
 
+def _stale_fix(raw=None) -> dict:
+    """Answer of the `stale_fix` action. A Python process cannot restart itself
+    (the updater does that, health-gated), so there is nothing to apply: stale code
+    is answered `restart`, current code `none`. Shape twin of the PHP answer."""
+    st = _code_status(raw)
+    return {
+        "stale": st["stale"], "codeStale": st["stale"],
+        "codeVersion": st["codeVersion"], "filesVersion": st["filesVersion"],
+        "reinstallSupported": False, "actions": [], "waitSeconds": 0, "reasons": [],
+        "next": "restart" if st["stale"] else "none",
+    }
+
+
 def _http_get_json(url: str, timeout: int = 10) -> dict:
     req = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
@@ -7015,7 +7028,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         "/api/admin.php": frozenset({"set_plugin", "update_apply", "update_ack",
                                      "approve_plugin", "revoke_plugin",
                                      "install_plugin", "update_plugin", "uninstall_plugin",
-                                     "repair_permissions"}),
+                                     "repair_permissions", "stale_fix"}),
     }
 
     def _is_endpoint_write(self, path: str, action: str) -> bool:
@@ -7911,6 +7924,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(st2, pl2)
             elif action == "version":
                 self._json(200, _version_info())
+            elif action == "stale_fix":
+                self._json(200, _stale_fix())
             elif action == "pipeline_info":
                 self._json(200, _pipeline_info())
             elif action == "pipeline_download":

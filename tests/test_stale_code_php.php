@@ -105,13 +105,50 @@ check('a code older than its files says code_older', ($t['a']['diagnosis']['dire
 check('without opcache functions nothing is invalidated nor reset (CLI)', ($t['a']['diagnosis']['recovery']['invalidated'] ?? -1) === 0);
 $t2 = child($r5, '$r = admin_recover_stale_code(); echo json_encode(["r" => $r, "reset" => function_exists("opcache_reset")]);');
 check('the recovery result keeps its documented shape', is_array($t2['r'] ?? null)
-    && array_keys($t2['r']) === ['parkedBefore', 'parkedAfter', 'swapped', 'invalidated', 'filesTried', 'opcacheReset', 'throttled']);
+    && array_keys($t2['r']) === ['parkedBefore', 'parkedAfter', 'swapped', 'invalidated', 'filesTried', 'opcacheReset', 'throttled', 'touched', 'touchFailed', 'libTouched', 'touchFailedFiles']);
 if (!empty($t2['reset'])) {
     check('inside the window the reset is skipped and reported as throttled',
         ($t2['r']['throttled'] ?? null) === true && ($t2['r']['opcacheReset'] ?? null) === false);
 } else {
     echo "  note  opcache_reset is not available on this CLI; the throttled reset is not exercised\n";
 }
+
+echo "\nthe updater gives what it installs the modification time of now\n";
+$r8 = make_root($src, '1.2.0', ['1.2.0', '1.3.0'], $PLACEHOLDER); $roots[] = $r8;
+$old80 = 315532800;
+file_put_contents("$r8/api/target.php", "<?php // old\n");
+file_put_contents("$r8/api/incoming.php", "<?php // new\n");
+touch("$r8/api/target.php", $old80);
+touch("$r8/api/incoming.php", $old80);   // what extractTo restores from a release built before 1.84.3
+$pl = child($r8, '$ok = admin_update_place_file(__DIR__ . "/api/incoming.php", __DIR__ . "/api/target.php"); clearstatcache();'
+    . ' echo json_encode(["ok" => $ok, "mtime" => filemtime(__DIR__ . "/api/target.php"), "body" => file_get_contents(__DIR__ . "/api/target.php"),'
+    . ' "gone" => !is_file(__DIR__ . "/api/incoming.php"), "now" => time()]);');
+check('the new bytes are in place', ($pl['ok'] ?? null) === true && ($pl['body'] ?? '') === "<?php // new\n" && ($pl['gone'] ?? null) === true);
+check('a file dated 1980 ends up with a recent mtime', isset($pl['mtime']) && $pl['mtime'] > $pl['now'] - 120);
+check('the old copy is parked beside it for the sweep', is_file("$r8/api/target.php.lumen-old"));
+file_put_contents("$r8/api/parked.php", "<?php // old\n");
+file_put_contents("$r8/api/parked.php.lumen-new", "<?php // new\n");
+touch("$r8/api/parked.php.lumen-new", $old80);
+file_put_contents("$r8/api/.update-pending.json", json_encode(['api/parked.php']));
+$fp = child($r8, '$n = admin_update_finish_pending(); clearstatcache(); echo json_encode(["n" => $n, "mtime" => filemtime(__DIR__ . "/api/parked.php"), "now" => time()]);');
+check('a parked file swapped in later is dated now too', ($fp['n'] ?? null) === 1 && isset($fp['mtime']) && $fp['mtime'] > $fp['now'] - 120);
+$tn = child($r8, 'echo json_encode(["missing" => admin_touch_now(__DIR__ . "/api/none.php")]);');
+check('touching a missing file is false, never an error', ($tn['missing'] ?? null) === false);
+
+echo "\nthe recovery touches the files that match the release when nothing could be invalidated\n";
+$r9 = make_root($src, '1.2.0', ['1.2.0', '1.3.0'], $PLACEHOLDER); $roots[] = $r9;
+copy(__DIR__ . '/../api/_code_probe.php', "$r9/api/_code_probe.php");
+file_put_contents("$r9/api/admin.php", "<?php // admin\n");
+$files9 = [];
+foreach (['api/_admin_lib.php', 'api/admin.php'] as $rel) $files9[$rel] = hash_file('sha256', "$r9/$rel");
+$files9['api/_upload_lib.php'] = str_repeat('0', 64);   // a shipped file that is NOT what the manifest says
+file_put_contents("$r9/api/code-manifest.json", json_encode(['version' => '1.3.0', 'files' => $files9]));
+foreach (glob("$r9/api/*.php") as $f) touch($f, $old80);
+$rc = child($r9, 'echo json_encode(["r" => admin_recover_stale_code(), "now" => time()]);');
+clearstatcache();
+check('two files touched, none failed', ($rc['r']['touched'] ?? null) === 2 && ($rc['r']['touchFailed'] ?? null) === 0);
+check('the matching files are recent', filemtime("$r9/api/_admin_lib.php") > time() - 120 && filemtime("$r9/api/admin.php") > time() - 120);
+check('the outdated file kept its date', filemtime("$r9/api/_upload_lib.php") === $old80);
 
 echo "\ncode NEWER than its files (an update that stopped half-way)\n";
 $r6 = make_root($src, '1.4.0', ['1.2.0', '1.3.0'], $PLACEHOLDER); $roots[] = $r6;
@@ -235,6 +272,46 @@ check('a healthy host carries no probe', !isset($v['codeDiagnosis']['probe']) &&
 file_put_contents("$a3/api/_admin_lib.php", str_replace('const LUMEN_UPDATE_REINSTALL = true;', '', (string)file_get_contents("$a3/api/_admin_lib.php")));
 $v = run_admin($a3, 'version');
 check('a library without reinstall support is reported as such', ($v['reinstallSupported'] ?? null) === false);
+
+echo "\nadmin.php: stale_fix\n";
+$ACTION_IDS = ['finish_parked', 'invalidate', 'touch', 'repair_permissions', 'opcache_reset'];
+$ids = function ($a) { return array_map(function ($x) { return $x['id']; }, is_array($a) ? $a : []); };
+$g = run_admin($a1, 'stale_fix', 'GET');
+check('stale_fix is a write action: a GET is refused', isset($g['error']) && !isset($g['actions']));
+$z = run_admin($a1, 'stale_fix', 'POST');
+check('code that is not stale: nothing to do', ($z['stale'] ?? null) === false && ($z['codeStale'] ?? null) === false && ($z['actions'] ?? null) === [] && ($z['next'] ?? null) === 'none'
+    && ($z['codeVersion'] ?? null) === '1.3.0' && ($z['filesVersion'] ?? null) === '1.3.0');
+// $a2: new library stamped 1.2.0 over files of 1.3.0, probe present.
+$z = run_admin($a2, 'stale_fix', 'POST');
+check('a stale host answers the five steps in order', ($z['stale'] ?? null) === true && $ids($z['actions'] ?? null) === $ACTION_IDS && !isset($z['error']));
+check('every step has ran/ok booleans', count(array_filter($z['actions'] ?? [], function ($a) { return is_bool($a['ran'] ?? null) && is_bool($a['ok'] ?? null); })) === 5);
+check('versions and the reinstall capability ride on the answer', ($z['codeVersion'] ?? null) === '1.2.0' && ($z['filesVersion'] ?? null) === '1.3.0' && ($z['codeStale'] ?? null) === true
+    && ($z['reinstallSupported'] ?? null) === true);
+check('the library on disk is the late file: permissions repaired, then reinstall', ($z['cause'] ?? null) === 'not_written' && ($z['actions'][3]['ran'] ?? null) === true && ($z['next'] ?? null) === 'reinstall');
+// $a3: an OLD library (no admin_code_status, no reinstall support).
+$z = run_admin($a3, 'stale_fix', 'POST');
+check('over an older library: no fatal, stale, codeVersion unknown', ($z['stale'] ?? null) === true && array_key_exists('codeVersion', $z) && $z['codeVersion'] === null && !isset($z['error']) && !isset($z['_raw']));
+check('without reinstall support the next step is manual and says why', ($z['next'] ?? null) === 'manual' && in_array('reinstall_unavailable', $z['reasons'] ?? [], true) && ($z['reinstallSupported'] ?? null) === false);
+check('the five steps are still reported', $ids($z['actions'] ?? null) === $ACTION_IDS);
+// An old library that also lacks the permission repair.
+$a4 = admin_root_with($src, '1.2.0', ['1.2.0', '1.3.0'], $PLACEHOLDER, true); $roots[] = $a4;
+copy(__DIR__ . '/../api/_code_probe.php', "$a4/api/_code_probe.php");
+$lib4 = (string)file_get_contents("$a4/api/_admin_lib.php");
+file_put_contents("$a4/api/_admin_lib.php", str_replace(['function admin_apply_tree_modes(', 'const LUMEN_UPDATE_REINSTALL = true;'], ['function admin_apply_tree_modes_old(', ''], $lib4));
+$z = run_admin($a4, 'stale_fix', 'POST');
+check('a library without the permission repair: the step is reported as unavailable, nothing fatal', !isset($z['_raw']) && ($z['actions'][3]['ran'] ?? null) === false
+    && ($z['actions'][3]['detail'] ?? null) === ['unavailable'] && ($z['next'] ?? null) === 'manual');
+// No probe file at all: stale, manual, with the reason.
+$a5 = admin_root_with($src, '1.2.0', ['1.2.0', '1.3.0'], $PLACEHOLDER, false); $roots[] = $a5;
+$z = run_admin($a5, 'stale_fix', 'POST');
+check('without the probe file: stale, manual, probe_unavailable', ($z['stale'] ?? null) === true && ($z['next'] ?? null) === 'manual' && ($z['reasons'] ?? null) === ['probe_unavailable'] && ($z['actions'] ?? null) === []);
+// A parked file is swapped by the fix.
+$a6 = admin_root_with($src, '1.2.0', ['1.2.0', '1.3.0'], $PLACEHOLDER, false); $roots[] = $a6;
+copy(__DIR__ . '/../api/_code_probe.php', "$a6/api/_code_probe.php");
+file_put_contents("$a6/api/other.php.lumen-new", "<?php // parked\n");
+file_put_contents("$a6/api/.update-pending.json", json_encode(['api/other.php']));
+$z = run_admin($a6, 'stale_fix', 'POST');
+check('the entry point itself already swaps parked files (admin.php does it at the door): nothing is left parked', !is_file("$a6/api/other.php.lumen-new") && is_file("$a6/api/other.php") && ($z['stale'] ?? null) === true);
 
 echo "\nthe version override (a test seam; the endpoint never passes it)\n";
 require_once __DIR__ . '/../api/_admin_lib.php';

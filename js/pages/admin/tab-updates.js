@@ -392,8 +392,9 @@ function fill(text, vars) {
 
 let _repair = { busy: false, result: null };
 
-/** The late files PHP could not write, the PHP account, and the repair button. */
-function staleRepairBlock(s, vars) {
+/** The late files PHP could not write and the account PHP runs as. The fix itself is the
+ *  banner's "Try to fix automatically" button. */
+function staleRepairBlock(s) {
   const yn = (b) => (b === true ? t('admin.staleCodeYes', 'yes') : b === false ? t('admin.staleCodeNo', 'no') : '?');
   const rows = s.outdated.slice(0, 12).map((o) => {
     const owner = o.owner ? `${o.owner}${o.group ? ':' + o.group : ''}` : '?';
@@ -408,31 +409,79 @@ function staleRepairBlock(s, vars) {
   }).join('');
   const user = s.phpUser
     ? `<p class="adm-muted" style="margin:0 0 8px;font-size:.85em">${escHtml(fill(t('admin.staleCodePhpUser', 'PHP runs as {user}.', { user: s.phpUser }), { user: s.phpUser }))}</p>` : '';
-  const labelKey = s.reinstall
-    ? ['admin.staleCodeRepairReinstall', 'Repair permissions and reinstall version {files}']
-    : ['admin.staleCodeRepair', 'Repair permissions'];
-  const label = fill(t(labelKey[0], labelKey[1], vars), vars);
   return `
         ${rows ? `<ul style="margin:0 0 8px;padding-left:18px">${rows}</ul>` : ''}
-        ${user}
-        <p style="margin:0 0 12px"><button class="adm-btn adm-btn-sm" id="btn-stale-repair"${_repair.busy || _versionsLoading ? ' disabled' : ''}>${_repair.busy
-    ? `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.staleCodeRepairing', 'Repairing…'))}`
-    : `<i data-lucide="wrench"></i> ${escHtml(label)}`}</button></p>`;
+        ${user}`;
 }
 
-/** What the last repair did, inside the card. */
+const STALE_FIX_IDS = ['finish_parked', 'invalidate', 'touch', 'repair_permissions', 'opcache_reset'];
+
+/** The steps the server reports it ran, reduced to what the card prints. */
+function cleanFixActions(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const a of list) {
+    if (!a || typeof a !== 'object' || !STALE_FIX_IDS.includes(a.id) || a.ran !== true) continue;
+    out.push({
+      id: a.id, ok: a.ok === true,
+      count: Math.max(0, Number(a.count) || 0), failed: Math.max(0, Number(a.failed) || 0),
+      detail: Array.isArray(a.detail) ? a.detail.filter((x) => typeof x === 'string').slice(0, 20) : [],
+    });
+  }
+  return out;
+}
+
+/** One translated line for a step that ran. */
+function staleFixLine(a) {
+  const v = { count: a.count, failed: a.failed };
+  const f = (key, def) => fill(t(key, def, v), v);
+  switch (a.id) {
+    case 'finish_parked':
+      return a.failed > 0 ? f('admin.staleFixParkedLeft', 'Parked files put in place: {count}, still parked: {failed}')
+        : f('admin.staleFixParked', 'Parked files put in place: {count}');
+    case 'invalidate':
+      if (a.ok) return f('admin.staleFixInvalidated', 'Opcache: cleared {count} files');
+      return (Array.isArray(a.detail) && a.detail.includes('blocked')) ? f('admin.staleFixInvalidateBlocked', 'Opcache: the host blocks clearing it')
+        : f('admin.staleFixInvalidateNone', 'Opcache: nothing to clear');
+    case 'touch':
+      return f('admin.staleFixTouched', 'File dates refreshed: {count} (failed: {failed})');
+    case 'repair_permissions':
+      return f('admin.staleFixPerms', 'Permissions repaired: {count} fixed, {failed} failed');
+    case 'opcache_reset':
+      return a.ok ? f('admin.staleFixReset', 'Opcache: reset') : f('admin.staleFixResetFailed', 'Opcache: the reset was refused');
+    default:
+      return '';
+  }
+}
+
+/** What the last automatic fix did, inside the card. */
 function staleRepairResult() {
   const r = _repair.result;
   if (!r) return '';
   const out = [];
-  if (r.error) {
-    out.push(`<p style="margin:0 0 8px;color:var(--color-danger,#c0392b)">${escHtml(r.error)}</p>`);
-  } else {
-    const vars = { fixed: r.fixed, failed: r.failed };
-    const done = fill(t('admin.staleCodeRepairDone', '{fixed} entries fixed, {failed} failed.', vars), vars);
-    out.push(`<p style="margin:0 0 8px">${escHtml(done)}${r.reinstalled ? ' ' + escHtml(t('admin.staleCodeReinstalled', 'The version was reinstalled.')) : ''}</p>`);
+  const lines = (r.actions || []).map(staleFixLine).filter(Boolean);
+  if (r.reinstalled) {
+    const vars = { version: r.reinstalled };
+    lines.push(fill(t('admin.staleFixReinstalled', 'Version {version} reinstalled', vars), vars));
   }
-  const paths = [...new Set([...(r.failedPaths || []), ...(r.codeUnwritable || [])])];
+  if (lines.length) {
+    out.push(`<ul style="margin:0 0 8px;padding-left:18px">${lines.map((l) => `<li>${escHtml(l)}</li>`).join('')}</ul>`);
+  } else if (!r.error) {
+    out.push(`<p style="margin:0 0 8px">${escHtml(t('admin.staleFixNothing', 'Nothing could be fixed from here.'))}</p>`);
+  }
+  if (r.error) out.push(`<p style="margin:0 0 8px;color:var(--color-danger,#c0392b)">${escHtml(r.error)}</p>`);
+  // The remedy paragraph already says it when the fresh read carries the touch report.
+  const remedySaysWait = (() => {
+    const d = describeStaleCode(_versions, { retriesExhausted: _staleExhausted, autoRecheckDone: _staleAutoUsed });
+    return !!d && d.remedy === 'wait' && d.touched > 0;
+  })();
+  if (r.wait > 0 && !remedySaysWait) {
+    const vars = { seconds: r.wait };
+    const when = _staleAutoAt
+      ? ' ' + fill(t('admin.staleCodeAutoRecheck', 'Automatic re-check at {time}.', { time: _staleAutoClock() }), { time: _staleAutoClock() }) : '';
+    out.push(`<p class="adm-muted" style="margin:0 0 8px">${escHtml(fill(t('admin.staleCodeRemedyWaitTouched', 'The server refreshed the date of its files, so PHP re-reads them within {seconds} s. This tab re-checks by itself after that delay.', vars), vars) + when)}</p>`);
+  }
+  const paths = [...new Set(r.paths || [])];
   if (paths.length) {
     out.push(`<p class="adm-muted" style="margin:0 0 4px">${escHtml(t('admin.staleCodeCannotWrite', 'PHP cannot change these files, they belong to another account: upload them again by SFTP, or ask the host to give the PHP user write access to them.'))}</p>`);
     out.push(`<ul style="margin:0 0 12px;padding-left:18px">${paths.slice(0, 20).map((p) => `<li><code>${escHtml(p)}</code></li>`).join('')}</ul>`);
@@ -440,7 +489,7 @@ function staleRepairResult() {
   return out.join('');
 }
 
-/** A failed repair or reinstall call as one sentence: never the raw code. */
+/** A failed fix or reinstall call as one sentence: never the raw code. */
 function repairErrorText(base, r) {
   const d = r && r.data;
   const code = d && typeof d.error === 'string' ? d.error : '';
@@ -463,55 +512,73 @@ function repairErrorText(base, r) {
   return `${base} (HTTP ${r ? r.status : 0}${why ? ' — ' + why : ''})`;
 }
 
-/** Repair the modes of what PHP owns (the Security tab's repair), reinstall the current
- *  version when the server can, then ask again whether the code is fresh. */
-async function repairStale() {
+/** Reinstall `version` (pinned: a server must not install a newer release in its place).
+ *  Fills `result`; answers 'reload' when another version landed and the page must reload. */
+async function reinstallStale(version, result) {
+  const u = await apiFetchStatus(`${API_ADMIN}?action=update_apply`, {
+    method: 'POST', body: JSON.stringify({ reinstall: true, version }) });
+  const ud = u && u.data;
+  if (!(u && u.ok && ud && ud.ok)) {
+    result.error = repairErrorText(t('admin.staleCodeReinstallFailed', 'The reinstall failed.'), u);
+  } else if (ud.applied && String(ud.applied) !== String(version)) {
+    // Another version landed: the running admin JS is outdated, reload as an update does.
+    const applied = String(ud.applied);
+    toast(t('admin.updateApplied', 'Mise à jour appliquée (v{v}) — rechargement…', { v: applied }).replace('{v}', applied), 'success');
+    setTimeout(() => location.reload(), 2000);
+    return 'reload';
+  } else if (Number(ud.pendingFinalize) > 0) {
+    result.error = t('admin.staleCodeReinstallPending', 'Some files could not be replaced and are parked beside their target: finish the update by renaming them, or upload them again by SFTP.');
+  } else if (ud.reinstalled === true) {
+    result.reinstalled = String(version);
+  } else {
+    result.error = repairErrorText(t('admin.staleCodeReinstallFailed', 'The reinstall failed.'), { status: u.status, data: null });
+  }
+  return null;
+}
+
+/** "Try to fix automatically": the server applies every correction it can (parked files,
+ *  opcache, file dates, permissions), the tab reinstalls the version when the server asks
+ *  for it, then asks again whether the code is fresh. One click is one run. */
+async function fixStale() {
   if (_repair.busy || _updating || _versionsLoading) return;
   _repair = { busy: true, result: null };
+  cancelStaleAuto();
+  _staleAutoUsed = false;   // like a manual re-check, a fix rearms the automatic one
   render();
-  const s0 = describeStaleCode(_versions);
-  const reinstall = s0?.reinstall === true;
-  const result = { fixed: 0, failed: 0, failedPaths: [], codeUnwritable: [], reinstalled: false, error: null };
+  const result = { actions: [], reinstalled: null, error: null, paths: [], wait: 0 };
+  let next = 'manual';
   try {
-    const r = await apiFetchStatus(`${API_ADMIN}?action=repair_permissions`, { method: 'POST', body: '{}' });
-    const d = r.data;
-    if (!d || d.error || typeof d.fixed !== 'number') {
-      result.error = repairErrorText(t('admin.permsFailed', 'Permission repair failed.'), r);
+    const r = await apiFetchStatus(`${API_ADMIN}?action=stale_fix`, { method: 'POST', body: '{}' });
+    const d = r && r.data;
+    if (!r || !r.ok || !d || d.error || typeof d.next !== 'string') {
+      result.error = repairErrorText(t('admin.staleFixFailed', 'The automatic fix could not run.'), r);
     } else {
-      result.fixed = d.fixed;
-      result.failed = Number(d.failed) || 0;
-      result.failedPaths = Array.isArray(d.failedPaths) ? d.failedPaths.filter((p) => typeof p === 'string') : [];
-      result.codeUnwritable = Array.isArray(d.codeUnwritable) ? d.codeUnwritable.filter((p) => typeof p === 'string') : [];
-      if (reinstall) {
-        // `version` pins the target: a server must not install a newer release in its place.
-        const u = await apiFetchStatus(`${API_ADMIN}?action=update_apply`, {
-          method: 'POST', body: JSON.stringify({ reinstall: true, version: s0.files }) });
-        const ud = u.data;
-        if (!(u.ok && ud && ud.ok)) {
-          result.error = repairErrorText(t('admin.staleCodeReinstallFailed', 'The reinstall failed.'), u);
-        } else if (ud.applied && String(ud.applied) !== String(s0.files)) {
-          // Another version landed: the running admin JS is outdated, reload as an update does.
-          const applied = String(ud.applied);
-          toast(t('admin.updateApplied', 'Mise à jour appliquée (v{v}) — rechargement…', { v: applied }).replace('{v}', applied), 'success');
-          setTimeout(() => location.reload(), 2000);
+      result.actions = cleanFixActions(d.actions);
+      for (const a of result.actions) if (a.id === 'repair_permissions' && !a.ok) result.paths.push(...a.detail);
+      next = d.next;
+      if (next === 'wait') result.wait = Math.max(0, Number(d.waitSeconds) || 0);
+      if (next === 'reinstall') {
+        const version = typeof d.filesVersion === 'string' && d.filesVersion ? d.filesVersion : (describeStaleCode(_versions)?.files || '');
+        if (version && (await reinstallStale(version, result)) === 'reload') {
           _repair = { busy: false, result: null };
           render();
           return;
-        } else if (Number(ud.pendingFinalize) > 0) {
-          result.error = t('admin.staleCodeReinstallPending', 'Some files could not be replaced and are parked beside their target: finish the update by renaming them, or upload them again by SFTP.');
-        } else if (ud.reinstalled === true) {
-          result.reinstalled = true;
-        } else {
-          result.error = repairErrorText(t('admin.staleCodeReinstallFailed', 'The reinstall failed.'), { status: u.status, data: null });
         }
       }
     }
   } catch (e) {
-    console.error('stale code repair failed', e);
-    result.error = t('admin.permsFailed', 'Permission repair failed.');
+    console.error('stale code fix failed', e);
+    result.error = t('admin.staleFixFailed', 'The automatic fix could not run.');
   }
-  _repair = { busy: false, result };
+  _repair = { busy: true, result };
+  render();
   await loadVersions({ keepResult: true });
+  // The dates were refreshed: PHP re-reads within `wait` s. The fresh read arms the timer
+  // itself when it still sees the server's own report; otherwise it is armed here.
+  if (next === 'wait' && result.wait > 0 && describeStaleCode(_versions)) armStaleAuto(result.wait + 5);
+  const stillStale = describeStaleCode(_versions, { retriesExhausted: _staleExhausted, autoRecheckDone: _staleAutoUsed }) !== null;
+  _repair = { ..._repair, busy: false };
+  if (!stillStale && !result.error) toast(t('admin.staleFixDone', 'The server now runs the new code.'), 'success');
   render();
 }
 
@@ -519,21 +586,25 @@ async function repairStale() {
  *  while an update runs: the process is about to be replaced and the numbers are moving. */
 function staleCodeBlock() {
   if (_updating) return '';
-  const s = describeStaleCode(_versions, { retriesExhausted: _staleExhausted });
+  const s = describeStaleCode(_versions, { retriesExhausted: _staleExhausted, autoRecheckDone: _staleAutoUsed });
   if (!s) return '';
   const vars = { code: s.code ?? '?', files: s.files, seconds: s.waitSeconds, details: s.details };
   const remedyText = {
     parked: ['admin.staleCodeRemedyParked', 'Update files are parked beside their target ({files}): rename each *.lumen-new file over its target, then re-check.'],
     restart: ['admin.staleCodeRemedyRestart', 'Restart the server (stop and start dev_server.py), then re-check.'],
     recheck: ['admin.staleCodeRemedyRecheck', 'The server has just dropped its cached code. Re-check: the next request runs the new files.'],
-    wait: ['admin.staleCodeRemedyWait', 'PHP re-reads changed files every {seconds} s. Wait that long, then re-check.'],
+    wait: s.touched > 0
+      ? ['admin.staleCodeRemedyWaitTouched', 'The server refreshed the date of its files, so PHP re-reads them within {seconds} s. This tab re-checks by itself after that delay.']
+      : ['admin.staleCodeRemedyWait', 'PHP re-reads changed files every {seconds} s. Wait that long, then re-check.'],
+    touch: ['admin.staleCodeRemedyTouch', 'PHP only re-reads a file whose date changed, and the server could not change the date of its files. Upload api/_admin_lib.php and the other api/*.php files again by SFTP, making sure the files get a new date (turn off "preserve timestamps" in your SFTP client, or open and re-save the file in your host\'s file manager). Or ask your host to restart PHP. Then re-check.'],
+    touchNoEffect: ['admin.staleCodeRemedyTouchNoEffect', 'The server refreshed the date of its files and waited {seconds} s, but PHP still runs the old code. Upload the api/*.php files again by SFTP, or ask your host to restart PHP, then re-check.'],
     incomplete: ['admin.staleCodeRemedyIncomplete', 'Run the update again (Verify, then update) so that every file reaches version {code}.'],
     reupload: ['admin.staleCodeRemedyReupload', 'Upload the files of version {files} again over the existing ones (the api/ folder first), or ask your host to restart PHP, then re-check.'],
     opcache: ['admin.staleCodeRemedyOpcache', 'Restart PHP or ask your host to clear opcache, then re-check.'],
     processes: ['admin.staleCodeRemedyProcesses', 'PHP dropped its cached copy, but other PHP processes of the host still hold the old one. Each is cleared when it next answers. If the warning stays, ask your host to restart PHP.'],
     permissions: s.reinstall
-      ? ['admin.staleCodeRemedyPermissionsReinstall', 'Some files of version {files} could not be written by PHP, so their old versions are still in place. Repair their permissions and reinstall the version from here.']
-      : ['admin.staleCodeRemedyPermissions', 'Some files of version {files} could not be written by PHP, so their old versions are still in place. Repair their permissions, then upload version {files} again over them (the api/ folder first) if the warning stays.'],
+      ? ['admin.staleCodeRemedyPermissionsReinstall', 'Some files of version {files} could not be written by PHP, so their old versions are still in place. “Try to fix automatically” repairs their permissions and reinstalls the version from here.']
+      : ['admin.staleCodeRemedyPermissions', 'Some files of version {files} could not be written by PHP, so their old versions are still in place. Use “Try to fix automatically” to repair their permissions, then upload version {files} again over them (the api/ folder first) if the warning stays.'],
   }[s.remedy];
   // t() interpolates {files} itself, so the parked list must be in the params it receives.
   const remedyVars = s.remedy === 'parked' ? { ...vars, files: (s.parked || []).join(', ') } : vars;
@@ -542,17 +613,24 @@ function staleCodeBlock() {
     : s.code ? ['admin.staleCodeBody', 'The server still runs the code of version {code} while its files are version {files}. Plugin installs are refused until this is fixed.']
       : ['admin.staleCodeBodyOlder', 'The server still runs code older than its files (version {files}). Plugin installs are refused until this is fixed.'];
   const body = fill(t(bodyKey[0], bodyKey[1], vars), vars);
+  const autoText = s.autoRecheckSeconds > 0 && _staleAutoAt
+    ? fill(t('admin.staleCodeAutoRecheck', 'Automatic re-check at {time}.', { time: _staleAutoClock() }), { time: _staleAutoClock() }) : '';
   const details = s.details ? fill(t('admin.staleCodeDetails', 'Details for your host: {details}', vars), vars) : '';
   return `
     <div class="adm-card" style="margin-top:18px" id="stale-code-card">
       <div class="adm-card-body">
         <div class="adm-update-state adm-warn" role="status"><i data-lucide="alert-triangle"></i> <b>${escHtml(t('admin.staleCodeTitle', 'The server runs older code than its files'))}</b></div>
         <p style="margin:8px 0">${escHtml(body)}</p>
-        <p class="adm-muted" style="margin:8px 0 ${details ? '4px' : '12px'}">${escHtml(remedy)}</p>
+        <p class="adm-muted" style="margin:8px 0 ${details ? '4px' : '12px'}">${escHtml(remedy)}${autoText ? ' ' + escHtml(autoText) : ''}</p>
         ${details ? `<p class="adm-muted" style="margin:0 0 12px;font-size:.85em">${escHtml(details)}</p>` : ''}
-        ${s.repairable ? staleRepairBlock(s, vars) : ''}
+        ${s.repairable ? staleRepairBlock(s) : ''}
         ${staleRepairResult()}
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-stale-recheck"${_repair.busy || _versionsLoading ? ' disabled' : ''}><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.staleCodeRecheck', 'Re-check'))}</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${s.fixable ? `<button class="adm-btn adm-btn-sm" id="btn-stale-autofix"${_repair.busy || _versionsLoading ? ' disabled' : ''}>${_repair.busy
+    ? `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.staleFixRunning', 'Fixing…'))}`
+    : `<i data-lucide="wrench"></i> ${escHtml(t('admin.staleFixButton', 'Try to fix automatically'))}`}</button>` : ''}
+          <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-stale-recheck"${_repair.busy || _versionsLoading ? ' disabled' : ''}><i data-lucide="refresh-cw"></i> ${escHtml(t('admin.staleCodeRecheck', 'Re-check'))}</button>
+        </div>
       </div>
     </div>`;
 }
@@ -610,7 +688,7 @@ function render(lastOutcome) {
 
   el('btn-recheck')?.addEventListener('click', recheck);
   el('btn-stale-recheck')?.addEventListener('click', recheck);
-  el('btn-stale-repair')?.addEventListener('click', repairStale);
+  el('btn-stale-autofix')?.addEventListener('click', fixStale);
   el('btn-ack-update')?.addEventListener('click', ackOutcome);
   bindUpdateBody(root);
   bindPluginUpdates(root);
@@ -620,6 +698,48 @@ function render(lastOutcome) {
 
 let _staleTries = 0;
 let _staleExhausted = false;
+// The automatic re-check of a stale banner whose remedy is "wait" (the server refreshed
+// the date of its files): one timer, once per manual re-check, ended by a newer read.
+let _staleAutoTimer = null;
+let _staleAutoAt = 0;
+let _staleAutoUsed = false;
+
+function _staleAutoClock() {
+  const d = new Date(_staleAutoAt);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function cancelStaleAuto() {
+  if (_staleAutoTimer !== null) clearTimeout(_staleAutoTimer);
+  _staleAutoTimer = null;
+  _staleAutoAt = 0;
+}
+
+/** Arms the automatic re-check when the banner says PHP will re-read its files by
+ *  itself. Called after every versions read; a read that is not the newest one, an
+ *  armed timer, or an automatic re-check already made (until a manual one) does nothing. */
+function scheduleStaleAuto(gen) {
+  if (gen !== _versionsGen || _staleAutoUsed || _staleAutoTimer !== null) return;
+  const s = describeStaleCode(_versions, { retriesExhausted: _staleExhausted, autoRecheckDone: _staleAutoUsed });
+  if (!s || s.autoRecheckSeconds <= 0) return;
+  armStaleAuto(s.autoRecheckSeconds);
+}
+
+/** One automatic re-check after `seconds`, unless a newer read (manual re-check, fix)
+ *  took over meanwhile. No-op while one is already armed. */
+function armStaleAuto(seconds) {
+  if (_staleAutoTimer !== null || !(seconds > 0)) return;
+  const gen = _versionsGen;
+  _staleAutoAt = Date.now() + seconds * 1000;
+  _staleAutoTimer = setTimeout(() => {
+    _staleAutoTimer = null;
+    _staleAutoAt = 0;
+    if (gen !== _versionsGen || _updating || _repair.busy) return;
+    _staleAutoUsed = true;
+    loadVersions().then(() => render());
+  }, seconds * 1000);
+}
 let _versionsGen = 0;
 let _versionsLoading = false;
 const STALE_RETRIES = 4;
@@ -629,11 +749,12 @@ const STALE_RETRY_MS = 1500;
  *  again. One run at a time: a newer call supersedes a running loop (its generation ends it). */
 async function loadVersions(opts = {}) {
   const gen = ++_versionsGen;
+  cancelStaleAuto();
   _staleTries = 0; _staleExhausted = false;
   const v = await apiFetch(`${API_ADMIN}?action=version`);
   if (gen !== _versionsGen) return;
   if (v) _versions = v;
-  let s = describeStaleCode(_versions, { retriesExhausted: false });
+  let s = describeStaleCode(_versions, { retriesExhausted: false, autoRecheckDone: _staleAutoUsed });
   if (s && s.retry) {
     _versionsLoading = true;
     render();
@@ -649,7 +770,7 @@ async function loadVersions(opts = {}) {
         if (!again) { lost = true; break; }   // no answer: the old reading says nothing new
         answers++;
         _versions = again;
-        s = describeStaleCode(_versions, { retriesExhausted: false });
+        s = describeStaleCode(_versions, { retriesExhausted: false, autoRecheckDone: _staleAutoUsed });
       }
     } finally {
       if (gen === _versionsGen) _versionsLoading = false;
@@ -660,6 +781,7 @@ async function loadVersions(opts = {}) {
   // A repair report belongs to the card it was shown in: it survives only the re-check
   // that follows the repair while the banner is still up.
   if (!(opts.keepResult && s)) _repair = { ..._repair, result: null };
+  scheduleStaleAuto(gen);
 }
 
 async function loadCheck() {
@@ -691,6 +813,7 @@ function recheck() {
   // A running repair or retry loop owns the versions read: the GitHub checks still run.
   if (!(_repair.busy || _versionsLoading)) {
     _repair = { ..._repair, result: null };
+    _staleAutoUsed = false;   // a manual re-check rearms the automatic one
     loadVersions().then(() => render());
   }
   loadCheck(); loadPluginUpdates(); loadPipelinePack();

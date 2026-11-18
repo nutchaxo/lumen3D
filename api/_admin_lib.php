@@ -1946,6 +1946,24 @@ function admin_recover_stale_code(): array {
     if (function_exists('opcache_invalidate')) {
         foreach ($files as $f) if (@opcache_invalidate($f, true)) $invalidated++;
     }
+    // Nothing could be invalidated (restrict_api, or no opcache API): a file with a
+    // fresh mtime is recompiled by validate_timestamps within revalidate_freq. Only
+    // files that match the release (the probe checks them) are touched.
+    $touched = 0;
+    $touchFailed = 0;
+    $libTouched = null;
+    $touchFailedFiles = [];
+    if ($invalidated === 0) {
+        $probe = admin_root() . '/api/_code_probe.php';
+        if (is_file($probe)) {
+            require_once $probe;
+            if (function_exists('lumen_probe_touch')) {
+                $t = lumen_probe_touch(admin_root(), admin_max_version(changelog_dir()));
+                $touched = $t['touched']; $touchFailed = $t['touchFailed'];
+                $libTouched = $t['libTouched'] ?? null; $touchFailedFiles = $t['touchFailedFiles'] ?? [];
+            }
+        }
+    }
     $reset = false;
     $throttled = false;
     if ($invalidated === 0 && function_exists('opcache_reset')) {
@@ -1953,7 +1971,9 @@ function admin_recover_stale_code(): array {
         else $reset = (bool)@opcache_reset();
     }
     $result = ['parkedBefore' => $before, 'parkedAfter' => count(admin_parked_update_files()), 'swapped' => $swapped,
-               'invalidated' => $invalidated, 'filesTried' => count($files), 'opcacheReset' => $reset, 'throttled' => $throttled];
+               'invalidated' => $invalidated, 'filesTried' => count($files), 'opcacheReset' => $reset, 'throttled' => $throttled,
+               'touched' => $touched, 'touchFailed' => $touchFailed,
+               'libTouched' => $libTouched, 'touchFailedFiles' => $touchFailedFiles];
     if (!$recent || $reset) @file_put_contents($file, json_encode(['at' => time(), 'result' => $result]));
     return $result;
 }
@@ -3599,21 +3619,17 @@ function admin_update_apply_locked(bool $reinstall = false, string $requested = 
                 mkt_rmrf($staging);
                 return admin_update_fail('write_failed', $relPath, $updated);
             }
+            admin_touch_now($dstF);
             $updated++;
             continue;
         }
-        if (file_exists($dstF)) {
-            @unlink($dstF . '.lumen-old');
-            if (!@rename($dstF, $dstF . '.lumen-old')) @unlink($dstF);
-        }
-        if (!@rename($srcF, $dstF) && !@copy($srcF, $dstF)) {
+        if (!admin_update_place_file($srcF, $dstF)) {
             // Name still blocked (delete-pending / AV lock): park the new bytes
             // beside it; a later request finalizes (admin_update_finish_pending).
             if (@rename($srcF, $dstF . '.lumen-new') || @copy($srcF, $dstF . '.lumen-new')) { $pending[] = $relPath; $updated++; continue; }
             mkt_rmrf($staging);
             return admin_update_fail('write_failed', $relPath, $updated);
         }
-        admin_fix_file_mode($dstF);
         if (substr($relPath, -4) === '.php') $phpWritten[] = $dstF;
         $updated++;
     }
@@ -3628,6 +3644,33 @@ function admin_update_apply_locked(bool $reinstall = false, string $requested = 
                   'skippedProtected' => $skipped, 'pendingFinalize' => count($pending),
                   'signature' => LUMEN_RELEASE_PUBKEY !== '' ? 'verified' : 'sha256-only']
             + ($latest === $current ? ['reinstalled' => true] : [])];
+}
+
+/** Give a file the modification time of NOW. opcache (validate_timestamps=1) decides
+ *  that a file changed only by comparing its mtime with the one it compiled, and
+ *  ZipArchive::extractTo (PHP >= 8.0) restores the ARCHIVE's date, so an update could
+ *  install new bytes carrying the very mtime of the old ones and the old bytecode
+ *  would stay in use. No time argument: utime(NULL) needs write access, not ownership.
+ *  Best-effort; false when the host refused. */
+function admin_touch_now(string $path): bool {
+    if (!is_file($path)) return false;
+    clearstatcache(true, $path);
+    return (bool)@touch($path);
+}
+
+/** Put one extracted file in place of its target: park the old one aside first (frees
+ *  the name even when the file is open, see the caller), move/copy the new one in,
+ *  stamp it with the current time (admin_touch_now) and fix its mode.
+ *  False when the name stayed blocked and nothing was installed. */
+function admin_update_place_file(string $srcF, string $dstF): bool {
+    if (file_exists($dstF)) {
+        @unlink($dstF . '.lumen-old');
+        if (!@rename($dstF, $dstF . '.lumen-old')) @unlink($dstF);
+    }
+    if (!@rename($srcF, $dstF) && !@copy($srcF, $dstF)) return false;
+    admin_touch_now($dstF);
+    admin_fix_file_mode($dstF);
+    return true;
 }
 
 /** Drop stale bytecode for freshly-overwritten *.php so the NEW code answers the
@@ -3658,12 +3701,7 @@ function admin_update_finish_pending(): int {
         $new = $dst . '.lumen-new';
         if (!is_file($new)) { @unlink($dst . '.lumen-old'); continue; }        // already finalized
         if ($self !== '' && str_replace('\\', '/', (string)@realpath($dst)) === $self) { $left[] = $rel; continue; }
-        if (file_exists($dst)) {
-            @unlink($dst . '.lumen-old');
-            if (!@rename($dst, $dst . '.lumen-old')) @unlink($dst);
-        }
-        if (!@rename($new, $dst) && !@copy($new, $dst)) { $left[] = $rel; continue; }
-        admin_fix_file_mode($dst);
+        if (!admin_update_place_file($new, $dst)) { $left[] = $rel; continue; }
         @unlink($new);
         @unlink($dst . '.lumen-old');
         $swapped[] = $dst;

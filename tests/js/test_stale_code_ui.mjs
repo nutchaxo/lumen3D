@@ -129,9 +129,11 @@ const need = {
   admin: ['staleCodeTitle', 'staleCodeBody', 'staleCodeBodyOlder', 'staleCodeBodyNewer', 'staleCodeRemedyParked', 'staleCodeRemedyOpcache',
     'staleCodeRemedyRestart', 'staleCodeRemedyRecheck', 'staleCodeRemedyWait', 'staleCodeRemedyIncomplete', 'staleCodeRemedyReupload',
     'staleCodeDetails', 'staleCodeRecheck', 'staleCodeRemedyProcesses', 'staleCodeRemedyPermissions',
-    'staleCodeRemedyPermissionsReinstall', 'staleCodeYes', 'staleCodeNo', 'staleCodeWritable', 'staleCodeReplaceable', 'updateErr_reinstall_version_mismatch', 'updateErr_reinstall_version_differs', 'staleCodePhpUser', 'staleCodeRepair',
-    'staleCodeRepairReinstall', 'staleCodeRepairing', 'staleCodeRepairDone', 'staleCodeReinstalled', 'staleCodeReinstallFailed',
-    'staleCodeCannotWrite'],
+    'staleCodeRemedyPermissionsReinstall', 'staleCodeYes', 'staleCodeNo', 'staleCodeWritable', 'staleCodeReplaceable', 'updateErr_reinstall_version_mismatch', 'updateErr_reinstall_version_differs', 'staleCodePhpUser',
+    'staleCodeReinstallFailed', 'staleCodeCannotWrite',
+    'staleFixButton', 'staleFixRunning', 'staleFixNothing', 'staleFixParked', 'staleFixParkedLeft', 'staleFixInvalidated',
+    'staleFixInvalidateBlocked', 'staleFixTouched', 'staleFixPerms', 'staleFixReset', 'staleFixResetFailed', 'staleFixReinstalled',
+    'staleFixFailed', 'staleFixDone'],
   mkt: ['staleServerCode', 'staleServerCodeOlder', 'unsupportedPlacement', 'badPluginId'],
 };
 for (const [l, d] of langs) {
@@ -142,9 +144,12 @@ for (const [l, d] of langs) {
   assert.ok(d.admin.staleCodeRemedyParked.includes('{files}'), `${l} parked token`);
   assert.ok(d.admin.staleCodeBodyOlder.includes('{files}') && d.admin.staleCodeBodyNewer.includes('{code}') && d.admin.staleCodeBodyNewer.includes('{files}'), `${l} body tokens (older/newer)`);
   assert.ok(d.admin.staleCodeRemedyWait.includes('{seconds}') && d.admin.staleCodeRemedyIncomplete.includes('{code}') && d.admin.staleCodeRemedyReupload.includes('{files}') && d.admin.staleCodeDetails.includes('{details}'), `${l} remedy tokens`);
-  assert.ok(d.admin.staleCodeRepairReinstall.includes('{files}') && d.admin.staleCodeRemedyPermissions.includes('{files}')
-    && d.admin.staleCodeWritable.includes('{w}') && d.admin.staleCodeReplaceable.includes('{w}') && d.admin.updateErr_reinstall_version_mismatch.includes('{latest}') && d.admin.staleCodePhpUser.includes('{user}')
-    && d.admin.staleCodeRepairDone.includes('{fixed}') && d.admin.staleCodeRepairDone.includes('{failed}'), `${l} repair tokens`);
+  assert.ok(d.admin.staleCodeRemedyPermissionsReinstall.includes('{files}') && d.admin.staleCodeRemedyPermissions.includes('{files}')
+    && d.admin.staleCodeWritable.includes('{w}') && d.admin.staleCodeReplaceable.includes('{w}') && d.admin.updateErr_reinstall_version_mismatch.includes('{latest}') && d.admin.staleCodePhpUser.includes('{user}'), `${l} repair tokens`);
+  for (const k of ['staleFixParked', 'staleFixInvalidated']) assert.ok(d.admin[k].includes('{count}'), `${l} ${k} token`);
+  for (const k of ['staleFixParkedLeft', 'staleFixTouched', 'staleFixPerms']) assert.ok(d.admin[k].includes('{count}') && d.admin[k].includes('{failed}'), `${l} ${k} tokens`);
+  assert.ok(d.admin.staleFixReinstalled.includes('{version}'), `${l} reinstalled token`);
+  for (const k of ['staleCodeRepair', 'staleCodeRepairReinstall', 'staleCodeRepairing', 'staleCodeRepairDone', 'staleCodeReinstalled']) assert.equal(d.admin[k], undefined, `${l} ${k} was folded into the automatic fix`);
   assert.ok(d.mkt.staleServerCodeOlder.includes('{filesVersion}'), `${l} older token`);
   assert.ok(d.mkt.staleServerCode.includes('{codeVersion}') && d.mkt.staleServerCode.includes('{filesVersion}'), `${l} stale tokens`);
   assert.ok(d.mkt.unsupportedPlacement.includes('{placement}'), `${l} placement token`);
@@ -162,6 +167,72 @@ for (const [l, d] of langs) {
   assert.equal(w.remedy, 'wait');
   assert.equal(w.waitSeconds, 2);
   assert.ok(w.details.includes('opcache.revalidate_freq=2') && w.details.includes('blocked=yes'));
+}
+
+// 1.84.3: the field case. opcache compares file dates, invalidation is blocked, the probe
+// refreshed the dates (touched): wait, and the tab re-checks by itself after waitSeconds + 5.
+{
+  const OC = { enabled: true, restrictApi: '/block_api_functions', validateTimestamps: true, revalidateFreq: 120 };
+  const probe = (rec) => ({ cause: 'opcache', opcache: OC, outdated: [], recovery: { invalidated: 0, tried: 28, blocked: true, ...rec } });
+  const fix = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ touched: 27, touchFailed: 0 }) } });
+  assert.equal(fix.remedy, 'wait'); assert.equal(fix.touched, 27); assert.equal(fix.waitSeconds, 120);
+  assert.equal(fix.autoRecheckSeconds, 125);
+  assert.match(fix.details, /blocked=yes, touched=27$/);
+  // Some touches failed but some worked: still wait.
+  const part = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ touched: 3, touchFailed: 2 }) } });
+  assert.equal(part.remedy, 'wait'); assert.equal(part.autoRecheckSeconds, 125);
+  assert.match(part.details, /touched=3, touchFailed=2/);
+  // Nothing could be touched and invalidation is blocked: waiting cannot help.
+  const stuck = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ touched: 0, touchFailed: 28 }) } });
+  assert.equal(stuck.remedy, 'touch'); assert.equal(stuck.autoRecheckSeconds, 0);
+  // The probe reports its touches but refreshed nothing (no file eligible): no wait either.
+  const none = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ touched: 0, touchFailed: 0, libTouched: null }) } });
+  assert.equal(none.remedy, 'touch'); assert.equal(none.autoRecheckSeconds, 0);
+  // The library itself could not be touched while other files were: waiting cannot help it.
+  const libFail = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true,
+      probe: probe({ touched: 27, touchFailed: 1, libTouched: false, touchFailedFiles: ['api/_admin_lib.php'] }) } });
+  assert.equal(libFail.remedy, 'touch'); assert.equal(libFail.autoRecheckSeconds, 0);
+  assert.match(libFail.details, /touchFailedFiles=api\/_admin_lib\.php/);
+  // A failure on another file with the library touched keeps waiting.
+  const otherFail = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ touched: 27, touchFailed: 1, libTouched: true }) } });
+  assert.equal(otherFail.remedy, 'wait');
+  // The automatic re-check already ran and the code is still old: stop promising a wait.
+  const after = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ touched: 27, touchFailed: 0 }) } }, { autoRecheckDone: true });
+  assert.equal(after.remedy, 'touchNoEffect'); assert.equal(after.autoRecheckSeconds, 0);
+  // An older probe (no touch fields) keeps the generic wait, without automatic re-check.
+  const old = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({}) } });
+  assert.equal(old.remedy, 'wait'); assert.equal(old.autoRecheckSeconds, 0); assert.equal(old.touched, 0);
+  // The library's own recovery reports touched too.
+  const lib = describeStaleCode({ codeStale: true, codeVersion: '1.84.2', filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', direction: 'code_older', parked: [], opcache: OC, recovery: { invalidated: 0, filesTried: 20, opcacheReset: false, touched: 19, touchFailed: 0 } } });
+  assert.equal(lib.remedy, 'wait'); assert.equal(lib.autoRecheckSeconds, 125); assert.match(lib.details, /touched=19/);
+  // invalidation that worked is still "recheck", never wait.
+  const okInv = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: probe({ invalidated: 5, blocked: false, touched: 5 }) } });
+  assert.equal(okInv.remedy, 'recheck'); assert.equal(okInv.autoRecheckSeconds, 0);
+  // validate_timestamps off: touching changes nothing, no wait/touch remedy.
+  const off = describeStaleCode({ codeStale: true, codeVersion: null, filesVersion: '1.84.3',
+    codeDiagnosis: { backend: 'php', libraryOutdated: true, probe: { ...probe({ touched: 5 }), opcache: { ...OC, validateTimestamps: false } } } });
+  assert.notEqual(off.remedy, 'wait'); assert.notEqual(off.remedy, 'touch');
+}
+
+// 1.84.3: the automatic fix is offered on a PHP host only; a Python process is restarted by hand.
+{
+  const phpAns = (extra) => ({ codeStale: true, codeVersion: '1.84.2', filesVersion: '1.84.3', codeDiagnosis: { backend: 'php', direction: 'code_older', parked: [], ...extra } });
+  assert.equal(describeStaleCode(phpAns({})).fixable, true);
+  assert.equal(describeStaleCode(phpAns({ parked: ['api/a.php'] })).fixable, true);
+  assert.equal(describeStaleCode(phpAns({ direction: 'code_newer' })).fixable, true, 'an incomplete update on PHP still offers it (the server explains)');
+  const py = describeStaleCode({ codeStale: true, codeVersion: '1.84.2', filesVersion: '1.84.3', codeDiagnosis: { backend: 'python', action: 'restart', direction: 'code_older' } });
+  assert.equal(py.fixable, false); assert.equal(py.backend, 'python');
+  assert.equal(describeStaleCode({ codeStale: true, codeVersion: '1.84.4', filesVersion: '1.84.3', codeDiagnosis: { backend: 'python', action: 'restart', direction: 'code_newer' } }).fixable, false);
 }
 
 console.log('ok');

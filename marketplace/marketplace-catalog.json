@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "serial": 21,
-  "issuedAt": "2026-11-17T12:45:57Z",
+  "serial": 22,
+  "issuedAt": "2026-11-18T08:45:33Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -93,16 +93,16 @@
       "name": "Advanced Studio",
       "placement": "studio",
       "subtype": null,
-      "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then adjust brightness and contrast, pick lookup tables, draw selections, measure, threshold, analyse particles and filter, on the full-precision voxels.",
+      "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then work on the full-precision voxels with the tools of ImageJ 1.54p: brightness and contrast, lookup tables, threshold, selections (including the Wand, segmented line and angle), measurements and particle analysis, background subtraction and contrast enhancement, filters and image math, binary tools (EDM, watershed, skeletons, Find Maxima), Image Calculator and channel split, merge and arrange, rotate, scale, canvas size, bin and calibration, and colocalization (Pearson, Manders, Costes, Li).",
       "creator": "IRIBHM",
       "icon": "microscope",
       "platformCompat": ">=1.83.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/plugin-advanced-studio-1.0.0.zip",
+      "latestVersion": "1.1.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/plugin-advanced-studio-1.1.0.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/advanced-studio/SHA256SUMS.sig",
-      "sha256": "edee7cec0c8fd80c6a5c59e55f915f1371243155d4be19239bf02aeda91df82a",
+      "sha256": "ca6d9741ea98ead2af1fe20ee3b69ba269b554f635810d87edcc9286abd4324c",
       "recommended": true
     },
     {

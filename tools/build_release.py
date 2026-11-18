@@ -19,7 +19,7 @@ import re
 import shutil
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -114,8 +114,9 @@ EXCLUDED_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db", ".htaccess.lumen-back
 # Sources a PHP update parks beside the live ones (never part of a release).
 EXCLUDED_SUFFIXES = frozenset({".pyc", ".lumen-old", ".lumen-new", ".lumen-backup"})
 
-# Fixed DOS timestamp so zip bytes do not vary with build-machine mtimes.
-ZIP_ENTRY_DATE = (1980, 1, 1, 0, 0, 0)
+# DOS timestamps run 1980-01-01 .. 2107-12-31.
+ZIP_DATE_MIN = (1980, 1, 1, 0, 0, 0)
+ZIP_DATE_MAX = (2107, 12, 31, 23, 59, 58)
 
 
 def is_excluded(rel_path):
@@ -235,9 +236,33 @@ def sha256_hex(data):
 def _release_timestamp():
     """SOURCE_DATE_EPOCH (the commit time, set by CI) keeps two builds of one commit
     byte-identical; without it, the build time."""
+    return _release_moment().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _release_moment():
+    """The release moment (UTC): SOURCE_DATE_EPOCH, else now."""
     epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
-    moment = datetime.fromtimestamp(int(epoch), timezone.utc) if epoch.isdigit() else datetime.now(timezone.utc)
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not epoch.isdigit():
+        return datetime.now(timezone.utc)
+    # timedelta arithmetic: fromtimestamp() refuses far-future values on Windows
+    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=int(epoch))
+
+
+def zip_entry_date():
+    """DOS date of every zip entry = the release moment, clamped to the DOS range.
+
+    It must differ from one release to the next: since PHP 8.0 ZipArchive::extractTo
+    restores each entry's mtime, and opcache (validate_timestamps=1) treats a file as
+    unchanged when its mtime equals the cached one. A constant date made every update
+    install files whose mtime matched the previous release's, so the old bytecode
+    stayed in use for good. Two builds of one commit (same SOURCE_DATE_EPOCH) stay
+    byte-identical."""
+    try:
+        m = _release_moment()
+        date = (m.year, m.month, m.day, m.hour, m.minute, m.second - m.second % 2)  # DOS: 2 s steps
+    except (ValueError, OverflowError):
+        return ZIP_DATE_MAX   # beyond year 9999
+    return min(max(date, ZIP_DATE_MIN), ZIP_DATE_MAX)
 
 
 def build_version_manifest(version, commit, file_hashes):
@@ -254,10 +279,11 @@ def build_version_manifest(version, commit, file_hashes):
 
 
 def write_zip(zip_path, entries):
-    """Write sorted (arcname, bytes) entries with fixed metadata."""
+    """Write sorted (arcname, bytes) entries; every entry carries the release moment."""
+    entry_date = zip_entry_date()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for arcname, data in entries:
-            info = zipfile.ZipInfo(arcname, date_time=ZIP_ENTRY_DATE)
+            info = zipfile.ZipInfo(arcname, date_time=entry_date)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             zf.writestr(info, data)

@@ -21,17 +21,26 @@
  *   permissions  PHP: files that PHP could not write are still the old ones (repairable from here)
  *   recheck      PHP: the server just dropped its cached code, the next request is fresh
  *   processes    PHP: this process dropped its cache, others of the host still hold the old one
- *   wait         PHP: opcache re-reads changed files every `waitSeconds`
+ *   wait         PHP: opcache re-reads changed files every `waitSeconds`; `touched` > 0 means the
+ *                server just gave its files a fresh date (what opcache compares), so the tab
+ *                re-checks by itself after `autoRecheckSeconds`
+ *   touch        PHP: opcache compares file dates, the dates could not be refreshed from here
+ *                and invalidation is blocked: waiting cannot help, upload the files again
+ *   touchNoEffect PHP: the dates were refreshed and the wait is over, the code is still old
  *   reupload     PHP: nothing explains it (opcache off, or a library older than its entry point)
  *   opcache      PHP: opcache is the cause and the host blocks us from clearing it
  * `retry` is true when the server acted on this very request (the answer still comes
  * from the old bytecode), so the tab should ask again before alarming the operator;
- * `opts.retriesExhausted` says it already did, so a recheck becomes `processes`.
+ * `opts.retriesExhausted` says it already did, so a recheck becomes `processes`;
+ * `opts.autoRecheckDone` says the tab's automatic re-check already ran and the code is
+ * still old, so `wait` becomes `touchNoEffect`.
  * @param {object} v the `version` answer
- * @param {{retriesExhausted?: boolean}} [opts]
+ * @param {{retriesExhausted?: boolean, autoRecheckDone?: boolean}} [opts]
  * @returns {null | {code:?string, files:string, remedy:string, parked:string[],
- *                   waitSeconds:number, retry:boolean, details:string, cause:?string,
- *                   outdated:object[], phpUser:?string, reinstall:boolean, repairable:boolean}}
+ *                   waitSeconds:number, touched:number, touchFailed:number, autoRecheckSeconds:number,
+ *                   retry:boolean, details:string, cause:?string,
+ *                   outdated:object[], phpUser:?string, reinstall:boolean, repairable:boolean,
+ *                   backend:string, fixable:boolean}}
  */
 export function describeStaleCode(v, opts = {}) {
   if (!v || v.codeStale !== true || !v.filesVersion) return null;
@@ -51,12 +60,28 @@ export function describeStaleCode(v, opts = {}) {
   const acted = !!rec && (rec.opcacheReset === true || rec.invalidated > 0 || rec.swapped > 0 || rec.parkedBefore > 0)
     || Number(diag.swappedEarlier) > 0 || probeInvalidated;
   const waitSeconds = oc && oc.validateTimestamps === true && oc.revalidateFreq > 0 ? oc.revalidateFreq : 0;
+  // What the server did to the dates of its files: the probe's report, else the library's own recovery.
+  const touched = Math.max(0, Number(prec && prec.touched) || Number(rec && rec.touched) || 0);
+  const touchFailed = Math.max(0, Number(prec && prec.touchFailed) || Number(rec && rec.touchFailed) || 0);
+  const libSource = prec && prec.libTouched !== undefined ? prec : rec;
+  const libTouched = libSource && typeof libSource.libTouched === 'boolean' ? libSource.libTouched : null;
+  const touchFailedFiles = [prec, rec].map((r) => (r && Array.isArray(r.touchFailedFiles) ? r.touchFailedFiles : []))
+    .reduce((a, b) => a.concat(b), []).filter((f) => typeof f === 'string').slice(0, 20);
+  const blocked = !!prec && prec.blocked === true;
+  const touchReported = !!prec && typeof prec.touched === 'number';
   let remedy;
   if (diag.direction === 'code_newer' || cause === 'incomplete') remedy = 'incomplete';
   else if (diag.backend === 'python') remedy = 'restart';
   else if (parked.length) remedy = 'parked';
   else if (cause === 'not_written' && outdated.length) remedy = 'permissions';
   else if (acted) remedy = opts && opts.retriesExhausted ? 'processes' : 'recheck';
+  // Waiting cannot help when the date of the library (or of every file) could not be
+  // refreshed, nor when the automatic re-check already ran and the code is still old.
+  // A probe that reports its touches but refreshed none (none eligible, or all failed)
+  // leaves the dates as they were: waiting cannot help either.
+  else if (waitSeconds && blocked && (touchFailed > 0 || touchReported) && (touched === 0 || libTouched === false)) remedy = 'touch';
+  // The dates were refreshed and the delay has passed, yet the code is old: another cause.
+  else if (waitSeconds && touched > 0 && opts && opts.autoRecheckDone) remedy = 'touchNoEffect';
   else if (waitSeconds) remedy = 'wait';
   else if (prec && prec.blocked === true) remedy = 'opcache';
   else if (cause !== 'opcache' && (diag.libraryOutdated || (oc && oc.enabled === false))) remedy = 'reupload';
@@ -68,17 +93,22 @@ export function describeStaleCode(v, opts = {}) {
   return {
     code,
     files: String(v.filesVersion),
-    remedy, parked, waitSeconds,
+    remedy, parked, waitSeconds, touched, touchFailed,
+    // The dates were refreshed: PHP re-reads within waitSeconds; a margin covers the request in flight.
+    autoRecheckSeconds: remedy === 'wait' && touched > 0 ? waitSeconds + 5 : 0,
     retry: remedy === 'recheck' && !(rec && rec.throttled && !probeInvalidated),
-    details: describeOpcache(oc, rec, prec),
+    details: describeOpcache(oc, rec, prec, touchFailedFiles),
     cause, outdated, phpUser,
     reinstall: v.reinstallSupported === true,
     repairable: remedy === 'permissions',
+    backend: diag.backend === 'python' ? 'python' : 'php',
+    // "Try to fix automatically" acts on a PHP host; a Python process can only be restarted by hand.
+    fixable: diag.backend !== 'python' && remedy !== 'restart',
   };
 }
 
 /** The raw opcache facts, one line the operator can forward to the host's support. */
-export function describeOpcache(oc, rec, prec) {
+export function describeOpcache(oc, rec, prec, touchFailedFiles) {
   const parts = [];
   if (oc) {
     const yn = (b) => (b === null || b === undefined ? '?' : b ? '1' : '0');
@@ -91,6 +121,14 @@ export function describeOpcache(oc, rec, prec) {
   }
   if (prec) {
     parts.push(`probe invalidated=${Number(prec.invalidated) || 0}/${Number(prec.tried) || 0}`, `blocked=${prec.blocked ? 'yes' : 'no'}`);
+  }
+  const touchSource = prec && prec.touched !== undefined ? prec : rec && rec.touched !== undefined ? rec : null;
+  if (touchSource) {
+    parts.push(`touched=${Number(touchSource.touched) || 0}`);
+    if (Number(touchSource.touchFailed) > 0) {
+      parts.push(`touchFailed=${Number(touchSource.touchFailed)}`);
+      if (Array.isArray(touchFailedFiles) && touchFailedFiles.length) parts.push(`touchFailedFiles=${touchFailedFiles.join(' ')}`);
+    }
   }
   return parts.join(', ');
 }

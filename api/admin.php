@@ -28,7 +28,7 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 $action = lumen_str($_GET['action'] ?? null) ?? '';
 $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (lumen_request_json() ?? []) : [];
 
-if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'update_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
+if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'update_plugin', 'uninstall_plugin', 'repair_permissions', 'stale_fix'], true)) admin_require_write();
 
 // The session was read at the door (auth, CSRF) and nothing below writes to it, so
 // its lock is released here. PHP serialises every request of one session on that
@@ -217,6 +217,38 @@ switch ($action) {
             'codeStale' => $code['stale'],
             'codeDiagnosis' => $code['diagnosis'],
         ]);
+
+    case 'stale_fix': {
+        // Applies every correction the server can make by itself to code older than its
+        // files, then says what it did and what is left (lumen_probe_fix). Works beside
+        // an older library: the stale verdict falls back to "older" when the library has
+        // no stamp function, and every library call the fix makes is guarded.
+        $code = function_exists('admin_code_status') ? admin_code_status(null, false) : [
+            'codeVersion' => null, 'filesVersion' => admin_max_version(changelog_dir()), 'stale' => true,
+        ];
+        $out = [
+            'stale' => !empty($code['stale']), 'codeStale' => !empty($code['stale']),
+            'codeVersion' => $code['codeVersion'] ?? null, 'filesVersion' => $code['filesVersion'] ?? null,
+            'reinstallSupported' => defined('LUMEN_UPDATE_REINSTALL') && LUMEN_UPDATE_REINSTALL === true,
+            'actions' => [], 'next' => 'none', 'waitSeconds' => 0, 'reasons' => [],
+        ];
+        if ($out['stale']) {
+            $out['next'] = 'manual';
+            $out['reasons'] = ['probe_unavailable'];
+            if (is_file(__DIR__ . '/_code_probe.php')) {
+                try {
+                    require_once __DIR__ . '/_code_probe.php';
+                    if (function_exists('lumen_probe_fix')) {
+                        $out = array_merge($out, lumen_probe_fix(dirname(__DIR__), $out['filesVersion'], $out['codeVersion']));
+                    }
+                } catch (\Throwable $e) {
+                    error_log('stale-code fix failed: ' . $e->getMessage());
+                    $out['reasons'] = ['fix_failed'];
+                }
+            }
+        }
+        admin_json_out($out);
+    }
 
     case 'docs_list':
         admin_json_out(admin_docs_list(($_GET['refresh'] ?? '') === '1'));

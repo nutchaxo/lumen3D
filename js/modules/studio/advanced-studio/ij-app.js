@@ -2558,7 +2558,9 @@ const IJApp = (() => {
     const note = h('p', { class: 'ij-banner' });
     note.hidden = true;
     const wrap = h('div', { class: 'ij-table-wrap' }, table);
-    let shown = 0, shownCols = '', tbody = null, firstRef = null;
+    // shownCols starts as null so the first render always builds the table, even an empty one
+    // (no rows = no columns = '' would otherwise skip the build and leave tbody null).
+    let shown = 0, shownCols = null, tbody = null, firstRef = null;
     const cell = (r, c) => h('td', { text: r[c] === undefined ? '' : (typeof r[c] === 'number' ? num(r[c], 4) : String(r[c])) });
     // Only the rows added since the last refresh are built; a full rebuild happens when the
     // columns change or the table was cleared / replaced.

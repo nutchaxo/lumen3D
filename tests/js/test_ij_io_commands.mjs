@@ -376,11 +376,12 @@ await test('File › Open: a text image, a selection (.roi), a RoiSet (.zip) and
     const z = (await import('./ij_io_support.mjs')).b64(JSON.parse((await import('node:fs')).readFileSync(new URL('../fixtures/ij-wave3/io/roiset_zip.json', import.meta.url), 'utf8')).zipDeflatedB64);
     assert.equal((await openVia(t, [file('fiji.zip', z)])).length, 0);
     assert.equal(t.api('io').roiManager.list().length, 2 + 7, 'the seven ROIs of the jar\'s deflated RoiSet');
-  } else console.log('SKIP deflated RoiSet: this Node has no deflate-raw stream');
+  } else console.log('note: deflated RoiSet not opened (this Node has no deflate-raw stream)');
   // a LUT: the codec of the Edit package (IJLutFile) reads it; without the codec the file type is refused
   const realLut = t.page.IJLutFile;
   assert.ok(realLut && typeof realLut.parse === 'function', 'the Edit package registers its LUT codec');
-  delete t.page.IJLutFile;
+  // assigned, not deleted: on Node 20 a `delete` on the vm sandbox does not reach the context's global (the code still sees the codec)
+  t.page.IJLutFile = undefined;
   let errs = await openVia(t, [file('my.lut', new Uint8Array(768).fill(7))]);
   assert.equal(errs[0].message, EN.err.ioUnknownFormat, 'no LUT codec');
   quiet(t);

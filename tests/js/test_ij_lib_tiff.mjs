@@ -324,12 +324,13 @@ await test('a real bundle TIFF (when the local DATA_WEB holds one)', async () =>
   const dir = path.join(ROOT, 'DATA_WEB', '3d', 'Egfl7eGFP-E8-1-DAPI-Egfl7-Pecam1-10x-stack', 'download');
   const name = 'Egfl7eGFP-E8-1-DAPI-Egfl7-Pecam1-10x-stack.tif';
   const file = path.join(dir, name);
-  if (!existsSync(file)) { console.log('SKIP real TIFF: DATA_WEB has no E8-1 bundle'); return; }
+  // datasets are never in the repository (DATA_WEB is gitignored): this group runs on a machine that has the E8-1 bundle
+  if (!existsSync(file)) { console.log('note: real-TIFF group not run (DATA_WEB has no E8-1 bundle)'); return; }
   const py = ['python', 'python3', 'py'].find((c) => spawnSync(c, ['-c', 'print(1)']).stdout?.toString().trim() === '1');
-  if (!py) { console.log('SKIP real TIFF: no python to build the index'); return; }
+  if (!py) { console.log('note: real-TIFF group not run (no python to build the index)'); return; }
   const code = `import sys, json; sys.path.insert(0, ${JSON.stringify(ROOT)}); import dev_server as d; print(d._tiff_json(d._tiff_index(${JSON.stringify(file)}, '3d/x', ${JSON.stringify(name)})))`;
   const run = spawnSync(py, ['-c', code], { maxBuffer: 1 << 28 });
-  if (run.status !== 0) { console.log('SKIP real TIFF: the index could not be built'); return; }
+  assert.equal(run.status, 0, 'the index of the real TIFF is built: ' + String(run.stderr || '').slice(0, 400));
   const index = JSON.parse(run.stdout.toString('utf8'));
   const p = IJTiffStream.plan(index);
   assert.deepEqual([p.width, p.height, p.bitDepth, p.channels, p.slices, p.pages], [2048, 2048, 8, 3, 100, 300]);

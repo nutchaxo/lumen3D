@@ -93,8 +93,10 @@ if ($up) {
         }
         $doc = json_decode($body, true);
         check("$file: answers {$exp['pages']} pages", $st === 200 && is_array($doc) && $doc['pages'] === $exp['pages'], "$st " . substr($body, 0, 120));
-        $code = "import sys; sys.path.insert(0, " . json_encode($repo) . "); import dev_server as d; "
-            . "sys.stdout.buffer.write(d._tiff_json(d._tiff_index(" . json_encode("$root/DATA_WEB/3d/demo/download/$file") . ", '3d/demo', " . json_encode($file) . ")).encode('utf-8'))";
+        // JSON strings are Python string literals only without PHP's escaped slashes ("\/" is not a Python escape: on Linux the path breaks)
+        $lit = function ($v) { return json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); };
+        $code = "import sys; sys.path.insert(0, " . $lit($repo) . "); import dev_server as d; "
+            . "sys.stdout.buffer.write(d._tiff_json(d._tiff_index(" . $lit("$root/DATA_WEB/3d/demo/download/$file") . ", '3d/demo', " . $lit($file) . ")).encode('utf-8'))";
         [$pc, $py, $perr] = run([$python, '-c', $code]);
         check("$file: JSON byte-identical to the Python twin", $pc === 0 && $py === $body, $pc === 0 ? 'differs at byte ' . strspn($py ^ $body, "\0") : substr($perr, -200));
     }

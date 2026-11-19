@@ -87,6 +87,7 @@ The user expects this to happen silently as part of every edit:
 The repo keeps **exactly two branches** : **`main`** (stable) and **`dev`** (active development). The user wants **all development on `dev`**, with **no sub-branches** (`feat/…`, `fix/…`, `claude/…`) and no git worktrees.
 * **No worktrees / no sub-branches** : never create git worktrees, never spawn agents with `isolation: "worktree"`, and don't spin up `feat/…`/`fix/…` branches for routine work. Always work in the primary checkout of this repo, on the `dev` branch — the checkout path varies by machine (e.g. `D:\Coding\WebPlatform` on host MSI), so don't assume a hardcoded location.
 * **Commit straight to `dev`** : default to committing/pushing on `dev` (not protected — direct pushes succeed). Commit finished, verified work promptly — untracked files have been wiped before by branch updates.
+* **"Publier" / "publish" = a full release** (user's wording, 2026-11-19): when the user says to publish, that explicitly authorises the whole chain — commit on `dev`, push, merge `dev → main` (commit-tree, no branch switch), wait for main CI, signed tag `vX.Y.Z` on the merge commit, push the tag so the release workflow builds and publishes. A bare "commit" is only a commit (+ push to `dev` when asked).
 * **Integrate `dev → main` only when the user explicitly asks.** Likewise, only create a branch / open a PR when the user *explicitly* asks (e.g. invokes the create-PR command). That request overrides this default for that task only.
 
 ---

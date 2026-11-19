@@ -748,7 +748,13 @@ if ($http === null) {
     [$st, $j, $hd, $raw] = $req('GET', 'action=list');
     check('no PHP error text ever reaches a body', strpos($raw, 'Warning') === false && strpos($raw, 'Notice') === false && strpos($raw, 'Deprecated') === false);
     $err = (string)@file_get_contents("$root/server.err");
-    check('and the server logged no PHP error for any of it', !preg_match('/PHP (Warning|Notice|Deprecated|Fatal|Parse)/', $err));
+    // Only what the platform's own files raised counts: a host php.ini can print startup
+    // notices of its own (deprecated directives, a module loaded twice) that no request caused.
+    $ours = array_values(array_filter(preg_split('/\R/', $err) ?: [], static function ($line) {
+        return preg_match('/PHP (Warning|Notice|Deprecated|Fatal|Parse)/', $line)
+            && (strpos($line, '/api/') !== false || strpos($line, '\\api\\') !== false);
+    }));
+    check('and the server logged no PHP error for any of it' . ($ours ? ': ' . implode(' | ', array_slice($ours, 0, 3)) : ''), !$ours);
 }
 
 // ── Done ───────────────────────────────────────────────────────────────────────

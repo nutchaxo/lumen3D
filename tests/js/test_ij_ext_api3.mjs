@@ -139,7 +139,7 @@ await test('panels: openPanel builds once, the window refreshes with the tool-wi
   assert.equal(sh.windows.floats.size, 1);
   const inst = t.page.__panel;
   assert.equal(inst.kinds[0], 'doc', 'the first refresh is `doc`');
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   await until(() => inst.kinds.length > 1, 'a refresh after the document changed');
   assert.ok(inst.kinds.every((k) => typeof k === 'string'));
   // the window title is the panel's titleKey
@@ -174,7 +174,7 @@ await test('on(): activeDoc, doc (opened / pixels / size / display / renamed / c
   throws(() => api.on('doc', null), 'IJ_BAD_ARGS', 'not a function');
   api.on('ext:made', () => {});
   const kinds = () => seen.filter((s) => s[0] === 'doc').map((s) => s[1].kind);
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   await until(() => kinds().includes('opened'), 'opened');
   assert.ok(seen.some((s) => s[0] === 'activeDoc'), 'the duplicate became the active document');
   assert.ok(seen.some((s) => s[0] === 'layout'), 'a layout change');
@@ -624,7 +624,7 @@ await test('setPending: commit runs before any command and an image switch, Ente
   await t.runCommand('editInvert');
   assert.deepEqual(order, ['p1:commit'], 'only once');
   // an image switch commits
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   const second = t.activeId();
   api.setPending(mk('p2'));
   sh.layout.activate(id);
@@ -821,7 +821,7 @@ await test('Window menu: ImageJ\'s order, the open tool windows before the image
   assert.deepEqual(fired, ['showAll', 'putBehind', 'cascade', 'tile']);
   assert.equal(t.cmd('windowShowAll').shortcut[0], ']');
   // the image list follows the layout order and the next / previous commands follow it
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   const second = t.activeId();
   assert.deepEqual(J(order(win()).filter((x) => x.startsWith('winImg'))), J(sh.layout.order().map((d) => 'winImg' + d)));
   await t.runCommand('windowNext');
@@ -880,7 +880,7 @@ const tick = (el, on) => { el.checked = on; for (const f of el.listeners.change 
 
 await test('Synchronize Windows: cursor marks, zoom / pan relay without an echo, the ticked images are persisted, Unsynchronize All frees them', async () => {
   const { t, sh, api, id } = await start();
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   const second = t.activeId();
   await t.runCommand('toolsSyncWindows');
   assert.ok(sh.windows.floats.has('sync'), 'the panel');
@@ -1042,7 +1042,8 @@ await test('IJLuts.register / IJRoi name and polyline width validate', async () 
   const tab = new Uint8Array(768).fill(3);
   assert.equal(IJLuts.register('mine', tab), 'mine');
   tab[0] = 99; assert.equal(IJLuts.get('mine')[0], 3, 'the table was copied');
-  assert.deepEqual(arr(IJLuts.registered().map((x) => x.name)), ['mine']);
+  // package edit registers its two LutLoader tables on both sides at load
+  assert.deepEqual(arr(IJLuts.registered().map((x) => x.name)), ['3-3-2 RGB', 'Red/Green', 'mine']);
   assert.equal(IJLuts.names().includes('mine'), false, 'names() stays the built-in set');
   assert.equal(IJLuts.register('mine', new Uint8Array(768).fill(4)), 'mine', 're-registering replaces');
   assert.equal(IJLuts.get('mine')[0], 4);

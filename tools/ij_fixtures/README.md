@@ -139,6 +139,7 @@ tools/ij_fixtures/fiji/run_fiji.sh ModuleInfoCapture <out.json>                 
 tools/ij_fixtures/fiji/run_fiji.sh CompositeCapture <out.json>                                    # dialogs that change on a composite / 16-bit image; merged into fiji-dialogs.json (`variants`)
 tools/ij_fixtures/fiji/run_fiji.sh FijiRefs tests/fixtures/ij-wave3 [cmd ...]                     # reference outputs of the Fiji plugins (GPL: RUN only, never read)
 tools/ij_fixtures/fiji/run_fiji.sh RepeatCapture tests/fixtures/ij-wave3/repeat-command.json
+tools/ij_fixtures/fiji/run_fiji.sh JamaTies <in.json> <out.json>                             # `enh/jama_ties.json`: Jama eigenvalue bits of the tied Frangi Hessians (the cases of the stored file are a valid input)
 ```
 
 `run3.sh` starts a GUI-less `ij.ImageJ` instance (menus for `IJ.run`, `java.awt` dialogs in macro mode: it needs a desktop

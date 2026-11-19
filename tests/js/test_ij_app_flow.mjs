@@ -155,6 +155,8 @@ function boot() {
   const stub = makeShellStub({ fakeEl, answer, ask: (s) => sandbox.Dialog.ask(s), status: [] });
   const shells = stub.shells;
   sandbox.IJShell = { create: stub.create };
+  // The page loads the P-io module before ij-app.js (plugin.json scripts): File > Open dispatches through IJFileKinds.
+  vm.runInContext(fs.readFileSync(path.join(DIR, 'ij-proc-io.js'), 'utf8'), sandbox, { filename: 'ij-proc-io.js' });
   vm.runInContext(fs.readFileSync(path.join(DIR, 'ij-app.js'), 'utf8') + '\n;globalThis.__IJApp = IJApp;', sandbox, { filename: 'ij-app.js' });
 
   // Plugin ctx.
@@ -506,7 +508,7 @@ const listed = async (t, key) => (await engineCall(t.workers[0], 'session.list')
   await until(() => sh.images.filter(Boolean).pop().bitDepth === 8, '8-bit');
   await run(sh, 'binMask');
   await until(() => /-mask$/.test(sh.images.filter(Boolean).pop().name), 'mask shown');
-  t.script.dialogs.push({ minSize: 0, maxSize: 1e9, minCirc: 0, maxCirc: 1, exclude: false, holes: false, display: true, manager: true, summarize: true });
+  t.script.dialogs.push({ size: '0-Infinity', circularity: '0.00-1.00', show: 'nothing', exclude: false, clear: true, holes: false, display: true, manager: true, summarize: true });
   const asks = t.script.asks.length;
   await run(sh, 'analyzeParticles');
   assert.equal(t.script.asks.length, asks, 'the summary is a window, not a modal');

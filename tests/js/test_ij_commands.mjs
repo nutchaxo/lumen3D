@@ -305,7 +305,9 @@ assert.equal(en('editSelectNone', withDoc(null)), false);
 assert.equal(en('editSelectNone', withDoc(rect)), true);
 assert.equal(en('editAddToManager', withDoc(null)), false);
 assert.equal(en('editAddToManager', withDoc(line)), true);
-assert.equal(en('analyzePlotProfile', withDoc(rect)), false, 'Plot Profile needs a straight line');
+assert.equal(en('analyzePlotProfile', withDoc(rect)), true, 'Plot Profile takes a rectangle (the column average) since wave 3');
+assert.equal(en('analyzePlotProfile', withDoc({ type: 'oval', x: 1, y: 1, w: 4, h: 4 })), false, 'Plot Profile needs a line or a rectangle');
+assert.equal(en('analyzePlotProfile', withDoc(null)), false);
 assert.equal(en('analyzePlotProfile', withDoc(line)), true);
 assert.equal(en('editRestoreSelection', withDoc(null)), false);
 assert.equal(en('editRestoreSelection', withDoc(null, { prevRoi: rect })), true);
@@ -528,7 +530,7 @@ assert.ok(/--ij-warn-text/.test(CSS) && /\[data-theme="light"\] \.ij-root\s*\{[^
     for (const code of LANGS) assert.ok(typeof resolve(lang[code], `menu.${seg}`) === 'string' && resolve(lang[code], `menu.${seg}`).length > 0, `${code}: menu.${seg}`);
   }
 }
-// ImageJ's Executer does not remember Undo and Close (Repeat Command would repeat the command before them): `repeatable`
-for (const c of COMMANDS) assert.equal(c.repeatable === false, ['editUndo', 'fileClose'].includes(c.id), `${c.id}: repeatable`);
+// ImageJ's Executer does not remember Undo and Close (Repeat Command would repeat the command before them), and Repeat Command itself runs the remembered one without replacing it: `repeatable`
+for (const c of COMMANDS) assert.equal(c.repeatable === false, ['editUndo', 'fileClose', 'procRepeatCommand'].includes(c.id), `${c.id}: repeatable`);
 
 console.log(`ij commands: OK (${COMMANDS.length} commands, ${seen.size} key specs, ${enKeys.size} lang keys x ${LANGS.length})`);

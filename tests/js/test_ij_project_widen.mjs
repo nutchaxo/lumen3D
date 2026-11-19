@@ -160,24 +160,39 @@ test('block typing, depth validation, estimateBytes', () => {
   assert.equal(IJProject.outputBitDepth('max', 3, 16), 16);
 });
 
-test('recorded ImageJ outputs (tests/fixtures/ij-wave3/lib/zproject_*.json) when present', () => {
+test('recorded ImageJ outputs (tests/fixtures/ij-wave3/lib/zproject_*.json): IJProject at the input bit depth gives the depth and pixels of ImageJ', () => {
   const dir = path.join(ROOT, 'tests', 'fixtures', 'ij-wave3', 'lib');
   const files = existsSync(dir) ? readdirSync(dir).filter((n) => /^zproject_.*\.json$/.test(n)) : [];
-  if (!files.length) { console.log('SKIP ImageJ ZProjector fixtures: none recorded yet'); return; }
+  assert.ok(files.length >= 6, 'the recorded fixtures are present: ' + files.length);
+  // a fixture array: a plain list (null = NaN) or { b64 } of the stated depth
+  const vals = (v, bd) => {
+    if (Array.isArray(v)) return v.map((x) => (x === null ? NaN : x));
+    const buf = Buffer.from(v.b64, 'base64'), ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
+    return Array.from(bd === 8 ? new Uint8Array(ab) : bd === 16 ? new Uint16Array(ab) : new Float32Array(ab));
+  };
+  let runs = 0;
+  const replay = (name, stack, cases) => {
+    const W = stack[0].width, H = stack[0].height, bd = stack[0].bitDepth;
+    const T = bd === 8 ? Uint8Array : bd === 16 ? Uint16Array : Float32Array;
+    const planes = stack.map((p) => T.from(vals(p.data, bd)));
+    for (const c of cases) {
+      const a = c.params.start - 1, b = c.params.stop - 1;
+      const proj = IJProject.create({ method: c.params.method, width: W, height: H, depth: b - a + 1, channels: 1, inputBitDepth: bd });
+      feed(proj, planes.slice(a, b + 1), W, H, Math.max(1, H >> 1), 2, rng(5));
+      const out = proj.finish()[0];
+      const where = `${name} ${c.params.method} ${c.params.start}-${c.params.stop}`;
+      assert.equal(out.bitDepth, c.bitDepth, where + ': bit depth');
+      const want = vals(c.output.data, c.output.bitDepth || c.bitDepth).map((v) => (c.bitDepth === 32 ? Math.fround(v) : v));
+      assert.equal(out.data.length, want.length, where);
+      for (let i = 0; i < want.length; i++) if (!(out.data[i] === want[i] || (out.data[i] !== out.data[i] && want[i] !== want[i]))) assert.fail(`${where}: pixel ${i} is ${out.data[i]}, ImageJ gave ${want[i]}`);
+      runs++;
+    }
+  };
   for (const name of files) {
     const fx = JSON.parse(readFileSync(path.join(dir, name), 'utf8'));
-    const cases = Array.isArray(fx) ? fx : (fx.cases || [fx]);
-    for (const c of cases) {
-      if (!c.method || !c.input || !c.expected) continue;       // another shape: left to the fixture's owner
-      const bd = c.bitDepth || 8, W = c.width, H = c.height;
-      const T = bd === 8 ? Uint8Array : bd === 16 ? Uint16Array : Float32Array;
-      const planes = c.input.map((p) => T.from(p.map((v) => (v === null ? NaN : v))));
-      const proj = IJProject.create({ method: c.method, width: W, height: H, depth: planes.length, channels: 1, inputBitDepth: bd });
-      feed(proj, planes, W, H, Math.max(1, H >> 1), 2, rng(5));
-      const got = Array.from(proj.finish()[0].data), want = c.expected.map((v) => (v === null ? NaN : v));
-      assert.ok(got.every((v, i) => Object.is(v, want[i]) || v === want[i]), `${name}: ${c.method} ${bd}-bit`);
-    }
+    if (fx.groups) fx.groups.forEach((g, i) => replay(name + '#' + i, g.stack, g.cases)); else replay(name, fx.stack, fx.cases);
   }
+  assert.ok(runs >= 90, 'the replay ran: ' + runs);
 });
 
 console.log(`test_ij_project_widen: ${passed} groups passed`);

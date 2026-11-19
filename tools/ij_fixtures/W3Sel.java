@@ -21,6 +21,8 @@ final class W3Sel {
         lineToArea();
         areaToLine();
         straighten();
+        ellipse();
+        interpolateOnePart();
     }
 
     // ------------------------------------------------------------------ helpers
@@ -293,5 +295,39 @@ final class W3Sel {
         new Fx("sel", "straighten", "straighten")
             .call("new Straightener().straighten(imp, roi, width): polyline -> straightenLine (spline fit for straightening, 1 px resampling, perpendicular interpolation); FREELINE first 'Fit Spline'; straight Line -> rotateLine")
             .input(ip).put("input16", J.image(ip16)).put("cases", cases).write();
+    }
+
+    /** EllipseRoi (Fit Ellipse) is a FREEROI polygon: smoothing in Interpolate, FREELINE in Area to Line, FREEROI after Rotate / Scale. */
+    static void ellipse() {
+        List<Object> cases = new ArrayList<>();
+        Roi e = new EllipseRoi(10, 20, 50, 30, 0.5);
+        for (String o : new String[]{"interval=1", "interval=2.5 smooth", "interval=2.5", "interval=9", "interval=3.7 smooth adjust"})
+            cases.add(J.o("name", "interpolate", "options", o, "input", roiFull(e), "output", viaSelection("interpolate", e, o)));
+        cases.add(J.o("name", "areaToLine", "input", roiFull(e), "output", viaSelection("toline", e, null)));
+        for (double a : new double[]{15, 90}) {
+            Object out;
+            try { out = roiFull(RoiRotator.rotate((Roi) e.clone(), a)); } catch (Throwable t) { out = J.o("error", String.valueOf(t)); }
+            cases.add(J.o("name", "rotate", "params", J.o("angle", a), "input", roiFull(e), "output", out));
+        }
+        Object sc;
+        try { sc = roiFull(RoiScaler.scale((Roi) e.clone(), 1.5, 0.75, false)); } catch (Throwable t) { sc = J.o("error", String.valueOf(t)); }
+        cases.add(J.o("name", "scale", "params", J.o("xscale", 1.5, "yscale", 0.75, "centered", false), "input", roiFull(e), "output", sc));
+        new Fx("sel", "ellipse", "selEllipse")
+            .call("EllipseRoi(10,20,50,30,0.5) through Selection.run(interpolate|toline), RoiRotator.rotate, RoiScaler.scale")
+            .put("cases", cases).write();
+    }
+
+    /** A ShapeRoi of ONE part (Make Band at the image corner) is not the "composite" branch of Interpolate (Selection.java:288: getRois().length>1). */
+    static void interpolateOnePart() {
+        List<Object> cases = new ArrayList<>();
+        ImagePlus imp = img(64, 48, 5);
+        imp.setRoi(new Roi(0, 0, 20, 14));
+        try { runSel("band", imp, "band=5"); } catch (Throwable t) { throw new RuntimeException(t); }
+        Roi band = imp.getRoi();
+        for (String o : new String[]{"interval=2.5", "interval=2.5 smooth", "interval=2.5 adjust", "interval=9"})
+            cases.add(J.o("name", "oneLoopBand", "options", o, "input", roiFull(band), "output", viaSelection("interpolate", band, o)));
+        new Fx("sel", "interpolate_onepart", "selInterpolate")
+            .call("Make Band at the image corner (one-loop ShapeRoi) then Selection.run(\"interpolate\"): Roi.getInterpolatedPolygon(sign*interval, smooth), FREEROI, no smoothing for a COMPOSITE")
+            .put("cases", cases).write();
     }
 }

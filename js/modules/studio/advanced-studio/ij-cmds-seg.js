@@ -6,8 +6,8 @@
  *
  * ImageJ reference (1.54p): Process › Find Maxima… is ij.plugin.filter.MaximumFinder.showDialog (fields, defaults and the
  * order of the output choice are the dialog's); Distance Map / Ultimate Points / Voronoi / Watershed are ij.plugin.filter.EDM
- * (no dialog: the output type is the "EDM output" choice of Process › Binary › Options, kept in a static field — here the same
- * choice is asked by the command and remembered for the session), Outline / Skeletonize are ij.plugin.filter.Binary.
+ * (no dialog: the output type is the "EDM output" choice of Process › Binary › Options, the `thr.edmOutput` setting here),
+ * Outline / Skeletonize are ij.plugin.filter.Binary. Which pixels are the objects follows Black background and the LUT.
  */
 (function () {
   'use strict';
@@ -18,35 +18,36 @@
   const is8 = (st) => has(st) && st.doc.bitDepth === 8;
 
   // ImageJ keeps the dialog values in static fields (MaximumFinder.tolerance, strict, excludeOnEdges, lightBackground,
-  // dialogOutputType; EDM.outputType): the same here, for the session.
-  const last = { edmOutput: 'overwrite', prominence: 10, strict: false, excludeEdges: false, aboveLower: false, light: false, output: 'points' };
+  // dialogOutputType): the same here, for the session. EDM.outputType is the "EDM output" choice of Process › Binary › Options
+  // (package thr), a setting of its own.
+  const last = { prominence: 10, strict: false, excludeEdges: false, aboveLower: false, light: false, output: 'points' };
 
   /* MaximumFinder.dialogItemChanged: "(invertedLut&&!lightBackground) || (!invertedLut&&lightBackground)" = find minima. */
   const findsMinima = (light, inverted) => (!!light && !inverted) || (!light && !!inverted);
 
-  // Process › Binary › Distance Map / Ultimate Points / Voronoi: the EDM output type, then the operation.
+  /* Which pixels are the objects. Binary.run: "int fg = Prefs.blackBackground ? 255 : 0; foreground = ip.isInvertedLut() ? 255-fg : fg",
+   * EDM.setup: "background255 = (invertedLut && Prefs.blackBackground) || (!invertedLut && !Prefs.blackBackground)". The ops of
+   * ij-proc-seg.js take ONE boolean per channel, `invert` = "the objects are the 0 pixels"; with "Black background" on (Fiji's default
+   * and this package's) that is the inverting LUT, with it off the opposite. Written into the params so the journal carries the rule. */
+  function invertArray(api, doc) {
+    const bb = api.settings.get('thr.blackBackground') !== false;
+    return (doc.channels || []).map((ch) => !!(ch && ch.display && ch.display.invert) === bb);
+  }
+
+  // Process › Binary › Options › EDM output (Overwrite | 8-bit | 16-bit | 32-bit), in the ids of the edmOutput operation.
+  const edmChoice = (api) => { const v = api.settings.get('thr.edmOutput'); return v === 'byte' || v === 'short' || v === 'float' ? v : 'overwrite'; };
+
+  // Process › Binary › Distance Map / Ultimate Points / Voronoi: no dialog in ImageJ (EDM.run): the output type is the one of Binary Options.
   async function distanceMap(api, op) {
     const st = api.state();
     const doc = st.doc;
     if (!doc) return;
-    const fields = [{
-      type: 'choice', id: 'output', labelKey: 'dlg.seg.output', value: last.edmOutput,
-      options: [
-        { value: 'overwrite', labelKey: 'dlg.seg.outOverwrite' }, { value: 'byte', labelKey: 'dlg.seg.out8' },
-        { value: 'short', labelKey: 'dlg.seg.out16' }, { value: 'float', labelKey: 'dlg.seg.out32' }]
-    }];
-    if ((doc.channels || []).length > 1) {
-      fields.push({ type: 'check', id: 'all', labelKey: 'dlg.allChannels', value: false, visibleIf: (v) => v.output === 'overwrite' });
-    }
-    const title = op === 'edm' ? api.tr('cmd.binDistanceMap') : op === 'ultimatePoints' ? api.tr('cmd.binUltimatePoints') : api.tr('cmd.binVoronoi');
-    const v = await api.dialog({ title, fields, okLabel: api.tr('dlg.ok') });
-    if (!v) return;
-    last.edmOutput = v.output;
-    if (v.output === 'overwrite') {
-      const chans = v.all ? doc.channels.map((_, i) => i) : [st.activeChannel];
-      const done = await api.run(op, { output: 'overwrite' }, { channel: v.all ? 'all' : st.activeChannel });
-      if (done) await showEdmRange(api, doc.docId, chans);
-    } else await api.run('edmOutput', { kind: op, output: v.output }, { channel: st.activeChannel, labelKey: 'op.edmOutput' });
+    const invert = invertArray(api, doc);
+    const output = edmChoice(api);
+    if (output === 'overwrite') {
+      const done = await api.run(op, { output: 'overwrite', invert }, { channel: st.activeChannel });
+      if (done) await showEdmRange(api, doc.docId, [st.activeChannel]);
+    } else await api.run('edmOutput', { kind: op, output, invert }, { channel: st.activeChannel, labelKey: 'op.edmOutput' });
   }
 
   /* ByteProcessor.setPixels(0, fp) ends with "setMinAndMax(fp.getMin(), fp.getMax())" and EDM.run then does
@@ -59,11 +60,11 @@
     }
   }
 
-  // No dialog in ImageJ: the active channel, the whole image.
+  // No dialog in ImageJ: the active channel, the whole image; the objects follow Black background and the LUT.
   async function plain(api, op, params, labelKey) {
     const st = api.state();
     if (!st.doc) return;
-    await api.run(op, params, { channel: st.activeChannel, labelKey });
+    await api.run(op, Object.assign({ invert: invertArray(api, st.doc) }, params), { channel: st.activeChannel, labelKey });
   }
 
   async function findMaxima(api) {
@@ -151,7 +152,7 @@
     errors: { IJ_SEG_NOT_BINARY: 'err.segNotBinary' },
     commands: [
       { id: 'procFindMaxima', menu: ['Process'], order: 40, long: true, run: findMaxima },
-      { id: 'binOutline', menu: ['Process', 'Binary'], order: 60, enabled: is8, run: (api) => plain(api, 'segOutline', {}, 'op.segOutline') },
+      { id: 'binOutline', menu: ['Process', 'Binary'], order: 60, separatorBefore: true, enabled: is8, run: (api) => plain(api, 'segOutline', {}, 'op.segOutline') },
       { id: 'binSkeletonize', menu: ['Process', 'Binary'], order: 80, long: true, enabled: is8, run: (api) => plain(api, 'skeletonize', {}, 'op.skeletonize') },
       { id: 'binDistanceMap', menu: ['Process', 'Binary'], order: 90, separatorBefore: true, long: true, enabled: is8, run: (api) => distanceMap(api, 'edm') },
       { id: 'binUltimatePoints', menu: ['Process', 'Binary'], order: 100, long: true, enabled: is8, run: (api) => distanceMap(api, 'ultimatePoints') },

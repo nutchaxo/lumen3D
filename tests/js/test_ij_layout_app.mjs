@@ -24,7 +24,7 @@ const pageSources = { 'ij-cmds-bg.js': STUB };
 async function twoDocs(t) {
   const sh = await t.open();
   const first = t.activeId();
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   await until(() => sh.layout.order().length === 2, 'the duplicate has its tab');
   const second = sh.layout.order().find((d) => d !== first);
   await until(() => sh.layout.active() === second && t.activeId() === second, 'the duplicate is active');

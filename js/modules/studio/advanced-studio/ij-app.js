@@ -150,6 +150,11 @@
  *   roiManager { list() → [{ name, docId, roi, stroke?, width?, fill? }], add(entries), set(list), select(indices), selected() → [i] }
  *   run(op, params, { …, placement })  placement 'tab' | 'splitRight' | 'gridWithSource' | 'float' for the images the step creates
  *
+ * Open from Library (package lib, PLAN-wave3 §4): ij-cmds-lib.js registers File › Open from Library… and its panel. The extension API has no
+ * member for the Studio facade (`ctx.studio.library`), so enter() hands the page's ctx to the panel through the package's own global
+ * (`IJLibPage.attach(ctx, { budget })`). The entry flow (zProject → probeFigureTiff → loadTiffProjection) offers the dataset's original TIFF
+ * (`library.describe` → `tiffIndex` → `IJLibSource.tiffFacts`) as the Source of the Z Project dialog and reads it in the worker (doc.tiff.project).
+ *
  * Key namespaces a package may use (the registry test scans for them): cmd. op. menu. meas. tool. res.
  * err. dlg.<prefix>. (prefix: bg→bg filters→flt seg→seg multi→multi geom→geom roi→roi coloc→coloc), and any key
  * the base dictionary already has (dlg.ok, …). The test also reads string literals that look like keys
@@ -185,7 +190,12 @@ const IJApp = (() => {
     kurtosis: ['kurtosis'],
     areaFraction: ['areaFraction'],
     limit: ['minThreshold', 'maxThreshold'],
-    labels: []
+    labels: [],
+    // Analyzer.doSetDialog, second group: no statistics of their own, they change how the rows are made and shown
+    invertY: [],
+    scientific: [],
+    addToOverlay: [],
+    nanEmpty: []
   };
   const MEASURE_DEFAULT = ['area', 'mean', 'minMax'];
   // Result column of each statistics key, in ImageJ's column order (ResultsTable: Area Mean StdDev Mode Min Max X Y XM YM
@@ -222,6 +232,7 @@ const IJApp = (() => {
     IJ_WORKER_CRASHED: 'err.workerCrashed',
     IJ_NOTHING_TO_UNDO: 'err.noUndo',
     IJ_NOT_BINARY: 'err.not8bit',
+    IJ_PARTICLES_THRESHOLD: 'dlg.ana.partNeedsThreshold',
     IJ_MODULE_MISSING: 'err.moduleMissing',
     IJ_STORAGE_QUOTA: 'err.storageFull',
     IJ_STORAGE_FAILED: 'err.storageFailed',
@@ -383,7 +394,7 @@ const IJApp = (() => {
       cmd('analyzeClearResults', ['Analyze'], { enabled: (st) => !!st.hasResults, run: (a) => a.clearResults() }),
       cmd('analyzeSetMeasurements', ['Analyze'], { enabled: always, run: (a) => a.setMeasurements() }),
       cmd('analyzeHistogram', ['Analyze'], Object.assign(sc('h'), { run: (a) => a.histogram() })),
-      cmd('analyzePlotProfile', ['Analyze'], Object.assign(sc('k'), { enabled: (st) => has(st) && !!st.roi && (st.roi.type === 'line' || st.roi.type === 'polyline'), run: (a) => a.plotProfile() })),
+      cmd('analyzePlotProfile', ['Analyze'], Object.assign(sc('k'), { enabled: (st) => has(st) && !!st.roi && (st.roi.type === 'line' || st.roi.type === 'polyline' || st.roi.type === 'rect'), run: (a) => a.plotProfile() })),
       cmd('toolsRoiManager', ['Analyze', 'Tools'], { enabled: always, run: (a) => a.openTool('roiManager') }),
       cmd('toolsSyncWindows', ['Analyze', 'Tools'], { enabled: (st) => st.nDocs > 0, run: (a) => a.syncWindows() }),
 
@@ -448,7 +459,10 @@ const IJApp = (() => {
   const bytesPerPixel = (bitDepth) => (bitDepth === 8 ? 1 : bitDepth === 16 ? 2 : 4);
 
   /** Output bit depth of a projection (PLAN §3.4 IJProject). */
-  function outputBitDepth(method, depth) {
+  function outputBitDepth(method, depth, inputBitDepth) {
+    // IJProject.outputBitDepth (ij-core.js) is the one rule: without the input depth the legacy 8-bit-source rule (max / min 8,
+    // sum 16 up to 257 slices, the rest 32), with it ZProjector's (a 16-bit TIFF keeps 16 bits for max / min / average; median, sum and sd are 32-bit float).
+    if (typeof IJProject !== 'undefined' && typeof IJProject.outputBitDepth === 'function') return IJProject.outputBitDepth(method, depth, inputBitDepth);
     if (method === 'max' || method === 'min') return 8;
     if (method === 'sum') return depth <= 257 ? 16 : 32;
     return 32;
@@ -466,7 +480,9 @@ const IJApp = (() => {
       const px = lv.width * lv.height;
       const bytes8 = px * nCh;
       const bytes = px * nCh * bytesPerPixel(outBits);
-      return { level: lv.level, width: lv.width, height: lv.height, depth: (lv.indices || []).length,
+      // a level lists its planes (`indices`), a TIFF's page plan (IJLibSource.tiffFacts: width, height, slices) only counts them (`depth`)
+      const depth = lv.indices ? lv.indices.length : (lv.depth | 0);
+      return { level: lv.level, width: lv.width, height: lv.height, depth,
         bytes8, bytes32: px * nCh * 4, bytes, fits: bytes * 2 <= budgetBytes };
     });
     rows.sort((a, b) => b.width * b.height - a.width * a.height);
@@ -1101,7 +1117,7 @@ const IJApp = (() => {
     for (const id of S.order) {
       if (!viewOf(id)) continue;
       const list = S.roiList.filter((r) => r.docId === id);
-      S.shell.setRois({ all: list.map((r) => ({ roi: r.roi, label: r.name, stroke: r.stroke, width: r.width, fill: r.fill })), showAll: S.showAll }, id);
+      S.shell.setRois({ all: list.map((r) => ({ roi: r.roi, label: roiLabels ? r.name : '', stroke: r.stroke, width: r.width, fill: r.fill })), showAll: S.showAll }, id);
     }
   }
 
@@ -1453,15 +1469,40 @@ const IJApp = (() => {
     };
   }
 
+  // ── Repeat Command (owner P-ana; ij.Executer: "if (!(cmd.equals("Undo")||cmd.equals("Close"))) previousCommand = cmd;") ──
+  // ImageJ re-runs the command and its dialog comes back with the values the last run used (the plugins keep them in static fields). Here the
+  // dialogs a command opened are remembered by command id and position; api.runCommand puts them back as the pre-filled values of the same dialogs.
+  const REPEAT = { run: null, memory: new Map(), next: null };
+  function prefillFields(fields, values) {
+    if (!values || typeof values !== 'object') return fields;
+    return fields.map((f) => {
+      if (!f || !f.id || !Object.prototype.hasOwnProperty.call(values, f.id)) return f;
+      const v = values[f.id];
+      switch (f.type) {
+        case 'check': return typeof v === 'boolean' ? Object.assign({}, f, { value: v }) : f;
+        case 'number': case 'slider': return typeof v === 'number' && Number.isFinite(v) ? Object.assign({}, f, { value: v }) : f;
+        case 'string': case 'textarea': return typeof v === 'string' ? Object.assign({}, f, { value: v }) : f;
+        case 'choice': case 'radio': return (f.options || []).some((o) => (o && typeof o === 'object' ? o.value : o) === v) ? Object.assign({}, f, { value: v }) : f;
+        default: return f;
+      }
+    });
+  }
+
   async function dialog(config) {
     if (!S.shell) return null;
     const spec = Object.assign({}, config);
     if (Array.isArray(config.fields)) spec.fields = config.fields.map(expandField);
+    const rep = REPEAT.run;
+    const at = rep ? rep.k++ : -1;
+    if (rep && rep.replay && rep.replay[at] && Array.isArray(spec.fields)) spec.fields = prefillFields(spec.fields, rep.replay[at]);
     const info = activeInfo();
     const ext = !!(config.preview && (config.preview.op || config.preview.compute) && !config.preview.onChange);
     if (ext) spec.preview = info ? extPreviewHook(config.preview, info) : undefined;
-    try { return await S.shell.windows.dialog(spec); }
-    finally { if (ext) clearExtPreview(); }
+    try {
+      const res = await S.shell.windows.dialog(spec);
+      if (rep && res && typeof res === 'object') rep.list[at] = res;
+      return res;
+    } finally { if (ext) clearExtPreview(); }
   }
 
   function channelField(info, value) {
@@ -1625,39 +1666,188 @@ const IJApp = (() => {
     const e = EXTRA_COLUMNS.find((c) => c[0] === key);
     return e ? e[1] : key;
   }
-  function resultsText(sep) {
+  // ── P-ana (wave 3): the Results table as ImageJ shows and writes it ──────────────────────────────────────────────
+  // `ANA` holds the transient state of the Results window (rows are held by identity: a sort or a delete keeps the selection right).
+  const ANA = { sel: new Set(), origin: -1, find: '', plotPrev: { color: 'blue', lineWidth: 1, symbol: 'Circle' } };
+  const anaSetting = (key, fallback) => { const v = settingGet(key); return v === undefined || v === null ? fallback : v; };
+  /** Analyze › Set Measurements › "Decimal places (0-9)" (Analyzer.precision, default 3). */
+  const anaDecimals = () => { const d = Number(anaSetting('ana.decimals', 3)); return Number.isInteger(d) ? clamp(d, 0, 9) : 3; };
+  /** ResultsTable.setPrecision: "(systemMeasurements&SCIENTIFIC_NOTATION)!=0?-precision:precision". */
+  const anaPrecision = () => (S.measurements.includes('scientific') ? -anaDecimals() : anaDecimals());
+  /**
+   * One cell as ImageJ prints it (ResultsTable.getValueAsString): a number with the table's precision (a whole number without decimals);
+   * a cell nobody filled is 0, or NaN with "NaN empty cells" (ResultsTable.setNaNEmptyCells); text as it is.
+   */
+  function cellText(r, c) {
+    const v = r[c];
+    if (v === undefined || v === null) return c === 'Label' ? '' : (S.measurements.includes('nanEmpty') ? 'NaN' : '0');
+    if (typeof v === 'number') return typeof IJAna !== 'undefined' ? IJAna.cellString(v, anaPrecision()) : num(v, 4);
+    return String(v);
+  }
+  /**
+   * The table as text. mode 'save' = File › Save As (Edit › Options › Input/Output: "Save_column headers", "Save_row numbers"),
+   * 'copy' = Edit › Copy ("Copy_column headers" off, "Copy_row numbers" on by default; TextPanel.copySelection puts the headers
+   * only in front of a selection of every row). `indices` = the rows to write (null = all).
+   */
+  function resultsText(sep, mode, indices) {
     const cols = resultColumns();
+    const save = mode !== 'copy';
+    const wantHeaders = !!anaSetting(save ? 'ana.saveHeaders' : 'ana.copyHeaders', save);
+    const wantNumbers = !!anaSetting(save ? 'ana.saveRowNumbers' : 'ana.copyRowNumbers', true);
     const q = (v) => {
       const s = v === undefined || v === null ? '' : String(v);
       return sep === ',' && /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
-    const lines = [[' '].concat(cols.map(columnHeader)).map(q).join(sep)];
-    S.results.forEach((r, i) => lines.push([String(i + 1)].concat(cols.map((c) => q(r[c]))).join(sep)));
-    return lines.join('\n') + '\n';
+    const idx = indices || S.results.map((r, i) => i);
+    const lines = [];
+    if (wantHeaders && (!indices || indices.length === S.results.length)) lines.push((wantNumbers ? [' '] : []).concat(cols.map(columnHeader)).map(q).join(sep));
+    for (const i of idx) lines.push((wantNumbers ? [String(i + 1)] : []).concat(cols.map((c) => q(cellText(S.results[i], c)))).join(sep));
+    // TextPanel.copySelection: "if (i<selEnd || selEnd>selStart) sb.append('\n');" — a copy of one single row has no trailing newline
+    return lines.join('\n') + (lines.length && !(mode === 'copy' && idx.length === 1) ? '\n' : '');
+  }
+  /** Edit › Options › Input/Output: "File extension for tables (.csv, .tsv or .txt)" decides the delimiter of a saved table. */
+  function tableFormat() {
+    const ext = String(anaSetting('ana.ext', '.csv')).toLowerCase();
+    const csv = ext === '.csv';
+    return { ext, sep: csv ? ',' : '\t', mime: csv ? 'text/csv' : (ext === '.tsv' ? 'text/tab-separated-values' : 'text/plain'), desc: csv ? 'CSV' : (ext === '.tsv' ? 'TSV' : 'Text') };
   }
 
   async function saveResults() {
+    const f = tableFormat();
     try {
-      await saveFile('Results.csv', 'text/csv', '.csv', 'CSV', async () => new Blob([resultsText(',')], { type: 'text/csv' }));
+      await saveFile('Results' + f.ext, f.mime, f.ext, f.desc, async () => new Blob([resultsText(f.sep, 'save')], { type: f.mime }));
     } catch (err) { await reportError(err); }
   }
 
-  function openTiff() {
-    const input = h('input', { type: 'file', accept: '.tif,.tiff,image/tiff' });
-    input.addEventListener('change', async () => {
-      const f = input.files && input.files[0];
-      if (!f) return;
-      await busy(tr('op.open'), async () => {
-        const buf = await f.arrayBuffer();
-        const res = await call('doc.open', { bytes: new Uint8Array(buf), name: String(f.name || '').replace(/\.tiff?$/i, '') || undefined }, [buf]);
-        const info = res.info;
-        registerDoc(info, { clean: true });
-        await showDoc(info.docId);
-        if (viewOf(info.docId)) viewOf(info.docId).fit();
-        commitHook();
-      });
+  // ── File › Open (package io): a TIFF (also the deflate-compressed ones of the Download Center), a PNG / JPEG / GIF / BMP
+  // the browser decodes, a text image, a selection (.roi), a RoiSet (.zip) or a LUT (.lut). The dispatcher asks the file's
+  // extension first, then its first bytes.
+  const OPEN_ACCEPT = '.tif,.tiff,.png,.jpg,.jpeg,.gif,.bmp,.txt,.roi,.zip,.lut';
+  /** A picture the browser decodes → an image document (IJFileKinds.imageFromRgba: grey = one 8-bit channel, colour = R / G / B). */
+  async function decodeBrowserImage(bytes, name) {
+    if (typeof createImageBitmap !== 'function') throw IJFileKinds.error('IJ_IO_DECODE');
+    let bmp;
+    try { bmp = await createImageBitmap(new Blob([bytes])); } catch (_) { throw IJFileKinds.error('IJ_IO_DECODE'); }
+    const w = bmp.width, hh = bmp.height;
+    if (!(w > 0 && hh > 0) || w * hh > 268435456) { if (bmp.close) bmp.close(); throw Object.assign(new Error('too large'), { code: 'IJ_TOO_LARGE' }); }
+    let data;
+    try {
+      let canvas;
+      if (typeof OffscreenCanvas === 'function') canvas = new OffscreenCanvas(w, hh);
+      else { canvas = document.createElement('canvas'); canvas.width = w; canvas.height = hh; }
+      const g = canvas.getContext('2d', { willReadFrequently: true });
+      g.drawImage(bmp, 0, 0);
+      data = g.getImageData(0, 0, w, hh).data;
+    } catch (_) { throw IJFileKinds.error('IJ_IO_DECODE'); } finally { if (bmp.close) bmp.close(); }
+    return IJFileKinds.imageFromRgba(data, w, hh, name);
+  }
+
+  /** What File › Open and Import › Text Image do with a parsed text image: a 32-bit image, display range = the finite data range. */
+  function textImageOf(t, name) {
+    const r = IJTextIo.floatRange(t.data);
+    return { name: name || 'Untitled', width: t.width, height: t.height, bitDepth: 32, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
+      channels: [{ data: t.data, name: 'C1', color: '#ffffff', display: { min: r.min, max: r.max, lut: 'Grays', invert: false } }] };
+  }
+
+  /** Imports an image a reader built and shows it as an opened file: nothing unsaved until it is edited. */
+  async function openOpened(image) {
+    const transfer = [];
+    const channels = image.channels.map((c) => {
+      const data = c.data.byteOffset === 0 && c.data.byteLength === c.data.buffer.byteLength ? c.data : c.data.slice();
+      transfer.push(data.buffer);
+      const ch = { data, name: c.name, color: c.color };
+      if (c.display) ch.display = c.display;
+      return ch;
     });
-    input.click();
+    const res = await call('doc.import', { image: { name: image.name, width: image.width, height: image.height, bitDepth: image.bitDepth, calibration: image.calibration, channels }, provenance: { opened: true } }, transfer);
+    const id = res.info.docId;
+    await call('doc.markSaved', { docId: id });
+    const info = await call('doc.info', { docId: id });
+    registerDoc(info, { clean: true });
+    await showDoc(id);
+    if (viewOf(id)) viewOf(id).fit();
+    commitHook();
+  }
+
+  async function openTiffBytes(bytes, buf, base) {
+    let compressed = false;
+    try { compressed = IJLocalTiff.needsDecoder(bytes); } catch (_) { compressed = false; }   // the worker reports a file it cannot read
+    if (compressed) { await openOpened(await IJLocalTiff.read(bytes, base)); return; }
+    const res = await call('doc.open', { bytes, name: base }, [buf]);
+    const info = res.info;
+    registerDoc(info, { clean: true });
+    await showDoc(info.docId);
+    if (viewOf(info.docId)) viewOf(info.docId).fit();
+    commitHook();
+  }
+
+  /** A selection file goes onto the active image; a RoiSet goes into the ROI Manager. */
+  async function openRoiFile(bytes, fname) {
+    // RoiReader.openRoi: "if (img==null || img.getWidth()<(r.x+r.width) || img.getHeight()<(r.y+r.height)) { ip = new ByteProcessor(
+    // r.x+r.width+10, r.y+r.height+10); img = new ImagePlus(name, ip); img.show(); }  img.setRoi(roi);" — a blank 8-bit image named after the
+    // file. (The stroke / fill / width the file carries are those of a ROI Manager entry; a selection of the image has no style here.)
+    const d = IJRoiCodec.decodeEntry(bytes, { fileName: fname });
+    let info = activeInfo();
+    const r = IJRoi.bounds(d.roi);
+    if (!info || info.width < r.x + r.w || info.height < r.y + r.h) {
+      const w = Math.max(1, r.x + r.w + 10), h = Math.max(1, r.y + r.h + 10);
+      if (w * h > 128 * 1000 * 1000) throw IJFileKinds.error('IJ_IO_TOO_LARGE');
+      await openOpened({ name: fname, width: w, height: h, bitDepth: 8, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
+        channels: [{ data: new Uint8Array(w * h), name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }] });
+      info = activeInfo();
+    }
+    setSelection(info.docId, d.roi, true);
+    setStatus(tr('status.roiOpened', { name: d.name || fname }));
+  }
+  async function openRoiSet(bytes) {
+    const info = activeInfo();
+    if (!info) throw IJFileKinds.error('IJ_IO_NEEDS_IMAGE');
+    const list = await IJRoiCodec.decodeSet(bytes);
+    for (const d of list) S.roiList.push(roiEntryFromFile(info.docId, d));
+    roiListChanged();
+    openTool('roiManager');
+  }
+  function roiEntryFromFile(docId, d) {
+    const e = { name: d.label || d.name || roiName(d.roi), docId, roi: d.roi };
+    if (d.stroke) e.stroke = d.stroke;
+    if (d.fill) e.fill = d.fill;
+    if (d.width > 0) e.width = d.width;
+    return e;
+  }
+  async function openLutFile(bytes, base) {
+    const info = activeInfo();
+    if (!info) throw IJFileKinds.error('IJ_IO_NEEDS_IMAGE');
+    if (typeof IJLutFile === 'undefined' || typeof IJLutFile.parse !== 'function') throw IJFileKinds.error('IJ_IO_UNKNOWN_FORMAT');
+    const parsed = IJLutFile.parse(bytes);
+    const table = parsed && parsed.table ? parsed.table : parsed;
+    const name = base || 'LUT';
+    await registerLutExt(name, table);
+    await setDisplayExt(info.docId, activeChannel(info), { lut: name });
+  }
+
+  async function openFileBody(f) {
+    const fname = String(f.name || '');
+    const buf = await f.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    const base = fname.replace(/\.[A-Za-z0-9]+$/, '') || undefined;
+    switch (IJFileKinds.kindOf(fname, bytes)) {
+      case 'tiff': return openTiffBytes(bytes, buf, base);
+      case 'image': return openOpened(await decodeBrowserImage(bytes, base || 'Untitled'));
+      case 'text': return openOpened(textImageOf(await IJTextIo.parseTextImageAsync(bytes), base));
+      case 'roi': return openRoiFile(bytes, fname);
+      case 'zip': return openRoiSet(bytes);
+      case 'lut': return openLutFile(bytes, base);
+      default: throw IJFileKinds.error('IJ_IO_UNKNOWN_FORMAT');
+    }
+  }
+
+  // The command returns at once, as it always did: the picker may stay open for as long as the operator likes, and the command
+  // must not look "running" (Repeat Command, the menu state) meanwhile. Each file is opened under its own busy step.
+  function openTiff() {
+    pickFileExt({ accept: OPEN_ACCEPT, multiple: true }).then(async (files) => {
+      if (!files) return;
+      for (const f of files) await busy(tr('op.open'), () => openFileBody(f));   // one file that fails does not stop the others
+    }).catch((err) => reportError(err));
   }
 
   async function revert() {
@@ -1900,13 +2090,22 @@ const IJApp = (() => {
     if (!S.shell || S.emptyEl) return;
     S.emptyEl = h('div', { class: 'ij-empty' },
       h('p', { class: 'ij-banner', text: tr('empty.message') }),
-      row(btn(tr('cmd.stackProject'), () => zProject(), 'ij-btn--primary'), btn(tr('cmd.fileOpen'), () => openTiff()), btn(tr('cmd.fileSimple'), () => simpleView())));
+      row(btn(tr('cmd.stackProject'), () => zProject(), 'ij-btn--primary'), btn(tr('cmd.fileOpen'), () => openTiff()),
+        ...(EXT.panels.has('library') && typeof IJLibPage !== 'undefined' && IJLibPage.available() ? [btn(tr('cmd.fileOpenLibrary'), () => { openPanelExt('library').catch((err) => reportError(err)); })] : []),
+        btn(tr('cmd.fileSimple'), () => simpleView())));
     S.shell.workspace.appendChild(S.emptyEl);
   }
   function hideEmpty() { if (S.emptyEl) { S.emptyEl.remove(); S.emptyEl = null; } }
 
+  /** The Open from Library panel (ij-cmds-lib.js) reaches the page's Studio facade through this handshake: the extension API of the
+   *  package has no member for it. Done first in enter(), so the panel works on a figure the Advanced view cannot read too. */
+  function attachLibrary() {
+    try { if (typeof IJLibPage !== 'undefined' && typeof IJLibPage.attach === 'function') IJLibPage.attach(S.ctx, { budget: () => S.engineBudget || S.budgetBytes }); } catch (err) { console.error('[advanced-studio] library', err); }
+  }
+
   async function enter() {
     const token = ++S.enterToken;
+    attachLibrary();
     let desc = null;
     try { desc = S.ctx.studio.source.describe(); } catch (err) { console.error('[advanced-studio] describe', err); }
     if (!desc || !desc.available) {
@@ -1920,7 +2119,7 @@ const IJApp = (() => {
     if (S.docs.size && S.figureKey === fkey) return;
     S.figureKey = fkey;
 
-    let match = null;
+    let cands = [];
     try {
       const res = await call('session.list', { datasetId: desc.datasetId });
       const loaded = new Set(S.sessionKeys.values());
@@ -1928,18 +2127,29 @@ const IJApp = (() => {
       const docCount = (s) => (Array.isArray(s.docs) ? s.docs.length : Number(s.docs) || 0);
       const mine = (res.sessions || []).filter((s) => String(s.key).startsWith(fkey + '|') && !loaded.has(s.key) && !elsewhere.has(s.key) && docCount(s) > 0);
       mine.sort((a, b) => b.savedAt - a.savedAt);
-      match = mine[0] || null;
+      // the newest session of EACH source (the figure key of the TIFF source is fkey|tiff|…, matched by the same prefix)
+      const seen = new Set();
+      for (const s of mine) {
+        const src = typeof IJLibSource !== 'undefined' ? IJLibSource.sourceOfKey(s.key, fkey) : 'processed';
+        if (!seen.has(src)) { seen.add(src); cands.push({ session: s, source: src }); }
+      }
     } catch (err) { console.error('[advanced-studio] session.list', err); }
     // A worker that died meanwhile has its own recovery path (crash / failed start): nothing to add here.
     if (token !== S.enterToken || !S.worker || S.worker.dead) return;
 
-    if (match) {
-      const a = await ask({ title: tr('resume.title'), message: tr('resume.message', { time: new Date(match.savedAt).toLocaleString() }),
-        options: [{ id: 'resume', label: tr('resume.resume'), primary: true }, { id: 'fresh', label: tr('resume.fresh') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
-      if (a === 'resume') {
+    if (cands.length) {
+      // One saved session of the processed volume: the plain question. Otherwise each row says which source made it.
+      const plainRow = cands.length === 1 && cands[0].source === 'processed';
+      const when = (c) => new Date(c.session.savedAt).toLocaleString();
+      const resumeOptions = plainRow ? [{ id: 'resume', label: tr('resume.resume'), primary: true }]
+        : cands.map((c, i) => ({ id: i === 0 ? 'resume' : 'resume' + (i + 1), primary: i === 0, label: tr('resume.resumeSource', { source: tr(c.source === 'tiff' ? 'resume.sourceTiff' : 'resume.sourceProcessed'), time: when(c) }) }));
+      const a = await ask({ title: tr('resume.title'), message: plainRow ? tr('resume.message', { time: when(cands[0]) }) : tr('resume.messageMany'),
+        options: [...resumeOptions, { id: 'fresh', label: tr('resume.fresh') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+      const at = resumeOptions.findIndex((o) => o.id === a);
+      if (at >= 0) {
         // A stored session that yields no document is dropped and the fresh load follows.
-        if ((await restoreSession(match.key)) > 0) return;
-        await call('session.discard', { key: match.key }).catch(() => {});
+        if ((await restoreSession(cands[at].session.key)) > 0) return;
+        await call('session.discard', { key: cands[at].session.key }).catch(() => {});
       } else
       if (a !== 'fresh') { if (!S.docs.size) { S.leaving = 'simple'; await S.api.exit(); } return; }
     }
@@ -1953,8 +2163,11 @@ const IJApp = (() => {
     let text = key;
     if (typeof I18n !== 'undefined' && I18n.t) text = I18n.t(key);
     if (!S.shell) return;
+    // a figure the Advanced view cannot read: the library (a dataset of the site, an original TIFF) is the other way in
+    const library = EXT.panels.has('library') && typeof IJLibPage !== 'undefined' && IJLibPage.available();
     S.emptyEl = h('div', { class: 'ij-empty' }, h('p', { class: 'ij-banner', text }),
-      row(btn(tr('cmd.fileSimple'), () => simpleView(), 'ij-btn--primary')));
+      row(...(library ? [btn(tr('cmd.fileOpenLibrary'), () => { openPanelExt('library').catch((err) => reportError(err)); }, 'ij-btn--primary')] : []),
+        btn(tr('cmd.fileSimple'), () => simpleView(), library ? '' : 'ij-btn--primary')));
     S.shell.workspace.appendChild(S.emptyEl);
   }
 
@@ -1970,26 +2183,137 @@ const IJApp = (() => {
     const fits = levels.filter((l) => l.fits);
     if (!fits.length) { await reportError(Object.assign(new Error('no level fits'), { code: 'IJ_OVER_BUDGET' })); return false; }
     const nCh = (desc.channels || []).length;
+    // The original TIFF of the dataset (download/), when the mounted dataset has a usable one: the Source choice (PLAN-wave3 §4)
+    const tiff = await probeFigureTiff(desc);
     const fields = [];
+    const rememberedMethod = settingGet('lib.method');
+    const method0 = typeof IJLibSource !== 'undefined' && IJLibSource.METHODS.indexOf(rememberedMethod) >= 0 ? rememberedMethod : 'avg';
     if (multi) {
-      fields.push({ type: 'choice', id: 'method', label: tr('proj.method'), value: 'max', options: [
-        { value: 'max', label: tr('proj.max') }, { value: 'min', label: tr('proj.min') }, { value: 'sum', label: tr('proj.sum') },
-        { value: 'avg', label: tr('proj.avg') }, { value: 'sd', label: tr('proj.sd') }, { value: 'median', label: tr('proj.median') }] });
+      // ZProjector's dialog order: "Start slice:", "Stop slice:", "Projection type" (ZProjector.java:295-297); the methods in ZProjector.METHODS
+      // order, the one last used (lib.method) the default, Average Intensity on first use (ZProjector.java:27)
       fields.push({ type: 'number', id: 'start', label: tr('proj.start'), value: 1, min: 1, max: n0, step: 1 });
       fields.push({ type: 'number', id: 'stop', label: tr('proj.stop'), value: n0, min: 1, max: n0, step: 1 });
+      fields.push({ type: 'choice', id: 'method', label: tr('proj.method'), value: method0, options: [
+        { value: 'avg', label: tr('proj.avg') }, { value: 'max', label: tr('proj.max') }, { value: 'min', label: tr('proj.min') },
+        { value: 'sum', label: tr('proj.sum') }, { value: 'sd', label: tr('proj.sd') }, { value: 'median', label: tr('proj.median') }] });
     } else {
       fields.push({ type: 'message', id: 'single', label: tr('proj.single') });
     }
-    fields.push({ type: 'choice', id: 'level', label: tr('proj.level'), value: fits[0].level, options: levels.map((l) => ({
+    let validate = null;
+    if (tiff) {
+      const f = tiff.facts;
+      const remembered = settingGet('lib.source');
+      const fitsTiff = (m) => {
+        const bits = outputBitDepth(multi ? m : 'avg', f.slices, f.bitDepth);
+        return planLevels({ channels: new Array(f.channels).fill(null), levels: [{ level: 0, width: f.width, height: f.height, depth: f.slices }] }, S.budgetBytes, bits)[0].fits;
+      };
+      fields.push({ type: 'choice', id: 'source', label: tr('proj.source'), value: remembered === 'processed' ? 'processed' : 'tiff', options: [
+        { value: 'tiff', label: tr('proj.sourceTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: tiff.entry.sizeBytes ? mb(tiff.entry.sizeBytes) : '?', level: f.level === null ? '?' : f.level }) },
+        { value: 'processed', label: tr('proj.sourceProcessed', { w: fine.width, h: fine.height }) }] });
+      fields.push({ type: 'message', id: 'tiffNote', label: tr('proj.tiffNote'), visibleIf: (vv) => vv.source !== 'processed' });
+      if (f.coarser) fields.push({ type: 'message', id: 'tiffCoarser', label: tr('proj.tiffCoarser', { w: f.width, h: f.height, W: fine.width, H: fine.height }), visibleIf: (vv) => vv.source !== 'processed' });
+      validate = (vv) => (vv.source !== 'processed' && !fitsTiff(multi ? vv.method : 'avg') ? { source: 'proj.tooLarge' } : null);
+    }
+    fields.push({ type: 'choice', id: 'level', label: tr('proj.level'), value: fits[0].level, visibleIf: tiff ? (vv) => vv.source === 'processed' : undefined, options: levels.map((l) => ({
       value: l.level, disabled: !l.fits,
       label: tr('proj.levelItem', { w: l.width, h: l.height, c: nCh, mb8: mb(l.bytes8), mb32: mb(l.bytes32) }) + (l.fits ? '' : ' — ' + tr('proj.tooLarge')) })) });
-    fields.push({ type: 'message', id: 'note', label: tr('proj.note') });
-    const v = await dialog({ title: tr('cmd.stackProject'), fields, okLabel: tr('dlg.ok') });
+    // the bit depths of the processed volume (the note) are not the TIFF's (tiffNote)
+    fields.push({ type: 'message', id: 'note', label: tr('proj.note'), visibleIf: tiff ? (vv) => vv.source === 'processed' : undefined });
+    const v = await dialog({ title: tr('cmd.stackProject'), fields, okLabel: tr('dlg.ok'), validate: validate || undefined });
     if (!v) return false;
     const method = multi ? v.method : 'max';
     const a = multi ? clamp(Math.round(Number(v.start)), 1, n0) : 1;
     const b = multi ? clamp(Math.round(Number(v.stop)), a, n0) : 1;
+    if (multi) settingSet('lib', 'lib.method', method);
+    if (tiff) settingSet('lib', 'lib.source', v.source === 'processed' ? 'processed' : 'tiff');
+    if (tiff && v.source !== 'processed') return loadTiffProjection(desc, tiff, { method: multi ? method : 'avg', a, b, n0 });
     return loadProjection(desc, { method, level: Number(v.level), a, b, n0 });
+  }
+
+  /** The original TIFF of the figure's dataset, indexed and judged (IJLibSource.tiffFacts), or null: no library, a figure that is not an
+   *  XY stack, no TIFF in download/, none the stream can read or that covers the volume. Cached per figure; never delays the dialog long. */
+  let tiffProbe = null;
+  async function probeFigureTiff(desc) {
+    if (desc.axis !== 'z' || typeof IJLibSource === 'undefined') return null;
+    const lib = S.ctx && S.ctx.studio && S.ctx.studio.library;
+    if (!lib || typeof lib.describe !== 'function') return null;
+    const key = figureKeyOf(desc);
+    if (tiffProbe && tiffProbe.key === key) return tiffProbe.value;
+    const live = desc.timepoint !== null && desc.timepoint !== undefined;
+    const work = (async () => {
+      const d = await lib.describe(desc.datasetId, live ? { timepoint: desc.timepoint } : {});
+      if (!d || !Array.isArray(d.tiffs) || !d.tiffs.length) return null;
+      const dims = d.levels && d.levels[0] ? d.levels[0].dims : null;
+      let best = null;
+      for (const entry of d.tiffs.slice(0, 6)) {
+        let index;
+        try { index = await lib.tiffIndex(d.id, entry.file); } catch (err) { console.error('[advanced-studio] tiff index', err); continue; }
+        const facts = IJLibSource.tiffFacts(index, { physicalUm: d.physicalUm, dims, live: d.type === 'live' || live, timepoint: live ? desc.timepoint : null });
+        if (facts.ok && (!best || facts.width * facts.height > best.facts.width * best.facts.height)) best = { entry, index, facts, dims };
+      }
+      return best;
+    })();
+    // A probe that has not answered in 6 s is left to finish: the dialog opens without the TIFF, and the next dialog of this figure
+    // (Start again) gets the settled answer; only a settled answer is cached.
+    const settled = work.then((v) => { if (!tiffProbe || tiffProbe.key !== key) tiffProbe = { key, value: v }; return v; }, (err) => { console.error('[advanced-studio] figure tiff', err); return null; });
+    const pending = Symbol('pending');
+    setStatus(tr('proj.probing'));
+    let value = null;
+    try {
+      value = await Promise.race([settled, new Promise((resolve) => { const t = setTimeout(() => resolve(pending), 6000); if (t && t.unref) t.unref(); })]);
+    } finally { setStatus(''); }
+    if (value === pending) return null;
+    return value;
+  }
+
+  /** Z Project of the figure's range from the dataset's original TIFF: the TIFF planes covering the same µm, read in the worker
+   *  (doc.tiff.project: Range requests, IJProject at the TIFF's bit depth). The image frame is the voxel frame (x = X, y = Y). */
+  async function loadTiffProjection(desc, tiff, opt) {
+    const f = tiff.facts;
+    const fine = finestLevel(desc);
+    // the figure's slices (1-based positions of its finest level) → level-0 voxel indices
+    const ia = fine.indices[opt.a - 1], ib = fine.indices[opt.b - 1];
+    const dimsK = fine.dims && fine.dims.z > 0 ? fine.dims.z : null, dims0 = tiff.dims && tiff.dims.z > 0 ? tiff.dims.z : null;
+    const toL0 = (i, up) => (dimsK && dims0 && dimsK !== dims0 ? (up ? Math.ceil(((i + 1) * dims0) / dimsK) - 1 : Math.floor((i * dims0) / dimsK)) : i);
+    const first = toL0(ia, false), last = Math.max(first, toL0(ib, true));
+    const r = IJLibSource.tiffRangeOf(f, tiff.dims ? tiff.dims.z : last + 1, first, last);
+    const depth = r.jhi - r.jlo + 1;
+    const method = depth > 1 ? opt.method : 'avg';
+    const fkey = figureKeyOf(desc);
+    // the figure key gains |tiff: entry matches `fkey|` so a resume offers the sessions of either source
+    const sessionKey = [fkey, 'tiff', tiff.entry.file, method, opt.a + '-' + opt.b, Date.now().toString(36)].join('|');
+    const provenance = { source: 'figure', input: 'tiff', datasetId: desc.datasetId, datasetName: desc.datasetName, treeKey: desc.treeKey, timepoint: desc.timepoint,
+      axis: desc.axis, level: f.level, method, first: ia, last: ib, tiff: { file: tiff.entry.file, etag: tiff.index.size + '-' + tiff.index.mtime }, sessionKey };
+    const name = ib > ia
+      ? tr('proj.name', { dataset: desc.datasetName, axis: String(desc.axis).toUpperCase(), a: ia, b: ib, method: tr('proj.' + method) })      // the method that ran: one TIFF plane is a copy ('avg')
+      : tr('proj.nameSingle', { dataset: desc.datasetName, axis: String(desc.axis).toUpperCase(), a: ia });
+    const calibration = f.pixelUm ? { pixelWidth: f.pixelUm.x, pixelHeight: f.pixelUm.y, unit: 'µm' } : { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' };
+    const ac = new AbortController();
+    S.loadAbort = ac;
+    beginBusy(tr('load.openTiff'));
+    let docId = null, ok = false;
+    try {
+      const res = await call('doc.tiff.project', { url: tiff.index.url, index: tiff.index, z0: r.jlo, z1: r.jhi, frame: f.frame, method,
+        channels: f.names.map((n, i) => ({ c: i, name: n, color: f.colors[i] })), name, calibration, provenance, sessionKey }, [], { long: true });
+      const info = res.info;
+      docId = info.docId;
+      registerDoc(info, { clean: true, sessionKey, provenance });
+      holdSessionLock(sessionKey);
+      ok = true;
+      await showDoc(docId);
+      if (viewOf(docId)) viewOf(docId).fit();
+      commitHook();
+    } catch (err) {
+      if (docId !== null && !ok) call('doc.close', { docId }).catch(() => {});
+      if (S.shell && !S.docs.size) { S.shell.clearImage(); showEmpty(); }
+      else if (S.activeId !== null) await showDoc(S.activeId);
+      endBusy();
+      S.loadAbort = null;
+      await reportError(err);
+      return false;
+    } finally { S.loadAbort = null; }
+    endBusy();
+    return ok;
   }
 
   /** Greyscale placeholder from the Studio's own picture, shown until the first band is in. */
@@ -2157,21 +2481,60 @@ const IJApp = (() => {
   const invert = () => runOp('invert', {});
   const crop = () => runOp('crop', {}, { all: true });
 
+  // ij.plugin.Duplicator keeps "Ignore selection" in a static field (staticIgnoreSelection) and marks every image it made with the property
+  // UniqueName, which lets WindowManager.getUniqueName drop the "-1" of such a title ("cells-1" duplicates to "cells-2").
+  const DUP = { ignoreSelection: false, made: new Set() };
+
+  /**
+   * Image > Duplicate… (Duplicator.run / showDialog / showHSDialog): "Title:" (the unique name of the image, WindowManager.getUniqueName),
+   * "Ignore selection" (only with an area selection; forced when the selection lies outside the image) and, for a multichannel image,
+   * "Channels (c):" "1-N" read as showHSDialog does (IJEdit.parseChannelRange). The copy has the selection's bounding box; the pixels of
+   * the box outside a non-rectangular selection are copied too; the new image carries the selection (moved to 0, 0) unless the selection was ignored,
+   * when it carries the original at its place.
+   */
   async function duplicate() {
     const info = activeInfo();
     if (!info) return;
-    let all = true;
-    if ((info.channels || []).length > 1) {
-      const v = await dialog({ title: tr('cmd.imageDuplicate'), okLabel: tr('dlg.ok'), fields: [{ type: 'check', id: 'all', label: tr('dlg.allChannels'), value: true }] });
-      if (!v) return;
-      all = !!v.all;
+    const nCh = (info.channels || []).length;
+    const roi0 = selOf(info.docId);
+    const area = isAreaRoi(roi0);
+    let outside = false;
+    if (area && typeof IJRoi !== 'undefined') {
+      const b = IJRoi.bounds(roi0);
+      // "if (r.x>=imp.getWidth() || r.y>=imp.getHeight() || r.x+r.width<=0 || r.y+r.height<=0) { ignoreSelection = true; roiOutside = true; }"
+      outside = b.x >= info.width || b.y >= info.height || b.x + b.w <= 0 || b.y + b.h <= 0;
     }
+    const existing = shownDocs().map((id) => S.docs.get(id).name);
+    const defaultTitle = typeof IJEdit !== 'undefined' ? IJEdit.uniqueName(info.name, existing, DUP.made.has(info.docId)) : info.name.replace(/(-\d+)?$/, '') + '-1';
+    const fields = [{ type: 'string', id: 'title', labelKey: 'dlg.edit.dupTitle', value: defaultTitle }];
+    if (area && !outside) fields.push({ type: 'check', id: 'ignore', labelKey: 'dlg.edit.ignoreSelection', value: DUP.ignoreSelection });
+    if (nCh > 1) fields.push({ type: 'string', id: 'channels', labelKey: 'dlg.edit.channelsRange', value: '1-' + nCh });
+    const v = await dialog({ title: tr('dlg.edit.dupDialog'), okLabel: tr('dlg.ok'), fields });
+    if (!v) return;
+    const ignore = outside || (area && !!v.ignore);
+    if (area && !outside) DUP.ignoreSelection = !!v.ignore;
+    let channels;
+    if (nCh > 1 && typeof IJEdit !== 'undefined') {
+      const r = IJEdit.parseChannelRange(v.channels, nCh);
+      if (!(r.first === 1 && r.last === nCh)) { channels = []; for (let c = r.first - 1; c < r.last; c++) channels.push(c); }
+    }
+    const title = String(v.title || '').trim() || defaultTitle;
     await busy(tr('op.duplicate'), async () => {
-      const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
-      const res = await call('doc.duplicate', { docId: info.docId, roi, channels: all ? undefined : [activeChannel(info)], name: info.name.replace(/(-\d+)?$/, '') + '-1' });
+      const roi = area && !ignore ? roi0 : null;
+      const res = await call('doc.duplicate', { docId: info.docId, roi, channels, name: title });
       registerDoc(res.info, { clean: false, provenance: S.sources.get(info.docId) || null, sessionKey: S.sessionKeys.get(info.docId) || null });
+      DUP.made.add(res.info.docId);
       await showDoc(res.info.docId);
       if (viewOf(res.info.docId)) viewOf(res.info.docId).fit();
+      // the selection the copy carries: "imp2.setRoi((Roi)roi.clone())" when ignored, else the cropped selection moved to (0, 0) unless it is a rectangle
+      let roi2 = null;
+      if (area && ignore && !outside) roi2 = roi0;
+      else if (roi && roi0.type !== 'rect' && typeof IJRoi !== 'undefined') {
+        const b = IJRoi.bounds(roi0);
+        if (b.x >= 0 && b.y >= 0 && b.x + b.w <= info.width && b.y + b.h <= info.height) roi2 = IJRoi.translate(roi0, -b.x, -b.y);
+        else { const m = IJRoi.mask(roi0, info.width, info.height); roi2 = m.w > 0 && m.h > 0 ? IJRoi.fromMask(m.data, m.w, m.h) : null; }
+      }
+      if (roi2) setSelection(res.info.docId, roi2, true);
       commitHook();
     });
   }
@@ -2208,7 +2571,8 @@ const IJApp = (() => {
   function setLut(name) {
     const info = activeInfo();
     if (!info) return;
-    setChannelDisplay(info.docId, activeChannel(info), { lut: name });
+    // LutLoader.showLut: "ip.setColorModel(cm)" installs a fresh table: a table that was inverted (Invert LUT) is replaced, not inverted again
+    setChannelDisplay(info.docId, activeChannel(info), { lut: name, invert: false });
   }
   function invertLut() {
     const info = activeInfo();
@@ -2229,13 +2593,42 @@ const IJApp = (() => {
     if (!info) return;
     await busy(tr('op.toMask'), async () => {
       const ch = activeChannel(info);
-      const t = await call('doc.threshold', { docId: info.docId, channel: ch, method: 'Default', dark: S.thrDark !== false, roi: isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null });
-      const res = await call('doc.run', { docId: info.docId, op: 'toMask', params: { lower: t.lower, upper: t.upper }, roi: null, channel: ch });
+      // Thresholder.run: "if (!imp.isThreshold()) autoThreshold(ip)": the range the Threshold window holds for this image and
+      // channel when it holds one, else an automatic one (Default method; deviation: ImageJ's ISODATA2 also guesses the polarity).
+      const w = S.threshold && S.threshold.docId === info.docId && S.threshold.channel === ch ? S.threshold : null;
+      let lower, upper;
+      if (w) { lower = w.lower; upper = w.upper; } else {
+        const t = await call('doc.threshold', { docId: info.docId, channel: ch, method: 'Default', dark: S.thrDark !== false, roi: isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null });
+        lower = t.lower; upper = t.upper;
+      }
+      const res = await call('doc.run', { docId: info.docId, op: 'toMask', params: { lower, upper }, roi: null, channel: ch });
       applyRunResult(info.docId, res);
-      if (res.newDocIds && res.newDocIds.length) await adoptNewDocs(res.newDocIds);
+      if (res.newDocIds && res.newDocIds.length) { await adoptNewDocs(res.newDocIds); maskLut(res.newDocIds); }
     });
   }
-  const binary = (op) => runOp('binary', { op }, { all: true });
+  /** Convert to Mask / Make Binary with "Black background" off: the mask keeps 255 = object and gets an INVERTING LUT
+   *  (Thresholder: `if (!Prefs.blackBackground) ip.invertLut()`), so the objects are displayed black on white. */
+  function maskLut(ids) {
+    if (settingGet('thr.blackBackground') === false) for (const id of ids || []) setChannelDisplay(id, 0, { invert: true });
+  }
+  /** The Binary Options the commands of Process › Binary read (ImageJ keeps them in static fields / Prefs): iterations and count
+   *  (Binary.iterations / count), Pad edges (Prefs.padEdges), Black background (Prefs.blackBackground, default TRUE as Fiji sets it).
+   *  `foreground` per channel is Binary.run's rule: "fg = blackBackground ? 255 : 0; foreground = ip.isInvertedLut() ? 255 − fg : fg". */
+  function binaryOptions(info) {
+    // `static int iterations` of Binary.java: the run of the program = the package's session data (Binary Options writes it)
+    const sessionIterations = () => { const d = S.extData && S.extData.thr; return d && Number.isInteger(d.iterations) && d.iterations >= 1 && d.iterations <= 100 ? d.iterations : 1; };
+    const num = (k, lo, hi) => { const v = Math.floor(Number(settingGet(k))); return v >= lo && v <= hi ? v : lo; };
+    const bb = settingGet('thr.blackBackground') !== false;
+    return {
+      iterations: sessionIterations(), count: num('thr.count', 1, 8), padEdges: settingGet('thr.padEdges') === true,
+      foreground: (info.channels || []).map((_, c) => { const l = lutOf(info, c); const fg = bb ? 255 : 0; return l && l.invert ? 255 - fg : fg; })
+    };
+  }
+  async function binary(op) {
+    const info = activeInfo();
+    if (!info) return null;
+    return runOp('binary', Object.assign({ op }, binaryOptions(info)), { all: true });
+  }
 
   async function math(kind) {
     const info = activeInfo();
@@ -2274,7 +2667,7 @@ const IJApp = (() => {
   }
   /** The arguments of doc.stats beyond the keys: the threshold, Limit to threshold, Redirect to. */
   function measureOptions(info, ch) {
-    const o = { threshold: thresholdFor(info, ch), limit: S.measurements.includes('limit') };
+    const o = { threshold: thresholdFor(info, ch), limit: S.measurements.includes('limit'), invertY: S.measurements.includes('invertY') };
     if (S.redirect) {
       const rinfo = S.docs.get(S.redirect.docId);
       // a redirect image closed, or whose channel Arrange Channels dropped, is no longer a target
@@ -2321,10 +2714,27 @@ const IJApp = (() => {
   async function measure() {
     const info = activeInfo();
     if (!info) return;
+    const roi = selOf(info.docId);
     await busy(tr('op.measure'), async () => {
-      appendResults(await measureRows(info, selOf(info.docId), activeChannel(info)));
+      appendResults(await measureRows(info, roi, activeChannel(info)));
+      // Analyzer.run: "if ((measurements&ADD_TO_OVERLAY)!=0) addRoiToOverlay();"
+      if (S.measurements.includes('addToOverlay')) anaAddToOverlay(info, roi);
     });
     openTool('results');
+  }
+  /**
+   * Analyzer.addRoiToOverlay: the measured selection joins the overlay, named by its row ("roi.setName(""+rt.size())"), its name drawn
+   * on a dark background ("overlay.setLabelColor(Color.white); overlay.drawBackgrounds(true)"). Overlay items are not undo steps.
+   */
+  function anaAddToOverlay(info, roi) {
+    if (!roi || !S.docs.has(info.docId)) return;
+    // Analyzer.addRoiToOverlay: "if (roi.getName()==null) roi.setName(""+rt.size());"
+    const name = typeof roi.name === 'string' && roi.name !== '' ? roi.name : String(S.results.length);
+    let b = null;
+    try { b = IJRoi.bounds(roi); } catch (_) { b = null; }
+    const items = [{ kind: 'roi', roi, name, stroke: null, tag: 'ana.measure' }];
+    if (b) items.push({ kind: 'text', x: b.x + b.w / 2, y: b.y + b.h / 2 - 6, text: name, size: 12, color: '#ffffff', background: '#000000', align: 'center', tag: 'ana.measure' });
+    annotationsApi.add(info.docId, items);
   }
   function clearResults() { S.results = []; scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi(); }
 
@@ -2426,8 +2836,9 @@ const IJApp = (() => {
   }
 
   /**
-   * Analyze > Set Measurements: the groups, Limit to threshold, Display label and Redirect to (another image or channel
-   * the statistics are read from; the same size as this image).
+   * Analyze › Set Measurements (Analyzer.doSetDialog): the groups, then Limit to threshold, Display label, Invert Y coordinates,
+   * Scientific notation, Add to overlay and NaN empty cells, "Redirect to:" (another image or channel the statistics are read from; the same
+   * size as this image) and "Decimal places (0-9):" (3). Scientific notation and the decimals re-format the Results table at once.
    */
   async function setMeasurements() {
     const info = activeInfo();
@@ -2440,93 +2851,253 @@ const IJApp = (() => {
       fields.push({ type: 'doc', id: 'redirectDoc', labelKey: 'dlg.roi.redirectImage', filter: same, value: red ? red.docId : undefined, enabledIf: (x) => !!x.redirectOn });
       fields.push({ type: 'channel', id: 'redirectChannel', labelKey: 'dlg.roi.redirectChannel', docField: 'redirectDoc', value: red ? red.channel : 0, enabledIf: (x) => !!x.redirectOn });
     }
+    fields.push({ type: 'number', id: 'decimals', labelKey: 'dlg.ana.decimals', value: anaDecimals(), min: 0, max: 9, integer: true });
     const v = await dialog({ title: tr('cmd.analyzeSetMeasurements'), okLabel: tr('dlg.ok'), fields });
     if (!v) return;
+    // Analyzer.setOptions: the table is re-formatted when the notation or the precision changed
+    const before = anaPrecision() + '/' + S.measurements.includes('nanEmpty');
     S.measurements = Object.keys(MEASURE_GROUPS).filter((g) => v[g]);
     if (!S.measurements.length) S.measurements = ['area'];
     S.redirect = v.redirectOn && v.redirectDoc !== undefined && v.redirectDoc !== '' ? { docId: v.redirectDoc, channel: Number.isInteger(v.redirectChannel) ? v.redirectChannel : 0 } : null;
+    // "int prec = (int)gd.getNextNumber(); if (prec<0) prec = 0; if (prec>9) prec = 9;"
+    const prec = Number.isFinite(Number(v.decimals)) ? clamp(Math.trunc(Number(v.decimals)), 0, 9) : anaDecimals();
+    settingSet('ana', 'ana.decimals', prec);
     saveMeasurements();
+    if (before !== anaPrecision() + '/' + S.measurements.includes('nanEmpty')) scheduleToolRefresh('results');
     scheduleMetaPersist();
   }
-
+  /**
+   * Analyze › Histogram (ij.plugin.Histogram). An 8 / 16-bit image has 256 bins over its pixel range and no dialog; a 32-bit image asks for
+   * "Bins:", "Use pixel value range" (or "X_min:" / "X_max:" and "Y_max:" "Auto"), as the dialog ImageJ shows for a 32-bit image and for Alt+Histogram
+   * ("if (bitDepth==32 || IJ.altKeyDown() …) if (!showDialog(imp)) return;"). Typing a range unticks "Use pixel value range"
+   * (Histogram.textValueChanged). The values are remembered for the next run (Histogram.static*).
+   */
   async function histogram() {
     const info = activeInfo();
     if (!info) return;
     const ch = activeChannel(info);
+    const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
+    let bins = 256, min, max, yMax = 0;
+    // Histogram.run: "if (bitDepth==32 || IJ.altKeyDown() …) showDialog" — a 16-bit image gets 256 bins over its pixel range and no dialog (the plan's
+    // "16/32-bit" is wrong for 1.54p); there is no Alt key here
+    if (info.bitDepth === 32) {
+      const d = lutOf(info, ch) || {};
+      // "if (imp.getID()!=imageID …) useImageMinAndMax = true": another image starts again from its own range (Bins and Y max stay)
+      const prev = ANA.hist || null;
+      const last = prev && prev.docId === info.docId ? prev : { bins: prev ? prev.bins : 256, useRange: true, yMax: prev ? prev.yMax : 'Auto' };
+      const lo = Number.isFinite(d.min) ? d.min : 0, hi = Number.isFinite(d.max) ? d.max : (info.bitDepth === 16 ? 65535 : 1);
+      const v = await dialog({ title: tr('cmd.analyzeHistogram'), okLabel: tr('dlg.ok'), fields: [
+        { type: 'number', id: 'bins', labelKey: 'dlg.ana.histBins', value: last.bins, min: 2, max: 65536, integer: true },
+        { type: 'check', id: 'useRange', labelKey: 'dlg.ana.histUseRange', value: last.useRange !== false },
+        { type: 'message', id: 'or', labelKey: 'dlg.ana.histOr' },
+        { type: 'number', id: 'xMin', labelKey: 'dlg.ana.histXMin', value: last.useRange === false && Number.isFinite(last.xMin) ? last.xMin : lo, step: 'any' },
+        { type: 'number', id: 'xMax', labelKey: 'dlg.ana.histXMax', value: last.useRange === false && Number.isFinite(last.xMax) ? last.xMax : hi, step: 'any' },
+        { type: 'string', id: 'yMax', labelKey: 'dlg.ana.histYMax', value: last.yMax === undefined ? 'Auto' : String(last.yMax) }],
+      onChange: (values, set, changedId) => { if (changedId === 'xMin' || changedId === 'xMax') set('useRange', false); } });
+      if (!v) return;
+      bins = Math.max(2, Math.min(65536, Math.round(Number(v.bins))));
+      ANA.hist = { docId: info.docId, bins, useRange: !!v.useRange, xMin: Number(v.xMin), xMax: Number(v.xMax), yMax: String(v.yMax) };
+      if (!v.useRange) { min = Number(v.xMin); max = Number(v.xMax); }
+      // "int iyMax = (int)Tools.parseDouble(yMax, 0.0);"
+      const y = typeof IJAna !== 'undefined' ? IJAna.parseDouble(v.yMax) : Number(v.yMax);
+      yMax = Number.isFinite(y) && y > 0 ? Math.trunc(y) : 0;
+    }
     await busy(tr('op.histogram'), async () => {
-      const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
-      const hist = await call('doc.histogram', { docId: info.docId, roi, channel: ch, bins: 256 });
-      const stats = await call('doc.stats', { docId: info.docId, roi, channel: ch, measurements: ['area', 'mean', 'stdDev', 'min', 'max', 'mode'] });
-      openHistogramWindow(info, ch, hist, stats.row || stats);
+      const args = { docId: info.docId, roi, channel: ch, bins };
+      if (min !== undefined) { args.min = min; args.max = max; }
+      const hist = await call('doc.histogram', args);
+      openHistogramWindow(info, ch, hist, { bins, yMax, roi });
     });
   }
 
   async function plotProfile() {
     const info = activeInfo();
-    const line = info && selOf(info.docId);
-    if (!line || (line.type !== 'line' && line.type !== 'polyline')) return;
+    const roi = info && selOf(info.docId);
+    if (!roi || !(roi.type === 'line' || roi.type === 'polyline' || roi.type === 'rect')) return;
     await busy(tr('op.profile'), async () => {
-      const res = await call('doc.profile', { docId: info.docId, line, channel: activeChannel(info) });
-      openProfileWindow(info, res);
+      const vertical = roi.type === 'rect' && !!anaSetting('ana.vertical', false);
+      const res = await call('doc.profile', { docId: info.docId, line: roi, channel: activeChannel(info), vertical, interpolate: anaSetting('ana.interpolate', true) !== false });
+      openProfileWindow(info, res, { rect: roi.type === 'rect', vertical });
     });
+  }
+
+  // ── Analyze › Analyze Particles (ij.plugin.filter.ParticleAnalyzer) ─────────────────────────────────────────────
+  // ParticleAnalyzer.showStrings2: the order of the "Show:" list; each id is the lang key `dlg.ana.show<Id>`.
+  const PARTICLE_SHOW = ['nothing', 'overlay', 'overlayMasks', 'outlines', 'bareOutlines', 'ellipses', 'masks', 'countMasks'];
+  const PARTICLE_SHOW_KEY = { nothing: 'dlg.ana.showNothing', overlay: 'dlg.ana.showOverlay', overlayMasks: 'dlg.ana.showOverlayMasks', outlines: 'dlg.ana.showOutlines',
+    bareOutlines: 'dlg.ana.showBareOutlines', ellipses: 'dlg.ana.showEllipses', masks: 'dlg.ana.showMasks', countMasks: 'dlg.ana.showCountMasks' };
+  /** "private static int staticOptions = Prefs.getInt(OPTIONS,CLEAR_WORKSHEET);": the first run has only "Clear results" ticked. */
+  function particleState() {
+    const s = settingGet('ana.particles');
+    return Object.assign({ minSize: 0, maxSize: null, minCirc: 0, maxCirc: 1, show: 'nothing', pixelUnits: false, display: false, exclude: false, clear: true,
+      holes: false, summarize: false, overlay: false, manager: false, composite: false, record: false }, s && typeof s === 'object' && !Array.isArray(s) ? s : {});
+  }
+  // The mean columns of the Summary row (ParticleAnalyzer.addMeans), by measurement key, in ImageJ's order.
+  const SUMMARY_MEAN_KEYS = ['mean', 'mode', 'perim', 'major', 'minor', 'angle', 'circularity', 'solidity', 'feret', 'feretX', 'feretY', 'feretAngle', 'minFeret', 'intDen', 'median', 'skewness', 'kurtosis'];
+  const SUMMARY_HEAD = ['Slice', 'Count', 'Total Area', 'Average Size', '%Area'];
+  /** A colour per particle for "Overlay Masks" (ImageJ takes the Glasbey look-up table, which this plugin does not ship): golden-angle hues. */
+  function particleMaskColor(index) {
+    const h6 = ((index * 137.508) % 360) / 60, s = 0.65, v = 0.95;
+    const f = (n) => { const k = (n + h6) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+    const hex = (x) => ('0' + Math.round(x * 255).toString(16)).slice(-2);
+    return '#' + hex(f(5)) + hex(f(3)) + hex(f(1)) + '99';
   }
 
   async function particles() {
     const info = activeInfo();
     if (!info) return;
     const cal = info.calibration || {};
-    const unit = cal.unit || 'µm';
-    const pxArea = (cal.pixelWidth || 1) * (cal.pixelHeight || 1);
-    const v = await dialog({ title: tr('cmd.analyzeParticles'), okLabel: tr('dlg.ok'), fields: [
-      { type: 'number', id: 'minSize', label: tr('part.minSize'), value: 0, min: 0, step: 'any', units: unit + '²' },
-      { type: 'number', id: 'maxSize', label: tr('part.maxSize'), value: 1e9, min: 0, step: 'any', units: unit + '²' },
-      { type: 'number', id: 'minCirc', label: tr('part.minCirc'), value: 0, min: 0, max: 1, step: 0.05 },
-      { type: 'number', id: 'maxCirc', label: tr('part.maxCirc'), value: 1, min: 0, max: 1, step: 0.05 },
-      { type: 'check', id: 'exclude', label: tr('part.exclude'), value: false },
-      { type: 'check', id: 'holes', label: tr('part.holes'), value: false },
-      { type: 'check', id: 'display', label: tr('part.display'), value: true },
-      { type: 'check', id: 'manager', label: tr('part.manager'), value: false },
-      { type: 'check', id: 'summarize', label: tr('part.summarize'), value: true }] });
+    const pw = cal.pixelWidth > 0 ? cal.pixelWidth : 1, ph = cal.pixelHeight > 0 ? cal.pixelHeight : 1;
+    const unit = cal.unit || 'pixel';
+    const scaled = pw !== 1 || ph !== 1 || !/^pixels?$/i.test(unit);
+    const st = particleState();
+    const A = typeof IJAna !== 'undefined' ? IJAna : null;
+    const stored = { minSize: st.minSize, maxSize: st.maxSize === null || st.maxSize === undefined ? Infinity : st.maxSize };
+    const fields = [{ type: 'string', id: 'size', label: tr('dlg.ana.partSize', { units: unit + '^2' }), value: A ? A.sizeText(stored.minSize, stored.maxSize, st.pixelUnits ? 1 : pw * ph) : '0-Infinity' }];
+    if (scaled) fields.push({ type: 'check', id: 'pixelUnits', labelKey: 'dlg.ana.partPixelUnits', value: !!st.pixelUnits });
+    fields.push({ type: 'string', id: 'circularity', labelKey: 'dlg.ana.partCirc', value: (A ? A.circText(st.minCirc, st.maxCirc) : '0.00-1.00') });
+    fields.push({ type: 'choice', id: 'show', labelKey: 'dlg.ana.partShow', value: PARTICLE_SHOW.includes(st.show) ? st.show : 'nothing', options: PARTICLE_SHOW.map((id) => ({ value: id, labelKey: PARTICLE_SHOW_KEY[id] })) });
+    for (const [id, key] of [['display', 'dlg.ana.partDisplay'], ['exclude', 'dlg.ana.partExclude'], ['clear', 'dlg.ana.partClear'], ['holes', 'dlg.ana.partHoles'], ['summarize', 'dlg.ana.partSummarize'],
+      ['overlay', 'dlg.ana.partOverlay'], ['manager', 'dlg.ana.partManager'], ['composite', 'dlg.ana.partComposite'], ['record', 'dlg.ana.partRecord']]) {
+      fields.push({ type: 'check', id, labelKey: key, value: !!st[id] });
+    }
+    const v = await dialog({ title: tr('cmd.analyzeParticles'), okLabel: tr('dlg.ok'), fields });
     if (!v) return;
+    // ParticleAnalyzer.showDialog: lenient parsing, never a refusal
+    const pixelUnits = scaled ? !!v.pixelUnits : !!st.pixelUnits;
+    const lim = A ? A.particleSettings(v.size, v.circularity, pixelUnits ? 1 : pw * ph) : { minSize: 0, maxSize: Infinity, minCirc: 0, maxCirc: 1 };
+    const opt = { display: !!v.display, exclude: !!v.exclude, clear: !!v.clear, holes: !!v.holes, summarize: !!v.summarize, overlay: !!v.overlay, manager: !!v.manager,
+      composite: !!v.composite, record: !!v.record, show: PARTICLE_SHOW.includes(v.show) ? v.show : 'nothing' };
+    settingSet('ana', 'ana.particles', Object.assign({ minSize: lim.minSize, maxSize: Number.isFinite(lim.maxSize) ? lim.maxSize : null, minCirc: lim.minCirc, maxCirc: lim.maxCirc, pixelUnits }, opt));
+    // "if ((options&DISPLAY_SUMMARY)!=0) Analyzer.setMeasurements(Analyzer.getMeasurements()|AREA);"
+    if (opt.summarize && !S.measurements.includes('area')) { S.measurements = S.measurements.concat('area'); saveMeasurements(); }
+    // analyze(): "if (showOverlay && showChoice==NOTHING) showChoice = OVERLAY_OUTLINES;" — an Overlay choice builds the overlay, any other choice the image
+    const overlayMode = opt.show === 'overlay' || opt.show === 'overlayMasks' || (opt.overlay && opt.show === 'nothing');
+    const maskedOverlay = opt.show === 'overlayMasks';
     let summary = null;
     await busy(tr('op.particles'), async () => {
-      const opts = { minSize: Math.max(0, Number(v.minSize)) / pxArea, maxSize: Math.max(0, Number(v.maxSize)) / pxArea,
-        minCirc: Number(v.minCirc), maxCirc: Number(v.maxCirc), excludeEdges: !!v.exclude, includeHoles: !!v.holes,
-        roi: isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null };
-      const res = await call('doc.particles', { docId: info.docId, channel: activeChannel(info), opts, keys: measuredKeys(null), redirect: measureOptions(info, activeChannel(info)).redirect });
-      // The particle's own columns, then the image measurements Set Measurements ticked.
-      const wanted = new Set(measuredKeys(null));
+      const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
+      const ch = activeChannel(info);
+      const analysis = { minSize: lim.minSize, minCirc: lim.minCirc, maxCirc: lim.maxCirc, excludeEdges: opt.exclude, includeHoles: opt.holes };
+      if (Number.isFinite(lim.maxSize)) analysis.maxSize = lim.maxSize;
+      // "if (showChoice==ELLIPSES) measurements |= ELLIPSE;"
+      const groups = S.measurements.slice();
+      if (opt.show === 'ellipses' && !groups.includes('ellipse')) groups.push('ellipse');
+      const keys = measurementKeys(groups, false);
+      const mo = measureOptions(info, ch);
+      // ParticleAnalyzer.setThresholdLevels: the threshold range of the image, else a binary image (refused with ImageJ's message for any other)
+      const pthr = thresholdFor(info, ch);
+      const res = await call('doc.particles', { docId: info.docId, channel: ch, opts: Object.assign({ roi }, analysis), keys, redirect: mo.redirect,
+        invertY: S.measurements.includes('invertY'), composite: opt.composite && !opt.holes, threshold: pthr, requireBinary: !pthr });
+      // The table the rows go to (ParticleAnalyzer.java:566-576): "Display results" off while a Results window is open measures into a private table
+      // — unless "Clear results" is ticked, which clears and closes the window and uses the system table. The system table keeps the rows even
+      // when nothing shows them. `rowBase` = rt.size() before the first particle: what the labels, Count Masks levels and overlay names count from.
+      const resultsOpen = S.wins.has('results');
+      if (opt.clear && !opt.display && resultsOpen) { const rw = S.wins.get('results'); if (rw && rw.close) rw.close(); }
+      const intoTable = opt.display || opt.clear || !resultsOpen;
+      const rowBase = intoTable && !opt.clear ? S.results.length - (hasSummary() ? 4 : 0) : 0;
+      // Analyzer.saveResults: the columns Set Measurements ticked, in ImageJ's column order; then "XStart" / "YStart" when the starts are recorded
+      const wanted = new Set(keys);
       const rowsOut = (res.rows || []).map((p) => {
         const r = {};
-        if ((info.channels || []).length > 1) r.Ch = activeChannel(info) + 1;
-        for (const [key, col] of PARTICLE_COLUMNS) if (p[key] !== undefined) r[col] = p[key];
-        for (const key of PARTICLE_MEASURE_KEYS) {
-          if (!wanted.has(key) || p[key] === undefined) continue;
-          const col = COLUMNS.find((c) => c[0] === key)[1];
-          if (r[col] === undefined) r[col] = p[key];
-        }
+        if (S.measurements.includes('labels')) r.Label = info.name;
+        if ((info.channels || []).length > 1) r.Ch = ch + 1;
+        for (const [key, col] of COLUMNS) if (wanted.has(key) && p[key] !== undefined) r[col] = p[key];
+        if (opt.record) { r.XStart = p.xStart; r.YStart = p.yStart; }
         return r;
       });
-      if (v.display) appendResults(rowsOut);
-      if (v.manager) {
-        // traced: a particle outline is a pixel-edge polygon, so its perimeter is the traced one
-        // (ImageJ's Wand ROI), the same number the particle row reports.
-        (res.outlines || []).forEach((pts) => S.roiList.push({ name: roiName({ type: 'polygon', points: pts }), docId: info.docId, roi: { type: 'polygon', points: pts, traced: true } }));
+      // "if (resetCounter && slice==1 && rt.size()>0) Analyzer.resetCounter()": the table is emptied before the first particle, shown or not
+      if (opt.clear) { S.results = []; ANA.sel.clear(); scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi(); }
+      if (intoTable) appendResults(rowsOut);
+      if ((res.rows || []).length === 0 && opt.display) setStatus(tr('dlg.ana.partNone'));
+      // ParticleAnalyzer.updateSliceSummary: Count, Total Area, Average Size, %Area, then the mean of every measured column. ImageJ reads the table
+      // through "float[] areas = rt.getColumn(AREA)" (columns are doubles, getColumn casts to float) and sums / averages those floats in a double
+      // (FloatStatistics.mean): Math.fround of each cell, a double accumulator. %Area is the exact pixel ratio of the analysis: up to 1 ULP of a
+      // float away from ImageJ's "sum*100.0/totalArea" computed over the float areas.
+      if (opt.summarize && res.summary) {
+        const s = res.summary;
+        let areaSum = 0;
+        for (const p of res.rows || []) areaSum += Math.fround(p.area);
+        const cnt = (res.rows || []).length;
+        const row = { Slice: info.name, Count: s.count, 'Total Area': areaSum, 'Average Size': cnt ? areaSum / cnt : 0, '%Area': s.percentArea };
+        for (const [key, col] of COLUMNS) {
+          if (!wanted.has(key) || SUMMARY_MEAN_KEYS.indexOf(key) < 0) continue;
+          let sum = 0, n = 0;
+          for (const p of res.rows || []) if (typeof p[key] === 'number') { sum += Math.fround(p[key]); n++; }
+          row[col] = n ? sum / n : NaN;
+        }
+        summary = row;
+      }
+      const outlines = res.outlines || [];
+      // Add to Manager (ParticleAnalyzer.addToRoiManager: the manager is reset first when "Clear results" is ticked)
+      if (opt.manager) {
+        if (opt.clear) { S.roiList = []; S.roiSelected.clear(); }
+        outlines.forEach((pts, i) => {
+          const maskRoi = res.rows && res.rows[i] && res.rows[i].maskRoi;
+          const roi2 = maskRoi || { type: 'polygon', points: pts, traced: true };
+          S.roiList.push({ name: roiLabel(roi2, i + 1), docId: info.docId, roi: roi2 });
+        });
         refreshRois(); scheduleToolRefresh('rois');
       }
+      // the overlay (showResults(): the overlay is set only when there are particles); the particles are named by their row when the results are displayed
+      if (overlayMode && outlines.length) {
+        const items = [];
+        outlines.forEach((pts, i) => {
+          const maskRoi = res.rows && res.rows[i] && res.rows[i].maskRoi;
+          const item = { kind: 'roi', roi: maskRoi || { type: 'polygon', points: pts, traced: true }, stroke: '#00ffff', tag: 'ana.particles' };
+          // "if (showResults) roi2.setName(""+count)" with count = rt.size()
+          if (opt.display) item.name = String(rowBase + i + 1);
+          if (maskedOverlay) item.fill = particleMaskColor(i + 5);
+          items.push(item);
+          if (opt.display) {
+            const b = outlineBounds(pts);
+            items.push({ kind: 'text', x: b.x + b.w / 2, y: b.y + b.h / 2 - 4, text: String(rowBase + i + 1), size: 9, color: '#ffffff', align: 'center', tag: 'ana.particles' });
+          }
+        });
+        annotationsApi.set(info.docId, items, { tag: 'ana.particles' });
+      }
+      // the "Show:" image
+      if (!overlayMode && opt.show !== 'nothing') {
+        const run = await call('doc.run', { docId: info.docId, op: 'particleImage', params: { show: opt.show, opts: analysis, threshold: pthr, rowOffset: rowBase, composite: opt.composite && !opt.holes }, roi, channel: ch });
+        applyRunResult(info.docId, run);
+        if (run && run.newDocIds && run.newDocIds.length) {
+          await adoptNewDocs(run.newDocIds, info.docId);
+          // Outlines: "ip.drawString(s)" — the numbers are text items of the new image (the browser's font, not Java's)
+          if (opt.show === 'outlines' && outlines.length) {
+            const labels = outlines.map((pts, i) => {
+              const b = outlineBounds(pts);
+              return { kind: 'text', x: b.x + b.w / 2, y: b.y + b.h / 2 - 4, text: String(rowBase + i + 1), size: 9, color: '#ff0000', align: 'center', tag: 'ana.particles' };
+            });
+            annotationsApi.set(run.newDocIds[0], labels, { tag: 'ana.particles' });
+          }
+        }
+      }
       scheduleMetaPersist();
-      if (v.display) openTool('results');
-      if (v.manager) openTool('roiManager');
-      if (v.summarize && res.summary) summary = res.summary;
     });
+    if (opt.display) openTool('results');
+    if (opt.manager) openTool('roiManager');
     // ImageJ shows a "Summary" table window, one row per run: never a modal that holds the busy state.
     if (summary) {
-      S.summaryRows.push({ Image: info.name, Count: summary.count, 'Total Area': summary.totalArea, 'Average Size': summary.averageSize, '%Area': summary.percentArea });
+      S.summaryRows.push(summary);
       openTool('summary');
       scheduleToolRefresh('summary');
     }
   }
+  /** The integer bounding rectangle of a traced outline (Roi.getBounds). */
+  function outlineBounds(pts) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
 
+  /** RoiManager.getLabel(imp, roi, n) with n >= 0 (what ParticleAnalyzer's "Add to Manager" calls): "{xc = yc; yc=n;}" → "nnnn-yyyy", the particle number then the y centre. */
+  function roiLabel(roi, n) {
+    let b = { x: 0, y: 0, w: 0, h: 0 };
+    if (typeof IJRoi !== 'undefined') { try { b = IJRoi.bounds(roi); } catch (_) { /* unnamed position */ } }
+    const xc = Math.max(0, Math.trunc(b.y + Math.trunc(b.h / 2))), yc = Math.max(0, n);
+    const digits = Math.max(4, String(xc).length, String(yc).length);
+    return String(yc).padStart(digits, '0').slice(-digits) + '-' + String(xc).padStart(digits, '0').slice(-digits);
+  }
   function roiName(roi) {
     let b = { x: 0, y: 0, w: 0, h: 0 };
     if (typeof IJRoi !== 'undefined') { try { b = IJRoi.bounds(roi); } catch (_) { /* unnamed position */ } }
@@ -2759,10 +3330,13 @@ const IJApp = (() => {
   // ── Threshold
 
   function buildThreshold() {
-    const T = { method: 'Default', dark: S.thrDark !== false, mode: 'red', lower: 0, upper: 255, overlayDoc: null };
+    const T = { method: 'Default', dark: S.thrDark !== false, mode: 'red', lower: 0, upper: 255, overlayDoc: null, hist16: settingGet('thr.hist16') === true };
     const canvas = h('canvas', { class: 'ij-hist', width: 256, height: 80 });
     const readout = h('div', { class: 'ij-readout' });
     let hist = null, token = 0;
+    // ThresholdAdjuster.java:221 (Prefs.get(SIXTEEN_BIT)), :941 (Prefs.set): the "16-bit histogram" box is remembered
+    const hist16Row = check(tr('dlg.thr.hist16'), T.hist16, (on) => { T.hist16 = on; settingSet('thr', 'thr.hist16', on); auto(); });
+    hist16Row.style.display = 'none';
     const R = 255;
     const toValue = (p) => (hist ? hist.min + (p / R) * (hist.max - hist.min) : p);
     const toPos = (v) => (hist ? clamp(((v - hist.min) / (hist.max - hist.min || 1)) * R, 0, R) : v);
@@ -2784,7 +3358,10 @@ const IJApp = (() => {
       if (!info) return;
       try {
         const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
-        const r = await call('doc.threshold', { docId: info.docId, channel: activeChannel(info), method: T.method, dark: T.dark, roi });
+        // "16-bit histogram" (ThresholdAdjuster.java:232, used :621 for 16-bit images): the full 65 536-bin histogram
+        const lutC = lutOf(info, activeChannel(info));
+        const r = await call('doc.threshold', { docId: info.docId, channel: activeChannel(info), method: T.method, dark: T.dark, roi,
+          histogram16: T.hist16 && info.bitDepth === 16, invertedLut: !!(lutC && lutC.invert) });
         T.lower = r.lower; T.upper = r.upper; commit();
       } catch (err) { reportError(err); }
     }
@@ -2796,13 +3373,15 @@ const IJApp = (() => {
         const hh = await call('doc.histogram', { docId: info.docId, roi: null, channel: activeChannel(info), bins: 256 });
         if (my !== token) return;
         hist = hh;
+        hist16Row.style.display = info.bitDepth === 16 ? '' : 'none'; // only a 16-bit image has a 16-bit histogram
       } catch (err) { console.error('[advanced-studio] histogram', err); }
       if (autoToo) await auto(); else commit();
     }
     async function apply() {
       const info = activeInfo();
       if (!info) return;
-      await runOp('toMask', { lower: T.lower, upper: T.upper }, { noRoi: true });
+      const res = await runOp('toMask', { lower: T.lower, upper: T.upper }, { noRoi: true });
+      if (res && res.newDocIds) maskLut(res.newDocIds);
     }
     function reset() {
       S.threshold = null;
@@ -2822,6 +3401,7 @@ const IJApp = (() => {
       row(selectEl(IJThresholdMethods().map((m) => ({ value: m, label: m })), T.method, (m) => { T.method = m; auto(); }),
         selectEl([{ value: 'red', label: tr('thr.red') }, { value: 'bw', label: tr('thr.bw') }, { value: 'overunder', label: tr('thr.overUnder') }], T.mode, (m) => { T.mode = m; commit(); })),
       check(tr('thr.dark'), T.dark, (on) => { T.dark = on; S.thrDark = on; auto(); }),
+      hist16Row,
       row(btn(tr('thr.auto'), auto), btn(tr('thr.apply'), apply, 'ij-btn--primary'), btn(tr('thr.reset'), reset), btn(tr('thr.setBtn'), setDialog)));
     // Opening the window thresholds with the default method at once, like ImageJ.
     let first = true;
@@ -2877,7 +3457,27 @@ const IJApp = (() => {
 
   // ── Results
 
+  // ── Results ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
   const RESULTS_CAP = 20000;
+  const SELECTED_ROW_BG = 'var(--color-accent-subtle, var(--bg-active))';
+  /** The row (tr) a click landed on, through the cells' parents. */
+  function rowElOf(target) {
+    let n = target;
+    while (n && String(n.tagName).toUpperCase() !== 'TR') n = n.parentNode;
+    return n && n.__row ? n : null;
+  }
+  /** The text of a row as TextPanel searches it ("Find…": the displayed line, row number first). */
+  function rowLine(i) {
+    const cols = resultColumns();
+    return [String(i + 1)].concat(cols.map((c) => cellText(S.results[i], c))).join('\t');
+  }
+
+  /**
+   * Window › Results: Analyze › Measure, Analyze Particles and the other measuring commands write here. A small menu bar (File / Edit / Results,
+   * ij.text.TextWindow) works on the table; clicking a row selects it (Shift extends, Ctrl toggles), Edit › Clear deletes the selected rows
+   * (with none selected it is Analyze › Clear Results), Copy honours Edit › Options › Input/Output.
+   */
   function buildResults() {
     const table = h('table', { class: 'ij-table' });
     const note = h('p', { class: 'ij-banner' });
@@ -2885,35 +3485,190 @@ const IJApp = (() => {
     const wrap = h('div', { class: 'ij-table-wrap' }, table);
     // shownCols starts as null so the first render always builds the table, even an empty one
     // (no rows = no columns = '' would otherwise skip the build and leave tbody null).
-    let shown = 0, shownCols = null, tbody = null, firstRef = null;
-    const cell = (r, c) => h('td', { text: r[c] === undefined ? '' : (typeof r[c] === 'number' ? num(r[c], 4) : String(r[c])) });
+    let shown = 0, shownCols = null, tbody = null, firstRef = null, trs = [];
+    function applySelection() {
+      for (const tr of trs) {
+        const on = ANA.sel.has(tr.__row);
+        tr.style.background = on ? SELECTED_ROW_BG : '';
+        if (tr.setAttribute) tr.setAttribute('aria-selected', on ? 'true' : 'false');
+      }
+    }
     // Only the rows added since the last refresh are built; a full rebuild happens when the
-    // columns change or the table was cleared / replaced.
+    // columns or the number format change or the table was cleared / replaced.
     function render() {
       const cols = resultColumns();
-      const sig = cols.join('\u0001');
+      const sig = cols.join('\u0001') + '|' + anaPrecision() + '|' + S.measurements.includes('nanEmpty');
       if (sig !== shownCols || S.results.length < shown || (firstRef !== null && S.results[0] !== firstRef)) {
         table.textContent = '';
         table.appendChild(h('thead', null, h('tr', null, [h('th', { text: ' ' })].concat(cols.map((c) => h('th', { text: columnHeader(c) }))))));
         tbody = h('tbody');
+        tbody.addEventListener('click', onRowClick);
         table.appendChild(tbody);
-        shown = 0; shownCols = sig;
+        shown = 0; shownCols = sig; trs = [];
       }
       firstRef = S.results.length ? S.results[0] : null;
       const cap = Math.min(S.results.length, RESULTS_CAP);
       const frag = document.createDocumentFragment ? document.createDocumentFragment() : tbody;
       for (let i = shown; i < cap; i++) {
         const r = S.results[i];
-        frag.appendChild(h('tr', null, [h('td', { text: String(i + 1) })].concat(cols.map((c) => cell(r, c)))));
+        const tr = h('tr', null, [h('td', { text: String(i + 1) })].concat(cols.map((c) => h('td', { text: cellText(r, c) }))));
+        tr.__row = r;
+        trs.push(tr);
+        frag.appendChild(tr);
       }
       if (frag !== tbody) tbody.appendChild(frag);
       shown = Math.max(shown, cap);
+      for (const r of Array.from(ANA.sel)) if (S.results.indexOf(r) < 0) ANA.sel.delete(r);
+      applySelection();
       note.hidden = S.results.length <= RESULTS_CAP;
       note.textContent = note.hidden ? '' : tr('res.capped', { shown: RESULTS_CAP, total: S.results.length });
       wrap.scrollTop = wrap.scrollHeight;
     }
-    const el = h('div', { class: 'ij-panel ij-results' }, wrap, note,
-      row(btn(tr('res.copy'), async () => { try { await navigator.clipboard.writeText(resultsText('\t')); setStatus(tr('status.copied')); } catch (err) { console.error(err); setStatus(tr('err.clipboard'), 'error'); } }),
+    /** TextPanel.select / extendSelection, with Ctrl added for a row at a time. */
+    function onRowClick(e) {
+      const el = rowElOf(e && e.target);
+      if (!el) return;
+      const i = S.results.indexOf(el.__row);
+      if (i < 0) return;
+      if (e.shiftKey && ANA.origin >= 0 && ANA.origin < S.results.length) {
+        const a = Math.min(ANA.origin, i), b = Math.max(ANA.origin, i);
+        if (!(e.ctrlKey || e.metaKey)) ANA.sel.clear();
+        for (let k = a; k <= b; k++) ANA.sel.add(S.results[k]);
+      } else if (e.ctrlKey || e.metaKey) {
+        if (ANA.sel.has(el.__row)) ANA.sel.delete(el.__row); else ANA.sel.add(el.__row);
+        ANA.origin = i;
+      } else {
+        ANA.sel.clear(); ANA.sel.add(el.__row); ANA.origin = i;
+      }
+      applySelection();
+    }
+    const selectedIndices = () => { const out = []; S.results.forEach((r, i) => { if (ANA.sel.has(r)) out.push(i); }); return out; };
+    const tableChanged = () => { scheduleToolRefresh('results'); scheduleMetaPersist(); refreshUi(); };
+
+    // Edit › Select All / Copy / Cut / Clear (TextPanel.selectAll, copySelection, cutSelection, doClear / clearSelection)
+    const selectAll = () => { for (const r of S.results) ANA.sel.add(r); ANA.origin = 0; applySelection(); };
+    const copy = async () => {
+      const sel = selectedIndices();
+      await copyText(resultsText('\t', 'copy', sel.length ? sel : null));
+    };
+    const deleteRows = (indices) => {
+      const drop = new Set(indices.map((i) => S.results[i]));
+      S.results = S.results.filter((r) => !drop.has(r));
+      for (const r of drop) ANA.sel.delete(r);
+      ANA.origin = -1;
+      tableChanged();
+    };
+    const cut = async () => { await copy(); const sel = selectedIndices(); deleteRows(sel.length ? sel : S.results.map((r, i) => i)); };
+    const clear = () => { const sel = selectedIndices(); if (sel.length) deleteRows(sel); else clearResults(); };
+
+    // TextPanel.find: "for (int i=first; i<iRowCount; i++) if (line.contains(s)) { setSelection(i, i); … }"; Find Next starts after the selection
+    function findFrom(text, first) {
+      for (let i = first; i < S.results.length; i++) {
+        if (rowLine(i).indexOf(text) >= 0) {
+          ANA.sel.clear(); ANA.sel.add(S.results[i]); ANA.origin = i;
+          applySelection();
+          if (trs[i] && typeof trs[i].scrollIntoView === 'function') trs[i].scrollIntoView({ block: 'nearest' });
+          return true;
+        }
+      }
+      setStatus(tr('res.notFound', { text }));
+      return false;
+    }
+    async function find() {
+      const v = await dialog({ title: tr('res.find'), okLabel: tr('dlg.ok'), fields: [{ type: 'string', id: 'find', labelKey: 'dlg.ana.resFind', value: ANA.find }] });
+      if (!v || !v.find) return;
+      ANA.find = String(v.find);
+      findFrom(ANA.find, 0);
+    }
+    function findNext() {
+      if (!ANA.find) return find();
+      const sel = selectedIndices();
+      const first = sel.length ? sel[sel.length - 1] + 1 : 0;
+      if (first >= S.results.length) { setStatus(tr('res.notFound', { text: ANA.find })); return undefined; }
+      return findFrom(ANA.find, first);
+    }
+
+    // File › Rename… / Duplicate… (TextPanel.rename / duplicate): the table becomes a window of its own
+    const stringRows = () => S.results.map((r) => resultColumns().map((c) => cellText(r, c)));
+    const titleOf = (name) => (name.endsWith('-1') || name.endsWith('-2') ? name.slice(0, -2) : name);
+    function newTitle(old) { const t2 = titleOf(old), t3 = t2 + '-1'; return t3 === old ? t2 + '-2' : t3; }
+    async function duplicate() {
+      const v = await dialog({ title: tr('res.duplicate'), okLabel: tr('dlg.ok'), fields: [{ type: 'string', id: 'title', labelKey: 'dlg.ana.resTitle', value: newTitle('Results') }] });
+      if (!v || !String(v.title).trim()) return;
+      const name = String(v.title) === 'Results' ? 'Results2' : String(v.title);
+      openTable(name, resultColumns().map(columnHeader), stringRows());
+    }
+    async function rename() {
+      const v = await dialog({ title: tr('res.rename'), okLabel: tr('dlg.ok'), fields: [{ type: 'string', id: 'title', labelKey: 'dlg.ana.resTitle', value: newTitle('Results') }] });
+      if (!v || !String(v.title).trim() || String(v.title) === 'Results') return;
+      // "if (title.equals("Results")) { … Analyzer.setResultsTable(null); Analyzer.resetCounter(); }" — the system table is empty afterwards
+      openTable(String(v.title), resultColumns().map(columnHeader), stringRows());
+      S.results = []; ANA.sel.clear();
+      tableChanged();
+    }
+    // Results › Sort… (TextPanel.sort: "Column:" the headers after Label; ResultsTable.sort(column))
+    async function sortTable() {
+      const cols = resultColumns().filter((c) => c !== 'Label');
+      if (!cols.length) return;
+      const v = await dialog({ title: tr('dlg.ana.sortTitle'), okLabel: tr('dlg.ok'), fields: [
+        { type: 'choice', id: 'column', labelKey: 'dlg.ana.resColumn', value: cols[0], options: cols.map((c) => ({ value: c, label: columnHeader(c) })) }] });
+      if (!v) return;
+      const order = typeof IJAna !== 'undefined' ? IJAna.sortOrder(S.results, v.column, S.measurements.includes('nanEmpty')) : S.results.map((r, i) => i);
+      const rows = S.results;
+      S.results = order.map((i) => rows[i]);
+      ANA.origin = -1;
+      tableChanged();
+    }
+    // Results › Plot… (PlotContentsDialog "Plot From Table": X (--- = the row number), Y, colour, line width, symbol, label)
+    const SYMBOLS = ['Line', 'Connected Circles', 'Filled', 'Bar', 'Separated Bars', 'Circle', 'Box', 'Triangle', '+', 'Diamond', 'X', 'Dot'];
+    async function plotTable() {
+      const cols = resultColumns().filter((c) => c !== 'Label' && S.results.some((r) => typeof r[c] === 'number'));
+      if (!cols.length) return;
+      const colOptions = cols.map((c) => ({ value: c, label: columnHeader(c) }));
+      const v = await dialog({ title: tr('res.plot'), okLabel: tr('dlg.ok'), fields: [
+        { type: 'choice', id: 'table', labelKey: 'dlg.ana.plotTable', value: 'Results', options: [{ value: 'Results', label: 'Results' }] },
+        // PlotContentsDialog: "previousColumns = {1, 1, 0, 0}" (x: the first column of the list that starts with "---", y: the second of the list without it),
+        // "previousColor="blue" … previousSymbol="Circle"", "previousLineWidth = 1"; OK keeps the colour, width and symbol for the next plot
+        { type: 'choice', id: 'x', labelKey: 'dlg.ana.plotX', value: cols[0], options: [{ value: '---', label: '---' }].concat(colOptions) },
+        { type: 'choice', id: 'y', labelKey: 'dlg.ana.plotY', value: cols[Math.min(1, cols.length - 1)], options: colOptions },
+        { type: 'string', id: 'color', labelKey: 'dlg.ana.plotColor', value: ANA.plotPrev.color },
+        { type: 'number', id: 'lineWidth', labelKey: 'dlg.ana.plotLineWidth', value: ANA.plotPrev.lineWidth, min: 0, step: 'any' },
+        { type: 'choice', id: 'symbol', labelKey: 'dlg.ana.plotSymbol', value: ANA.plotPrev.symbol, options: SYMBOLS.map((s) => ({ value: s, label: s })) },
+        { type: 'string', id: 'label', labelKey: 'dlg.ana.plotLabel', value: '' }] });
+      if (!v) return;
+      ANA.plotPrev = { color: String(v.color), lineWidth: Number.isFinite(Number(v.lineWidth)) ? Number(v.lineWidth) : 1, symbol: String(v.symbol) };
+      const ys = S.results.map((r) => (typeof r[v.y] === 'number' ? r[v.y] : 0));
+      const xs = v.x === '---' ? ys.map((y, i) => i) : S.results.map((r) => (typeof r[v.x] === 'number' ? r[v.x] : 0));
+      const color = cssColorOf(v.color) || undefined;
+      const kindOf = { Line: 'line', 'Connected Circles': 'line', Filled: 'line', Bar: 'bars', 'Separated Bars': 'bars' }[v.symbol] || 'points';
+      const label = v.label || columnHeader(v.y);
+      const series = [{ kind: kindOf, x: xs, y: ys, color, label }];
+      if (v.symbol === 'Connected Circles') series.push({ kind: 'points', x: xs, y: ys, color, label });
+      // "new Plot("Plot of "+title, "x", "y")" then "plot.setXYLabels(data[0]==null ? "x" : x heading, y heading)": the table is the "Results" window
+      const xName = v.x === '---' ? 'x' : columnHeader(v.x);
+      openPlot({ title: 'Plot of Results', xLabel: xName, yLabel: columnHeader(v.y), series,
+        csv: { columns: [xName, columnHeader(v.y)], rows: xs.map((x, i) => [x, ys[i]]) } });
+    }
+    const menus = {
+      file: [['res.saveAs', () => saveResults()], ['res.rename', rename], ['res.duplicate', duplicate]],
+      edit: [['res.cut', cut], ['res.copy', copy], ['res.clearRows', clear], ['res.selectAll', selectAll], ['res.find', find], ['res.findNext', findNext]],
+      results: [['cmd.analyzeClearResults', () => clearResults()], ['cmd.analyzeSummarize', () => summarize()], ['cmd.analyzeDistribution', () => distribution()],
+        ['cmd.analyzeSetMeasurements', () => setMeasurements()], ['res.sort', sortTable], ['res.plot', plotTable], ['res.options', () => runCommandExt('optInputOutput')]]
+    };
+    const sub = h('div', { class: 'ij-row' });
+    let openMenu = null;
+    function showMenu(id) {
+      sub.textContent = '';
+      openMenu = openMenu === id ? null : id;
+      if (!openMenu) return;
+      for (const [key, fn] of menus[id]) sub.appendChild(btn(tr(key), () => { Promise.resolve(fn()).catch((err) => reportError(err)); }));
+    }
+    const bar = h('div', { class: 'ij-menubar-mini' },
+      h('button', { type: 'button', text: tr('res.menuFile'), on: { click: () => showMenu('file') } }),
+      h('button', { type: 'button', text: tr('res.menuEdit'), on: { click: () => showMenu('edit') } }),
+      h('button', { type: 'button', text: tr('res.menuResults'), on: { click: () => showMenu('results') } }));
+    const el = h('div', { class: 'ij-panel ij-results' }, bar, sub, h('p', { class: 'ij-note', text: tr('res.help') }), wrap, note,
+      row(btn(tr('res.copy'), () => { copy().catch((err) => console.error(err)); }),
         btn(tr('res.save'), () => saveResults()), btn(tr('res.clear'), () => clearResults())));
     return { el, update(kind) { if (kind === 'results' || kind === 'doc') render(); } };
   }
@@ -2923,15 +3678,19 @@ const IJApp = (() => {
   function buildSummary() {
     const table = h('table', { class: 'ij-table' });
     function render() {
+      // Slice, Count, Total Area, Average Size, %Area, then the mean columns the runs added (ParticleAnalyzer.addMeans)
+      const extra = [];
+      for (const r of S.summaryRows) for (const k of Object.keys(r)) if (SUMMARY_HEAD.indexOf(k) < 0 && extra.indexOf(k) < 0) extra.push(k);
+      const cols = SUMMARY_HEAD.concat(extra);
       table.textContent = '';
-      table.appendChild(h('thead', null, h('tr', null, SUMMARY_COLUMNS.map((c) => h('th', { text: c })))));
+      table.appendChild(h('thead', null, h('tr', null, cols.map((c) => h('th', { text: c })))));
       const tb = h('tbody');
-      for (const r of S.summaryRows) tb.appendChild(h('tr', null, SUMMARY_COLUMNS.map((c) => h('td', { text: typeof r[c] === 'number' ? num(r[c], 4) : String(r[c] === undefined ? '' : r[c]) }))));
+      for (const r of S.summaryRows) tb.appendChild(h('tr', null, cols.map((c) => h('td', { text: cellText(r, c) }))));
       table.appendChild(tb);
     }
     const el = h('div', { class: 'ij-panel ij-summary' }, h('div', { class: 'ij-table-wrap' }, table),
       row(btn(tr('res.clear'), () => { S.summaryRows = []; render(); })));
-    return { el, update(kind) { if (kind === 'summary' || kind === 'doc') render(); } };
+    return { el, update(kind) { if (kind === 'summary' || kind === 'doc' || kind === 'results') render(); } };
   }
 
   /**
@@ -2975,18 +3734,109 @@ const IJApp = (() => {
 
   // ── ROI Manager
 
-  // owner: P6 (wave 2)
+  // owner: P-io (wave 3) — ImageJ's ROI Manager (ij/plugin/frame/RoiManager.java:136-143): the list with its column of buttons
+  // (Add [t], Update, Delete, Rename…, Measure, Deselect, Properties…, Flatten [F], More »), the Show All and Labels
+  // checkboxes, and the "More »" popup (addPopupMenu, :177-200) in ImageJ's order. The list shown is the one of the active
+  // image; it is S.roiList, the list api.roiManager serves. Entries carry name, docId, roi and the optional style
+  // { stroke, width, fill } the views draw.
+  let roiLabels = false;     // the Labels checkbox (RoiManager.labelsCheckbox: off at start)
+
+  const cloneRoi = (roi) => IJRoi.translate(roi, 0, 0);
+  /** String.compareToIgnoreCase: each UTF-16 unit upper-cased, then lower-cased, before it is compared. */
+  function compareIgnoreCase(a, b) {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      let c1 = a.charCodeAt(i), c2 = b.charCodeAt(i);
+      if (c1 === c2) continue;
+      const u1 = String.fromCharCode(c1).toUpperCase(), u2 = String.fromCharCode(c2).toUpperCase();
+      c1 = u1.length === 1 ? u1.charCodeAt(0) : c1; c2 = u2.length === 1 ? u2.charCodeAt(0) : c2;
+      if (c1 === c2) continue;
+      const l1 = String.fromCharCode(c1).toLowerCase(), l2 = String.fromCharCode(c2).toLowerCase();
+      c1 = l1.length === 1 ? l1.charCodeAt(0) : c1; c2 = l2.length === 1 ? l2.charCodeAt(0) : c2;
+      if (c1 !== c2) return c1 - c2;
+    }
+    return a.length - b.length;
+  }
+  /** Colors.colorToString / Colors.decode of the Properties dialog: a name, "#rrggbb" or "none"; a fill may carry an alpha
+   * first ("#aarrggbb"). → css ('#rrggbb' | '#rrggbbaa') | null (none) | undefined (not a colour). */
+  function parseStyleColor(text, fill) {
+    const s = String(text == null ? '' : text).trim().toLowerCase();
+    if (s === '' || s === 'none') return null;
+    const rgb = parseColorValue(s);
+    if (rgb) { const css = '#' + rgb.map((x) => x.toString(16).padStart(2, '0')).join(''); return fill ? css + 'ff' : css; }
+    const m = /^#?([0-9a-f]{2})?([0-9a-f]{6})$/.exec(s);
+    if (!m) return undefined;
+    return fill ? '#' + m[2] + (m[1] || 'ff') : '#' + m[2];
+  }
+  function styleColorText(css, fill) {
+    if (!css) return 'none';
+    const rgb = css.slice(0, 7);
+    const alpha = fill && css.length === 9 ? css.slice(7) : 'ff';
+    if (alpha !== 'ff') return '#' + alpha + rgb.slice(1);        // ImageJ writes a translucent colour as "#aarrggbb"
+    for (const [name, v] of Object.entries(COLOR_NAMES)) if (rgb === '#' + v.map((x) => x.toString(16).padStart(2, '0')).join('')) return name;
+    return rgb;
+  }
+  /** Area to Line (ImageJ's RoiManager.multiPlot): the outline of an area selection as a closed segmented line. */
+  function areaToLineRoi(roi) {
+    const pts = IJRoiCodec.xyPolygon(roi).points;
+    return pts.length ? { type: 'polyline', points: pts.concat([pts[0]]) } : roi;
+  }
+
   function buildRoiManager() {
-    const list = h('div', { class: 'ij-list', attrs: { role: 'listbox' } });
-    function curList() { const i = activeInfo(); return i ? S.roiList.filter((r) => r.docId === i.docId) : []; }
+    const list = h('div', { class: 'ij-list is-multi', attrs: { role: 'listbox', 'aria-multiselectable': 'true' } });
+    list.style.flex = '1 1 auto'; list.style.minWidth = '150px';
+    let anchor = -1;
+    const curList = () => { const i = activeInfo(); return i ? S.roiList.filter((r) => r.docId === i.docId) : []; };
+    const selectedList = () => curList().filter((r) => S.roiSelected.has(r));
+    /** RoiManager.getIndexes: the selected entries, or all of them when none is selected. */
+    const targets = () => { const s = selectedList(); return s.length ? s : curList(); };
+    const note = (key, params) => ask({ title: tr('roi.title'), message: tr(key, params), options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }], dismissId: 'ok' });
+    const needImage = async () => { const i = activeInfo(); if (!i) await note('roi.errNoImage'); return i; };
+
+    const checkBox = (text, on, onChange) => {
+      const input = h('input', { type: 'checkbox', checked: !!on, on: { change: (e) => onChange(e.target.checked) } });
+      return { input, el: h('label', { class: 'ij-check' }, input, h('span', { text })) };
+    };
+    const showAllBox = checkBox(tr('roi.showAll'), S.showAll, (on) => { S.showAll = on; refreshRois(); });
+    const labelsBox = checkBox(tr('roi.labels'), roiLabels, (on) => { roiLabels = on; refreshRois(); });
+
+    /** RoiManager.restore: the entry becomes the selection of the active image (a selection entirely outside it is centred). */
+    function restoreRoi(item) {
+      const info = activeInfo();
+      if (!info) return;
+      let roi = cloneRoi(item.roi);
+      if (roi.type !== 'point') {
+        const b = IJRoi.bounds(roi);
+        if (b.x >= info.width || b.y >= info.height || b.x + b.w < 0 || b.y + b.h < 0) roi = IJRoi.translate(roi, Math.trunc((info.width - b.w) / 2) - b.x, Math.trunc((info.height - b.h) / 2) - b.y);
+      }
+      setSelection(info.docId, roi, true);
+    }
+    function selectionChanged() {
+      render(); refreshRois();
+      const s = selectedList();
+      if (s.length === 1) restoreRoi(s[0]);
+    }
+    function pick(item, i, e) {
+      const items = curList();
+      if (e.shiftKey && anchor >= 0 && anchor < items.length) {
+        if (!(e.ctrlKey || e.metaKey)) S.roiSelected.clear();
+        for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) S.roiSelected.add(items[k]);
+      } else if (e.ctrlKey || e.metaKey) {
+        if (S.roiSelected.has(item)) S.roiSelected.delete(item); else S.roiSelected.add(item);
+        anchor = i;
+      } else { S.roiSelected.clear(); S.roiSelected.add(item); anchor = i; }
+      selectionChanged();
+    }
     function render() {
       list.textContent = '';
-      for (const item of curList()) {
-        const li = h('div', { class: 'ij-list-item' + (S.roiSelected.has(item) ? ' is-selected' : ''), attrs: { role: 'option', tabindex: '0' }, text: item.name, on: {
-          click: (e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) S.roiSelected.clear(); if (S.roiSelected.has(item)) S.roiSelected.delete(item); else S.roiSelected.add(item); const i = activeInfo(); if (i) setSelection(i.docId, item.roi, true); render(); refreshRois(); },
-          dblclick: () => rename(item, li) } });
-        list.appendChild(li);
-      }
+      curList().forEach((item, i) => {
+        const on = S.roiSelected.has(item);
+        const row = h('div', { class: 'ij-list-row' + (on ? ' is-selected' : ''), text: item.name, attrs: { role: 'option', tabindex: '0', 'aria-selected': String(on) },
+          on: { click: (e) => pick(item, i, e), dblclick: () => rename(item, row) } });
+        list.appendChild(row);
+      });
+      showAllBox.input.checked = !!S.showAll;
+      labelsBox.input.checked = roiLabels;
     }
     function rename(item, li) {
       const input = h('input', { type: 'text', class: 'ij-rename', value: item.name });
@@ -2997,18 +3847,210 @@ const IJApp = (() => {
       input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); });
       input.addEventListener('blur', () => done(true));
     }
-    const targets = () => { const l = curList(); const sel = l.filter((r) => S.roiSelected.has(r)); return sel.length ? sel : l; };
-    const el = h('div', { class: 'ij-panel ij-roimanager' }, list,
-      row(btn(tr('roi.add'), () => addToManager()), btn(tr('roi.delete'), () => { const t = targets(); S.roiList = S.roiList.filter((r) => !t.includes(r)); t.forEach((r) => S.roiSelected.delete(r)); render(); refreshRois(); scheduleMetaPersist(); })),
-      row(btn(tr('roi.measure'), async () => {
-        const info = activeInfo(); if (!info) return;
-        await busy(tr('op.measure'), async () => {
-          const rows = [];
-          for (const r of targets()) for (const row of await measureRows(info, r.roi, activeChannel(info))) rows.push(row);
-          appendResults(rows);
-        });
-        openTool('results');
-      }), btn(tr('roi.multiMeasure'), () => multiMeasure(targets())), check(tr('roi.showAll'), S.showAll, (on) => { S.showAll = on; refreshRois(); })));
+
+    // ── the buttons
+    async function doUpdate() {                        // RoiManager.update(true)
+      const info = await needImage();
+      if (!info) return;
+      const roi = selOf(info.docId);
+      if (!roi) { await note('roi.errNoSelection'); return; }
+      const sel = selectedList();
+      if (!sel.length && !S.showAll) { await note('roi.errOne'); return; }
+      if (sel.length) sel[0].roi = Object.assign(cloneRoi(roi), { name: sel[0].name });
+      roiListChanged(); render();
+    }
+    async function doDelete() {                        // RoiManager.delete(false)
+      const items = curList();
+      if (!items.length) { await note('roi.errEmpty'); return; }
+      let t = selectedList();
+      if (!t.length) {
+        const a = await ask({ title: tr('roi.title'), message: tr('roi.deleteAll'),
+          options: [{ id: 'yes', label: tr('roi.yes'), primary: true }, { id: 'no', label: tr('roi.no') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+        if (a !== 'yes') return;
+        t = items;
+      }
+      S.roiList = S.roiList.filter((r) => !t.includes(r));
+      for (const r of t) S.roiSelected.delete(r);
+      roiListChanged(); render();
+    }
+    async function doRename() {                        // RoiManager.rename(null): the first selected entry
+      const sel = selectedList();
+      if (!sel.length) { await note('roi.errOne'); return; }
+      const item = sel[0];
+      const v = await dialog({ title: tr('roi.title'), okLabel: tr('dlg.ok'), fields: [{ type: 'string', id: 'name', labelKey: 'dlg.io.renameAs', value: item.name }],
+        validate: (x) => (String(x.name || '').trim() ? null : { name: 'dlg.io.nameEmpty' }) });
+      if (!v || String(v.name).trim() === item.name) return;
+      item.name = String(v.name).trim();
+      roiListChanged(); render();
+    }
+    async function doMeasure() {
+      const info = await needImage();
+      if (!info) return;
+      const t = targets();
+      if (!t.length) return;
+      await busy(tr('op.measure'), async () => {
+        const rows = [];
+        for (const r of t) for (const row of await measureRows(info, r.roi, activeChannel(info))) rows.push(row);
+        appendResults(rows);
+      });
+      if (t.length > 1) setSelection(info.docId, null, true);   // "if (indexes.length>1) imp.deleteRoi()"
+      openTool('results');
+    }
+    function doDeselect() { S.roiSelected.clear(); anchor = -1; render(); refreshRois(); }
+    async function doProperties() {                    // RoiManager.setProperties → RoiProperties (name, stroke colour, width, fill colour)
+      const t = targets();
+      if (!t.length) return;
+      const items = curList();
+      const first = t[0];
+      const isLineOnly = t.every((r) => r.roi.type === 'line' || r.roi.type === 'polyline' || r.roi.type === 'angle');
+      const fields = [];
+      if (t.length === 1) fields.push({ type: 'string', id: 'name', labelKey: 'dlg.io.rpName', value: first.name });
+      else fields.push({ type: 'message', id: 'range', value: tr('dlg.io.rpRange', { range: (items.indexOf(t[0]) + 1) + '-' + (items.indexOf(t[t.length - 1]) + 1) }) });
+      const stroke0 = first.stroke || (!first.fill ? cssColorOf(settingGet('colors.selection')) : null);
+      const w0 = first.width > 0 ? first.width : 0;
+      fields.push({ type: 'string', id: 'stroke', labelKey: 'dlg.io.rpStroke', value: styleColorText(stroke0, false) });
+      fields.push({ type: 'number', id: 'width', labelKey: 'dlg.io.rpWidth', value: w0, min: 0, step: 1, decimals: Number.isInteger(w0) ? 0 : 1 });
+      if (!isLineOnly) fields.push({ type: 'string', id: 'fill', labelKey: 'dlg.io.rpFill', value: styleColorText(t.length === 1 ? first.fill : null, true) });
+      const v = await dialog({ title: tr('dlg.io.rpTitle'), okLabel: tr('dlg.ok'), fields,
+        validate: (x) => {
+          const bad = {};
+          if (parseStyleColor(x.stroke, false) === undefined) bad.stroke = 'dlg.io.badColor';
+          if (x.fill !== undefined && parseStyleColor(x.fill, true) === undefined) bad.fill = 'dlg.io.badColor';
+          return Object.keys(bad).length ? bad : null;
+        } });
+      if (!v) return;
+      if (t.length === items.length && t.length > 1) {   // "Apply changes to all N selections?"
+        const a = await ask({ title: tr('roi.title'), message: tr('roi.applyAll', { n: t.length }),
+          options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+        if (a !== 'ok') return;
+      }
+      const stroke = parseStyleColor(v.stroke, false);
+      const fill = v.fill !== undefined ? parseStyleColor(v.fill, true) : undefined;
+      const width = Number(v.width);
+      for (const item of t) {
+        if (stroke) item.stroke = stroke;
+        if (width > 0) item.width = width; else delete item.width;
+        if (fill !== undefined) { if (fill) item.fill = fill; else delete item.fill; }
+      }
+      if (t.length === 1 && v.name !== undefined && String(v.name).trim()) t[0].name = String(v.name).trim();
+      roiListChanged(); render();
+    }
+
+    // ── the More » popup
+    async function drawOrFill(mode) {                  // RoiManager.drawOrFill: the foreground colour; a line is drawn, never filled
+      const info = await needImage();
+      if (!info) return;
+      const t = targets();
+      if (!t.length) return;
+      setSelection(info.docId, null, true);             // imp.deleteRoi()
+      const ch = activeChannel(info);
+      // RoiManager.java:1481-1482 "if (mode==FILL&&(type==Roi.POLYLINE||type==Roi.FREELINE||type==Roi.ANGLE)) mode = DRAW;" changes the
+      // loop's own variable: once a line is met every later entry is drawn too. (ImageJ also takes ONE snapshot / undo step for the whole
+      // run, :1473-1474 "ip.snapshot(); Undo.setup(Undo.FILTER, imp)"; here each entry is a step of its own — the extension API has no
+      // single-undo batch.)
+      let m = mode;
+      for (const item of t) {
+        if (m === 'fill' && (item.roi.type === 'polyline' || item.roi.type === 'angle')) m = 'draw';
+        const value = fillValue(info, ch, true);
+        // the draw op takes the outline as its `shape` parameter: the engine hands a pixel op no selection of its own here (the
+        // selection was just deleted)
+        const r = m === 'fill'
+          ? await runExt('fill', { value }, { docId: info.docId, channel: ch, roi: item.roi, labelKey: 'op.fill' })
+          : await runExt('draw', { value, lineWidth: item.width > 1 ? Math.round(item.width) : 1, shape: item.roi }, { docId: info.docId, channel: ch, roi: item.roi, labelKey: 'op.roiDraw' });
+        if (!r) break;
+      }
+      if (S.showAll) { S.showAll = false; refreshRois(); render(); }   // "if (showAllCheckbox.getState()) runCommand("show none")"
+    }
+    async function combineOp(op) {                     // RoiManager.combine / and / xor: the selected entries (all when none), a selection of the image
+      const info = await needImage();
+      if (!info) return;
+      const t = targets();
+      if (t.length < 2) { await note(t.length === 0 ? 'roi.errEmpty' : 'roi.errMoreThanOne'); return; }
+      const res = await compute('roiSetOp', { op, rois: t.map((r) => r.roi) }, { docId: info.docId, roi: null, channel: 0, labelKey: 'op.roiSetOp' });
+      if (!res) return;
+      setSelection(info.docId, res.roi || null, true);
+    }
+    async function doSplit() {                         // RoiManager.split: every outline of the composite selection becomes an entry
+      const info = await needImage();
+      if (!info) return;
+      const sel = selOf(info.docId);
+      if (!sel || sel.type !== 'mask') { await note('roi.errComposite'); return; }
+      const res = await compute('roiSetOp', { op: 'split', rois: [sel] }, { docId: info.docId, roi: null, channel: 0, labelKey: 'op.roiSetOp' });
+      if (!res || !res.rois) return;
+      for (const roi of res.rois) S.roiList.push({ name: roiName(roi), docId: info.docId, roi });
+      roiListChanged(); render();
+    }
+    async function doMultiPlot() {                     // RoiManager.multiPlot: one profile per entry in one plot
+      const info = await needImage();
+      if (!info) return;
+      const t = targets();
+      if (!t.length) return;
+      const cal = info.calibration || {};
+      const xinc = cal.pixelWidth || 1;
+      const unit = !cal.unit || cal.unit === 'px' ? 'pixels' : cal.unit;
+      await busy(tr('op.profile'), async () => {
+        const named = ['#0000ff', '#00ff00', '#ff00ff', '#ff0000', '#00ffff', '#ffff00'];   // blue green magenta red cyan yellow
+        const inc = 150.0 / t.length;
+        const series = [];
+        for (let i = 0; i < t.length; i++) {
+          let roi = t[i].roi;
+          if (isAreaRoi(roi) && roi.type !== 'rect') roi = areaToLineRoi(roi);
+          const res = await profileExt(info.docId, roi, activeChannel(info));
+          const y = Array.from(res.values);
+          const g = Math.trunc(i * inc).toString(16).padStart(2, '0');
+          series.push({ kind: 'line', x: y.map((_, j) => j * xinc), y, color: t.length > named.length ? '#' + g + g + g : named[i], label: t[i].name });
+        }
+        openPlot({ title: tr('roi.profilesTitle'), xLabel: tr('roi.distance', { unit }), yLabel: tr('roi.value'), series });
+      });
+      if (t.length > 1) setSelection(info.docId, null, true);   // IJ.run("Select None")
+    }
+    function doSort() {                                // RoiManager.sort: Tools.rank(labels), String.compareToIgnoreCase, stable
+      if (!S.roiList.length) return;
+      S.roiList = S.roiList.slice().sort((a, b) => compareIgnoreCase(a.name, b.name));
+      S.roiSelected.clear();
+      roiListChanged(); render();
+    }
+    async function doOpen() {                          // RoiManager.open: .roi files and RoiSet .zip archives, added to the list
+      const files = await pickFileExt({ accept: '.roi,.zip', multiple: true });
+      if (!files) return;
+      const info = await needImage();
+      if (!info) return;
+      await busy(tr('op.open'), async () => {
+        for (const f of files) {
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          const name = String(f.name || '');
+          const kind = IJFileKinds.kindOf(name, bytes);
+          if (kind === 'zip') { for (const d of await IJRoiCodec.decodeSet(bytes)) S.roiList.push(roiEntryFromFile(info.docId, d)); }
+          else if (kind === 'roi') S.roiList.push(roiEntryFromFile(info.docId, IJRoiCodec.decodeEntry(bytes, { fileName: name })));
+          else throw IJFileKinds.error('IJ_IO_UNKNOWN_FORMAT');
+        }
+        roiListChanged(); render();
+      });
+    }
+    async function doSave() {                          // RoiManager.save: one entry → .roi, several (or none selected) → a RoiSet .zip
+      const t = targets();
+      if (!curList().length) { await note('roi.errListEmpty'); return; }
+      const style = (r) => ({ roi: r.roi, name: r.name, stroke: r.stroke, fill: r.fill, width: r.width });
+      try {
+        if (t.length > 1) await saveFile('RoiSet.zip', 'application/zip', '.zip', 'ZIP', async () => new Blob([IJRoiCodec.encodeSet(t.map(style))], { type: 'application/zip' }));
+        else await saveFile(safeName(t[0].name, '.roi'), 'application/octet-stream', '.roi', 'ROI', async () => new Blob([IJRoiCodec.encode(t[0].roi, style(t[0]))], { type: 'application/octet-stream' }));
+      } catch (err) { await reportError(err); }
+    }
+    const MORE = [
+      ['roi.open', doOpen], ['roi.save', doSave], ['roi.fill', () => drawOrFill('fill')], ['roi.draw', () => drawOrFill('draw')],
+      ['roi.and', () => combineOp('and')], ['roi.or', () => combineOp('or')], ['roi.xor', () => combineOp('xor')], ['roi.split', doSplit],
+      ['roi.multiMeasure', () => multiMeasure(targets())], ['roi.multiPlot', doMultiPlot], ['roi.sort', doSort]
+    ];
+    const popup = h('div', { class: 'ij-menu-panel', hidden: true, attrs: { role: 'menu' } },
+      MORE.map(([key, fn]) => h('button', { type: 'button', class: 'ij-menu-item', attrs: { role: 'menuitem' }, text: tr(key), on: { click: () => { popup.hidden = true; fn(); } } })));
+    const more = btn(tr('roi.more'), () => { popup.hidden = !popup.hidden; }, 'ij-btn-more');
+    const flatten = h('button', { type: 'button', class: 'ij-btn', text: tr('roi.flatten'), disabled: true });   // Image > Overlay > Flatten is not part of this view
+
+    const column = h('div', { class: 'ij-btn-col' },
+      btn(tr('roi.addT'), () => addToManager()), btn(tr('roi.update'), doUpdate), btn(tr('roi.delete'), doDelete), btn(tr('roi.rename'), doRename),
+      btn(tr('roi.measure'), doMeasure), btn(tr('roi.deselect'), doDeselect), btn(tr('roi.properties'), doProperties), flatten, more, popup, showAllBox.el, labelsBox.el);
+    const el = h('div', { class: 'ij-panel ij-roimanager' }, row(list, column));
+    render();
     return { el, update(kind) { if (kind === 'rois' || kind === 'doc') render(); } };
   }
 
@@ -3095,25 +4137,109 @@ const IJApp = (() => {
     return tableWin;
   }
 
-  function openHistogramWindow(info, ch, hist, stats) {
+  /**
+   * ij.gui.HistogramPlot: the histogram window. The bar height is scaled to the modal count, "if ((newMaxCount>(maxCount2 * 2)) && (maxCount2 != 0))
+   * newMaxCount = (int)(maxCount2 * 1.5);" — a modal bin more than twice the second one is cut off — or to "Y_max"; "Log" adds the logarithmic plot
+   * ("drawLogPlot: y = HIST_HEIGHT*Math.log(histogram[i])/max", gray) behind the linear one; "List" opens the values, "Copy" puts them on the clipboard.
+   */
+  function openHistogramWindow(info, ch, hist, o) {
+    if (!S.shell || typeof IJPlot === 'undefined') return null;
+    const opt = o || {};
     const counts = Array.from(hist.counts);
-    const xs = counts.map((c, i) => hist.min + i * hist.binWidth);
-    const text = ['area', 'mean', 'stdDev', 'min', 'max', 'mode'].filter((k) => stats[k] !== undefined).map((k) => tr('meas.' + k) + ': ' + num(stats[k], 4)).join('\n')
-      + '\n' + tr('hist.binWidth') + ': ' + num(hist.binWidth, 4);
-    openPlot({ title: tr('cmd.analyzeHistogram') + ' — ' + info.name, xLabel: tr('hist.value'), yLabel: tr('hist.count'),
-      series: [{ kind: 'bars', x: xs, y: counts, label: tr('hist.count') }], text,
-      csv: { columns: [tr('hist.value'), tr('hist.count')], rows: counts.map((c, i) => [num(xs[i], 4), c]) } });
+    const st = hist.stats || null;
+    const binW = hist.binWidth > 0 ? hist.binWidth : 1;
+    const xs = counts.map((c, i) => hist.min + i * binW);
+    let mode = 0, second = 0;
+    counts.forEach((c, i) => { if (c > counts[mode]) mode = i; });
+    counts.forEach((c, i) => { if (i !== mode && c > second) second = c; });
+    let top = counts.length ? counts[mode] : 0;
+    if (top > second * 2 && second !== 0) top = Math.trunc(second * 1.5);
+    if (opt.yMax > 0) top = opt.yMax;
+    if (top === 0) top = 1;
+    const cal = info.calibration || {};
+    // HistogramWindow.java:260: "digits = cal.calibrated()||stats.binSize!=1.0?decimalPlaces:0" (this plugin has no density calibration)
+    const digits = binW !== 1 ? anaDecimals() : 0;
+    const fmt = (v) => (typeof IJAna !== 'undefined' ? IJAna.d2s(v, digits) : num(v, digits));
+    // the window's own numbers: HistogramPlot.d2s (whole number: no decimals, else 3 significant digits within 8)
+    const hn = (v) => (typeof IJAna !== 'undefined' ? IJAna.histNumber(v) : num(v, 3));
+    const text = [];
+    if (st) {
+      // "String modeCount = " (" + stats.maxCount + ")"; … if (mcount>1) modeCount=modeCount+"*"; if (modeCount.length()>12) modeCount = "";"
+      let modeCount = ' (' + st.maxCount + ')';
+      let atMax = 0;
+      for (let i = 0; i < counts.length && atMax <= 1; i++) if (counts[i] === st.maxCount) atMax++;
+      if (atMax > 1) modeCount += '*';
+      if (modeCount.length > 12) modeCount = '';
+      text.push(tr('hist.statCount', { v: String(st.n) }), tr('hist.statMean', { v: hn(st.mean) }), tr('hist.statStdDev', { v: hn(st.stdDev) }),
+        tr('hist.statMode', { v: hn(st.dmode), n: modeCount }), tr('hist.statMin', { v: hn(st.min) }), tr('hist.statMax', { v: hn(st.max) }));
+    }
+    // "showBins = binWidth!=1.0": the bin lines are drawn only then
+    if (Math.abs(binW) !== 1) text.push(tr('hist.statBins', { v: hn(counts.length) }), tr('hist.statBinWidth', { v: hn(Math.abs(binW)) }));
+    const name = String(info.name || '').replace(/\.[A-Za-z0-9]{1,4}$/, '');
+    const title = tr('hist.title', { name });
+    const canvas = h('canvas', { class: 'ij-plot', width: 360, height: 220 });
+    const wrap = h('div', { class: 'ij-plot-wrap' }, canvas);
+    let logOn = false, observer = null, drawn = false;
+    const clipped = counts.map((c) => Math.min(c, top));
+    const logged = counts.map((c) => (c === 0 || top <= 1 ? 0 : Math.min(top, top * Math.log(c) / Math.log(top))));
+    const specNow = () => ({ title, xLabel: tr('hist.value'), yLabel: tr('hist.count'), yRange: [0, top],
+      series: (logOn ? [{ kind: 'bars', x: xs, y: logged, color: '#808080', label: tr('hist.logLabel') }] : []).concat([{ kind: 'bars', x: xs, y: clipped, color: '#000000', label: tr('hist.count') }]) });
+    const redraw = () => {
+      const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? Math.max(1, Math.min(3, window.devicePixelRatio)) : 1;
+      const w = Math.max(160, wrap.clientWidth || 360), hh = Math.max(120, wrap.clientHeight || 220);
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(hh * dpr);
+      canvas.style.width = w + 'px'; canvas.style.height = hh + 'px';
+      try { IJPlot.draw(canvas, specNow(), Object.assign(plotTheme(canvas), { dpr, lut: () => null })); drawn = true; } catch (err) { console.error('[advanced-studio] plot', err); }
+    };
+    // HistogramWindow.getResultsTable: "index" (only when the bin width is not 1), "value" | "bin start", "count" — ImageJ's own English column names
+    const binned = binW !== 1;
+    const listHead = (binned ? ['index'] : []).concat(binned ? 'bin start' : 'value', 'count');
+    const rows = () => counts.map((c, i) => (binned ? [String(i)] : []).concat(fmt(xs[i]), String(c)));
+    // copyToClipboard: "d2s(value, digits)+"\t"+histogram[i]+"\n"" — no heading, every line ends with a newline
+    const listText = () => counts.map((c, i) => fmt(xs[i]) + '\t' + c + '\n').join('');
+    const csvText = () => tableText(listHead, counts.map((c, i) => (binned ? [i] : []).concat(num(xs[i], 6), c)), ',');
+    const buttons = row(
+      btn(tr('hist.list'), () => openTable(title, listHead, rows())),
+      btn(tr('res.copy'), () => copyText(listText())),
+      btn(tr('hist.log'), () => { logOn = !logOn; redraw(); }),
+      btn(tr('plot.saveCsv'), async () => { try { await saveFile(safeName(title, '.csv'), 'text/csv', '.csv', 'CSV', async () => new Blob([csvText()], { type: 'text/csv' })); } catch (err) { await reportError(err); } }),
+      btn(tr('plot.savePng'), async () => {
+        try {
+          await saveFile(safeName(title, '.png'), 'image/png', '.png', 'PNG', async () => new Promise((resolve, reject) =>
+            canvas.toBlob((b) => (b ? resolve(b) : reject(Object.assign(new Error('png'), { code: 'IJ_PNG_FAILED' }))), 'image/png')));
+        } catch (err) { await reportError(err); }
+      }));
+    const content = h('div', { class: 'ij-panel ij-plotwin' }, wrap, h('pre', { class: 'ij-info-pre', text: text.join('\n') }), buttons);
+    const win = S.shell.windows.floating({ id: 'plot-' + (++S.openCounter), title, content, onClose: () => { if (observer) { try { observer.disconnect(); } catch (_) { /* gone */ } } syncWindowMenu(); } });
+    syncWindowMenu();
+    if (typeof ResizeObserver !== 'undefined') { observer = new ResizeObserver(() => { if (drawn) redraw(); }); observer.observe(wrap); }
+    requestAnimationFrame(redraw);
+    return win;
   }
 
-  function openProfileWindow(info, res) {
+  /**
+   * ProfilePlot.getPlot: "Distance (unit)" against the value, titled "Plot of <title>"; Edit › Options › Plots "Fixed y-axis scale" sets the y range
+   * ("plot.setLimits(a[0],a[1],fixedMin,fixedMax)").
+   */
+  function openProfileWindow(info, res, o) {
+    const opt = o || {};
     const values = Array.from(res.values || []);
-    const unit = (info.calibration && info.calibration.unit) || 'px';
+    const cal = info.calibration || {};
+    const unit = cal.unit || 'px';
     const step = res.stepUm || 1;
     const xs = values.map((v, i) => i * step);
     const dist = tr('plot.distance') + ' (' + unit + ')';
-    openPlot({ title: tr('cmd.analyzePlotProfile') + ' — ' + info.name, xLabel: dist, yLabel: tr('plot.value'),
+    const name = String(info.name || '').replace(/\.[A-Za-z0-9]{1,4}$/, '');
+    const spec = { title: tr('plot.profileTitle', { name }), xLabel: dist, yLabel: tr('plot.value'),
       series: [{ kind: 'line', x: xs, y: values, label: tr('plot.value') }],
-      csv: { columns: [dist, tr('plot.value')], rows: values.map((v, i) => [num(xs[i], 5), v]) } });
+      csv: { columns: [dist, tr('plot.value')], rows: values.map((v, i) => [num(xs[i], 5), v]) } };
+    if (anaSetting('ana.fixedScale', false) === true) {
+      let lo = Number(anaSetting('ana.ymin', 0)), hi = Number(anaSetting('ana.ymax', 0));
+      if (lo > hi) { const t = lo; lo = hi; hi = t; }
+      if (lo !== 0 || hi !== 0) spec.yRange = [lo, hi];
+    }
+    if (opt.rect) spec.text = tr(opt.vertical ? 'plot.rowAverage' : 'plot.columnAverage');
+    openPlot(spec);
   }
 
   async function copyText(text) {
@@ -3208,10 +4334,23 @@ const IJApp = (() => {
     if (!c.enabled(snapshot())) return undefined;
     // ImageJ's Executer remembers what ran (except Undo and Close) so Repeat Command can run it again
     if (c.repeatable !== false && !c.dynamic) S.lastCommand = c.id;
+    // the dialogs of this run: pre-filled from the last run when the command is repeated, remembered for the next repeat
+    const run = { id: c.id, list: [], k: 0, replay: REPEAT.next && REPEAT.next.id === c.id ? REPEAT.next.list : null };
+    REPEAT.next = null;
+    REPEAT.run = run;
     return Promise.resolve()
       .then(() => flushPending())       // a floating paste is committed before anything else runs
       .then(() => c.run(c.ext ? apiFor(c.pkg) : API))
-      .catch((err) => reportError(err));
+      .catch((err) => reportError(err))
+      .then(() => {
+        // dialogs opened later outside a command (Results menus, histogram window, ROI Manager) belong to no run
+        if (REPEAT.run === run) REPEAT.run = null;
+        // a dialog the operator cancelled leaves the remembered values as they were (ImageJ's statics change on OK only)
+        if (!run.list.some(Boolean) || c.repeatable === false || c.dynamic) return;
+        const mem = REPEAT.memory.get(c.id) || [];
+        run.list.forEach((v, i) => { if (v) mem[i] = v; });
+        REPEAT.memory.set(c.id, mem);
+      });
   }
 
   function refreshUi() { if (S.shell) S.shell.refreshMenus(); }
@@ -3817,7 +4956,11 @@ const IJApp = (() => {
   function runCommandExt(id) {
     const c = COMMANDS.find((x) => x.id === id);
     if (!c) throw extError('runCommand: ' + String(id));
-    return Promise.resolve(onCommand(c));
+    // the command runs normally; the dialogs it opens come back with the values of its last run (Repeat Command)
+    REPEAT.next = { id, list: REPEAT.memory.get(id) || null };
+    const p = onCommand(c);
+    REPEAT.next = null;
+    return Promise.resolve(p);
   }
   const lastCommandExt = () => (S.lastCommand ? { id: S.lastCommand } : null);
 
@@ -3840,6 +4983,8 @@ const IJApp = (() => {
     const fresh = await call('doc.info', { docId: info.docId });
     if (!S.docs.has(fresh.docId)) {
       registerDoc(fresh, { clean: false, provenance: opt.provenance || null, sessionKey: opt.sessionKey || (fresh.provenance && fresh.provenance.sessionKey) || null });
+      const lockKey = opt.sessionKey || (fresh.provenance && fresh.provenance.sessionKey);
+      if (lockKey) holdSessionLock(lockKey);          // a second tab's Recover must not restore a session that is being edited here
     }
     if (!fresh.hidden) await showDoc(fresh.docId, placementOf(opt.placement));
     commitHook();
@@ -3863,6 +5008,7 @@ const IJApp = (() => {
       provenance: opt.provenance, sessionKey: opt.sessionKey, hidden: !!opt.hidden
     }, transfer);
     registerDoc(res.info, { clean: false, provenance: opt.provenance || null, sessionKey: opt.sessionKey || null });
+    if (opt.sessionKey) holdSessionLock(opt.sessionKey);
     if (!res.info.hidden) await showDoc(res.info.docId, placementOf(opt.placement));
     commitHook();
     return res.info.docId;
@@ -4001,7 +5147,8 @@ const IJApp = (() => {
   }
   async function profileExt(docId, roi, channel) {
     const info = needDoc(docId);
-    const res = await call('doc.profile', { docId, line: roi, channel: Number.isInteger(channel) ? channel : activeChannel(info) });
+    const res = await call('doc.profile', { docId, line: roi, channel: Number.isInteger(channel) ? channel : activeChannel(info),
+      vertical: !!anaSetting('ana.vertical', false), interpolate: anaSetting('ana.interpolate', true) !== false });
     return Object.assign({}, res, { step: res && res.step !== undefined ? res.step : (res ? res.stepUm : undefined) });
   }
 
@@ -4253,6 +5400,7 @@ const IJApp = (() => {
     }
     S.visHandler = onVisibility;
     document.addEventListener('visibilitychange', S.visHandler);
+    attachLibrary();                 // the entry screen offers Open from Library… only when the page has a library
     showEmpty();
     enter().catch((err) => reportError(err));
   }

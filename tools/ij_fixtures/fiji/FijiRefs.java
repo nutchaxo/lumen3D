@@ -328,8 +328,10 @@ public class FijiRefs {
             ByteProcessor sk = skeletonGraph(v);
             System.err.println("  [skeleton] built");
             List<Object> cases = new ArrayList<>();
-            String[][] opts = {{"prune=none", "default"}, {"prune=none detailed", "detailed"}, {"prune=none show", "labeled"}, {"prune=[shortest branch]", "pruneShortest"}, {"prune=none prune_0 detailed", "pruneEnds"}, {"prune=none calculate detailed", "shortestPath"},
-                {"prune=[lowest intensity voxel] detailed", "pruneLowestVoxel"}, {"prune=[lowest intensity branch] detailed", "pruneLowestBranch"}};
+            // macro keys are the first word of each label: "Show detailed info" = show, "Display labeled skeletons" = display, "Calculate largest shortest path" = calculate,
+            // "Prune ends" = prune_0 (the cycle choice itself is prune)
+            String[][] opts = {{"prune=none", "default"}, {"prune=none show", "detailed"}, {"prune=none display", "labeled"}, {"prune=[shortest branch]", "pruneShortest"}, {"prune=none prune_0 show", "pruneEnds"}, {"prune=none calculate show", "shortestPath"},
+                {"prune=[lowest intensity voxel] show", "pruneLowestVoxel"}, {"prune=[lowest intensity branch] show", "pruneLowestBranch"}, {"prune=none show display", "detailedLabeled"}};
             for (String[] o : opts) {
                 Result r = run("Analyze Skeleton (2D/3D)", o[0], sk);
                 cases.add(J.o("name", o[1], "options", o[0], "result", describe(r)));

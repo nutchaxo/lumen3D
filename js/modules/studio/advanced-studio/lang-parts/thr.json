@@ -1,0 +1,222 @@
+{
+ "en": {
+  "op": {
+   "autoThreshold": "Auto Threshold",
+   "autoLocalThreshold": "Auto Local Threshold",
+   "binaryMedian": "Binary median"
+  },
+  "cmd": {
+   "adjustAutoThreshold": "Auto Threshold",
+   "adjustAutoLocalThreshold": "Auto Local Threshold",
+   "binMakeBinary": "Make Binary",
+   "binMedian": "Median",
+   "binOptions": "Options…"
+  },
+  "err": {
+   "thr32bit": "Auto Threshold needs an 8-bit or a 16-bit image: convert this one first (Image › Type).",
+   "thr8bit": "Auto Local Threshold needs an 8-bit image: convert this one first (Image › Type).",
+   "thrNotBinary": "8-bit binary (0 and 255 only) image required. Convert this one to a mask first (Process › Binary › Make Binary)."
+  },
+  "dlg": {
+   "thr": {
+    "tryAll": "Try all",
+    "method": "Method",
+    "ignoreBlack": "Ignore black",
+    "ignoreWhite": "Ignore white",
+    "white": "White objects on black background",
+    "setThreshold": "SetThreshold instead of Threshold (single images)",
+    "showValues": "Show threshold values in log window",
+    "levelStatus": "{method}: {level}",
+    "radius": "Radius",
+    "special": "Special parameters (if different from default)",
+    "parameter1": "Parameter 1",
+    "parameter2": "Parameter 2",
+    "alwaysWhite": "Thresholded result is always shown in white [255].",
+    "medianRadius": "Radius:",
+    "optionsTitle": "Binary Options",
+    "iterations": "Iterations (1-100):",
+    "count": "Count (1-8):",
+    "blackBackground": "Black background",
+    "padEdges": "Pad edges when eroding",
+    "edmOutput": "EDM output:",
+    "do": "Do:",
+    "opNothing": "Nothing",
+    "opErode": "Erode",
+    "opDilate": "Dilate",
+    "opOpen": "Open",
+    "opClose": "Close",
+    "opOutline": "Outline",
+    "opFillHoles": "Fill Holes",
+    "opSkeletonize": "Skeletonize",
+    "hist16": "16-bit histogram",
+    "previewNone": "Choose an operation under Do: to preview it.",
+    "levelsStatus": "{list}"
+   }
+  }
+ },
+ "fr": {
+  "op": {
+   "autoThreshold": "Seuillage automatique",
+   "autoLocalThreshold": "Seuillage local automatique",
+   "binaryMedian": "Médiane binaire"
+  },
+  "cmd": {
+   "adjustAutoThreshold": "Auto Threshold",
+   "adjustAutoLocalThreshold": "Auto Local Threshold",
+   "binMakeBinary": "Rendre binaire",
+   "binMedian": "Médiane",
+   "binOptions": "Options…"
+  },
+  "err": {
+   "thr32bit": "Auto Threshold nécessite une image 8 bits ou 16 bits : convertissez d’abord celle-ci (Image › Type).",
+   "thr8bit": "Auto Local Threshold nécessite une image 8 bits : convertissez d’abord celle-ci (Image › Type).",
+   "thrNotBinary": "Il faut une image binaire 8 bits (uniquement les valeurs 0 et 255) : convertissez-la d'abord en masque (Process › Binary › Make Binary)."
+  },
+  "dlg": {
+   "thr": {
+    "tryAll": "Tout essayer",
+    "method": "Méthode",
+    "ignoreBlack": "Ignorer le noir",
+    "ignoreWhite": "Ignorer le blanc",
+    "white": "Objets blancs sur fond noir",
+    "setThreshold": "Définir le seuil au lieu de seuiller (images simples)",
+    "showValues": "Afficher les valeurs de seuil dans la fenêtre Log",
+    "levelStatus": "{method} : {level}",
+    "radius": "Rayon",
+    "special": "Paramètres spéciaux (si différents de ceux par défaut)",
+    "parameter1": "Paramètre 1",
+    "parameter2": "Paramètre 2",
+    "alwaysWhite": "Le résultat seuillé est toujours affiché en blanc [255].",
+    "medianRadius": "Rayon :",
+    "optionsTitle": "Options binaires",
+    "iterations": "Itérations (1-100) :",
+    "count": "Compte (1-8) :",
+    "blackBackground": "Fond noir",
+    "padEdges": "Compléter les bords lors de l’érosion",
+    "edmOutput": "Sortie EDM :",
+    "do": "Faire :",
+    "opNothing": "Rien",
+    "opErode": "Éroder",
+    "opDilate": "Dilater",
+    "opOpen": "Ouvrir",
+    "opClose": "Fermer",
+    "opOutline": "Contour",
+    "opFillHoles": "Remplir les trous",
+    "opSkeletonize": "Squelettiser",
+    "hist16": "Histogramme 16 bits",
+    "previewNone": "Choisissez une opération sous Faire : pour la prévisualiser.",
+    "levelsStatus": "{list}"
+   }
+  }
+ },
+ "es": {
+  "op": {
+   "autoThreshold": "Umbral automático",
+   "autoLocalThreshold": "Umbral local automático",
+   "binaryMedian": "Mediana binaria"
+  },
+  "cmd": {
+   "adjustAutoThreshold": "Auto Threshold",
+   "adjustAutoLocalThreshold": "Auto Local Threshold",
+   "binMakeBinary": "Hacer binaria",
+   "binMedian": "Mediana",
+   "binOptions": "Opciones…"
+  },
+  "err": {
+   "thr32bit": "Auto Threshold necesita una imagen de 8 o de 16 bits: convierta antes ésta (Image › Type).",
+   "thr8bit": "Auto Local Threshold necesita una imagen de 8 bits: convierta antes ésta (Image › Type).",
+   "thrNotBinary": "Se necesita una imagen binaria de 8 bits (solo los valores 0 y 255): conviértala primero en una máscara (Process › Binary › Make Binary)."
+  },
+  "dlg": {
+   "thr": {
+    "tryAll": "Probar todos",
+    "method": "Método",
+    "ignoreBlack": "Ignorar negro",
+    "ignoreWhite": "Ignorar blanco",
+    "white": "Objetos blancos sobre fondo negro",
+    "setThreshold": "Fijar el umbral en lugar de umbralizar (imágenes simples)",
+    "showValues": "Mostrar los valores de umbral en la ventana Log",
+    "levelStatus": "{method}: {level}",
+    "radius": "Radio",
+    "special": "Parámetros especiales (si difieren de los predeterminados)",
+    "parameter1": "Parámetro 1",
+    "parameter2": "Parámetro 2",
+    "alwaysWhite": "El resultado umbralizado se muestra siempre en blanco [255].",
+    "medianRadius": "Radio:",
+    "optionsTitle": "Opciones binarias",
+    "iterations": "Iteraciones (1-100):",
+    "count": "Recuento (1-8):",
+    "blackBackground": "Fondo negro",
+    "padEdges": "Rellenar los bordes al erosionar",
+    "edmOutput": "Salida EDM:",
+    "do": "Hacer:",
+    "opNothing": "Nada",
+    "opErode": "Erosionar",
+    "opDilate": "Dilatar",
+    "opOpen": "Abrir",
+    "opClose": "Cerrar",
+    "opOutline": "Contorno",
+    "opFillHoles": "Rellenar huecos",
+    "opSkeletonize": "Esqueletizar",
+    "hist16": "Histograma de 16 bits",
+    "previewNone": "Elija una operación en Hacer: para previsualizarla.",
+    "levelsStatus": "{list}"
+   }
+  }
+ },
+ "nl": {
+  "op": {
+   "autoThreshold": "Automatische drempel",
+   "autoLocalThreshold": "Automatische lokale drempel",
+   "binaryMedian": "Binaire mediaan"
+  },
+  "cmd": {
+   "adjustAutoThreshold": "Auto Threshold",
+   "adjustAutoLocalThreshold": "Auto Local Threshold",
+   "binMakeBinary": "Binair maken",
+   "binMedian": "Mediaan",
+   "binOptions": "Opties…"
+  },
+  "err": {
+   "thr32bit": "Auto Threshold vereist een afbeelding van 8 of 16 bit: zet deze eerst om (Image › Type).",
+   "thr8bit": "Auto Local Threshold vereist een afbeelding van 8 bit: zet deze eerst om (Image › Type).",
+   "thrNotBinary": "Er is een binair 8-bits beeld nodig (alleen de waarden 0 en 255): zet het eerst om in een masker (Process › Binary › Make Binary)."
+  },
+  "dlg": {
+   "thr": {
+    "tryAll": "Alles proberen",
+    "method": "Methode",
+    "ignoreBlack": "Zwart negeren",
+    "ignoreWhite": "Wit negeren",
+    "white": "Witte objecten op een zwarte achtergrond",
+    "setThreshold": "Drempel instellen in plaats van drempelen (enkele afbeeldingen)",
+    "showValues": "Drempelwaarden tonen in het Log-venster",
+    "levelStatus": "{method}: {level}",
+    "radius": "Straal",
+    "special": "Speciale parameters (indien afwijkend van de standaard)",
+    "parameter1": "Parameter 1",
+    "parameter2": "Parameter 2",
+    "alwaysWhite": "Het gedrempelde resultaat wordt altijd in wit [255] getoond.",
+    "medianRadius": "Straal:",
+    "optionsTitle": "Binaire opties",
+    "iterations": "Iteraties (1-100):",
+    "count": "Aantal (1-8):",
+    "blackBackground": "Zwarte achtergrond",
+    "padEdges": "Randen aanvullen bij erosie",
+    "edmOutput": "EDM-uitvoer:",
+    "do": "Uitvoeren:",
+    "opNothing": "Niets",
+    "opErode": "Eroderen",
+    "opDilate": "Dilateren",
+    "opOpen": "Openen",
+    "opClose": "Sluiten",
+    "opOutline": "Omtrek",
+    "opFillHoles": "Gaten vullen",
+    "opSkeletonize": "Skeletiseren",
+    "hist16": "16-bit histogram",
+    "previewNone": "Kies een bewerking bij Uitvoeren: om een voorbeeld te zien.",
+    "levelsStatus": "{list}"
+   }
+  }
+ }
+}

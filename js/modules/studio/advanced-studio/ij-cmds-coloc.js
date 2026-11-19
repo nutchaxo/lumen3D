@@ -115,6 +115,9 @@
     api.openPlot(plotOf(api, res, params, i1, i2));
   }
 
+  // the table and the plot of one run, shared with Analyze > Colocalization > Coloc 2 (ij-cmds-fiji.js, loaded after this file)
+  (typeof self !== 'undefined' ? self : globalThis).IJColocUi = { tableOf, plotOf, chName, docInfo, cell };
+
   IJApp.extend({
     pkg: 'coloc',
     commands: [

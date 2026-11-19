@@ -112,7 +112,9 @@ await test('IJOpRegistry: define is idempotent for one spec, refuses another und
   const WAVE2_SIZE = ['arrangeChannels', 'bin', 'canvasSize', 'resize', 'rotateEnlarge', 'setCalibration'];
   assert.deepEqual(sizeOps.filter((n) => !['convert', 'crop', 'rotate90'].includes(n)).sort(), WAVE2_SIZE.filter((n) => sizeOps.includes(n)).sort(), 'no unexpected size op');
   const WAVE2_NEWDOC = ['findMaximaImage', 'imageCalculator', 'mergeChannels', 'scaleNew', 'splitChannels', 'createMask', 'edmOutput'];
-  assert.deepEqual(newdocOps.filter((n) => !['cropToNew', 'toMask'].includes(n)).filter((n) => !WAVE2_NEWDOC.includes(n)), [], 'no unexpected newdoc op');
+  // Wave 3 (PLAN-wave3 §1.4): the newdoc ops of the packages that add them (a package that failed to load adds none).
+  const WAVE3_NEWDOC = ['autoThresholdMask', 'autoThresholdTryAll', 'autoLocalThresholdTryAll', 'tubeness', 'frangi', 'fft', 'inverseFft', 'bandpassFilter', 'straighten', 'particleImage', 'newImage', 'montage', 'skeletonTagged', 'localThickness'];
+  assert.deepEqual(newdocOps.filter((n) => !['cropToNew', 'toMask'].includes(n)).filter((n) => !WAVE2_NEWDOC.includes(n) && !WAVE3_NEWDOC.includes(n)), [], 'no unexpected newdoc op');
   assert.equal(R2.get('gaussian').preview, 'reduced');
   assert.equal(R2.get('flipH').preview, false);
   t.close();

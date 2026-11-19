@@ -140,8 +140,34 @@
     }
   }
 
+  // Edit > Options > Misc. "Divide by zero value:" (ij.plugin.Options.miscOptions): the text is read as
+  //   if (divValue.equalsIgnoreCase("infinity") || divValue.equalsIgnoreCase("infinite")) FloatBlitter.divideByZeroValue = Float.POSITIVE_INFINITY;
+  //   else if (divValue.equalsIgnoreCase("NaN")) ... = Float.NaN;   else if (divValue.equalsIgnoreCase("max")) ... = Float.MAX_VALUE;
+  //   else { try {f = Float.valueOf(divValue);} catch (NumberFormatException e) {f = null;}  if (f!=null) ... = f.floatValue(); }
+  // Returns the float, or null when the text is none of those (ImageJ then leaves the value as it was).
+  // Float.valueOf: leading and trailing white space (<= U+0020) is trimmed, an optional sign, "NaN" / "Infinity" (case-sensitive),
+  // a decimal number with an optional exponent and an optional f / F / d / D suffix.
+  const JAVA_FLOAT = /^[+-]?(?:NaN|Infinity|(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)[fFdD]?)$/;
+  function parseDivZero(text) {
+    const t = String(text === undefined || text === null ? '' : text);
+    const l = t.toLowerCase();
+    if (l === 'infinity' || l === 'infinite') return Infinity;
+    if (l === 'nan') return NaN;
+    if (l === 'max') return 3.4028234663852886e38;
+    const s = t.replace(/^[\0-\x20]+|[\0-\x20]+$/g, '');
+    if (!JAVA_FLOAT.test(s)) return null;
+    const neg = s.charAt(0) === '-';
+    const u = /^[+-]/.test(s) ? s.slice(1) : s;
+    let v;
+    if (u === 'NaN') v = NaN;
+    else if (u === 'Infinity') v = neg ? -Infinity : Infinity;
+    else v = (neg ? -1 : 1) * parseFloat(u.replace(/[fFdD]$/, ''));
+    return Math.fround(v);
+  }
+
   // FloatBlitter. `out` and `s` are Float32Array: a store rounds to float, as Java's float assignment.
-  function floatKernel(op) {
+  // `dbz` = FloatBlitter.divideByZeroValue (default +Infinity).
+  function floatKernel(op, dbz) {
     switch (op) {
       case 'add': return (out, o, s, n) => { for (let i = 0; i < n; i++) out[o + i] = s[i] + out[o + i]; };
       case 'subtract': return (out, o, s, n) => { for (let i = 0; i < n; i++) out[o + i] = out[o + i] - s[i]; };
@@ -150,6 +176,12 @@
         // FloatBlitter: "boolean useDBZValue = !Float.isInfinite(divideByZeroValue);" with the default
         // divideByZeroValue = Float.POSITIVE_INFINITY, useDBZValue is false, so
         // "pixels[dstIndex] = pixels[dstIndex]/src;" is IEEE division: x/0 = +-Infinity, 0/0 = NaN.
+        // Otherwise "if (useDBZValue && src==0.0) pixels[dstIndex] = divideByZeroValue; else pixels[dstIndex] = pixels[dstIndex]/src;"
+        // (a NaN value is not infinite, so it is used too; -0.0 == 0.0).
+        if (dbz !== undefined && dbz !== null && dbz !== Infinity && dbz !== -Infinity) {
+          const v = Math.fround(dbz);
+          return (out, o, s, n) => { for (let i = 0; i < n; i++) out[o + i] = s[i] === 0 ? v : out[o + i] / s[i]; };
+        }
         return (out, o, s, n) => { for (let i = 0; i < n; i++) out[o + i] = out[o + i] / s[i]; };
       case 'and': // "dst = (int)srcPixels[srcIndex++]&(int)pixels[dstIndex];" (int -> float on the store)
         return (out, o, s, n) => { for (let i = 0; i < n; i++) out[o + i] = d2i(s[i]) & d2i(out[o + i]); };
@@ -181,6 +213,8 @@
   function validateCalc(params, info) {
     if (!params || CALC_OPS.indexOf(params.op) < 0) throw ijError('IJ_BAD_ARGS', 'operation');
     if (params.float32 !== undefined && typeof params.float32 !== 'boolean') throw ijError('IJ_BAD_ARGS', 'float32');
+    // Edit > Options > Misc. "Divide by zero value:" as typed; absent = +Infinity (plain IEEE division, today's behaviour)
+    if (params.divZero !== undefined && (typeof params.divZero !== 'string' || params.divZero.length > 64 || parseDivZero(params.divZero) === null)) throw ijError('IJ_BAD_ARGS', 'divZero');
     const other = info.docs && info.docs.length ? info.docs[0] : null;   // unknown when the request did not name docIds (a size estimate)
     if (params.all) {
       if (other && other.channels !== info.channels) throw ijError('IJ_BAD_ARGS', 'channel counts differ');
@@ -231,7 +265,8 @@
       // (mode==Blitter.MULTIPLY || mode==Blitter.DIVIDE);" — the integer destination is converted to float,
       // the FloatBlitter runs, setPixels(1, ipFloat) rounds back ("value = fPixels[i] + 0.5f; ... (byte)value").
       const tempFloat = intDst && v2.bitDepth === 32 && (op === 'multiply' || op === 'divide');
-      const kernel = tempFloat ? floatKernel(op) : (intDst ? intKernel(op, max) : floatKernel(op));
+      const dbz = params.divZero === undefined ? undefined : parseDivZero(params.divZero);
+      const kernel = tempFloat ? floatKernel(op, dbz) : (intDst ? intKernel(op, max) : floatKernel(op, dbz));
       const outputs = [];
       const rowsPerTick = Math.max(1, Math.floor((1 << 20) / w));
       const srow = tempFloat || !intDst ? new Float32Array(w) : new Int32Array(w);
@@ -436,5 +471,5 @@
     }
   });
 
-  root.IJMulti = { CALC_OPS, SLOT_COLORS, isColorLut };
+  root.IJMulti = { CALC_OPS, SLOT_COLORS, isColorLut, intKernel, floatKernel, parseDivZero };
 })(typeof self !== 'undefined' ? self : globalThis);

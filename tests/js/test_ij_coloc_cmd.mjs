@@ -120,7 +120,7 @@ const undoDepth0 = (await t.engine('doc.info', { docId: A })).undoDepth;
 
 // ── 3. two documents, Costes ──
 {
-  await t.runCommand('imageDuplicate', { all: true });
+  await t.runCommand('imageDuplicate');
   await until(() => t.activeId() !== A && t.activeId() !== undefined, 'duplicate shown');
   const B = t.activeId();
   await t.runCommand('editInvert');

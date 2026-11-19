@@ -259,7 +259,9 @@ const findByText = (root, text) => { for (const n of walk(root)) if (n.tagName =
   assert.ok(p3.values.length > 20);
   const p2 = await eng('doc.profile', { docId: id, line: pl, channel: 0 });
   assert.ok(p2.values.length > 40 && p2.values.length < 60, 'one sample per pixel of the path: ' + p2.values.length);
-  assert.equal((await eng('doc.profile', { docId: id, line: rect(1, 1, 5, 5), channel: 0 }).catch((e) => e)).code, 'IJ_BAD_ROI');
+  // a rectangle has a profile since wave 3 (ProfilePlot.getColumnAverageProfile); an oval or a point has none
+  assert.equal((await eng('doc.profile', { docId: id, line: rect(1, 1, 5, 5), channel: 0 })).values.length, 5);
+  assert.equal((await eng('doc.profile', { docId: id, line: { type: 'oval', x: 1, y: 1, w: 5, h: 5 }, channel: 0 }).catch((e) => e)).code, 'IJ_BAD_ROI');
 
   // the registry operations on their own
   const tr = (op, params, o) => eng('doc.compute', Object.assign({ docId: id, op, params, roi: null, channel: 0 }, o || {}));
@@ -448,7 +450,7 @@ function IR_mask(t, roi, W, H) {
 {
   const t = await boot({ channels: 2 });
   await t.open();
-  setRoi(t, rect(2, 2, 8, 8));
+  setRoi(t, { type: 'oval', x: 2, y: 2, w: 8, h: 8 });
   assert.equal(t.isEnabled('analyzePlotProfile'), false);
   setRoi(t, { type: 'polyline', points: [[3, 4], [14, 18], [30, 10]], width: 1 });
   assert.equal(t.isEnabled('analyzePlotProfile'), true, 'a segmented line has a profile');

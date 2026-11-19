@@ -1,0 +1,258 @@
+{
+  "en": {
+    "cmd": {
+      "overlayAddSelection": "Add Selection…",
+      "overlayHide": "Hide Overlay",
+      "overlayShow": "Show Overlay",
+      "overlayFromManager": "From ROI Manager",
+      "overlayToManager": "To ROI Manager",
+      "overlayRemove": "Remove Overlay",
+      "overlayToggle": "Toggle Overlay",
+      "toolsScaleBar": "Scale Bar…",
+      "toolsGrid": "Grid…"
+    },
+    "op": { "paintMask": "Writing the scale bar into the pixels" },
+    "err": {
+      "ovNoOverlay": "Overlay required.",
+      "ovManagerEmpty": "The ROI Manager holds no selection of this image.",
+      "ovNoRoiItems": "The overlay has no selection the ROI Manager could take."
+    },
+    "warn": { "ovKept": "{n} overlay items that are not selections stay in the overlay." },
+    "dlg": {
+      "ov": {
+        "noSelectionTitle": "No Selection",
+        "noSelectionMsg": "\"Overlay>Add\" requires a selection.",
+        "removeExisting": "Remove existing overlay",
+        "addTitle": "Add to Overlay",
+        "stroke": "Stroke color:",
+        "strokePoint": "Stroke (point) color:",
+        "width": "Width:",
+        "fill": "Fill color:",
+        "newOverlay": "New overlay",
+        "gridTitle": "Grid…",
+        "gridType": "Grid type:",
+        "gridArea": "Area per point:",
+        "gridColor": "Color:",
+        "gridBold": "Bold",
+        "gridCenter": "Center grid on image",
+        "gridRandom": "Random offset",
+        "gridTooSmall": "\"Area per Point\" too small",
+        "gt": { "lines": "Lines", "horizontalLines": "Horizontal Lines", "crosses": "Crosses", "points": "Points", "circles": "Circles", "none": "None" },
+        "c": {
+          "red": "Red", "green": "Green", "blue": "Blue", "magenta": "Magenta", "cyan": "Cyan", "yellow": "Yellow", "orange": "Orange",
+          "black": "Black", "white": "White", "lightGray": "Light Gray", "gray": "Gray", "darkGray": "Dark Gray", "none": "None"
+        },
+        "loc": { "upperRight": "Upper Right", "lowerRight": "Lower Right", "lowerLeft": "Lower Left", "upperLeft": "Upper Left", "atSelection": "At Selection" },
+        "sbTitle": "Scale Bar",
+        "sbWidth": "Width in {unit}:",
+        "sbHeight": "Height in {unit}:",
+        "sbThickness": "Thickness in pixels:",
+        "sbFontSize": "Font size:",
+        "sbColor": "Color:",
+        "sbBackground": "Background:",
+        "sbLocation": "Location:",
+        "sbHorizontal": "Horizontal",
+        "sbVertical": "Vertical",
+        "sbBold": "Bold Text",
+        "sbHideText": "Hide Text",
+        "sbSerif": "Serif Font",
+        "sbOverlay": "Overlay",
+        "sbRemove": "Remove Scale Bar",
+        "sbPositive": "Enter a number above 0.",
+        "sbNeedsSelection": "Draw a selection first, or pick another location."
+      }
+    }
+  },
+  "fr": {
+    "cmd": {
+      "overlayAddSelection": "Ajouter la sélection…",
+      "overlayHide": "Masquer la surimpression",
+      "overlayShow": "Afficher la surimpression",
+      "overlayFromManager": "Depuis le gestionnaire de ROI",
+      "overlayToManager": "Vers le gestionnaire de ROI",
+      "overlayRemove": "Supprimer la surimpression",
+      "overlayToggle": "Basculer la surimpression",
+      "toolsScaleBar": "Barre d'échelle…",
+      "toolsGrid": "Grille…"
+    },
+    "op": { "paintMask": "Écriture de la barre d'échelle dans les pixels" },
+    "err": {
+      "ovNoOverlay": "Une surimpression est requise.",
+      "ovManagerEmpty": "Le gestionnaire de ROI ne contient aucune sélection de cette image.",
+      "ovNoRoiItems": "La surimpression ne contient aucune sélection que le gestionnaire de ROI puisse prendre."
+    },
+    "warn": { "ovKept": "{n} éléments de la surimpression qui ne sont pas des sélections y restent." },
+    "dlg": {
+      "ov": {
+        "noSelectionTitle": "Aucune sélection",
+        "noSelectionMsg": "« Surimpression > Ajouter » requiert une sélection.",
+        "removeExisting": "Supprimer la surimpression existante",
+        "addTitle": "Ajouter à la surimpression",
+        "stroke": "Couleur du trait :",
+        "strokePoint": "Couleur du trait (point) :",
+        "width": "Épaisseur :",
+        "fill": "Couleur de remplissage :",
+        "newOverlay": "Nouvelle surimpression",
+        "gridTitle": "Grille",
+        "gridType": "Type de grille :",
+        "gridArea": "Surface par point :",
+        "gridColor": "Couleur :",
+        "gridBold": "Gras",
+        "gridCenter": "Centrer la grille sur l'image",
+        "gridRandom": "Décalage aléatoire",
+        "gridTooSmall": "« Surface par point » trop petite",
+        "gt": { "lines": "Lignes", "horizontalLines": "Lignes horizontales", "crosses": "Croix", "points": "Points", "circles": "Cercles", "none": "Aucune" },
+        "c": {
+          "red": "Rouge", "green": "Vert", "blue": "Bleu", "magenta": "Magenta", "cyan": "Cyan", "yellow": "Jaune", "orange": "Orange",
+          "black": "Noir", "white": "Blanc", "lightGray": "Gris clair", "gray": "Gris", "darkGray": "Gris foncé", "none": "Aucun"
+        },
+        "loc": { "upperRight": "En haut à droite", "lowerRight": "En bas à droite", "lowerLeft": "En bas à gauche", "upperLeft": "En haut à gauche", "atSelection": "Sur la sélection" },
+        "sbTitle": "Barre d'échelle",
+        "sbWidth": "Largeur en {unit} :",
+        "sbHeight": "Hauteur en {unit} :",
+        "sbThickness": "Épaisseur en pixels :",
+        "sbFontSize": "Taille de police :",
+        "sbColor": "Couleur :",
+        "sbBackground": "Fond :",
+        "sbLocation": "Emplacement :",
+        "sbHorizontal": "Horizontale",
+        "sbVertical": "Verticale",
+        "sbBold": "Texte en gras",
+        "sbHideText": "Masquer le texte",
+        "sbSerif": "Police à empattements",
+        "sbOverlay": "Surimpression",
+        "sbRemove": "Supprimer la barre d'échelle",
+        "sbPositive": "Saisissez un nombre supérieur à 0.",
+        "sbNeedsSelection": "Tracez d'abord une sélection, ou choisissez un autre emplacement."
+      }
+    }
+  },
+  "es": {
+    "cmd": {
+      "overlayAddSelection": "Añadir la selección…",
+      "overlayHide": "Ocultar la superposición",
+      "overlayShow": "Mostrar la superposición",
+      "overlayFromManager": "Desde el administrador de ROI",
+      "overlayToManager": "Hacia el administrador de ROI",
+      "overlayRemove": "Quitar la superposición",
+      "overlayToggle": "Alternar la superposición",
+      "toolsScaleBar": "Barra de escala…",
+      "toolsGrid": "Cuadrícula…"
+    },
+    "op": { "paintMask": "Escribiendo la barra de escala en los píxeles" },
+    "err": {
+      "ovNoOverlay": "Se requiere una superposición.",
+      "ovManagerEmpty": "El administrador de ROI no contiene ninguna selección de esta imagen.",
+      "ovNoRoiItems": "La superposición no contiene ninguna selección que el administrador de ROI pueda tomar."
+    },
+    "warn": { "ovKept": "{n} elementos de la superposición que no son selecciones se quedan en ella." },
+    "dlg": {
+      "ov": {
+        "noSelectionTitle": "Sin selección",
+        "noSelectionMsg": "«Superposición > Añadir» requiere una selección.",
+        "removeExisting": "Quitar la superposición existente",
+        "addTitle": "Añadir a la superposición",
+        "stroke": "Color del trazo:",
+        "strokePoint": "Color del trazo (punto):",
+        "width": "Grosor:",
+        "fill": "Color de relleno:",
+        "newOverlay": "Nueva superposición",
+        "gridTitle": "Cuadrícula",
+        "gridType": "Tipo de cuadrícula:",
+        "gridArea": "Área por punto:",
+        "gridColor": "Color:",
+        "gridBold": "Negrita",
+        "gridCenter": "Centrar la cuadrícula en la imagen",
+        "gridRandom": "Desplazamiento aleatorio",
+        "gridTooSmall": "«Área por punto» demasiado pequeña",
+        "gt": { "lines": "Líneas", "horizontalLines": "Líneas horizontales", "crosses": "Cruces", "points": "Puntos", "circles": "Círculos", "none": "Ninguna" },
+        "c": {
+          "red": "Rojo", "green": "Verde", "blue": "Azul", "magenta": "Magenta", "cyan": "Cian", "yellow": "Amarillo", "orange": "Naranja",
+          "black": "Negro", "white": "Blanco", "lightGray": "Gris claro", "gray": "Gris", "darkGray": "Gris oscuro", "none": "Ninguno"
+        },
+        "loc": { "upperRight": "Arriba a la derecha", "lowerRight": "Abajo a la derecha", "lowerLeft": "Abajo a la izquierda", "upperLeft": "Arriba a la izquierda", "atSelection": "En la selección" },
+        "sbTitle": "Barra de escala",
+        "sbWidth": "Anchura en {unit}:",
+        "sbHeight": "Altura en {unit}:",
+        "sbThickness": "Grosor en píxeles:",
+        "sbFontSize": "Tamaño de fuente:",
+        "sbColor": "Color:",
+        "sbBackground": "Fondo:",
+        "sbLocation": "Ubicación:",
+        "sbHorizontal": "Horizontal",
+        "sbVertical": "Vertical",
+        "sbBold": "Texto en negrita",
+        "sbHideText": "Ocultar el texto",
+        "sbSerif": "Fuente con serifa",
+        "sbOverlay": "Superposición",
+        "sbRemove": "Quitar la barra de escala",
+        "sbPositive": "Introduzca un número mayor que 0.",
+        "sbNeedsSelection": "Trace primero una selección, o elija otra ubicación."
+      }
+    }
+  },
+  "nl": {
+    "cmd": {
+      "overlayAddSelection": "Selectie toevoegen…",
+      "overlayHide": "Overlay verbergen",
+      "overlayShow": "Overlay tonen",
+      "overlayFromManager": "Van ROI-beheer",
+      "overlayToManager": "Naar ROI-beheer",
+      "overlayRemove": "Overlay verwijderen",
+      "overlayToggle": "Overlay omschakelen",
+      "toolsScaleBar": "Schaalbalk…",
+      "toolsGrid": "Raster…"
+    },
+    "op": { "paintMask": "De schaalbalk in de pixels schrijven" },
+    "err": {
+      "ovNoOverlay": "Een overlay is vereist.",
+      "ovManagerEmpty": "ROI-beheer bevat geen selectie van dit beeld.",
+      "ovNoRoiItems": "De overlay bevat geen selectie die ROI-beheer kan overnemen."
+    },
+    "warn": { "ovKept": "{n} overlay-elementen die geen selecties zijn, blijven in de overlay." },
+    "dlg": {
+      "ov": {
+        "noSelectionTitle": "Geen selectie",
+        "noSelectionMsg": "\"Overlay > Toevoegen\" vereist een selectie.",
+        "removeExisting": "Bestaande overlay verwijderen",
+        "addTitle": "Aan overlay toevoegen",
+        "stroke": "Lijnkleur:",
+        "strokePoint": "Lijnkleur (punt):",
+        "width": "Breedte:",
+        "fill": "Vulkleur:",
+        "newOverlay": "Nieuwe overlay",
+        "gridTitle": "Raster",
+        "gridType": "Rastertype:",
+        "gridArea": "Oppervlak per punt:",
+        "gridColor": "Kleur:",
+        "gridBold": "Vet",
+        "gridCenter": "Raster op het beeld centreren",
+        "gridRandom": "Willekeurige verschuiving",
+        "gridTooSmall": "\"Oppervlak per punt\" te klein",
+        "gt": { "lines": "Lijnen", "horizontalLines": "Horizontale lijnen", "crosses": "Kruisen", "points": "Punten", "circles": "Cirkels", "none": "Geen" },
+        "c": {
+          "red": "Rood", "green": "Groen", "blue": "Blauw", "magenta": "Magenta", "cyan": "Cyaan", "yellow": "Geel", "orange": "Oranje",
+          "black": "Zwart", "white": "Wit", "lightGray": "Lichtgrijs", "gray": "Grijs", "darkGray": "Donkergrijs", "none": "Geen"
+        },
+        "loc": { "upperRight": "Rechtsboven", "lowerRight": "Rechtsonder", "lowerLeft": "Linksonder", "upperLeft": "Linksboven", "atSelection": "Op de selectie" },
+        "sbTitle": "Schaalbalk",
+        "sbWidth": "Breedte in {unit}:",
+        "sbHeight": "Hoogte in {unit}:",
+        "sbThickness": "Dikte in pixels:",
+        "sbFontSize": "Lettergrootte:",
+        "sbColor": "Kleur:",
+        "sbBackground": "Achtergrond:",
+        "sbLocation": "Locatie:",
+        "sbHorizontal": "Horizontaal",
+        "sbVertical": "Verticaal",
+        "sbBold": "Vette tekst",
+        "sbHideText": "Tekst verbergen",
+        "sbSerif": "Lettertype met schreef",
+        "sbOverlay": "Overlay",
+        "sbRemove": "Schaalbalk verwijderen",
+        "sbPositive": "Voer een getal boven 0 in.",
+        "sbNeedsSelection": "Teken eerst een selectie of kies een andere locatie."
+      }
+    }
+  }
+}

@@ -365,6 +365,15 @@ const IJEngine = (() => {
         const op = p.op;
         if (!['erode', 'dilate', 'open', 'close', 'fillHoles', 'outline'].includes(op)) throw ijError('IJ_BAD_ARGS', 'binary op');
         const o = { iterations: p.iterations > 0 ? Math.floor(p.iterations) : 1, count: p.count > 0 ? Math.floor(p.count) : 1 };
+        // Binary Options (version 1, additive): `padEdges` = "Pad edges when eroding" (Prefs.padEdges), `foreground` = the object
+        // value, 255 or 0 (Binary.run: "foreground = blackBackground ? 255 : 0; if (ip.isInvertedLut()) foreground = 255 − foreground"),
+        // one number or one per channel. Absent = the v1 behaviour (255 objects, outside = background).
+        if (p.padEdges !== undefined && typeof p.padEdges !== 'boolean') throw ijError('IJ_BAD_ARGS', 'padEdges');
+        if (p.padEdges === true) o.padEdges = true;
+        const fgOf = Array.isArray(p.foreground) ? p.foreground[c] : p.foreground;
+        if (fgOf !== undefined && fgOf !== 255 && fgOf !== 0) throw ijError('IJ_BAD_ARGS', 'foreground');
+        if (fgOf === 0) o.foreground = 0;
+        if (o.iterations > 100 || o.count > 8) throw ijError('IJ_BAD_ARGS', 'iterations / count');
         // Rows a result pixel depends on: erode/dilate 1 per iteration, open/close
         // twice that, outline 1. fillHoles is a global flood fill: one whole band.
         const reach = op === 'fillHoles' ? 0 : (op === 'open' || op === 'close' ? 2 * o.iterations : (op === 'outline' ? 1 : o.iterations));
@@ -2127,7 +2136,18 @@ const IJEngine = (() => {
     function finiteNum(v) { return typeof v === 'number' && isFinite(v); }
 
     // → [row]; one row, except a multi-point selection (one row per point). `keys` are the short keys of IJRoiTools.
+    // opts.invertY (Set Measurements › Invert Y coordinates): the Y of the centroid / centre of mass / bounding rectangle / point as
+    // Calibration.getY(y, imageHeight) gives it (IJAna.invertY, ij-proc-ana.js).
     function measureRows(doc, c, roi, keys, opts) {
+      const rows = measureRowsRaw(doc, c, roi, keys, opts);
+      if (opts && opts.invertY) {
+        // never silently dropped: without the module the rows would carry the wrong Y
+        if (!ROOT.IJAna) throw ijError('IJ_MODULE_MISSING', 'module IJAna is not loaded');
+        const cl = calOf(doc); for (const r of rows) ROOT.IJAna.invertY(r, doc.height, cl.ph);
+      }
+      return rows;
+    }
+    function measureRowsRaw(doc, c, roi, keys, opts) {
       const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
       const o = opts || {};
       const want = Array.isArray(keys) && keys.length ? keys : BASE_KEYS;
@@ -2184,7 +2204,7 @@ const IJEngine = (() => {
     // outline limited to the foreground (ParticleAnalyzer measures with the threshold as a
     // LIMIT), so a hole inside the outline never enters Mean / Min / IntDen.
     // owner: P6 (wave 2)
-    function particleImageStats(doc, c, outline, includeHoles, keys, redirect) {
+    function particleImageStats(doc, c, outline, includeHoles, keys, redirect, ownMask, thr) {
       const IJOps = dep('IJOps'), IJRoi = dep('IJRoi');
       const roi = { type: 'polygon', points: outline, traced: true };
       const T = ROOT.IJRoiTools;
@@ -2194,7 +2214,8 @@ const IJEngine = (() => {
         // particle's pixels are measured in the redirect image; without "Include holes" the particle's own mask (the
         // analysed image's foreground inside the outline) decides which pixels count, not a value range of the redirect.
         let r2 = roi;
-        if (!includeHoles) {
+        if (!includeHoles && ownMask) r2 = ownMask;
+        else if (!includeHoles) {
           const m = IJRoi.mask(roi, doc.width, doc.height);
           if (m && m.data && m.w > 0 && m.h > 0) {
             const sub = new Uint8Array(m.w * m.h), own = doc.channels[c].data;
@@ -2212,8 +2233,19 @@ const IJEngine = (() => {
       if (T && Array.isArray(keys) && keys.length) {
         // the columns Set Measurements ticked, computed as Analyze > Measure computes them on the particle's outline
         const row = T.measureArea({ img: channelImage(doc, c), roi, cal: doc.calibration, keys: keys.filter((k) => !PARTICLE_OWN.has(k)),
-          thr: includeHoles ? null : { lower: 1, upper: 255 }, limit: !includeHoles });
+          thr: includeHoles ? null : (thr || { lower: 1, upper: 255 }), limit: !includeHoles });
         for (const k of Object.keys(row)) out[k] = row[k];
+        if (!includeHoles) {
+          // ParticleAnalyzer measures the particle's own mask ("ff.particleAnalyzerFill(x, y, level1, level2, ip2.getMask(), r)": the holes are
+          // outside it): the ellipse, the shape ratios, the solidity and the area fraction read that mask, every pixel of which is foreground
+          // ("%Area" of a particle is 100). The perimeter and the Feret diameters are those of the traced outline, which `roi` above is.
+          if (ownMask) {
+            const OUTLINE_KEYS = new Set(['perim', 'circularity', 'feret', 'feretX', 'feretY', 'feretAngle', 'minFeret']);
+            const mk = keys.filter((k) => !PARTICLE_OWN.has(k) && !OUTLINE_KEYS.has(k));
+            if (mk.length) { const r2 = T.measureArea({ img: channelImage(doc, c), roi: ownMask, cal: doc.calibration, keys: mk, thr: null, limit: false }); for (const k of mk) if (k in r2) out[k] = r2[k]; }
+          }
+          if (out.areaFraction !== undefined) out.areaFraction = 100;
+        }
         return out;
       }
       const box = IJRoi.mask(roi, doc.width, doc.height);
@@ -2630,7 +2662,7 @@ const IJEngine = (() => {
         ensureRoomNoEvict(need);
         transientBytes += need;
         try {
-          const rows = measureRows(doc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit });
+          const rows = measureRows(doc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit, invertY: a.invertY === true });
           return { row: rows[0], rows };
         } finally { transientBytes -= need; }
       });
@@ -2644,21 +2676,31 @@ const IJEngine = (() => {
         const o = { bins: a.bins > 0 ? a.bins : 256 };
         if (a.min != null) o.min = a.min;
         if (a.max != null) o.max = a.max;
-        return dep('IJOps').histogram(channelImage(doc, c), mask, o);
+        const img = channelImage(doc, c);
+        const res = dep('IJOps').histogram(img, mask, o);
+        // the numbers of ImageJ's histogram window for the same bins / range (ShortStatistics, FloatStatistics, ByteStatistics)
+        if (a.stats !== false && ROOT.IJAna) res.stats = ROOT.IJAna.histogramStats(img, mask, { bins: doc.bitDepth === 8 ? 256 : o.bins, histMin: a.min || 0, histMax: a.max || 0 });
+        return res;
       });
     };
 
-    // owner: P6 (wave 2)
-    // doc.profile { docId, line, channel } → { values, stepUm }: a straight line (any width) or a segmented line
-    // (ProfilePlot.getProfile). The step is ImageJ's xInc: the pixel width, or the calibrated over the pixel length of a
-    // straight line when the pixels are not square.
+    // owner: P6 (wave 2), P-ana (wave 3)
+    // doc.profile { docId, line (or roi), channel, vertical?, interpolate? } → { values, stepUm }: a straight line (any width), a
+    // segmented line or a rectangle (ProfilePlot.getProfile: the column average, the row average with `vertical`). `interpolate` is
+    // PlotWindow.interpolate (default true). The step is ImageJ's xInc: the pixel width, or the calibrated over the pixel length of a
+    // straight line when the pixels are not square; the pixel height of a vertical rectangle profile.
     handlers['doc.profile'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const c = isInt(a.channel) ? a.channel : doc.active;
-        const line = a.line;
-        if (!line || (line.type !== 'line' && line.type !== 'polyline')) throw ijError('IJ_BAD_ROI', 'a line selection is needed');
+        const line = a.line || a.roi;
+        if (!line || (line.type !== 'line' && line.type !== 'polyline' && line.type !== 'rect')) throw ijError('IJ_BAD_ROI', 'a line or a rectangle selection is needed');
         dep('IJRoi').validate(line);
+        if (ROOT.IJAna) {
+          const r = ROOT.IJAna.profile(channelImage(doc, c), line, { interpolate: a.interpolate !== false, vertical: a.vertical === true, calibration: doc.calibration });
+          return { values: r.values, stepUm: r.step };
+        }
+        if (line.type === 'rect') throw ijError('IJ_MODULE_MISSING', 'module IJAna is not loaded');
         const T = ROOT.IJRoiTools;
         const cal = calOf(doc);
         if (!T) {
@@ -2683,16 +2725,25 @@ const IJEngine = (() => {
         const c = isInt(a.channel) ? a.channel : doc.active;
         const mask = roiMask(a.roi || null, doc.width, doc.height);
         const o = { dark: !!a.dark, maskBox: mask };
-        if (doc.bitDepth !== 8) {
+        // The Threshold window's "16-bit histogram" box (ThresholdAdjuster.java:232, :621): the full 65 536-bin histogram of a
+        // 16-bit channel, trimmed to its first / last non-empty bin by AutoThresholder.getThreshold. Other depths ignore it.
+        if (a.histogram16 === true && doc.bitDepth === 16) o.histogram16 = true;
+        if (a.invertedLut === true) o.invertedLut = true;
+        if (a.ignoreBlack === true) o.ignoreBlack = true;
+        if (a.ignoreWhite === true) o.ignoreWhite = true;
+        if (doc.bitDepth !== 8 && !o.histogram16) {
           const r = rangeOf(doc, c);
           o.min = r.min; o.max = r.max;
         }
         const r = dep('IJThreshold').levels(channelImage(doc, c), a.method || 'Default', o);
-        return { lower: r.lower, upper: r.upper, level: r.level, min: r.min, max: r.max };
+        return { lower: r.lower, upper: r.upper, level: r.level, min: r.min, max: r.max, ijLower: r.ijLower, ijUpper: r.ijUpper, histogram16: r.histogram16 };
       });
     };
 
-    // owner: P6 (wave 2)
+    // owner: P6 (wave 2), P-ana (wave 3)
+    // doc.particles { docId, channel, opts, keys, redirect, measureImage?, invertY?, composite? } → { rows, outlines, summary }. A row also carries
+    // xStart / yStart (ParticleAnalyzer "Record starts": the first pixel met in raster order); with `composite` (Composite ROIs, only without
+    // Include holes) a particle whose outline encloses holes carries `maskRoi`, its own pixels as a mask selection.
     handlers['doc.particles'] = (a, ctx) => {
       const doc = getDoc(a.docId);
       const red = redirectDoc(a.redirect, doc);
@@ -2701,6 +2752,26 @@ const IJEngine = (() => {
         const redirectSrc = a.redirect && a.redirect.docId !== undefined && a.redirect.docId !== null ? measureSource(doc, c, a.redirect) : null;
         if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'particle analysis needs an 8-bit mask');
         const o = Object.assign({}, a.opts || {});
+        const IJP = dep('IJParticles');
+        // The pixels analysed (ParticleAnalyzer.setThresholdLevels): the threshold range of the image when one is set, else the 255 pixels of a
+        // binary image — "A thresholded image or 8-bit binary image is required." for anything else. `requireBinary` is the page's flag; a caller
+        // without it keeps the historical rule "every non-zero pixel is foreground".
+        const src8 = doc.channels[c].data;
+        let analysed = src8, thr = null;
+        const hasThr = a.threshold && isFinite(a.threshold.lower) && isFinite(a.threshold.upper);
+        if (hasThr) { thr = { lower: a.threshold.lower, upper: a.threshold.upper }; }
+        else if (a.requireBinary === true) {
+          for (let i = 0; i < src8.length; i++) if (src8[i] !== 0 && src8[i] !== 255) throw ijError('IJ_PARTICLES_THRESHOLD', 'a thresholded image or 8-bit binary image is required');
+        }
+        // the peak of the whole analysis: working copy, pixel list + flood-fill stack, thresholded mask, the selection's box, the per-particle masks
+        const peak = IJP.scratchBytes(doc.width, doc.height, { roi: !!o.roi }) + (thr ? doc.width * doc.height : 0) + 2 * doc.width * doc.height;
+        ensureRoom(peak);
+        transientBytes += peak;
+        ctx.release = () => { transientBytes -= peak; };
+        if (thr) {
+          analysed = new Uint8Array(src8.length);
+          for (let i = 0; i < src8.length; i++) { const v = src8[i]; if (v >= thr.lower && v <= thr.upper) analysed[i] = 1; }
+        }
         const cal = calOf(doc);
         if (o.unit === 'um2') {
           const px = cal.pw * cal.ph;
@@ -2711,16 +2782,64 @@ const IJEngine = (() => {
         o.maskBox = o.roi ? roiMask(o.roi, doc.width, doc.height) : null;
         delete o.roi; delete o.unit;
         await ctx.task.tick(0, 'op.particles');
-        const r = dep('IJParticles').analyze(doc.channels[c].data, doc.width, doc.height, o);
+        // ParticleAnalyzer: "if (compositeRois && floodFill && mask!=null) { … new ThresholdToSelection().convert(mask) … roi = roi2; }" — the holes of a
+        // particle stay holes of its selection
+        const composite = a.composite === true && !o.includeHoles;
+        const maskRois = [], ownMasks = [];
+        const T0 = ROOT.IJRoiTools;
+        let lastMask = null;
+        const maskOf = (rec, pix, np, rect) => {
+          const bw = rect.w, bh = rect.h, bx = rect.x, by = rect.y;
+          const sub = new Uint8Array(bw * bh);
+          for (let k = 0; k < np; k++) { const px = pix[k], x = px % doc.width, y = (px - x) / doc.width; sub[(y - by) * bw + (x - bx)] = 1; }
+          return { type: 'mask', x: bx, y: by, w: bw, h: bh, rle: Uint32Array.from(dep('IJRoi').rleEncode(sub)) };
+        };
+        if (composite && T0 && T0.maskPerimeter) {
+          // Composite ROIs: the perimeter (so Circ. and the circularity filter) is the length of the selection ThresholdToSelection builds from the
+          // particle's mask — ParticleAnalyzer.java:915-927 ("roi = roi2" precedes "double perimeter = roi.getLength()")
+          o.perimeterOf = (outline, pix, np, rect, pw, ph) => {
+            lastMask = maskOf(null, pix, np, rect);
+            return T0.maskPerimeter(lastMask, pw, ph);
+          };
+        }
+        if (!o.includeHoles) {
+          // without Include holes a particle is its 8-connected component only: its pixels, as a mask selection of its bounding box, are what
+          // ParticleAnalyzer measures ("ff.particleAnalyzerFill") and what Composite ROIs keep as the selection
+          const IJRoi = dep('IJRoi');
+          o.sink = (rec, pix, np, index) => {
+            const m = lastMask || maskOf(rec, pix, np, { x: rec.bx, y: rec.by, w: rec.bw, h: rec.bh });
+            lastMask = null;
+            ownMasks[index - 1] = m;
+            if (composite && rec.bw * rec.bh > np) {
+              const filled = IJRoi.mask({ type: 'polygon', points: rec.outline }, doc.width, doc.height);
+              let fc = 0;
+              for (let k = 0; k < filled.data.length; k++) if (filled.data[k]) fc++;
+              if (fc > np) maskRois[index - 1] = m;
+            }
+          };
+        }
+        // cancel and progress: the scan hands control back every 16384 pixels
+        const r = await IJP.analyzeAsync(analysed, doc.width, doc.height, o, (f) => ctx.task.tick(0.1 * f, 'op.particles'));
         const measure = a.measureImage !== false;
+        if (a.invertY === true && !ROOT.IJAna) throw ijError('IJ_MODULE_MISSING', 'module IJAna is not loaded');
+        const invY = a.invertY === true && ROOT.IJAna;
+        const calY = calOf(doc).ph;
         const rows = [];
         for (let i = 0; i < r.particles.length; i++) {
           const p = r.particles[i];
           const row = {
             n: i + 1, area: p.area, areaPx: p.areaPx, perimeter: p.perimeter, circularity: p.circularity,
-            bx: p.bx, by: p.by, bw: p.bw, bh: p.bh, xCentroid: p.xCentroid, yCentroid: p.yCentroid
+            bx: p.bx, by: p.by, bw: p.bw, bh: p.bh, xCentroid: p.xCentroid, yCentroid: p.yCentroid, xStart: p.xStart, yStart: p.yStart
           };
-          if (measure && p.outline && p.outline.length >= 3) Object.assign(row, particleImageStats(doc, c, p.outline, !!o.includeHoles, a.keys, redirectSrc));
+          if (measure && p.outline && p.outline.length >= 3) {
+            const st = particleImageStats(doc, c, p.outline, !!o.includeHoles, a.keys, redirectSrc, ownMasks[i], thr);
+            // Composite ROIs: Perim. is the length of the particle's selection, which analyze() already measured
+            if (composite && o.perimeterOf && Array.isArray(a.keys) && a.keys.indexOf('perim') >= 0 && !redirectSrc) st.perim = p.perimeter;
+            if (invY) ROOT.IJAna.invertY(st, doc.height, calY);
+            Object.assign(row, st);
+          }
+          if (invY) ROOT.IJAna.invertY(row, doc.height, calY, ['yCentroid']);
+          if (maskRois[i]) row.maskRoi = maskRois[i];
           rows.push(row);
           if ((i & 63) === 63) await ctx.task.tick(0.1 + 0.9 * (i + 1) / r.particles.length, 'op.particles');
         }

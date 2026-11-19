@@ -1,0 +1,158 @@
+{
+  "en": {
+    "cmd": { "procRepeatCommand": "Repeat Command", "utilFindCommands": "Find Commands…", "optInputOutput": "Input/Output…", "optPlots": "Plots…" },
+    "meas": { "invertY": "Invert Y coordinates", "scientific": "Scientific notation", "addToOverlay": "Add to overlay", "nanEmpty": "NaN empty cells" },
+    "res": {
+      "menuFile": "File", "menuEdit": "Edit", "menuResults": "Results",
+      "help": "Results of Analyze › Measure and the other measuring commands; Window › Results reopens it.",
+      "saveAs": "Save As…", "rename": "Rename…", "duplicate": "Duplicate…", "cut": "Cut", "clearRows": "Clear", "selectAll": "Select All",
+      "find": "Find…", "findNext": "Find Next", "sort": "Sort…", "plot": "Plot…", "options": "Options…",
+      "notFound": "\"{text}\" not found.", "rowNumber": "Row number"
+    },
+    "hist": {
+      "title": "Histogram of {name}", "statCount": "N: {v}", "statMean": "Mean: {v}", "statStdDev": "StdDev: {v}", "statMode": "Mode: {v}{n}",
+      "statMin": "Min: {v}", "statMax": "Max: {v}", "statBins": "Bins: {v}", "statBinWidth": "Bin Width: {v}", "log": "Log", "logLabel": "Log scale"
+    },
+    "plot": {
+      "profileTitle": "Plot of {name}",
+      "rowAverage": "Vertical profile: the average of each row of the rectangle.",
+      "columnAverage": "Horizontal profile: the average of each column of the rectangle."
+    },
+    "dlg": { "ana": {
+      "decimals": "Decimal places (0-9):",
+      "histBins": "Bins:", "histUseRange": "Use pixel value range", "histOr": "or use:", "histXMin": "X min:", "histXMax": "X max:", "histYMax": "Y max:",
+      "partSize": "Size ({units}):", "partPixelUnits": "Pixel units", "partCirc": "Circularity:", "partShow": "Show:",
+      "showNothing": "Nothing", "showOverlay": "Overlay", "showOverlayMasks": "Overlay Masks", "showOutlines": "Outlines", "showBareOutlines": "Bare Outlines",
+      "showEllipses": "Ellipses", "showMasks": "Masks", "showCountMasks": "Count Masks",
+      "partDisplay": "Display results", "partExclude": "Exclude on edges", "partClear": "Clear results", "partHoles": "Include holes", "partSummarize": "Summarize",
+      "partOverlay": "Overlay", "partManager": "Add to Manager", "partComposite": "Composite ROIs", "partRecord": "Record starts",
+      "partNone": "No particles detected.",
+      "partNeedsThreshold": "A thresholded image or 8-bit binary image is required.",
+      "sortTitle": "Sort Table",
+      "resFind": "Find:", "resTitle": "Title:", "resColumn": "Column:",
+      "plotTable": "Select Table:", "plotX": "X:", "plotY": "Y:", "plotColor": "Color:", "plotLineWidth": "Line width:", "plotSymbol": "Symbol:", "plotLabel": "Label:",
+      "findTitle": "Command Finder", "findPlaceholder": "Search commands", "findNone": "No matching command.", "findCloseAfter": "Close window after running command",
+      "findRun": "Run", "findCloseButton": "Close", "findRunning": "Running command {name}", "repeatNone": "No command to repeat.",
+      "ioTitle": "I/O Options", "ioExt": "File extension for tables (.csv, .tsv or .txt):", "ioTableOptions": "Results Table Options",
+      "ioCopyHeaders": "Copy column headers", "ioCopyRowNumbers": "Copy row numbers", "ioSaveHeaders": "Save column headers", "ioSaveRowNumbers": "Save row numbers",
+      "plotsTitle": "Plot Defaults", "plotsFixed": "Fixed y-axis scale", "plotsYMin": "Minimum Y:", "plotsYMax": "Maximum Y:", "plotsVertical": "Vertical", "plotsInterpolate": "Interpolate"
+    } }
+  },
+  "fr": {
+    "cmd": { "procRepeatCommand": "Répéter la commande", "utilFindCommands": "Chercher une commande…", "optInputOutput": "Entrées/sorties…", "optPlots": "Graphiques…" },
+    "meas": { "invertY": "Inverser les coordonnées Y", "scientific": "Notation scientifique", "addToOverlay": "Ajouter à la surcouche", "nanEmpty": "NaN dans les cellules vides" },
+    "res": {
+      "menuFile": "Fichier", "menuEdit": "Édition", "menuResults": "Résultats",
+      "help": "Résultats d'Analyser › Mesurer et des autres commandes de mesure ; Fenêtre › Résultats la rouvre.",
+      "saveAs": "Enregistrer sous…", "rename": "Renommer…", "duplicate": "Dupliquer…", "cut": "Couper", "clearRows": "Effacer", "selectAll": "Tout sélectionner",
+      "find": "Chercher…", "findNext": "Chercher le suivant", "sort": "Trier…", "plot": "Tracer…", "options": "Options…",
+      "notFound": "« {text} » introuvable.", "rowNumber": "Numéro de ligne"
+    },
+    "hist": {
+      "title": "Histogramme de {name}", "statCount": "N: {v}", "statMean": "Moyenne : {v}", "statStdDev": "Écart type : {v}", "statMode": "Mode : {v}{n}",
+      "statMin": "Min : {v}", "statMax": "Max : {v}", "statBins": "Classes : {v}", "statBinWidth": "Largeur de classe : {v}", "log": "Log", "logLabel": "Échelle logarithmique"
+    },
+    "plot": {
+      "profileTitle": "Profil de {name}",
+      "rowAverage": "Profil vertical : la moyenne de chaque ligne du rectangle.",
+      "columnAverage": "Profil horizontal : la moyenne de chaque colonne du rectangle."
+    },
+    "dlg": { "ana": {
+      "decimals": "Décimales (0-9) :",
+      "histBins": "Classes :", "histUseRange": "Utiliser l'étendue des valeurs des pixels", "histOr": "ou utiliser :", "histXMin": "X min :", "histXMax": "X max :", "histYMax": "Y max :",
+      "partSize": "Taille ({units}) :", "partPixelUnits": "Unités en pixels", "partCirc": "Circularité :", "partShow": "Afficher :",
+      "showNothing": "Rien", "showOverlay": "Surcouche", "showOverlayMasks": "Masques en surcouche", "showOutlines": "Contours", "showBareOutlines": "Contours seuls",
+      "showEllipses": "Ellipses", "showMasks": "Masques", "showCountMasks": "Masques numérotés",
+      "partDisplay": "Afficher les résultats", "partExclude": "Exclure sur les bords", "partClear": "Effacer les résultats", "partHoles": "Inclure les trous", "partSummarize": "Résumer",
+      "partOverlay": "Surcouche", "partManager": "Ajouter au gestionnaire", "partComposite": "ROI composites", "partRecord": "Enregistrer les points de départ",
+      "partNone": "Aucune particule détectée.",
+      "partNeedsThreshold": "Une image seuillée ou une image binaire 8 bits est requise.",
+      "sortTitle": "Trier le tableau",
+      "resFind": "Chercher :", "resTitle": "Titre :", "resColumn": "Colonne :",
+      "plotTable": "Choisir le tableau :", "plotX": "X :", "plotY": "Y :", "plotColor": "Couleur :", "plotLineWidth": "Épaisseur du trait :", "plotSymbol": "Symbole :", "plotLabel": "Légende :",
+      "findTitle": "Recherche de commande", "findPlaceholder": "Chercher une commande", "findNone": "Aucune commande ne correspond.", "findCloseAfter": "Fermer la fenêtre après l'exécution",
+      "findRun": "Exécuter", "findCloseButton": "Fermer", "findRunning": "Exécution de la commande {name}", "repeatNone": "Aucune commande à répéter.",
+      "ioTitle": "Options d'entrée/sortie", "ioExt": "Extension des fichiers de tableaux (.csv, .tsv ou .txt) :", "ioTableOptions": "Options du tableau de résultats",
+      "ioCopyHeaders": "Copier les en-têtes de colonnes", "ioCopyRowNumbers": "Copier les numéros de ligne", "ioSaveHeaders": "Enregistrer les en-têtes de colonnes", "ioSaveRowNumbers": "Enregistrer les numéros de ligne",
+      "plotsTitle": "Réglages des graphiques", "plotsFixed": "Échelle fixe de l'axe Y", "plotsYMin": "Y minimum :", "plotsYMax": "Y maximum :", "plotsVertical": "Vertical", "plotsInterpolate": "Interpoler"
+    } }
+  },
+  "es": {
+    "cmd": { "procRepeatCommand": "Repetir comando", "utilFindCommands": "Buscar comandos…", "optInputOutput": "Entrada/salida…", "optPlots": "Gráficos…" },
+    "meas": { "invertY": "Invertir las coordenadas Y", "scientific": "Notación científica", "addToOverlay": "Añadir a la superposición", "nanEmpty": "NaN en celdas vacías" },
+    "res": {
+      "menuFile": "Archivo", "menuEdit": "Edición", "menuResults": "Resultados",
+      "help": "Resultados de Analizar › Medir y de los demás comandos de medida; Ventana › Resultados la vuelve a abrir.",
+      "saveAs": "Guardar como…", "rename": "Renombrar…", "duplicate": "Duplicar…", "cut": "Cortar", "clearRows": "Borrar", "selectAll": "Seleccionar todo",
+      "find": "Buscar…", "findNext": "Buscar siguiente", "sort": "Ordenar…", "plot": "Graficar…", "options": "Opciones…",
+      "notFound": "«{text}» no se encuentra.", "rowNumber": "Número de fila"
+    },
+    "hist": {
+      "title": "Histograma de {name}", "statCount": "N: {v}", "statMean": "Media: {v}", "statStdDev": "Desv. típica: {v}", "statMode": "Moda: {v}{n}",
+      "statMin": "Mín: {v}", "statMax": "Máx: {v}", "statBins": "Clases: {v}", "statBinWidth": "Ancho de clase: {v}", "log": "Log", "logLabel": "Escala logarítmica"
+    },
+    "plot": {
+      "profileTitle": "Perfil de {name}",
+      "rowAverage": "Perfil vertical: la media de cada fila del rectángulo.",
+      "columnAverage": "Perfil horizontal: la media de cada columna del rectángulo."
+    },
+    "dlg": { "ana": {
+      "decimals": "Decimales (0-9):",
+      "histBins": "Clases:", "histUseRange": "Usar el rango de valores de los píxeles", "histOr": "o usar:", "histXMin": "X mín:", "histXMax": "X máx:", "histYMax": "Y máx:",
+      "partSize": "Tamaño ({units}):", "partPixelUnits": "Unidades en píxeles", "partCirc": "Circularidad:", "partShow": "Mostrar:",
+      "showNothing": "Nada", "showOverlay": "Superposición", "showOverlayMasks": "Máscaras en superposición", "showOutlines": "Contornos", "showBareOutlines": "Solo contornos",
+      "showEllipses": "Elipses", "showMasks": "Máscaras", "showCountMasks": "Máscaras numeradas",
+      "partDisplay": "Mostrar resultados", "partExclude": "Excluir en los bordes", "partClear": "Borrar resultados", "partHoles": "Incluir huecos", "partSummarize": "Resumir",
+      "partOverlay": "Superposición", "partManager": "Añadir al gestor", "partComposite": "ROI compuestas", "partRecord": "Registrar los puntos de inicio",
+      "partNone": "No se detectó ninguna partícula.",
+      "partNeedsThreshold": "Se necesita una imagen con umbral o una imagen binaria de 8 bits.",
+      "sortTitle": "Ordenar tabla",
+      "resFind": "Buscar:", "resTitle": "Título:", "resColumn": "Columna:",
+      "plotTable": "Elegir la tabla:", "plotX": "X:", "plotY": "Y:", "plotColor": "Color:", "plotLineWidth": "Grosor de línea:", "plotSymbol": "Símbolo:", "plotLabel": "Etiqueta:",
+      "findTitle": "Buscador de comandos", "findPlaceholder": "Buscar comandos", "findNone": "Ningún comando coincide.", "findCloseAfter": "Cerrar la ventana tras ejecutar el comando",
+      "findRun": "Ejecutar", "findCloseButton": "Cerrar", "findRunning": "Ejecutando el comando {name}", "repeatNone": "No hay ningún comando que repetir.",
+      "ioTitle": "Opciones de entrada/salida", "ioExt": "Extensión de los archivos de tablas (.csv, .tsv o .txt):", "ioTableOptions": "Opciones de la tabla de resultados",
+      "ioCopyHeaders": "Copiar los encabezados de columna", "ioCopyRowNumbers": "Copiar los números de fila", "ioSaveHeaders": "Guardar los encabezados de columna", "ioSaveRowNumbers": "Guardar los números de fila",
+      "plotsTitle": "Valores de los gráficos", "plotsFixed": "Escala fija del eje Y", "plotsYMin": "Y mínimo:", "plotsYMax": "Y máximo:", "plotsVertical": "Vertical", "plotsInterpolate": "Interpolar"
+    } }
+  },
+  "nl": {
+    "cmd": { "procRepeatCommand": "Opdracht herhalen", "utilFindCommands": "Opdrachten zoeken…", "optInputOutput": "Invoer/uitvoer…", "optPlots": "Grafieken…" },
+    "meas": { "invertY": "Y-coördinaten omkeren", "scientific": "Wetenschappelijke notatie", "addToOverlay": "Aan overlay toevoegen", "nanEmpty": "NaN in lege cellen" },
+    "res": {
+      "menuFile": "Bestand", "menuEdit": "Bewerken", "menuResults": "Resultaten",
+      "help": "Resultaten van Analyseren › Meten en de andere meetopdrachten; Venster › Resultaten opent ze opnieuw.",
+      "saveAs": "Opslaan als…", "rename": "Hernoemen…", "duplicate": "Dupliceren…", "cut": "Knippen", "clearRows": "Wissen", "selectAll": "Alles selecteren",
+      "find": "Zoeken…", "findNext": "Volgende zoeken", "sort": "Sorteren…", "plot": "Plotten…", "options": "Opties…",
+      "notFound": "\"{text}\" niet gevonden.", "rowNumber": "Rijnummer"
+    },
+    "hist": {
+      "title": "Histogram van {name}", "statCount": "N: {v}", "statMean": "Gemiddelde: {v}", "statStdDev": "Standaardafwijking: {v}", "statMode": "Modus: {v}{n}",
+      "statMin": "Min: {v}", "statMax": "Max: {v}", "statBins": "Klassen: {v}", "statBinWidth": "Klassebreedte: {v}", "log": "Log", "logLabel": "Logaritmische schaal"
+    },
+    "plot": {
+      "profileTitle": "Profiel van {name}",
+      "rowAverage": "Verticaal profiel: het gemiddelde van elke rij van de rechthoek.",
+      "columnAverage": "Horizontaal profiel: het gemiddelde van elke kolom van de rechthoek."
+    },
+    "dlg": { "ana": {
+      "decimals": "Decimalen (0-9):",
+      "histBins": "Klassen:", "histUseRange": "Bereik van de pixelwaarden gebruiken", "histOr": "of gebruik:", "histXMin": "X min:", "histXMax": "X max:", "histYMax": "Y max:",
+      "partSize": "Grootte ({units}):", "partPixelUnits": "Pixeleenheden", "partCirc": "Circulariteit:", "partShow": "Tonen:",
+      "showNothing": "Niets", "showOverlay": "Overlay", "showOverlayMasks": "Overlay-maskers", "showOutlines": "Contouren", "showBareOutlines": "Alleen contouren",
+      "showEllipses": "Ellipsen", "showMasks": "Maskers", "showCountMasks": "Genummerde maskers",
+      "partDisplay": "Resultaten tonen", "partExclude": "Aan de randen uitsluiten", "partClear": "Resultaten wissen", "partHoles": "Gaten opnemen", "partSummarize": "Samenvatten",
+      "partOverlay": "Overlay", "partManager": "Aan beheer toevoegen", "partComposite": "Samengestelde ROI's", "partRecord": "Startpunten vastleggen",
+      "partNone": "Geen deeltjes gevonden.",
+      "partNeedsThreshold": "Een afbeelding met drempelwaarde of een binaire 8-bit afbeelding is vereist.",
+      "sortTitle": "Tabel sorteren",
+      "resFind": "Zoeken:", "resTitle": "Titel:", "resColumn": "Kolom:",
+      "plotTable": "Tabel kiezen:", "plotX": "X:", "plotY": "Y:", "plotColor": "Kleur:", "plotLineWidth": "Lijndikte:", "plotSymbol": "Symbool:", "plotLabel": "Label:",
+      "findTitle": "Opdrachten zoeken", "findPlaceholder": "Opdrachten zoeken", "findNone": "Geen opdracht komt overeen.", "findCloseAfter": "Venster sluiten na het uitvoeren van de opdracht",
+      "findRun": "Uitvoeren", "findCloseButton": "Sluiten", "findRunning": "Opdracht {name} wordt uitgevoerd", "repeatNone": "Geen opdracht om te herhalen.",
+      "ioTitle": "Invoer-/uitvoeropties", "ioExt": "Bestandsextensie voor tabellen (.csv, .tsv of .txt):", "ioTableOptions": "Opties van de resultatentabel",
+      "ioCopyHeaders": "Kolomkoppen kopiëren", "ioCopyRowNumbers": "Rijnummers kopiëren", "ioSaveHeaders": "Kolomkoppen opslaan", "ioSaveRowNumbers": "Rijnummers opslaan",
+      "plotsTitle": "Standaardwaarden voor grafieken", "plotsFixed": "Vaste schaal van de y-as", "plotsYMin": "Minimale Y:", "plotsYMax": "Maximale Y:", "plotsVertical": "Verticaal", "plotsInterpolate": "Interpoleren"
+    } }
+  }
+}

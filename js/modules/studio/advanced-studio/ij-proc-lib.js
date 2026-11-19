@@ -684,6 +684,445 @@
     return { create, reference, estimateBytes };
   })();
 
+  // ==================================================================================== IJLibSource
+  /* The pure rules of "Open from Library" shared by the page (panel, entry flow) and the worker (commands below):
+   * what a TIFF offers next to a dataset, which TIFF planes cover which slices, names, keys. No I/O. */
+  const IJLibSource = (() => {
+    /* ZProjector.METHODS = {"Average Intensity", "Max Intensity", "Min Intensity", "Sum Slices", "Standard Deviation",
+     * "Median"} (IJ/plugin/ZProjector.java:24), and makeTitle() (:606-615): "AVG_" unless SUM_ MAX_ MIN_ STD_ MED_. */
+    const METHODS = ['avg', 'max', 'min', 'sum', 'sd', 'median'];
+    const PREFIX = { avg: 'AVG_', max: 'MAX_', min: 'MIN_', sum: 'SUM_', sd: 'STD_', median: 'MED_' };
+    /* CompositeImage.colors (IJ/CompositeImage.java:15): red, green, blue, white, cyan, magenta, yellow, white */
+    const IMAGEJ_COLORS = ['#ff0000', '#00ff00', '#0000ff', '#ffffff', '#00ffff', '#ff00ff', '#ffff00', '#ffffff'];
+    const EPS = 1e-9;
+
+    const projectionTitle = (method, name) => (PREFIX[method] || PREFIX.avg) + String(name);
+
+    /* The free text tools/build_download_bundles.py:tiff_info writes (Fiji's Image > Show Info):
+     *   "Source: Imaris .ims ResolutionLevel {level}, native {dtype}" + ", timepoint {t} of 0..{N-1}" (one frame of a timelapse)
+     *   "Voxel size (um): X={x} Y={y} Z={z}" */
+    function tiffLevelOf(info) {
+      const m = /ResolutionLevel\s+(\d+)/.exec(String(info || ''));
+      return m ? Number(m[1]) : null;
+    }
+    /* The frame a timelapse bundle TIFF holds, from the info block the pipeline writes (tools/build_download_bundles.py:364-376, tiff_info):
+     *   f"Source: Imaris .ims ResolutionLevel {level}, native {dtype}"
+     *   + (f", timepoint {frame[0]} of 0..{frame[1] - 1}" if frame else "")
+     * so "timepoint 1 of 0..2" is frame 1 of 3. */
+    function tiffFrameOf(info) {
+      const m = /timepoint\s+(\d+)\s+of\s+0\.\.(\d+)/.exec(String(info || ''));
+      return m ? { frame: Number(m[1]), count: Number(m[2]) + 1 } : null;
+    }
+    function tiffVoxelOf(info) {
+      const m = /Voxel size \(um\):\s*X=(\S+)\s+Y=(\S+)\s+Z=(\S+)/.exec(String(info || ''));
+      if (!m) return null;
+      const v = { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+      return v.x > 0 && v.y > 0 && v.z > 0 ? v : null;
+    }
+
+    /* The plan of a TIFF for a dataset of type 2d: its pages are channels (one page per channel in the ImageJ composites the
+     * pipeline writes; a plain multi-page TIFF without ImageJ metadata too). A chunky RGB page is already 3 channels. */
+    function planFor(index, asChannels) {
+      const p = IJTiffStream.plan(index);
+      if (asChannels && p.spp === 1 && p.channels === 1 && p.slices > 1) return Object.assign({}, p, { channels: p.slices, slices: 1 });
+      return p;
+    }
+
+    /* Which TIFF planes cover the dataset's level-0 slices [first, last] (inclusive). Dataset plane i covers [i·vz0, (i+1)·vz0) µm,
+     * TIFF plane j covers [j·vzT, (j+1)·vzT): a range → jlo = floor(first·vz0/vzT), jhi = ceil((last+1)·vz0/vzT) − 1; one plane →
+     * the TIFF plane holding its centre (i + ½)·vz0. Clamped to the stack. */
+    function tiffZRange(o) {
+      const n = Math.max(1, o.slices | 0);
+      const clamp = (v) => Math.max(0, Math.min(n - 1, v));
+      const ratio = o.vz0 / o.vzT;
+      if (!(ratio > 0) || !Number.isFinite(ratio)) return { jlo: 0, jhi: n - 1, single: false };
+      if (o.first === o.last) {
+        const j = clamp(Math.floor((o.first + 0.5) * ratio + EPS));
+        return { jlo: j, jhi: j, single: true };
+      }
+      const jlo = clamp(Math.floor(o.first * ratio + EPS));
+      const jhi = Math.max(jlo, clamp(Math.ceil((o.last + 1) * ratio - EPS) - 1));
+      return { jlo, jhi, single: false };
+    }
+
+    /* tiffZRange for a TIFF judged by tiffFacts: `nz` = the dataset's level-0 slices (what `first` / `last` index). A dataset with no
+     * physical z (or none to map to) is taken stack-to-stack: the TIFF's planes are the dataset's, resampled proportionally. */
+    function tiffRangeOf(facts, nz, first, last) {
+      const n = Math.max(1, nz | 0);
+      const mapped = facts.vz0 > 0 && facts.vzT > 0;
+      return tiffZRange({ first, last, vz0: mapped ? facts.vz0 : 1, vzT: mapped ? facts.vzT : n / facts.slices, slices: facts.slices });
+    }
+
+    function channelNames(plan, n) {
+      const out = [];
+      const labels = plan.labels || [];
+      // ImageJ's slice labels name the channels — unless they are one string for all of them (the Leica composites label every page with
+      // the acquisition's name) or too long to be a name: then C1, C2…
+      const clean = labels.slice(0, n).map((l) => (typeof l === 'string' ? l.replace(/^c:\d+\/\d+\s*-\s*/i, '').trim() : ''));      // Bio-Formats' "c:1/3 - <name>"
+      const usable = clean.length === n && new Set(clean).size === n && clean.every((l) => l && l.length <= 40);
+      for (let i = 0; i < n; i++) {
+        if (usable) out.push(clean[i]);
+        else if (plan.spp === 3 && n === 3) out.push(['R', 'G', 'B'][i]);
+        else out.push('C' + (i + 1));
+      }
+      return out;
+    }
+    function channelColors(plan, n) {
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const c = (plan.colors || [])[i];
+        if (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) out.push(c.toLowerCase());
+        else if (plan.spp === 3 && n === 3) out.push(IMAGEJ_COLORS[i]);
+        else out.push(n === 1 ? '#ffffff' : IMAGEJ_COLORS[i % IMAGEJ_COLORS.length]);
+      }
+      return out;
+    }
+
+    /* What a TIFF is worth to a dataset, or why it is not offered:
+     *   o = { physicalUm: {x, y, z, calibrated?} | null, dims: {x, y, z} (level 0) | null, live: bool, timepoint: n | null, asChannels: bool }
+     *   → { ok: false, reason: 'unsupported' | 'extent' | 'frame', code?, detail? }
+     *   | { ok: true, plan, level, width, height, slices, channels, bitDepth, pixelUm: {x, y} | null, calibrated, frame, vz0, vzT, names,
+     *       colors, coarser: bool (fewer pixels than the dataset's level 0) } */
+    function tiffFacts(index, o) {
+      const opt = o || {};
+      let plan;
+      try { plan = planFor(index, !!opt.asChannels); } catch (err) {
+        return { ok: false, reason: 'unsupported', code: (err && err.code) || null, detail: (err && err.detail) || null };
+      }
+      const info = (index.imagej && index.imagej.info) || '';
+      const vox = tiffVoxelOf(info);
+      const phys = opt.physicalUm && opt.physicalUm.x > 0 && opt.physicalUm.y > 0 ? opt.physicalUm : null;
+      const physCal = !!phys && phys.calibrated !== false;
+      let known = true;
+      let px = plan.pixelUm ? plan.pixelUm.x : (vox ? vox.x : null);
+      let py = plan.pixelUm ? plan.pixelUm.y : (vox ? vox.y : null);
+      if (px === null && phys) { px = phys.x / plan.width; py = phys.y / plan.height; known = false; }
+      // the TIFF must cover the dataset's field: its width in µm within one TIFF pixel of the volume's
+      if (known && px !== null && physCal && !(Math.abs(plan.width * px - phys.x) <= px && Math.abs(plan.height * py - phys.y) <= py)) {
+        return { ok: false, reason: 'extent' };
+      }
+      // the frame: a timelapse's bundle TIFF holds ONE frame, named in its info block; a TIFF with several frames is indexed by t
+      let frame = 0;
+      if (opt.live) {
+        const tp = opt.timepoint === null || opt.timepoint === undefined ? 0 : opt.timepoint;
+        if (plan.frames > 1) { if (!(tp >= 0 && tp < plan.frames)) return { ok: false, reason: 'frame' }; frame = tp; }
+        else {
+          const f = tiffFrameOf(info);
+          if (!f || f.frame !== tp) return { ok: false, reason: 'frame' };
+        }
+      }
+      let vz0 = null, vzT = null;
+      if (phys && opt.dims && opt.dims.z > 0 && phys.z > 0) {
+        vz0 = phys.z / opt.dims.z;
+        vzT = plan.spacingUm || (vox && vox.z) || phys.z / plan.slices;
+      }
+      const channels = plan.spp > 1 ? plan.spp : plan.channels;
+      return {
+        ok: true, plan, level: tiffLevelOf(info), width: plan.width, height: plan.height, slices: plan.slices, channels, bitDepth: plan.bitDepth,
+        pixelUm: px === null ? null : { x: px, y: py }, calibrated: px !== null, frame, vz0, vzT,
+        names: channelNames(plan, channels), colors: channelColors(plan, channels),
+        coarser: !!(opt.dims && plan.width * plan.height < opt.dims.x * opt.dims.y * 0.99)
+      };
+    }
+
+    /* The pages a read takes: for z in [z0, z1] and the wanted channels (a chunky page counts once). */
+    function pagesFor(plan, z0, z1, frame, chans) {
+      const out = [];
+      for (let z = z0; z <= z1; z++) {
+        if (plan.chunky) out.push(IJTiffStream.pageOf(plan, { z, c: 0, t: frame }));
+        else for (const c of chans) out.push(IJTiffStream.pageOf(plan, { z, c, t: frame }));
+      }
+      return out;
+    }
+    /* Compressed bytes the read downloads (from the strip tables): what the panel shows next to the TIFF. */
+    function readBytes(plan, z0, z1, frame, chans) {
+      let total = 0;
+      for (const page of pagesFor(plan, z0, z1, frame, chans)) {
+        const s = plan.stripsOf(page);
+        for (let i = 0; i < s.counts.length; i++) total += s.counts[i];
+      }
+      return total;
+    }
+
+    /* The session key of a library document (PLAN-wave3 §4): lib|<datasetId>|<treeKey>|<tp>|<z:first-last | obl:…>|<level>|<method>|<input>|<stamp> */
+    function sessionKey(o) {
+      const where = o.mode === 'oblique'
+        ? 'obl:' + [o.spec.yaw, o.spec.pitch, o.spec.roll, o.spec.depth, o.spec.thickness, o.spec.projection].join(',')
+        : 'z:' + o.first + '-' + o.last;
+      return ['lib', o.datasetId, o.treeKey || '', o.timepoint === null || o.timepoint === undefined ? '' : o.timepoint, where,
+        o.level === null || o.level === undefined ? '' : o.level, o.method || '', o.input, o.stamp].join('|');
+    }
+    /* A stored session of the figure: which source made it. The figure key of the TIFF source is fkey|tiff|…, the processed one
+     * fkey|<level>|… (enter() matches both by the fkey| prefix). */
+    function sourceOfKey(key, fkey) {
+      const rest = String(key).slice(String(fkey).length + 1).split('|')[0];
+      return rest === 'tiff' ? 'tiff' : 'processed';
+    }
+
+    return { METHODS, PREFIX, IMAGEJ_COLORS, projectionTitle, tiffLevelOf, tiffFrameOf, tiffVoxelOf, planFor, tiffZRange, tiffRangeOf, tiffFacts, pagesFor, readBytes, sessionKey, sourceOfKey };
+  })();
+
+  // ============================================================================ worker commands (pkg lib)
+  /* The three families of worker commands of "Open from Library", registered with IJOpRegistry.defineCommand: the page reaches them
+   * with api.call (or `call` for the entry flow), the documents they build are taken in with api.adopt.
+   *   doc.tiff.project   one projection of an original TIFF, read page by page with Range requests (IJTiffStream) — long
+   *   doc.zproj.*        the same projection of a processed volume, the page feeding the blocks IJProject takes
+   *   doc.oblique.*      an oblique plane accumulated brick by brick (IJOblique)
+   * Nothing is written into a document; a handler's arrays live in its own buffers until E.createDoc. */
+  (function registerCommands() {
+    const R = root.IJOpRegistry;
+    if (!R || typeof R.defineCommand !== 'function') return;
+    const define = (name, spec) => R.defineCommand(name, Object.assign({ pkg: 'lib' }, spec));
+    const MAX_LIVE = 3;                           // accumulators alive at once; a new begin drops the oldest
+    const FETCH_MAX = 64 * MIB;
+    let tokenSeq = 0;
+    const live = new Map();                       // token → { kind, … }
+
+    const bad = (E, what) => E.ijError('IJ_BAD_ARGS', 'lib: ' + what);
+    const isInt = (v) => Number.isInteger(v);
+    const hexColor = (c) => (typeof c === 'string' && /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(c) ? c : undefined);
+    const cleanName = (s, fallback) => (typeof s === 'string' && s.length && s.length <= 255 ? s : fallback);
+
+    function newToken(kind, rec) {
+      while (live.size >= MAX_LIVE) live.delete(live.keys().next().value);
+      const token = 'lib' + kind + (++tokenSeq);
+      live.set(token, Object.assign({ kind }, rec));
+      return token;
+    }
+    function tokenOf(E, token, kind) {
+      const rec = live.get(token);
+      if (!rec || rec.kind !== kind) throw E.ijError('IJ_LIB_NO_TOKEN', 'the image under construction is gone');
+      return rec;
+    }
+    function calibrationOf(E, c) {
+      if (c === undefined || c === null) return { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' };
+      if (typeof c !== 'object' || !(c.pixelWidth > 0) || !(c.pixelHeight > 0) || !Number.isFinite(c.pixelWidth) || !Number.isFinite(c.pixelHeight)) throw bad(E, 'calibration');
+      return { pixelWidth: c.pixelWidth, pixelHeight: c.pixelHeight, unit: typeof c.unit === 'string' ? c.unit.slice(0, 64) : 'pixel' };
+    }
+    const plain = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : {});
+    const checkMethod = (E, m) => { if (IJLibSource.METHODS.indexOf(m) < 0) throw bad(E, 'method'); return m; };
+    const keyOfArgs = (a) => (typeof a.sessionKey === 'string' && a.sessionKey ? a.sessionKey : undefined);
+
+    // ---------------------------------------------------------------------------------------- doc.tiff.project
+    /* Reads pages z0..z1 of the TIFF (channels `channels[].c`) into IJProject, band by band (a band = whole strips of every page of the
+     * range: the peak the accumulator needs), several pages per request. The projection's input bit depth is the TIFF's: a 16-bit TIFF
+     * keeps 16 bits for Max / Min / Average; Median, Sum and SD are 32-bit float (IJProject.outputBitDepth, ZProjector.java:
+     * the median of a 16-bit stack is a float image). Progress: the event `libTiffProgress { fraction }` (whole percents) for the panel. args: { url (absolute), index (the
+     * api/tiff-index answer), z0, z1, frame, channels: [{ c, name, color }], method, name, calibration, provenance, sessionKey, asChannels } */
+    define('doc.tiff.project', { long: true, async handler(a, E) {
+      const IJProject = root.IJProject;
+      if (!a || typeof a !== 'object') throw bad(E, 'args');
+      if (typeof a.url !== 'string' || !/^[a-z][a-z0-9+.-]*:\/\/[^/]/i.test(a.url)) throw bad(E, 'url');
+      const plan = IJLibSource.planFor(a.index, !!a.asChannels);       // IJ_LIB_TIFF_UNSUPPORTED before one byte is requested
+      const method = checkMethod(E, a.method);
+      const z0 = a.z0, z1 = a.z1, frame = a.frame === undefined ? 0 : a.frame;
+      if (!isInt(z0) || !isInt(z1) || z0 < 0 || z1 < z0 || z1 >= plan.slices) throw bad(E, 'z range');
+      if (!isInt(frame) || frame < 0 || frame >= plan.frames) throw bad(E, 'frame');
+      const nCh = plan.spp > 1 ? plan.spp : plan.channels;
+      if (!Array.isArray(a.channels) || !a.channels.length || a.channels.length > 64) throw bad(E, 'channels');
+      const chans = a.channels.map((c) => {
+        if (!c || !isInt(c.c) || c.c < 0 || c.c >= nCh) throw bad(E, 'channel');
+        return { c: c.c, name: cleanName(c.name, 'C' + (c.c + 1)), color: hexColor(c.color) };
+      });
+      const calibration = calibrationOf(E, a.calibration);
+      const C = chans.length, depth = z1 - z0 + 1, bps = plan.bitDepth / 8;
+      const fetchBytes = Math.min(FETCH_MAX, Math.max(4 * MIB, Math.floor((E.budgetBytes || 0) / 8)));
+      let perBand = plan.stripsPerPage, bandRows = plan.height;
+      for (;;) {
+        bandRows = Math.min(plan.height, perBand * plan.rowsPerStrip);
+        const need = IJProject.estimateBytes({ method, width: plan.width, height: plan.height, depth, channels: C, bandRows, inputBitDepth: plan.bitDepth })
+          + 2 * bandRows * plan.width * bps * (plan.spp + 1) + fetchBytes;
+        try { E.reserve(need); break; } catch (err) {
+          if (err && err.code === 'IJ_OVER_BUDGET' && perBand > 1) { perBand = Math.ceil(perBand / 2); continue; }
+          throw err;
+        }
+      }
+      const projector = IJProject.create({ method, width: plan.width, height: plan.height, depth, channels: C, inputBitDepth: plan.bitDepth });
+      // Cancel: the page's request is a task the engine flags; the fetches in flight are aborted from here.
+      const ac = typeof AbortController === 'function' ? new AbortController() : { signal: undefined, abort() {} };
+      let cancelled = false;
+      const watch = setInterval(() => { try { E.check(); } catch (err) { cancelled = true; ac.abort(); } }, 100);
+      let requests = 0, lastPct = -1;
+      try {
+        for (let s0 = 0; s0 < plan.stripsPerPage; s0 += perBand) {
+          const s1 = Math.min(plan.stripsPerPage, s0 + perBand);
+          const y0 = s0 * plan.rowsPerStrip, rows = Math.min(plan.height, s1 * plan.rowsPerStrip) - y0;
+          const whole = s0 === 0 && s1 === plan.stripsPerPage;
+          const keyOf = (page) => (whole ? page : page + ':' + s0);
+          const targets = new Map(), entries = [];
+          const want = (page, t) => {
+            const k = keyOf(page);
+            if (!targets.has(k)) { targets.set(k, []); entries.push(whole ? page : { page, s0, s1 }); }
+            targets.get(k).push(t);
+          };
+          for (let z = z0; z <= z1; z++) {
+            if (plan.chunky) { const page = IJTiffStream.pageOf(plan, { z, c: 0, t: frame }); chans.forEach((ch, k) => want(page, { z, ci: k, plane: ch.c })); }
+            else chans.forEach((ch, k) => want(IJTiffStream.pageOf(plan, { z, c: ch.c, t: frame }), { z, ci: k, plane: 0 }));
+          }
+          const got = await IJTiffStream.readPages(a.url, plan, entries, {
+            concurrency: 2, signal: ac.signal, fetchImpl: (...args) => E.fetch(...args), maxBytes: Math.floor(fetchBytes / 2),
+            onPage: async (entry, bytes) => {
+              const list = targets.get(keyOf(entry.page));
+              const planes = await IJTiffStream.decodePage(plan, entry, bytes, { signal: ac.signal });
+              for (const t of list) projector.addBlock({ channel: t.ci, y0, rows, z0: t.z - z0, depth: 1, data: planes[t.plane] });
+              const frac = projector.progress();
+              await E.tick(frac, 'op.libTiff');
+              const pct = Math.floor(100 * frac);
+              if (pct > lastPct) { lastPct = pct; E.postEvent({ event: 'libTiffProgress', fraction: frac }); }
+            }
+          });
+          requests += got.requests;
+        }
+        E.check();
+      } catch (err) {
+        if (cancelled || (err && err.name === 'AbortError')) throw E.ijError('IJ_CANCELLED', 'cancelled');
+        throw err;
+      } finally { clearInterval(watch); }
+      const outs = projector.finish();
+      // The stored display range of the acquisition. ZProjector resets a single-channel projection to its own data range (ZProjector.java:363,
+      // :367, :579, :679) and, for a multichannel image, copies the LUTs / ranges (copyLuts(imp), :446-450) and resets only Sum and SD; so the
+      // ranges are carried when C > 1 and the method is neither, whatever the output depth (a 16-bit Median is a float image on the input's
+      // scale). A single plane is no projection: it keeps what the file says.
+      const keepRanges = depth === 1 || (nCh > 1 && method !== 'sum' && method !== 'sd');
+      const channels = outs.map((o, k) => {
+        const ch = { data: o.data, name: chans[k].name, color: chans[k].color };
+        const lo = plan.ranges[chans[k].c * 2], hi = plan.ranges[chans[k].c * 2 + 1];
+        if (keepRanges && Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
+          ch.display = { min: lo, max: hi, lut: root.IJLuts ? root.IJLuts.forColor(chans[k].color || '#ffffff') : null, invert: false };
+        }
+        return ch;
+      });
+      const info = E.createDoc({ name: cleanName(a.name, 'TIFF'), width: plan.width, height: plan.height, bitDepth: outs[0].bitDepth, calibration, channels },
+        { provenance: plain(a.provenance), sessionKey: keyOfArgs(a) });
+      return { info, bitDepth: outs[0].bitDepth, requests };
+    } });
+
+    // ---------------------------------------------------------------------------------------- doc.photo.create
+    /* A photograph decoded on the page (RGBA bytes, transferred) → one grey channel when R = G = B everywhere, else R, G, B channels (8-bit).
+     * The per-pixel work lives here so the page's main thread stays free. args: { name, width, height, rgba, calibration, provenance, sessionKey } */
+    define('doc.photo.create', { async handler(a, E) {
+      if (!a || typeof a !== 'object') throw bad(E, 'args');
+      if (!isInt(a.width) || !isInt(a.height) || a.width < 1 || a.height < 1) throw bad(E, 'size');
+      const n = a.width * a.height;
+      if (!a.rgba || !ArrayBuffer.isView(a.rgba) || a.rgba.BYTES_PER_ELEMENT !== 1 || a.rgba.length !== 4 * n) throw bad(E, 'rgba');
+      const calibration = calibrationOf(E, a.calibration);
+      E.reserve(3 * n);
+      const rgba = a.rgba;
+      const r = new Uint8Array(n), g = new Uint8Array(n), b = new Uint8Array(n);
+      let grey = true;
+      for (let i = 0, k = 0; i < n; i++, k += 4) {
+        r[i] = rgba[k]; g[i] = rgba[k + 1]; b[i] = rgba[k + 2];
+        if (grey && (r[i] !== g[i] || r[i] !== b[i])) grey = false;
+        if ((i & 0xFFFFF) === 0xFFFFF) E.check();
+      }
+      const channels = grey ? [{ data: r, name: 'Gray', color: '#ffffff' }]
+        : [{ data: r, name: 'R', color: IJLibSource.IMAGEJ_COLORS[0] }, { data: g, name: 'G', color: IJLibSource.IMAGEJ_COLORS[1] }, { data: b, name: 'B', color: IJLibSource.IMAGEJ_COLORS[2] }];
+      const info = E.createDoc({ name: cleanName(a.name, 'photograph'), width: a.width, height: a.height, bitDepth: 8, calibration, channels },
+        { provenance: plain(a.provenance), sessionKey: keyOfArgs(a) });
+      return { info };
+    } });
+
+    // ---------------------------------------------------------------------------------------- doc.zproj.*
+    /* begin { method, width, height, depth, channels: [{ name, color }], name, calibration, provenance, sessionKey, bandRows } → { token,
+     * outputBitDepth, bandRows }; add { token, y0, rows, z0, depth, data: [Uint8Array per channel] } → { fraction };
+     * finish { token } → { info }; abort { token }. The page streams the blocks of a library session (8-bit, processed volume). */
+    define('doc.zproj.begin', { async handler(a, E) {
+      const IJProject = root.IJProject;
+      if (!a || typeof a !== 'object') throw bad(E, 'args');
+      const method = checkMethod(E, a.method);
+      for (const k of ['width', 'height', 'depth']) if (!isInt(a[k]) || a[k] < 1) throw bad(E, k);
+      if (!Array.isArray(a.channels) || !a.channels.length || a.channels.length > 64) throw bad(E, 'channels');
+      const calibration = calibrationOf(E, a.calibration);
+      let rows = isInt(a.bandRows) && a.bandRows > 0 ? Math.min(a.bandRows, a.height) : Math.min(64, a.height);
+      for (;;) {
+        const need = IJProject.estimateBytes({ method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length, bandRows: rows, inputBitDepth: 8 });
+        try { E.reserve(need); break; } catch (err) {
+          if (err && err.code === 'IJ_OVER_BUDGET' && rows > 8) { rows = Math.max(8, rows >> 1); continue; }
+          throw err;
+        }
+      }
+      // ZProjector's own output depth for an 8-bit stack (Average 8, Sum 32, Median 8): the same image as the TIFF route gives for an 8-bit TIFF
+      const projector = IJProject.create({ method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length, inputBitDepth: 8 });
+      const token = newToken('z', { projector, a: { name: cleanName(a.name, 'projection'), width: a.width, height: a.height, calibration,
+        channels: a.channels.map((c, i) => ({ name: cleanName(c && c.name, 'C' + (i + 1)), color: hexColor(c && c.color) })),
+        provenance: plain(a.provenance), sessionKey: keyOfArgs(a) } });
+      return { token, outputBitDepth: projector.outputBitDepth, bandRows: rows };
+    } });
+    define('doc.zproj.add', { long: true, async handler(a, E) {
+      E.check();
+      const rec = tokenOf(E, a && a.token, 'z');
+      if (!Array.isArray(a.data) || a.data.length !== rec.a.channels.length) throw bad(E, 'data');
+      a.data.forEach((data, channel) => rec.projector.addBlock({ channel, y0: a.y0, rows: a.rows, z0: a.z0, depth: a.depth, data }));
+      return { fraction: rec.projector.progress() };
+    } });
+    define('doc.zproj.finish', { async handler(a, E) {
+      const rec = tokenOf(E, a && a.token, 'z');
+      const outs = rec.projector.finish();
+      live.delete(a.token);
+      const m = rec.a;
+      const info = E.createDoc({ name: m.name, width: m.width, height: m.height, bitDepth: outs[0].bitDepth, calibration: m.calibration,
+        channels: outs.map((o, k) => ({ data: o.data, name: m.channels[k].name, color: m.channels[k].color })) }, { provenance: m.provenance, sessionKey: m.sessionKey });
+      return { info };
+    } });
+    define('doc.zproj.abort', { async handler(a) { return { dropped: live.delete(a && a.token) }; } });
+
+    // ---------------------------------------------------------------------------------------- doc.oblique.*
+    /* begin { G, channels: [{ index, name, color }], name, calibration, provenance, sessionKey } → { token } (the handler checks what the
+     * accumulators need fits; no document yet); add { token, channel, box, data } → { ok } (one brick of one library channel, transferred),
+     * or add { token, channel, done: true, failed: [boxes] } → the channel is finished (its accumulator freed, the output pixels with a
+     * sample in a failed box noted); finish { token } → { info, missing } (pixels with a sample in a failed box); abort { token }. */
+    define('doc.oblique.begin', { async handler(a, E) {
+      if (!a || typeof a !== 'object' || !a.G) throw bad(E, 'args');
+      if (!Array.isArray(a.channels) || !a.channels.length || a.channels.length > 64) throw bad(E, 'channels');
+      const calibration = calibrationOf(E, a.calibration);
+      let need;
+      try { need = IJOblique.estimateBytes(a.G, { channels: a.channels.length }); } catch (err) { throw bad(E, 'geometry'); }
+      E.reserve(need);
+      const channels = a.channels.map((c, i) => {
+        if (!c || !isInt(c.index) || c.index < 0) throw bad(E, 'channel');
+        return { index: c.index, name: cleanName(c.name, 'C' + (i + 1)), color: hexColor(c.color), acc: null, out: null };
+      });
+      const token = newToken('o', { G: a.G, N: a.G.width * a.G.height, channels, mask: null,
+        a: { name: cleanName(a.name, 'oblique'), calibration, provenance: plain(a.provenance), sessionKey: keyOfArgs(a) } });
+      return { token };
+    } });
+    const finishChannel = (rec, ch, failed) => {
+      if (ch.out) return;
+      if (!ch.acc) ch.acc = IJOblique.create(rec.G, { channel: ch.index, outBitDepth: 8 });
+      if (failed && failed.length) {
+        const m = ch.acc.missing(failed);
+        if (!rec.mask) rec.mask = new Uint8Array(rec.N);
+        for (let i = 0; i < rec.N; i++) if (m.mask[i]) rec.mask[i] = 1;
+      }
+      ch.out = ch.acc.finish();
+      ch.acc = null;
+    };
+    define('doc.oblique.add', { long: true, async handler(a, E) {
+      E.check();
+      const rec = tokenOf(E, a && a.token, 'o');
+      const ch = rec.channels.find((c) => c.index === a.channel);
+      if (!ch) throw bad(E, 'channel');
+      if (ch.out) throw bad(E, 'channel already finished');
+      if (a.done === true) { finishChannel(rec, ch, Array.isArray(a.failed) ? a.failed : []); return { ok: true, done: true }; }
+      if (!ch.acc) ch.acc = IJOblique.create(rec.G, { channel: ch.index, outBitDepth: 8 });
+      try { ch.acc.add({ channel: ch.index, box: a.box, data: a.data }); } catch (err) { throw bad(E, 'brick ' + (err && err.code ? err.code : 'invalid')); }
+      return { ok: true };
+    } });
+    define('doc.oblique.finish', { async handler(a, E) {
+      const rec = tokenOf(E, a && a.token, 'o');
+      for (const ch of rec.channels) finishChannel(rec, ch, []);
+      live.delete(a.token);
+      let missing = 0;
+      if (rec.mask) for (let i = 0; i < rec.N; i++) missing += rec.mask[i];
+      const m = rec.a;
+      const info = E.createDoc({ name: m.name, width: rec.G.width, height: rec.G.height, bitDepth: 8, calibration: m.calibration,
+        channels: rec.channels.map((c) => ({ data: c.out, name: c.name, color: c.color })) }, { provenance: m.provenance, sessionKey: m.sessionKey });
+      return { info, missing };
+    } });
+    define('doc.oblique.abort', { async handler(a) { return { dropped: live.delete(a && a.token) }; } });
+  })();
+
   root.IJTiffStream = IJTiffStream;
   root.IJOblique = IJOblique;
+  root.IJLibSource = IJLibSource;
 })(typeof self !== 'undefined' ? self : globalThis);

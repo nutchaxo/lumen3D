@@ -33,11 +33,10 @@
 'use strict';
 
 import { API_SITE, I18n, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
-import { setUnsaved, registerDirtyGuard } from './bus.js';
+import { setUnsaved, registerDirtyGuard, navigateTo } from './bus.js';
 import { renderFields, renderGroups } from './pages-controls.js';
 import { renderTranslatePanel } from './pages-translate.js';
 import { renderVariablesPanel } from './pages-variables.js';
-import { openExportDialog, pickImportFile } from './pages-transfer-ui.js';
 
 const SPECIAL = [{ slug: 'home', builtin: true }, { slug: 'about', builtin: true }];
 
@@ -1015,8 +1014,9 @@ function renderLauncher() {
   el('pages-select').addEventListener('change', (e) => switchPage(e.target.value));
   el('pages-new').addEventListener('click', newPage);
   el('pages-delete').addEventListener('click', deletePage);
-  el('pages-export').addEventListener('click', () => openExportDialog(_xferCtx()));
-  el('pages-import').addEventListener('click', () => pickImportFile(_xferCtx()));
+  // Export / import live in their own tab (versions, verifier, overwrite as a new version).
+  el('pages-export').addEventListener('click', () => navigateTo('pages-io'));
+  el('pages-import').addEventListener('click', () => navigateTo('pages-io'));
   el('pages-loc').addEventListener('change', (e) => { _editLoc = e.target.value; });
   el('pages-edit').addEventListener('click', enterEditor);
   refreshIcons(root);
@@ -1860,30 +1860,13 @@ function addWidgetToSelection(type) {
   _afterMutate();
 }
 
-// ── Import / export of pages (pages-transfer-ui.js) ─────────────
-// The dialogs write through the same endpoints as the editor; this is what they
-// need from the tab's state.
-function _xferCtx() {
-  return {
-    pages: () => _pages,
-    currentSlug: () => _slug,
-    instance: () => _instance,
-    locale: () => _editLoc,
-    isBusy: () => _switching || _dirty || _autosaveFailed || !!_autosaveTimer,
-    normalizeContent: (b) => {
-      const out = { sections: _sanitizeSections(_migrate(b)) };
-      if (_isObj(b) && _isObj(b.background) && b.background.preset) out.background = JSON.parse(JSON.stringify(b.background));
-      return out;
-    },
-    reconcileInstance: _reconcileInstance,
-    saveInstancePaths: _saveInstancePaths,
-    takeOver: (slug) => { try { _chan?.postMessage({ t: 'takeover', slug, id: _tabId }); } catch (_) { /* channel closed */ } },
-    afterImport: async (slugs) => {
-      _buildPageList();
-      const show = (slugs || []).find((s) => _pages.some((p) => p.slug === s)) || (_pages.some((p) => p.slug === _slug) ? _slug : 'home');
-      await selectPage(show);
-    },
-  };
+// ── Page content as the editor holds it ─────────────────────────
+// What the Import / export tab stores for an imported or restored page: sections
+// sanitised by the same code that loads a page into the editor.
+export function normalizePageContent(b) {
+  const out = { sections: _sanitizeSections(_migrate(b)) };
+  if (_isObj(b) && _isObj(b.background) && b.background.preset) out.background = JSON.parse(JSON.stringify(b.background));
+  return out;
 }
 
 // ── Page management + persistence ───────────────────────────────

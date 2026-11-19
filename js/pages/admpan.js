@@ -61,6 +61,7 @@ registerTab({ id: 'changelog', titleKey: 'admin.changelogTitle', titleDefault: '
 registerTab({ id: 'pipeline', titleKey: 'admin.navPipeline', titleDefault: 'Pipeline', load: async () => { return (await import(`./admin/tab-pipeline.js${V}`)).PipelineTab; } });
 registerTab({ id: 'branding', titleKey: 'admin.navBranding', titleDefault: 'Identité', load: async () => { return (await import(`./admin/tab-branding.js${V}`)).BrandingTab; } });
 registerTab({ id: 'pages', titleKey: 'admin.navPages', titleDefault: 'Pages', load: async () => { await loadPageSystem(); return (await import(`./admin/tab-pages.js${V}`)).PagesTab; } });
+registerTab({ id: 'pages-io', titleKey: 'admin.navPagesIO', titleDefault: 'Page import / export', load: async () => { await loadPageSystem(); return (await import(`./admin/tab-pages-io.js${V}`)).PagesIoTab; } });
 registerTab({ id: 'appearance', titleKey: 'admin.navAppearance', titleDefault: 'Apparence', load: async () => { return (await import(`./admin/tab-appearance.js${V}`)).AppearanceTab; } });
 registerTab({ id: 'legal', titleKey: 'admin.navLegal', titleDefault: 'Mentions légales', load: async () => { return (await import(`./admin/tab-legal.js${V}`)).LegalTab; } });
 registerTab({ id: 'marketplace', titleKey: 'admin.navMarketplace', titleDefault: 'Catalogue', load: async () => { return (await import(`./admin/tab-marketplace.js${V}`)).MarketplaceTab; } });

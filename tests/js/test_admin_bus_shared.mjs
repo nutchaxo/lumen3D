@@ -129,17 +129,21 @@ const bus = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/bus.js'))
   for (const f of ['tab-branding.js', 'tab-appearance.js', 'tab-legal.js', 'tab-dataset-types.js', 'tab-pages.js', 'tab-datasets.js']) {
     assert.match(read('js/pages/admin/' + f), /registerDirtyGuard\('/, `${f} registers its own unsaved guard`);
   }
+  // The Import / export tab keeps no unsaved edit: a file waiting for its confirmation is read again by dropping it, an inline
+  // rename is one click, and a running import holds the page with its own beforeunload guard.
+  assert.doesNotMatch(read('js/pages/admin/tab-pages-io.js'), /registerDirtyGuard/, 'the Import / export tab needs no dirty guard');
+  assert.match(read('js/pages/admin/tab-pages-io.js'), /addEventListener\('beforeunload', onBeforeUnload\)/, 'but a running import is guarded');
   assert.ok(!/localStorage\./.test(read('js/pages/admin/shell.js')), 'the shell never touches localStorage unguarded');
 
   // lazy tabs: the entry imports nothing but the shell eagerly
   const entry = read('js/pages/admpan.js');
   const staticImports = entry.match(/^import .* from '\.\/admin\/[^']+';/gm) || [];
   assert.equal(staticImports.length, 1, 'admpan.js statically imports only the shell');
-  assert.equal((entry.match(/registerTab\(/g) || []).length, 18, 'all eighteen tabs are still registered');
+  assert.equal((entry.match(/registerTab\(/g) || []).length, 19, 'all nineteen tabs are still registered');
   // Cache busting: the release build stamps ?v= on STATIC specifiers only, so every
   // lazily imported tab (and the page-system scripts) must carry the entry's own stamp.
   const dyn = entry.match(/import\(`[^`]*`\)/g) || [];
-  assert.equal(dyn.length, 18, 'one lazy import per tab');
+  assert.equal(dyn.length, 19, 'one lazy import per tab');
   for (const d of dyn) assert.ok(d.endsWith('${V}`)'), `${d} inherits the entry's ?v= stamp`);
   assert.match(entry, /s\.src = src \+ V;/, 'page-system scripts inherit the stamp too');
   assert.match(read('js/pages/admin/upload-manager.js'), /upload-worker\.js\$\{new URL\(import\.meta\.url\)\.search\}/, 'the upload worker URL inherits the stamp');

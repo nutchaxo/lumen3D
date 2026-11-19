@@ -6,9 +6,10 @@
 //      for custom pages only) → parseBundle round trip, and every refusal code;
 //   3. the import plan (targets, replaced / new / built-in, duplicates), the media
 //      and variable plans, the write sequence of a page;
-//   4. runImport end to end against an in-memory twin of api/site.php + api/media.php:
-//      published / draft, media dedup and rename, variables kept, menu rows;
-//   5. locale parity of pages.xfer.* and that every key the dialogs use exists;
+//   4. importMedia / importVariables against an in-memory twin of api/media.php and
+//      api/site.php: media dedup and rename, variables kept (the page writes themselves
+//      are the Import / export tab's, tests/js/test_pages_io_tab.mjs);
+//   5. locale parity of pages.xfer.* and that every key the tab and the launcher use exists;
 //   6. the page bundles shipped under DOCS/ parse and only use widget types the
 //      renderer and the editor palette know.
 //
@@ -22,7 +23,7 @@ import {
   parseBundle, planImport, planMedia, planVariables, pageWrites, checkContent, isEmptyDoc,
   slugFromFileName, bundleFileName, widgetCount, pageLocales, magicType, base64Bytes,
 } from '../../js/pages/admin/pages-transfer.js';
-import { runImport } from '../../js/pages/admin/pages-transfer-ui.js';
+import { importMedia, importVariables } from '../../js/pages/admin/pages-transfer-ui.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -103,7 +104,8 @@ const section = (...widgets) => ({ id: 's1', props: { padY: 48 }, columns: [{ id
   assert.deepEqual(codes('{not json'), ['json']);
   assert.deepEqual(codes(''), ['json']);
   assert.deepEqual(codes({ hello: 1 }), ['schema']);
-  assert.deepEqual(codes(Object.assign({}, ok, { $schema: 'lumen-pages/2' })), ['version'], 'a newer format is named, not mangled');
+  assert.deepEqual(codes(Object.assign({}, ok, { $schema: 'lumen-pages/3' })), ['version'], 'a newer format is named, not mangled');
+  assert.deepEqual(codes(Object.assign({}, ok, { $schema: 'lumen-pages/2' })), [], 'lumen-pages/2 (the versions of a page) is read by this platform');
   assert.deepEqual(codes(Object.assign({}, ok, { pages: [] })), ['pages']);
   assert.deepEqual(codes({ $schema: SCHEMA, pages: [{ slug: '../x', published: { sections: [] } }] }), ['slug']);
   assert.deepEqual(codes({ $schema: SCHEMA, pages: [{ slug: 'Home', published: { sections: [] } }] }), ['slug'], 'slugs are lower-case');
@@ -167,7 +169,7 @@ const section = (...widgets) => ({ id: 's1', props: { padY: 48 }, columns: [{ id
   assert.equal(checkContent({ blocks: [{ type: 'heading' }] }), null, 'legacy flat pages pass');
 }
 
-// ── 4. runImport against an in-memory twin of the endpoints ─────────────────
+// ── 4. importMedia / importVariables against an in-memory twin of the endpoints ─
 function fakeServer(seed) {
   const pages = new Map(Object.entries(seed.pages || {}));   // slug → { public, draft }
   const media = new Map(Object.entries(seed.media || {}));   // name → Buffer
@@ -227,86 +229,37 @@ function fakeServer(seed) {
   return { pages, media, get instance() { return instance; }, log };
 }
 
-function ctxFor(server, local) {
-  const taken = [];
-  const ctx = {
-    pages: () => [{ slug: 'home', builtin: true }, { slug: 'about', builtin: true }],
-    instance: () => local,
-    locale: () => 'fr',
-    isBusy: () => false,
-    normalizeContent: (b) => JSON.parse(JSON.stringify(b)),
-    reconcileInstance: async () => { for (const k of Object.keys(server.instance)) if (k !== 'variables') local[k] = JSON.parse(JSON.stringify(server.instance[k])); },
-    saveInstancePaths: async (paths) => {
-      const r = await fetch(`api/site.php?action=save&doc=instance&merge=${paths.join(',')}`, { method: 'POST', body: JSON.stringify(local) });
-      return r.ok;
-    },
-    takeOver: (slug) => taken.push(slug),
-    afterImport: async () => {},
-  };
-  return { ctx, taken };
-}
-
 {
   const logoRef = { sections: [section(widget('image', { props: { src: 'config/uploads/logo.png' } }), widget('heading', { text: { en: '{lab} team, {other}' } }))] };
   const bundle = parseBundle(JSON.stringify({
     $schema: SCHEMA,
     pages: [
-      { slug: 'about', title: {}, published: { sections: [section(widget('heading', { text: { en: 'About' } }))] } },
-      { slug: 'team', title: { en: 'Team' }, nav: { label: { en: 'Our team' }, show: true }, published: logoRef, draft: { sections: [] } },
+      { slug: 'team', title: { en: 'Team' }, published: logoRef },
       { slug: 'news', title: { en: 'News' }, published: { sections: [section(widget('image', { props: { src: 'config/uploads/same.png' } }))] } },
     ],
-    media: [{ name: 'logo.png', data: b64(PNG) }, { name: 'same.png', data: b64(PNG) }],
-    variables: { lab: 'IRIBHM', other: 'kept' },
+    media: [{ name: 'logo.png', data: b64(PNG) }, { name: 'same.png', data: b64(PNG) }, { name: 'unused.png', data: b64(PNG) }],
+    variables: { lab: 'IRIBHM', other: 'kept', unused: 'x' },
   })).bundle;
 
-  // Publish: the library already has a DIFFERENT logo.png and the SAME same.png.
+  // The library already has a DIFFERENT logo.png and the SAME same.png.
   const server = fakeServer({
     media: { 'logo.png': PNG2, 'same.png': PNG },
-    instance: { brand: { name: 'B' }, variables: { other: 'mine' }, nav: { customPages: [{ slug: 'news', label: { en: 'News' }, show: false }] } },
+    instance: { brand: { name: 'B' }, variables: { other: 'mine' } },
   });
   const local = JSON.parse(JSON.stringify(server.instance));
-  const { ctx, taken } = ctxFor(server, local);
-  const plan = planImport(bundle, ['news']);
-  const res = await runImport(ctx, bundle, plan, { publish: true, say: () => {} });
-  assert.deepEqual(res.failed, []);
-  assert.deepEqual(res.done, ['about', 'team', 'news']);
-  assert.deepEqual(taken, ['about', 'team', 'news'], 'open editors are told to stop before any write');
-  assert.ok(server.log.indexOf('upload logo.png') < server.log.indexOf('save_draft pages/about'), 'images first, so pages never point at a missing file');
-  assert.equal(server.log.filter((l) => l.startsWith('upload')).length, 1, 'an identical file already in the library is reused');
-  assert.ok(server.media.has('logo-1.png'), 'a different file under the same name gets the name the server picks');
-  const team = server.pages.get('team');
-  assert.equal(team.public.published.sections[0].columns[0].widgets[0].props.src, 'config/uploads/logo-1.png', 'the page follows the new name');
-  assert.deepEqual(team.public.title, { en: 'Team' });
-  assert.deepEqual(team.draft, { sections: [] }, 'the different draft of the file is put back after publishing');
-  assert.equal(server.pages.get('about').public.published.sections[0].columns[0].widgets[0].text.en, 'About');
-  assert.equal(server.pages.get('news').public.published.sections[0].columns[0].widgets[0].props.src, 'config/uploads/same.png');
-  assert.deepEqual(server.instance.variables, { other: 'mine', lab: 'IRIBHM' }, 'absent variable added, operator value kept');
-  assert.ok(res.notes.some((n) => n.includes('other')), 'the kept variable is reported');
-  assert.deepEqual(server.instance.nav.customPages, [
-    { slug: 'news', label: { en: 'News' }, show: true },
-    { slug: 'team', label: { en: 'Our team' }, show: true },
-  ], 'new custom page gets its menu row; a hidden one is revealed on publish, as the editor does');
+  const notes = [];
+  const renames = await importMedia(bundle, bundle.pages, () => {}, notes);
+  assert.deepEqual([...renames], [['logo.png', 'logo-1.png']], 'a different file under the same name gets the name the server picks, the pages follow');
+  assert.equal(server.log.filter((l) => l.startsWith('upload')).length, 1, 'an identical file already in the library is reused; an image no page uses is not sent');
+  assert.ok(server.media.has('logo-1.png') && !server.media.has('unused.png'));
+  const ctx = {
+    instance: () => local,
+    saveInstancePaths: async (paths) => (await fetch(`api/site.php?action=save&doc=instance&merge=${paths.join(',')}`, { method: 'POST', body: JSON.stringify(local) })).ok,
+  };
+  await importVariables(ctx, bundle, bundle.pages, () => {}, notes);
+  assert.deepEqual(server.instance.variables, { other: 'mine', lab: 'IRIBHM' }, 'absent variable added, operator value kept, unused one not copied');
+  assert.ok(notes.some((n) => n.includes('other')), 'the kept variable is reported');
   assert.deepEqual(server.instance.brand, { name: 'B' }, 'nothing else of instance.json is touched');
-}
-
-{
-  // Draft mode: published versions untouched, new custom page hidden, a failing page reported.
-  const bundle = parseBundle(JSON.stringify({ $schema: SCHEMA, pages: [
-    { slug: 'home', published: { sections: [section(widget('hero'))] } },
-    { slug: 'lab', title: { en: 'Lab' }, published: { sections: [section(widget('richtext'))] } },
-    { slug: 'broken', published: { sections: [] } },
-  ] })).bundle;
-  const live = { title: [], published: { sections: [section(widget('heading', { text: { en: 'Live' } }))] } };
-  const server = fakeServer({ pages: { home: { public: live, draft: null } }, instance: { nav: { customPages: [] } }, failSlug: 'broken' });
-  const local = JSON.parse(JSON.stringify(server.instance));
-  const { ctx } = ctxFor(server, local);
-  const res = await runImport(ctx, bundle, planImport(bundle, []), { publish: false, say: () => {} });
-  assert.deepEqual(res.done, ['home', 'lab']);
-  assert.deepEqual(res.failed, ['broken']);
-  assert.equal(server.pages.get('home').public, live, 'draft mode never touches what visitors see');
-  assert.equal(server.pages.get('home').draft.sections[0].columns[0].widgets[0].type, 'hero');
-  assert.equal(server.log.includes('publish pages/home'), false);
-  assert.deepEqual(server.instance.nav.customPages, [{ slug: 'lab', label: { en: 'Lab' }, show: false }], 'hidden until published');
 }
 
 // ── 5. locales ──────────────────────────────────────────────────────────────
@@ -317,11 +270,14 @@ function ctxFor(server, local) {
   for (const code of ['fr', 'es', 'nl']) {
     assert.deepEqual(keysOf(JSON.parse(read(`lang/${code}.json`)).pages.xfer).sort(), enKeys, `pages.xfer parity in ${code}`);
   }
-  const src = read('js/pages/admin/pages-transfer-ui.js') + read('js/pages/admin/tab-pages.js');
+  const src = read('js/pages/admin/pages-transfer-ui.js') + read('js/pages/admin/tab-pages.js') + read('js/pages/admin/tab-pages-io.js');
   for (const m of src.matchAll(/'pages\.xfer\.([A-Za-z_.]+)'/g)) assert.ok(enKeys.includes(m[1]), `missing en key pages.xfer.${m[1]}`);
   for (const slug of ['home', 'about']) assert.ok(enKeys.includes(`builtin_${slug}`));
-  assert.match(read('js/pages/admin/tab-pages.js'), /openExportDialog\(_xferCtx\(\)\)/);
-  assert.match(read('js/pages/admin/tab-pages.js'), /pickImportFile\(_xferCtx\(\)\)/);
+  // The launcher's Export / Import buttons lead to the Import / export tab: one code path, no second dialog.
+  const launcher = read('js/pages/admin/tab-pages.js');
+  assert.match(launcher, /navigateTo\('pages-io'\)/);
+  assert.doesNotMatch(launcher, /_xferCtx|openExportDialog|pickImportFile/, 'the old dialogs are gone');
+  assert.doesNotMatch(read('js/pages/admin/pages-transfer-ui.js'), /openExportDialog|pickImportFile|openImportDialog|export async function runImport/, 'and so is their code');
 }
 
 // ── 6. shipped bundles use only known widgets ───────────────────────────────

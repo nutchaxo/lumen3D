@@ -32,6 +32,7 @@ DOCS/*
 !DOCS/plugin-sandbox/
 !DOCS/admin-guide/
 !DOCS/dataset-migrations/
+!DOCS/pages-library/
 !DOCS/build/
 !DOCS/documentation/
 # Published operator documents, served by the admin Documentation tab straight
@@ -64,6 +65,7 @@ api/quarantined-plugins.json
 api/plugin-trust.json
 api/release-notes-cache.json
 api/page-drafts/
+api/page-versions/
 api/trusted-proxies.json
 # PHP runtime stores (sessions, login throttle, file locks, caches, update lock and
 # the busy files a Windows update parks for the next request)

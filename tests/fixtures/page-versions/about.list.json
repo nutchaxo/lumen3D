@@ -1,0 +1,81 @@
+{
+  "schema": "lumen-page-versions/1",
+  "limits": {
+    "maxVersions": 50,
+    "maxBytes": 33554432
+  },
+  "pages": {
+    "about": {
+      "active": "v000000000002",
+      "count": 3,
+      "versions": [
+        {
+          "id": "v000000000003",
+          "label": "Before activation",
+          "note": "",
+          "origin": "auto",
+          "createdAt": "2026-11-19T13:45:03Z",
+          "updatedAt": "2026-11-19T13:45:03Z",
+          "exportedAt": "",
+          "source": "",
+          "platform": "",
+          "widgets": 1,
+          "bytes": 240,
+          "locales": [
+            "en",
+            "fr"
+          ],
+          "hasPublished": true,
+          "hasDraft": false,
+          "title": {
+            "en": "About"
+          },
+          "isActive": false
+        },
+        {
+          "id": "v000000000002",
+          "label": "Plain",
+          "note": "",
+          "origin": "capture",
+          "createdAt": "2026-11-19T13:45:02Z",
+          "updatedAt": "2026-11-19T13:45:02Z",
+          "exportedAt": "",
+          "source": "",
+          "platform": "",
+          "widgets": 0,
+          "bytes": 29,
+          "locales": [],
+          "hasPublished": true,
+          "hasDraft": false,
+          "title": {},
+          "isActive": true
+        },
+        {
+          "id": "v000000000001",
+          "label": "Spring redesign",
+          "note": "From the lab site",
+          "origin": "import",
+          "createdAt": "2026-11-19T13:45:01Z",
+          "updatedAt": "2026-11-19T13:45:01Z",
+          "exportedAt": "2026-11-18T09:00:00.000Z",
+          "source": "bemine.be",
+          "platform": "1.86.0",
+          "widgets": 1,
+          "bytes": 406,
+          "locales": [
+            "en",
+            "fr",
+            "nl"
+          ],
+          "hasPublished": true,
+          "hasDraft": true,
+          "title": {
+            "en": "About",
+            "fr": "A propos"
+          },
+          "isActive": false
+        }
+      ]
+    }
+  }
+}

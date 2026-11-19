@@ -139,14 +139,13 @@ const shared = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/shared
   assert.match(ask, /modalize\(overlay, \{ labelledBy: titleId, describedBy: bodyId, initialFocus: input \}\)/, 'password dialog');
   assert.match(ask, /<h3 class="upl-exit-title" id="\$\{titleId\}">/, 'password dialog title has an id');
 
-  const xfer = read('js/pages/admin/pages-transfer-ui.js');
-  const open = xfer.slice(xfer.indexOf('function openDialog'), xfer.indexOf('function localLabel'));
-  assert.match(open, /title\.id = modalId\('pg-xfer-title'\)/, 'transfer dialogs name themselves');
-  assert.match(open, /release = modalize\(overlay, \{/, 'transfer dialogs are modal');
+  // The page export dialog (Import / export tab) names itself, is modal, and gives the page back before it goes.
+  const xfer = read('js/pages/admin/tab-pages-io.js');
+  const open = xfer.slice(xfer.indexOf('function openExportDialog'), xfer.indexOf('// ── Import: reading the file'));
+  assert.match(open, /id: titleId/, 'the export dialog names itself');
+  assert.match(open, /release = modalize\(overlay, \{ labelledBy: titleId,/, 'the export dialog is modal');
   assert.match(open, /if \(release\) release\(\);\s*overlay\.remove\(\)/, 'the page comes back before the overlay goes');
-  assert.ok(xfer.includes(`initialFocus: '[data-act="cancel"]'`), 'export focuses Cancel while it reads the pages');
-  assert.ok(xfer.includes(`$('input[data-slug]:not(:disabled)')?.focus()`), 'then the first page');
-  assert.ok(xfer.includes(`$('input[data-i]')?.focus()`), 'import focuses its first page');
+  assert.doesNotMatch(read('js/pages/admin/pages-transfer-ui.js'), /modalize|openDialog/, 'no second dialog shell is left in the transfer helpers');
 
   const shell = read('js/pages/admin/shell.js');
   assert.match(shell, /_releaseExitOverlay = modalize\(overlay, \{\s*labelledBy: 'upl-exit-title',\s*describedBy: 'upl-exit-body',\s*initialFocus: el\('upl-exit-stay'\)/, 'upload exit guard');

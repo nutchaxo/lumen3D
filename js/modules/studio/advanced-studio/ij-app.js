@@ -2306,7 +2306,7 @@ const IJApp = (() => {
         return planLevels({ channels: new Array(f.channels).fill(null), levels: [{ level: 0, width: f.width, height: f.height, depth: f.slices }] }, S.budgetBytes, bits)[0].fits;
       };
       fields.push({ type: 'choice', id: 'source', label: tr('proj.source'), value: remembered === 'processed' ? 'processed' : 'tiff', options: [
-        { value: 'tiff', label: tr('proj.sourceTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: tiff.entry.sizeBytes ? mb(tiff.entry.sizeBytes) + ' MB' : '?', level: f.level === null ? '?' : f.level }) },
+        { value: 'tiff', label: tr(f.level === null ? 'proj.sourceTiffNoLevel' : 'proj.sourceTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: tiff.entry.sizeBytes ? mb(tiff.entry.sizeBytes) + ' MB' : '?', level: f.level === null ? '?' : f.level }) },
         { value: 'processed', label: tr('proj.sourceProcessed', { w: fine.width, h: fine.height }) }] });
       fields.push({ type: 'message', id: 'tiffNote', label: tr('proj.tiffNote'), visibleIf: (vv) => vv.source !== 'processed' });
       if (f.coarser) fields.push({ type: 'message', id: 'tiffCoarser', label: tr('proj.tiffCoarser', { w: f.width, h: f.height, W: fine.width, H: fine.height }), visibleIf: (vv) => vv.source !== 'processed' });

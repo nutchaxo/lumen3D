@@ -808,7 +808,7 @@
       let tiffLabel;
       if (tiffOn) {
         const f = t.facts;
-        const text = tx('dlg.lib.srcTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: t.sizeBytes ? mb(t.sizeBytes) : '?', level: f.level === null ? '?' : f.level });
+        const text = tx(f.level === null ? 'dlg.lib.srcTiffNoLevel' : 'dlg.lib.srcTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: t.sizeBytes ? mb(t.sizeBytes) : '?', level: f.level === null ? '?' : f.level });
         tiffLabel = text;
       } else if (tiffs.some((x) => x.state === 'loading')) tiffLabel = tx('dlg.lib.tiffLoading');
       else if (tiffs.length) tiffLabel = tx(tiffs.every((x) => x.reason === 'extent') ? 'err.libTiffExtent' : tiffs.every((x) => x.reason === 'frame') ? 'dlg.lib.tiffFrame' : 'err.libTiffUnusable');

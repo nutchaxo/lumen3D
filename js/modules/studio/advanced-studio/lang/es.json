@@ -832,6 +832,7 @@
       "noPhoto": "No hay fotografía que abrir.",
       "obliqueNo": "Aquí no se puede leer un plano oblicuo de este conjunto de datos.",
       "zNo": "La pila en z de este conjunto de datos no se puede leer aquí.",
+      "srcProcessedNo": "Volumen procesado — no se puede leer aquí (abra el conjunto de datos en el visor para usarlo)",
       "noLevelFits": "Nada cabe en la memoria de este dispositivo: elija menos canales, otro nivel u otro origen.",
       "level": "Resolución",
       "levelItem": "{w} × {h} px, {size}",
@@ -1547,6 +1548,13 @@
     "famGeometry": "Geometría y calibración: Rotar, Escalar, Tamaño, Tamaño del lienzo, Trasladar, Agrupar (bin), Propiedades y Establecer escala.",
     "famMeasure": "Mediciones: Medir, Analizar partículas, Resumir, Distribución, Histograma y Perfil, con Definir mediciones (descriptores de forma, Feret, Redirigir a, Limitar al umbral).",
     "famColoc": "Colocalización: Pearson, Manders, umbral automático de Costes e ICQ de Li, con un histograma 2D.",
+    "famThreshold": "Umbrales: Auto Threshold y Auto Local Threshold con todos los métodos de Fiji (Try all incluido), Make Binary y las opciones binarias.",
+    "famEnhance": "Contraste local y ruido: CLAHE, añadir ruido, ruido especificado, sal y pimienta, Tubeness y Frangi.",
+    "famFft": "Dominio de frecuencias: FFT, FFT inversa, opciones de FFT, filtro de paso de banda, intercambio de cuadrantes y Directionality.",
+    "famSelOps": "Operaciones con selecciones: Fit Spline, Fit Circle, Fit Rectangle, Interpolate, Scale, Rotate, Make Band, Straighten, Line to Area y Area to Line.",
+    "famEdit": "Edición y superposiciones: cortar, copiar, pegar con Paste Control, copiar al sistema, dibujar, rellenar, imagen nueva, montaje, archivos de tablas de colores, Image › Overlay, cuadrícula, barra de escala y Edición › Opciones.",
+    "famFiji": "Análisis de Fiji: Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count y Curve Fitting.",
+    "famFiles": "Archivos y vistas: Abrir desde la biblioteca (otro conjunto de datos del sitio, como proyección de la pila en z o como plano oblicuo, desde su TIFF original cuando existe), archivos ROI y conjuntos de ROI, imágenes de texto, coordenadas XY; cada imagen en su propia vista, que se puede dividir, poner en pestañas, minimizar o hacer flotante.",
     "missingTitle": "No incluido en esta versión",
     "missing": "Pilas y 3D (hiperpilas, vistas ortogonales, herramientas 3D), macros, texto y flechas, Bio-Formats, gráficos de superficie, el tipo de color RGB y el modo Legacy de la varita mágica.",
     "thisTitle": "Acerca de esta vista avanzada",
@@ -1567,7 +1575,7 @@
       "invertLut": "Invertir LUT en una imagen compuesta mostrada en modo Composite se rechaza; cambie antes a modo Color o Escala de grises.",
       "log": "No hay ventana Log: los valores que ImageJ escribe allí aparecen en la barra de estado."
     },
-    "fijiDeviations": "Herramientas de Fiji, donde difieren: Analyze Skeleton corta los ciclos en los mismos vóxeles que Fiji cuando las intensidades difieren, pero con ramas empatadas, y con el método « lowest intensity voxel » (Fiji se detiene antes), la tabla de resultados puede diferir; Branch information lista las mismas ramas en otro orden, con otro primer extremo y otro promedio móvil; un esqueleto podado sale como una imagen nueva, « <nombre>-pruned », en lugar de modificar el origen. La búsqueda de umbral de Costes por defecto de Coloc 2 se detiene en otros valores que la de Fiji, de modo que los umbrales, tM1 / tM2 y los valores de Pearson por encima y por debajo de los umbrales difieren un poco (Bisection coincide en los pares probados); una pendiente negativa da el máximo del canal 1. Coloc 2 no muestra imágenes de resultado, Cell Counter no tiene Keep Original ni Show All, y Curve Fitting no tiene « Show settings » ni fórmula definida por el usuario."
+    "fijiDeviations": "Analyze Skeleton: un esqueleto podado sale como una imagen nueva, «<nombre>-pruned», en lugar de modificar la fuente. Coloc 2 no muestra imágenes de resultado, Cell Counter no tiene Keep Original ni Show All, y Curve Fitting no tiene «Show settings» ni fórmula definida por el usuario."
   },
   "view": {
     "menubar": "Barra de menús",

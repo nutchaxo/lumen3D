@@ -572,6 +572,7 @@
   "dlg.lib.singlePlane",
   "dlg.lib.srcPhoto",
   "dlg.lib.srcProcessed",
+  "dlg.lib.srcProcessedNo",
   "dlg.lib.srcTiff",
   "dlg.lib.starting",
   "dlg.lib.thickness",

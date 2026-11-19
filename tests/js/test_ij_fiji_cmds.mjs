@@ -53,6 +53,8 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   const id = await addImage(t, 'skel', g.input.width, g.input.height, [u8(g.input)]);
   const info0 = await t.engine('doc.info', { docId: id });
   const want = g.cases.find((c) => c.name === 'shortestPath');
+  // a row already in Results: Fiji's `new ResultsTable().show("Results")` replaces it
+  t.api('fiji').addResults([{ Label: 'earlier measurement', Area: 1 }], { show: false });
   // the dialog = Fiji's: field order, labels, defaults
   await t.runCommand('skelAnalyze', { prune: 'none', pruneEnds: false, excludeRoi: false, shortestPath: true, detailed: true, labeled: true });
   const spec = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
@@ -63,7 +65,8 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   assert.equal(spec.fields.find((f) => f.id === 'prune').value, 'none');
   assert.ok(spec.fields.filter((f) => f.type === 'check').every((f) => f.value === false), 'every checkbox starts ticked off');
   const rows = await results(t, 3);
-  assert.equal(rows.length, 3, 'one row per skeleton');
+  assert.equal(rows.length, 3, 'one row per skeleton, the earlier Results rows replaced');
+  assert.ok(rows.every((r) => r.Label !== 'earlier measurement'));
   const cols = want.result.table.headings;
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 9; c++) assert.ok(Math.abs(rows[r][cols[c]] - want.result.table.rows[r][c]) < 1e-6, `row ${r} ${cols[c]}: ${rows[r][cols[c]]} vs ${want.result.table.rows[r][c]}`);

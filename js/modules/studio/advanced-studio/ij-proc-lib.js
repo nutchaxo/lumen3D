@@ -743,17 +743,20 @@
     /* Which TIFF planes cover the dataset's level-0 slices [first, last] (inclusive). Dataset plane i covers [i·vz0, (i+1)·vz0) µm,
      * TIFF plane j covers [j·vzT, (j+1)·vzT): a range → jlo = floor(first·vz0/vzT), jhi = ceil((last+1)·vz0/vzT) − 1; one plane →
      * the TIFF plane holding its centre (i + ½)·vz0. Clamped to the stack. */
+    // A ten-thousandth of a plane: metadata.json prints the z step with 6 decimals (4.652059) while the TIFF carries the full double
+    // (spacing=4.652059326…), so slice 90 maps to TIFF plane 89.999994 — that is plane 90, not a sliver of plane 89.
+    const ZTOL = 1e-4;
     function tiffZRange(o) {
       const n = Math.max(1, o.slices | 0);
       const clamp = (v) => Math.max(0, Math.min(n - 1, v));
       const ratio = o.vz0 / o.vzT;
       if (!(ratio > 0) || !Number.isFinite(ratio)) return { jlo: 0, jhi: n - 1, single: false };
       if (o.first === o.last) {
-        const j = clamp(Math.floor((o.first + 0.5) * ratio + EPS));
+        const j = clamp(Math.floor((o.first + 0.5) * ratio + ZTOL));
         return { jlo: j, jhi: j, single: true };
       }
-      const jlo = clamp(Math.floor(o.first * ratio + EPS));
-      const jhi = Math.max(jlo, clamp(Math.ceil((o.last + 1) * ratio - EPS) - 1));
+      const jlo = clamp(Math.floor(o.first * ratio + ZTOL));
+      const jhi = Math.max(jlo, clamp(Math.ceil((o.last + 1) * ratio - ZTOL) - 1));
       return { jlo, jhi, single: false };
     }
 

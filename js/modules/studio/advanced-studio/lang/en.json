@@ -832,6 +832,7 @@
       "noPhoto": "No photograph to open.",
       "obliqueNo": "An oblique plane cannot be read for this dataset here.",
       "zNo": "The z-stack of this dataset cannot be read here.",
+      "srcProcessedNo": "Processed volume — not readable here (open the dataset in the viewer to use it)",
       "noLevelFits": "Nothing fits the memory of this device: choose fewer channels, another level or another source.",
       "level": "Resolution",
       "levelItem": "{w} × {h} px, {size}",
@@ -1547,6 +1548,13 @@
     "famGeometry": "Geometry and calibration: Rotate, Scale, Size, Canvas Size, Translate, Bin, Properties and Set Scale.",
     "famMeasure": "Measurements: Measure, Analyze Particles, Summarize, Distribution, Histogram and Plot Profile, with Set Measurements (shape descriptors, Feret, Redirect to, Limit to threshold).",
     "famColoc": "Colocalization: Pearson, Manders, Costes automatic threshold and Li's ICQ, with a 2D histogram.",
+    "famThreshold": "Thresholds: Auto Threshold and Auto Local Threshold with every Fiji method (Try all included), Make Binary and Binary Options.",
+    "famEnhance": "Local contrast and noise: CLAHE, Add Noise, Add Specified Noise, Salt and Pepper, Tubeness and Frangi vesselness.",
+    "famFft": "Frequency domain: FFT, Inverse FFT, FFT Options, Bandpass Filter, Swap Quadrants and Directionality.",
+    "famSelOps": "Selection operations: Fit Spline, Fit Circle, Fit Rectangle, Interpolate, Scale, Rotate, Make Band, Straighten, Line to Area and Area to Line.",
+    "famEdit": "Editing and overlays: Cut, Copy, Paste with Paste Control, Copy to System, Draw, Fill, New Image, Make Montage, lookup-table files, Image › Overlay, Grid, Scale Bar and Edit › Options.",
+    "famFiji": "Fiji analysis: Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count and Curve Fitting.",
+    "famFiles": "Files and views: Open from Library (another dataset of the site, as a z-stack projection or an oblique plane, from its original TIFF when there is one), ROI files and ROI sets, text images, XY coordinates; every image in its own view, which can be split, tabbed, docked or floated.",
     "missingTitle": "Not in this version",
     "missing": "Stacks and 3D (hyperstacks, orthogonal views, 3D tools), macros, text and arrows, Bio-Formats, surface plots, the RGB colour type and the Wand's Legacy mode.",
     "thisTitle": "About this Advanced view",
@@ -1567,7 +1575,7 @@
       "invertLut": "Invert LUTs on a composite image shown in Composite mode is refused; switch to Color or Grayscale first.",
       "log": "There is no Log window: the values ImageJ writes there appear in the status bar."
     },
-    "fijiDeviations": "Fiji tools, where they differ: Analyze Skeleton cuts cycles at the same voxels as Fiji when intensities differ, but where branches tie, and for the \"lowest intensity voxel\" method (Fiji stops earlier), the Results table can differ; Branch information lists the same branches in another order, with another first end and running average; a pruned skeleton comes out as a new image, \"<name>-pruned\", instead of changing the source. Coloc 2's default Costes threshold search stops at other values than Fiji's, so the thresholds, tM1 / tM2 and the Pearson values above and below the thresholds differ a little (Bisection matches on the tested pairs); a negative slope gives the maximum of channel 1. Coloc 2 shows no result images, Cell Counter has no Keep Original or Show All, and Curve Fitting has no \"Show settings\" and no user-defined formula."
+    "fijiDeviations": "Analyze Skeleton: a pruned skeleton comes out as a new image, \"<name>-pruned\", instead of changing the source. Coloc 2 shows no result images, Cell Counter has no Keep Original or Show All, and Curve Fitting has no \"Show settings\" and no user-defined formula."
   },
   "view": {
     "menubar": "Menu bar",

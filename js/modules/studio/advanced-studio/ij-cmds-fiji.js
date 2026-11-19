@@ -81,7 +81,8 @@
     const opts = { docId: st.doc.docId, channel: ch };
     const res = await api.compute('analyzeSkeleton', params, Object.assign({ labelKey: 'op.analyzeSkeleton' }, opts));
     if (!res) return;
-    api.addResults(res.rows.map((row) => { const o = {}; res.columns.forEach((c, i) => { o[c] = row[i]; }); return o; }));
+    // AnalyzeSkeleton_.showResults: `new ResultsTable()` … `rt.show("Results")`, which replaces what the Results table held
+    api.addResults(res.rows.map((row) => { const o = {}; res.columns.forEach((c, i) => { o[c] = row[i]; }); return o; }), { replace: true });
     if (res.branchRows) api.openTable(api.tr('res.skeletonBranchInfo'), res.branchColumns, res.branchRows);
     // the images need the graph again (a separate worker request) but not the Branch information rows
     await api.run('skeletonTagged', Object.assign({}, params, { detailed: false }), Object.assign({ placement: 'tab', labelKey: 'op.skeletonTagged' }, opts));

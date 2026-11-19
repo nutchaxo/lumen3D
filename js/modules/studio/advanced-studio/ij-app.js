@@ -88,7 +88,8 @@
  *   preview(op, params, { docId, channel, roi }) → Promise<{ ok, tooLarge? }>   cancelPreview()
  *   overlay(items) / clearOverlay()                  items: IJDisplay.setOverlay (points, polyline, grid, rect)
  *   setRoi(roi, { docId })                           set (null clears) the selection of an image
- *   addResults(rows, { show })                       rows = [{ key: value }] appended to Results (shown unless show:false)
+ *   addResults(rows, { show, replace })              rows = [{ key: value }] appended to Results (shown unless show:false);
+ *                                                    replace:true empties the table first (a plugin's `new ResultsTable().show("Results")`)
  *   openTable(name, columns, rows)                   a table window; columns = [header], rows = [[value]] | [{ header: value }]
  *                                                    NOT kept across a reload (the About box says so); Results are
  *   openPlot(spec)                                   a plot window (see IJPlot, ij-view.js): series lines / bars /
@@ -2305,7 +2306,7 @@ const IJApp = (() => {
         return planLevels({ channels: new Array(f.channels).fill(null), levels: [{ level: 0, width: f.width, height: f.height, depth: f.slices }] }, S.budgetBytes, bits)[0].fits;
       };
       fields.push({ type: 'choice', id: 'source', label: tr('proj.source'), value: remembered === 'processed' ? 'processed' : 'tiff', options: [
-        { value: 'tiff', label: tr('proj.sourceTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: tiff.entry.sizeBytes ? mb(tiff.entry.sizeBytes) : '?', level: f.level === null ? '?' : f.level }) },
+        { value: 'tiff', label: tr('proj.sourceTiff', { bits: f.bitDepth, w: f.width, h: f.height, n: f.slices, size: tiff.entry.sizeBytes ? mb(tiff.entry.sizeBytes) + ' MB' : '?', level: f.level === null ? '?' : f.level }) },
         { value: 'processed', label: tr('proj.sourceProcessed', { w: fine.width, h: fine.height }) }] });
       fields.push({ type: 'message', id: 'tiffNote', label: tr('proj.tiffNote'), visibleIf: (vv) => vv.source !== 'processed' });
       if (f.coarser) fields.push({ type: 'message', id: 'tiffCoarser', label: tr('proj.tiffCoarser', { w: f.width, h: f.height, W: fine.width, H: fine.height }), visibleIf: (vv) => vv.source !== 'processed' });
@@ -4386,7 +4387,8 @@ const IJApp = (() => {
     'about.dev.traced', 'about.dev.plot', 'about.dev.particles', 'about.dev.directionality', 'about.dev.invertLut', 'about.dev.log'];
   function showAbout() {
     const para = (k) => h('p', { text: tr(k) });
-    const families = ['about.famDisplay', 'about.famSelect', 'about.famBackground', 'about.famFilters', 'about.famBinary', 'about.famMulti', 'about.famGeometry', 'about.famMeasure', 'about.famColoc']
+    const families = ['about.famDisplay', 'about.famSelect', 'about.famBackground', 'about.famFilters', 'about.famBinary', 'about.famMulti', 'about.famGeometry', 'about.famMeasure', 'about.famColoc',
+      'about.famThreshold', 'about.famEnhance', 'about.famFft', 'about.famSelOps', 'about.famEdit', 'about.famFiji', 'about.famFiles']
       .map((k) => h('li', { text: tr(k) }));
     // every deviation that stays (ORCHESTRATOR-DECISIONS), then the Fiji tools' own list (about.fijiDeviations)
     const limits = ABOUT_DEVIATIONS.map((k) => h('li', { text: tr(k) }));
@@ -4661,7 +4663,7 @@ const IJApp = (() => {
 
   function addResultRows(rows, o) {
     if (!Array.isArray(rows) || !rows.length) return;
-    S.results = S.results.concat(rows.map((r) => Object.assign({}, r)));
+    S.results = (o && o.replace ? [] : S.results).concat(rows.map((r) => Object.assign({}, r)));
     scheduleToolRefresh('results');
     scheduleMetaPersist();
     refreshUi();

@@ -832,6 +832,7 @@
       "noPhoto": "Geen foto om te openen.",
       "obliqueNo": "Een schuin vlak kan hier niet voor deze dataset worden gelezen.",
       "zNo": "De z-stapel van deze dataset kan hier niet worden gelezen.",
+      "srcProcessedNo": "Verwerkt volume — hier niet leesbaar (open de dataset in de viewer om het te gebruiken)",
       "noLevelFits": "Niets past in het geheugen van dit apparaat: kies minder kanalen, een ander niveau of een andere bron.",
       "level": "Resolutie",
       "levelItem": "{w} × {h} px, {size}",
@@ -1547,6 +1548,13 @@
     "famGeometry": "Geometrie en calibratie: Roteren, Schalen, Grootte, Canvasgrootte, Verschuiven, Binnen (bin), Eigenschappen en Schaal instellen.",
     "famMeasure": "Metingen: Meten, Deeltjes analyseren, Samenvatten, Verdeling, Histogram en Profiel, met Metingen instellen (vormkenmerken, Feret, Omleiden naar, Beperken tot drempel).",
     "famColoc": "Colocalisatie: Pearson, Manders, automatische drempel van Costes en ICQ van Li, met een 2D-histogram.",
+    "famThreshold": "Drempels: Auto Threshold en Auto Local Threshold met elke Fiji-methode (Try all inbegrepen), Make Binary en de binaire opties.",
+    "famEnhance": "Lokaal contrast en ruis: CLAHE, ruis toevoegen, opgegeven ruis, zout en peper, Tubeness en Frangi.",
+    "famFft": "Frequentiedomein: FFT, inverse FFT, FFT-opties, banddoorlaatfilter, kwadranten wisselen en Directionality.",
+    "famSelOps": "Selectiebewerkingen: Fit Spline, Fit Circle, Fit Rectangle, Interpolate, Scale, Rotate, Make Band, Straighten, Line to Area en Area to Line.",
+    "famEdit": "Bewerken en overlays: knippen, kopiëren, plakken met Paste Control, kopiëren naar het systeem, tekenen, vullen, nieuwe afbeelding, montage, opzoektabelbestanden, Image › Overlay, raster, schaalbalk en Bewerken › Opties.",
+    "famFiji": "Fiji-analyses: Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count en Curve Fitting.",
+    "famFiles": "Bestanden en weergaven: Openen uit de bibliotheek (een andere dataset van de site, als projectie van de z-stapel of als schuin vlak, uit de originele TIFF als die er is), ROI-bestanden en ROI-sets, tekstafbeeldingen, XY-coördinaten; elke afbeelding in een eigen weergave, die kan worden gesplitst, in tabbladen gezet, geminimaliseerd of zwevend gemaakt.",
     "missingTitle": "Niet in deze versie",
     "missing": "Stacks en 3D (hyperstacks, orthogonale aanzichten, 3D-hulpmiddelen), macro's, tekst en pijlen, Bio-Formats, oppervlakgrafieken, het RGB-kleurtype en de Legacy-modus van de toverstaf.",
     "thisTitle": "Over deze geavanceerde weergave",
@@ -1567,7 +1575,7 @@
       "invertLut": "Invert LUTs op een samengesteld beeld in de modus Composite wordt geweigerd; schakel eerst over naar Color of Grayscale.",
       "log": "Er is geen Log-venster: de waarden die ImageJ daar schrijft verschijnen in de statusbalk."
     },
-    "fijiDeviations": "Fiji-hulpmiddelen, waar ze verschillen: Analyze Skeleton snijdt cycli op dezelfde voxels als Fiji wanneer de intensiteiten verschillen, maar bij gelijke takken, en bij de methode « lowest intensity voxel » (Fiji stopt eerder), kan de resultatentabel verschillen; Branch information toont dezelfde takken in een andere volgorde, met een ander eerste uiteinde en een ander lopend gemiddelde; een gesnoeid skelet komt als nieuw beeld « <naam>-pruned » in plaats van de bron te wijzigen. De standaard Costes-drempelzoektocht van Coloc 2 stopt bij andere waarden dan die van Fiji, zodat de drempels, tM1 / tM2 en de Pearson-waarden boven en onder de drempels iets verschillen (Bisection komt overeen op de geteste paren); een negatieve helling geeft het maximum van kanaal 1. Coloc 2 toont geen resultaatbeelden, Cell Counter heeft geen Keep Original of Show All, en Curve Fitting heeft geen « Show settings » en geen door de gebruiker gedefinieerde formule."
+    "fijiDeviations": "Analyze Skeleton: een gesnoeid skelet komt als een nieuwe afbeelding, \"<naam>-pruned\", in plaats van de bron te wijzigen. Coloc 2 toont geen resultaatafbeeldingen, Cell Counter heeft geen Keep Original of Show All, en Curve Fitting heeft geen \"Show settings\" en geen door de gebruiker gedefinieerde formule."
   },
   "view": {
     "menubar": "Menubalk",

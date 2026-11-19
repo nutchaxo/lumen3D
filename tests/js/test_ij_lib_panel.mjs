@@ -186,7 +186,7 @@ await test('B (format 1, nothing readable but a coarser TIFF): the TIFF is the o
   assert.match(ctl.text(), /The TIFF is 10 × 8, coarser than the volume's 20 × 16/);
   assert.match(ctl.text(), /An oblique plane of this dataset cannot be read here\. Open it in the viewer\./);
   assert.match(ctl.text(), /Open this dataset in the viewer/);
-  assert.match(ctl.text(), /The z-stack of this dataset cannot be read here/, 'the processed radio says why it is off');
+  assert.match(ctl.text(), /Processed volume — not readable here/, 'the processed radio names the processed volume and says why it is off');
   ctl.setMode('oblique');
   assert.equal(ctl.st.mode, 'z', 'refused');
   ctl.setSource('processed');

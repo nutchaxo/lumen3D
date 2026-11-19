@@ -824,7 +824,7 @@
       } else {
         const fine = levelRows().find((x) => x.fits) || levelRows()[0];
         procOn = zLevels().length > 0;
-        procLabel = procOn && fine ? tx('dlg.lib.srcProcessed', { w: d.levels[0].width, h: d.levels[0].height }) : tx('dlg.lib.zNo');
+        procLabel = procOn && fine ? tx('dlg.lib.srcProcessed', { w: d.levels[0].width, h: d.levels[0].height }) : tx('dlg.lib.srcProcessedNo');
       }
       rows.push(radio(group, 'processed', st.source === 'processed', procLabel, setSource, locked || !procOn));
       D.appendChild(h('div', { class: 'ij-radio-group' }, rows));

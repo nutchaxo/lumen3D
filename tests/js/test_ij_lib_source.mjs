@@ -46,6 +46,9 @@ test('tiffZRange: one plane takes the TIFF plane holding its centre, a range eve
   // float noise on a boundary never adds a plane: 3 × 0.4 / 0.4 is 3.0000000000000004
   deepEq(R(3, 5, 0.4, 0.4, 20), { jlo: 3, jhi: 5, single: false });
   deepEq(R(0, 0.29 === 0 ? 0 : 6, 0.1, 0.1, 20).jhi, 6);
+  // metadata.json's 6-decimal z step against the TIFF's full double (E95-1: 4.652059 vs 4.652059326175001): slices 90..109 are 20 planes
+  deepEq(R(90, 109, 4.652059, 4.652059326175001, 200), { jlo: 90, jhi: 109, single: false });
+  deepEq(R(199, 199, 4.652059, 4.652059326175001, 200), { jlo: 199, jhi: 199, single: true });
   // a degenerate ratio keeps the whole stack
   deepEq(R(1, 2, 0, 2, 10), { jlo: 0, jhi: 9, single: false });
 });

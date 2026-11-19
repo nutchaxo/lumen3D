@@ -893,8 +893,17 @@
     let xs = starts(W), ys = starts(H);
     const piecesAll = xs.length * ys.length;
     if (xs.length * ys.length > PIECES_MAX) {
-      const k = Math.ceil(Math.sqrt(xs.length * ys.length / PIECES_MAX));
-      xs = xs.filter((v, i) => i % k === 0); ys = ys.filter((v, i) => i % k === 0);
+      // the same fraction of each axis, evenly spaced and keeping both ends, so the grid fills the cap (13×13 → 10×10, not 7×7)
+      const f = Math.sqrt(PIECES_MAX / (xs.length * ys.length));
+      const pick = (a, n) => {
+        n = Math.max(1, Math.min(a.length, n));
+        if (n === a.length) return a;
+        if (n === 1) return [a[Math.floor((a.length - 1) / 2)]];
+        const out = [];
+        for (let i = 0; i < n; i++) out.push(a[Math.round(i * (a.length - 1) / (n - 1))]);
+        return out;
+      };
+      xs = pick(xs, Math.floor(xs.length * f)); ys = pick(ys, Math.floor(ys.length * f));
     }
     // the fine angular bin of every frequency pixel whose radius is in [1, side/2] cycles per piece
     const nFine = Math.round(180 / DIR_RES);

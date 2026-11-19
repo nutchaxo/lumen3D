@@ -832,6 +832,7 @@
       "noPhoto": "Pas de photographie à ouvrir.",
       "obliqueNo": "Un plan oblique ne peut pas être lu ici pour ce jeu de données.",
       "zNo": "La pile en z de ce jeu de données ne peut pas être lue ici.",
+      "srcProcessedNo": "Volume traité — illisible ici (ouvrez le jeu de données dans la visionneuse pour l'utiliser)",
       "noLevelFits": "Rien ne tient dans la mémoire de cet appareil : choisissez moins de canaux, un autre niveau ou une autre source.",
       "level": "Résolution",
       "levelItem": "{w} × {h} px, {size}",
@@ -1547,6 +1548,13 @@
     "famGeometry": "Géométrie et calibration : Rotation, Mise à l'échelle, Taille, Taille du canevas, Translation, Regroupement (bin), Propriétés et Définir l'échelle.",
     "famMeasure": "Mesures : Mesurer, Analyser les particules, Résumer, Distribution, Histogramme et Profil, avec Définir les mesures (descripteurs de forme, Feret, Rediriger vers, Limiter au seuil).",
     "famColoc": "Colocalisation : Pearson, Manders, seuil automatique de Costes et ICQ de Li, avec un histogramme 2D.",
+    "famThreshold": "Seuils : Auto Threshold et Auto Local Threshold avec toutes les méthodes de Fiji (Try all compris), Make Binary et les options binaires.",
+    "famEnhance": "Contraste local et bruit : CLAHE, ajout de bruit, bruit spécifié, poivre et sel, Tubeness et Frangi.",
+    "famFft": "Domaine fréquentiel : FFT, FFT inverse, options FFT, filtre passe-bande, échange des quadrants et Directionality.",
+    "famSelOps": "Opérations sur les sélections : Fit Spline, Fit Circle, Fit Rectangle, Interpolate, Scale, Rotate, Make Band, Straighten, Line to Area et Area to Line.",
+    "famEdit": "Édition et surimpressions : couper, copier, coller avec Paste Control, copier vers le système, dessiner, remplir, nouvelle image, montage, fichiers de tables de couleurs, Image › Overlay, grille, barre d'échelle et Édition › Options.",
+    "famFiji": "Analyses de Fiji : Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count et Curve Fitting.",
+    "famFiles": "Fichiers et vues : Ouvrir depuis la bibliothèque (un autre jeu de données du site, en projection de la pile en z ou en coupe oblique, depuis son TIFF d'origine quand il existe), fichiers ROI et jeux de ROI, images texte, coordonnées XY ; chaque image dans sa propre vue, que l'on peut découper, mettre en onglet, réduire ou rendre flottante.",
     "missingTitle": "Absent de cette version",
     "missing": "Piles et 3D (hyperpiles, vues orthogonales, outils 3D), macros, texte et flèches, Bio-Formats, graphes de surface, le type couleur RVB et le mode Legacy de la baguette magique.",
     "thisTitle": "À propos de cette vue avancée",
@@ -1567,7 +1575,7 @@
       "invertLut": "Inverser les LUT sur une image composite affichée en mode Composite est refusé ; passez d'abord en mode Couleur ou Niveaux de gris.",
       "log": "Il n'y a pas de fenêtre Log : les valeurs qu'ImageJ y écrit apparaissent dans la barre d'état."
     },
-    "fijiDeviations": "Outils Fiji, là où ils diffèrent : Analyze Skeleton coupe les cycles aux mêmes voxels que Fiji quand les intensités diffèrent, mais en cas d'égalité entre branches, et pour la méthode « lowest intensity voxel » (Fiji s'arrête plus tôt), le tableau de résultats peut différer ; Branch information liste les mêmes branches dans un autre ordre, avec une autre première extrémité et une autre moyenne glissante ; un squelette élagué donne une nouvelle image, « <nom>-pruned », au lieu de modifier la source. La recherche de seuil Costes par défaut de Coloc 2 s'arrête à d'autres valeurs que celle de Fiji : les seuils, tM1 / tM2 et les valeurs de Pearson au-dessus et en dessous des seuils diffèrent un peu (Bisection concorde sur les paires testées) ; une pente négative donne le maximum du canal 1. Coloc 2 n'affiche pas d'images de résultat, Cell Counter n'a ni Keep Original ni Show All, et Curve Fitting n'a ni « Show settings » ni formule définie par l'utilisateur."
+    "fijiDeviations": "Analyze Skeleton : un squelette élagué sort comme une nouvelle image, « <nom>-pruned », au lieu de modifier la source. Coloc 2 n'affiche pas d'images de résultat, Cell Counter n'a ni Keep Original ni Show All, et Curve Fitting n'a ni « Show settings » ni formule définie par l'utilisateur."
   },
   "view": {
     "menubar": "Barre de menus",

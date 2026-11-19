@@ -842,7 +842,7 @@ await test('Find Commands: a search field over the commands, every word in the n
   t.close();
 });
 
-await test('every key the package reads exists in the four languages; plugin version untouched', async () => {
+await test('every key the package reads exists in the four languages', async () => {
   const parts = langPart('ana');
   const flat = (o, p = '', out = {}) => { for (const k of Object.keys(o)) { if (o[k] && typeof o[k] === 'object') flat(o[k], p + k + '.', out); else out[p + k] = o[k]; } return out; };
   const en = flat(parts.en);
@@ -851,8 +851,6 @@ await test('every key the package reads exists in the four languages; plugin ver
     deq(Object.keys(l).sort(), Object.keys(en).sort(), lang + ' has the keys of en');
     for (const k of Object.keys(en)) assert.equal((en[k].match(/\{\w+\}/g) || []).sort().join(), (l[k].match(/\{\w+\}/g) || []).sort().join(), lang + ' ' + k + ' keeps its tokens');
   }
-  const pj = JSON.parse(fs.readFileSync(path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio', 'plugin.json'), 'utf8'));
-  assert.equal(pj.version, '1.1.0');
 });
 
 console.log(`ij ana commands: OK (${passed} groups)`);

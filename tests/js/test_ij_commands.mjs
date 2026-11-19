@@ -77,7 +77,8 @@ same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js',
   'the worker loads the mandatory scripts, then every package file');
 assert.deepEqual(pj.styles, ['ij-style.css']);
 assert.deepEqual(pj.contexts, ['page']);
-assert.ok(pj.platformCompat.includes('1.83.0'));
+// ctx.studio.library (File › Open from Library) and api/tiff-index arrived with the core 1.86.0
+assert.ok(pj.platformCompat.includes('1.86.0'));
 
 // ── lang parity ──
 const enKeys = leafKeys(lang.en);

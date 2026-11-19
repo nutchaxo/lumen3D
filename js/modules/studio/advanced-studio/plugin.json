@@ -1,8 +1,8 @@
 {
   "id": "advanced-studio",
   "name": "Advanced Studio",
-  "version": "1.1.0",
-  "platformCompat": ">=1.83.0",
+  "version": "1.2.0",
+  "platformCompat": ">=1.86.0",
   "dataTypes": [
     "3d",
     "live"
@@ -14,7 +14,7 @@
   "placement": "studio",
   "icon": "microscope",
   "order": 10,
-  "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then work on the full-precision voxels with the tools of ImageJ 1.54p: brightness and contrast, lookup tables, threshold, selections (including the Wand, segmented line and angle), measurements and particle analysis, background subtraction and contrast enhancement, filters and image math, binary tools (EDM, watershed, skeletons, Find Maxima), Image Calculator and channel split, merge and arrange, rotate, scale, canvas size, bin and calibration, and colocalization (Pearson, Manders, Costes, Li).",
+  "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then work on the full-precision voxels with the tools of ImageJ 1.54p: brightness and contrast, lookup tables, threshold, selections (including the Wand, segmented line and angle), measurements and particle analysis, background subtraction and contrast enhancement, filters and image math, binary tools (EDM, watershed, skeletons, Find Maxima), Image Calculator and channel split, merge and arrange, rotate, scale, canvas size, bin and calibration, and colocalization (Pearson, Manders, Costes, Li); plus the Fiji tools a browser can run with Fiji's own menus and parameters (Auto Threshold and Auto Local Threshold, CLAHE, Tubeness and Frangi, FFT and Bandpass, Directionality, Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count, Curve Fitting), File › Open from Library (any dataset of the site, as a z-stack projection or an oblique plane, from its original TIFF when there is one) and a panel layout where every image has its own view (split, tabs, dock, float).",
   "i18nTitle": "mode",
   "i18nLanguages": [
     "en",

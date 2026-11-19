@@ -234,7 +234,8 @@ function site_generate_theme_css($theme): string {
  * keys that read 0..n-1), which holds none of the members checked here, so it is
  * accepted as is and stays `{}` when written. */
 function site_validate_page(array &$data): ?string {
-    $raw = json_encode($data);
+    // Slashes stay raw, as in the Python twin's json.dumps: `\/` would count twice what dev_server.py counts.
+    $raw = json_encode($data, JSON_UNESCAPED_SLASHES);
     if ($raw === false) return 'Malformed page document';
     if (strlen($raw) > 2097152) return 'Page document too large';
     $data['schemaVersion'] = 2;

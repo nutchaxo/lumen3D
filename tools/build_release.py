@@ -104,8 +104,8 @@ API_RUNTIME_STATE = frozenset(
         ".stale-recovery.json",
     }
 )
-# Runtime directories under api/ (PHP sessions, login throttle, file locks, page drafts).
-API_RUNTIME_DIRS = frozenset({".sessions", ".bruteforce", ".locks", ".telemetry", "page-drafts"})
+# Runtime directories under api/ (PHP sessions, login throttle, file locks, page drafts, page version histories).
+API_RUNTIME_DIRS = frozenset({".sessions", ".bruteforce", ".locks", ".telemetry", "page-drafts", "page-versions"})
 
 API_SHIPPED_FILES = frozenset({".htaccess", "ca-bundle.pem", "code-manifest.json"})
 

@@ -142,6 +142,17 @@
   "preset_msdLog": "Desplazamiento cuadrático medio (log–log)",
   "note_subsampled": "Dispersión trazada con una fila de cada {n}.",
   "note_series-capped": "Solo se trazan las primeras 24 curvas.",
-  "note_missing": "Sin respuesta para este gráfico de: {names}.",
-  "note_rangesDiffer": "Las posiciones en µm cubren la extensión propia de cada conjunto; use las variables en % para alinearlos."
+  "note_missing": "No trazado para: {names} (le falta una variable de este gráfico, o no respondió).",
+  "note_rangesDiffer": "Las posiciones en µm cubren la extensión propia de cada conjunto; use las variables en % para alinearlos.",
+  "table_line": "Intensidad a lo largo de una medida",
+  "var_d": "Distancia a lo largo de la línea",
+  "var_dr": "Posición a lo largo de la línea (% de su longitud)",
+  "var_line": "Medida",
+  "var_tr": "Tiempo (% de la adquisición)",
+  "var_divTr": "Momento de división (% de la adquisición)",
+  "preset_lineProfile": "Intensidad a lo largo de las líneas de medida",
+  "preset_lineProfileRel": "Intensidad a lo largo de las líneas, en % de su longitud",
+  "lineInfo": "{n} línea(s) de medida muestreada(s) cada {size} µm en los vóxeles del fotograma en pantalla, lectura sin pérdida.",
+  "err_export": "No se pudo guardar la imagen.",
+  "note_msd-sampled": "El desplazamiento cuadrático medio usa una muestra regular de las células (el conjunto de trayectorias es grande); se conservan todos los desfases."
 }

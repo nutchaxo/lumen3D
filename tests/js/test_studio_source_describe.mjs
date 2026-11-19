@@ -193,7 +193,7 @@ function makeEnv({
     const datasetMeta = { id: '3d/demo', name: 'Demo', formatVersion: env.formatVersion, dimensions: { c: 3 } };
     const _studioTreeSignatures = new WeakMap();
     ${['_studioError', '_fnv1a', '_studioTreeKey', '_studioFigureIndices', '_studioLevelVoxelUm', '_studioGeometry', '_studioSourceDescribe',
-      '_linkSignals', '_studioBrickBytes', '_studioRegionToBlock', '_studioSourceOpen', '_studioFacade',
+      '_linkSignals', '_studioBrickBytes', '_studioRegionToBlock', '_studioSourceOpen', '_makeStudioReader', '_studioFacade',
       '_planesBaseOnScreen', '_planesTreeOnScreen', '_cutTreeOnScreen', '_brickTreeBaseOnScreen',
       '_frameLabel', '_tf', '_displayedTimepoint', '_shownTimepoint', '_hasMountedVolume', '_whenTimepointIdle',
       '_dropOtherFrameLoad', '_holdStudioFrame', '_returnToStudioFrame', '_mountTreeOnScreen'].map(lift).join('\n')}
@@ -602,7 +602,7 @@ async function blockCheck(spec, level, axis, expectAt) {
 {
   const { page } = makeEnv();
   const ctxStudio = page.facade();
-  assert.deepEqual(Object.keys(ctxStudio).sort(), ['getDocument', 'getSliceRaw', 'isOpen', 'registerMode', 'source']);
+  assert.deepEqual(Object.keys(ctxStudio).sort(), ['getDocument', 'getSliceRaw', 'isOpen', 'library', 'registerMode', 'source']);
   assert.deepEqual(Object.keys(ctxStudio.source).sort(), ['describe', 'open']);
   assert.equal(ctxStudio.isOpen(), true);
   assert.equal(ctxStudio.getDocument().dataset.id, '3d/demo');

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { ROOT } from './harness.mjs';
+import { makeShellStub } from './ij_harness.mjs';
 
 const DIR = path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio');
 const EN = JSON.parse(fs.readFileSync(path.join(DIR, 'lang', 'en.json'), 'utf8'));
@@ -151,33 +152,11 @@ function boot() {
   sandbox.Dialog = { ask: async (cfg) => { script.asks.push(cfg); const n = script.nextAsk; if (n) { script.nextAsk = null; return n; } const o = (cfg.options || []).find((x) => x.primary) || cfg.options[0]; return o.id; }, isOpen: () => false };
 
   // The chrome of ij-view.js, recorded.
-  const shells = [];
-  sandbox.IJShell = {
-    create(root, opts) {
-      const calls = [];
-      const display = {
-        setTileProvider(f) { display.provider = f; }, invalidate(c) { calls.push(['invalidate', c]); }, setPreview(p) { display.preview = p; },
-        setThresholdOverlay(t) { display.overlay = t; }, setDisplay() {}, zoomAt() {}, fit() { calls.push(['fit']); }, view100() {}, zoomToRect() {},
-        getView: () => ({ zoom: 1, ox: 0, oy: 0, level: 0, viewportWidth: 800, viewportHeight: 600 }), resize() {}, renderToCanvas: async () => null
-      };
-      const floats = new Map();
-      const shell = {
-        opts, calls, display, stage: fakeEl('div'), images: [], status: [], progress: [], warnings: [], menuRefreshes: 0, rois: [],
-        windows: {
-          dialog: async (spec) => answer(spec), confirm: async (s) => sandbox.Dialog.ask(s),
-          hasModal: () => false, closeAll() { shell.closedAll = true; },
-          floating(spec) { const w = { id: spec.id, spec, focus() {}, close() { floats.delete(spec.id); if (spec.onClose) spec.onClose(); } }; floats.set(spec.id, w); return w; }, floats
-        },
-        setImage(i) { shell.images.push(i); }, clearImage() { shell.images.push(null); }, setDisplayState(s) { shell.displayState = s; },
-        setActiveRoi(r) { shell.activeRoi = r; }, setRois(r) { shell.rois.push(r); }, setStatus(t) { shell.status.push(t); },
-        setProgress(p) { shell.progress.push(p); }, setWarning(w) { shell.warnings.push(w); }, setLineWidth() {}, setTool() {},
-        refreshMenus() { shell.menuRefreshes++; }, destroy() { shell.destroyed = true; }
-      };
-      shells.push(shell);
-      return shell;
-    }
-  };
-  sandbox.IJDisplay = {};
+  const stub = makeShellStub({ fakeEl, answer, ask: (s) => sandbox.Dialog.ask(s), status: [] });
+  const shells = stub.shells;
+  sandbox.IJShell = { create: stub.create };
+  // The page loads the P-io module before ij-app.js (plugin.json scripts): File > Open dispatches through IJFileKinds.
+  vm.runInContext(fs.readFileSync(path.join(DIR, 'ij-proc-io.js'), 'utf8'), sandbox, { filename: 'ij-proc-io.js' });
   vm.runInContext(fs.readFileSync(path.join(DIR, 'ij-app.js'), 'utf8') + '\n;globalThis.__IJApp = IJApp;', sandbox, { filename: 'ij-app.js' });
 
   // Plugin ctx.
@@ -210,7 +189,7 @@ const run = async (shell, id) => { const c = cmdOf(shell, id); assert.ok(c, 'com
 const pix = async (shell, x, y) => (await shell.opts.readPixel(x, y));
 const J = (x) => JSON.parse(JSON.stringify(x));
 
-// ═════════════ 1. Z Project (Sum, 16-bit) → pixels → commands ═════════════
+// ═════════════ 1. Z Project (Sum, 32-bit) → pixels → commands ═════════════
 {
   const t = boot();
   t.script.dialogs.push((spec) => { assert.ok(spec.fields.some((f) => f.id === 'method'), 'the first dialog is Z Project'); return { method: 'sum', start: 1, stop: D, level: 0 }; });
@@ -218,12 +197,12 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   await until(() => t.shells[0] && t.shells[0].images.find((i) => i && i.name), 'projection loaded');
   const sh = t.shells[0];
   assert.deepEqual(J(t.log.init.scripts), ['blob:ij-core.js', 'blob:ij-analysis.js', 'blob:ij-proc-shared.js', 'blob:ij-engine.js'], 'worker init carries the verified URLs of the mandatory scripts');
-  assert.deepEqual(J(t.log.init.packages).map((p) => p.pkg), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc'], 'and the packages, each loaded on its own by the worker');
+  assert.deepEqual(J(t.log.init.packages).map((p) => p.pkg), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'], 'and the packages, each loaded on its own by the worker');
   assert.ok(t.log.init.budgetBytes >= 512 * 1048576 && t.log.init.budgetBytes <= 2 * 1024 * 1048576, 'budget within [512 MiB, 2 GiB]');
   assert.equal(t.workers[0].url, 'asset/ij-worker.js');
-  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.bitDepth === 16), 'doc shown');
+  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.bitDepth === 32), 'doc shown');
   const img = sh.images.filter(Boolean).pop();
-  assert.equal(img.bitDepth, 16, 'Sum of 5 slices is 16-bit');
+  assert.equal(img.bitDepth, 32, 'Sum of 5 slices is 32-bit float (ZProjector on the 8-bit processed volume, the rule of the library route)');
   assert.equal(img.width, W); assert.equal(img.height, H);
   assert.equal(img.channels.length, CH);
   assert.equal(img.calibration.pixelWidth, 0.5);
@@ -248,10 +227,10 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   const before = J(await pix(sh, 7, 3));
   await run(sh, 'editInvert');
   const inv = J(await pix(sh, 7, 3));
-  // ImageJ's 16-bit Invert reflects about the data's own min and max (ShortProcessor.invert), not 65535.
+  // ImageJ's Invert reflects about the data's own min and max (FloatProcessor: max - (v - min)), exact for these integers.
   let lo0 = Infinity, hi0 = -Infinity;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = refSum(0, y, x); lo0 = Math.min(lo0, v); hi0 = Math.max(hi0, v); }
-  assert.deepEqual(inv, [lo0 + hi0 - before[0], before[1]], '16-bit invert of the active channel only (ImageJ composite behaviour)');
+  assert.deepEqual(inv, [lo0 + hi0 - before[0], before[1]], 'invert of the active channel only (ImageJ composite behaviour)');
   assert.ok(sh.calls.some((c) => c[0] === 'invalidate'), 'the display drops its tiles');
   assert.equal(cmdOf(sh, 'editUndo').enabled(sh.opts.getState()), true);
   assert.equal(cmdOf(sh, 'fileRevert').enabled(sh.opts.getState()), true, 'a changed image can be reverted');
@@ -529,7 +508,7 @@ const listed = async (t, key) => (await engineCall(t.workers[0], 'session.list')
   await until(() => sh.images.filter(Boolean).pop().bitDepth === 8, '8-bit');
   await run(sh, 'binMask');
   await until(() => /-mask$/.test(sh.images.filter(Boolean).pop().name), 'mask shown');
-  t.script.dialogs.push({ minSize: 0, maxSize: 1e9, minCirc: 0, maxCirc: 1, exclude: false, holes: false, display: true, manager: true, summarize: true });
+  t.script.dialogs.push({ size: '0-Infinity', circularity: '0.00-1.00', show: 'nothing', exclude: false, clear: true, holes: false, display: true, manager: true, summarize: true });
   const asks = t.script.asks.length;
   await run(sh, 'analyzeParticles');
   assert.equal(t.script.asks.length, asks, 'the summary is a window, not a modal');

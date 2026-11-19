@@ -2985,7 +2985,6 @@ const ViewerApp = (() => {
     const depth = indices.length;
     const channelCount = info.channels.length;
     const allChannels = Array.from({ length: channelCount }, (_, c) => c);
-    const roundUp64 = (n) => Math.ceil(n / 64) * 64;
     const sessionAbort = new AbortController();
     let released = false;
     const release = () => {
@@ -3008,9 +3007,6 @@ const ViewerApp = (() => {
       console.warn('[ViewerApp] The Studio source falls back to the bricks.', err?.message || err);
     }
     const cutKind = axis === 'y' ? 'xz' : 'yz';
-    let planesOk = Boolean(planesTree);
-    let cutOk = Boolean(cutTree);
-    const backendName = () => (planesOk ? 'planes' : (cutOk ? cutKind : 'bricks'));
 
     const assertFrame = () => {
       const shown = typeof VolumeViewer.getDisplayedTree === 'function' ? VolumeViewer.getDisplayedTree() : null;
@@ -3028,12 +3024,65 @@ const ViewerApp = (() => {
       try { return handle && BrickLoader.withMount ? BrickLoader.withMount(handle, run) : run(); } catch (err) { return 0; }
     };
     let bytes = estimateBrickPath();
-    if (planesOk) {
+    if (planesTree) {
       try {
         const est = await planesTree.estimate(indices, allChannels, { x0: 0, y0: 0, x1: width, y1: height }, { sample: 16, signal: outer || undefined });
         if (est && Number.isFinite(est.bytes)) bytes = est.bytes;
       } catch (err) { /* the brick estimate stands */ }
     }
+
+    const readBricks = async (y0, y1, z0, z1, chans, signal) => {
+      const rows = y1 - y0;
+      const count = z1 - z0;
+      const first = indices[z0];
+      const end = indices[z1 - 1] + 1;
+      const box = axis === 'z' ? { x0: 0, x1: width, y0, y1, z0: first, z1: end }
+        : axis === 'y' ? { x0: 0, x1: width, y0: first, y1: end, z0: y0, z1: y1 }
+          : { x0: first, x1: end, y0: 0, y1: width, z0: y0, z1: y1 };
+      const region = await DataAccess.readRegion(box, chans, { level, signal, handle });
+      return region.data.map(src => _studioRegionToBlock(src, axis, width, rows, count));
+    };
+
+    const reader = _makeStudioReader({
+      level, axis, indices, width, height, channelCount, planesTree, cutTree, cutKind, readBricks, assertFrame,
+      signals: () => [outer, sessionAbort.signal],
+      isReleased: () => released,
+      releasedError: () => _studioError('STUDIO_SESSION_RELEASED', 'The Studio source session was released.')
+    });
+
+    return {
+      level,
+      width,
+      height,
+      depth,
+      bandRows: reader.bandRows,
+      zChunk: reader.zChunk,
+      readBlock: reader.readBlock,
+      estimateBytes: () => bytes,
+      assertFrame,
+      release,
+      backend: reader.backend
+    };
+  }
+
+  /**
+   * The block reader of a read session over the planes of one axis: the figure's
+   * (_studioSourceOpen) and the Studio library's (openPlanes) share it. Backends, finest
+   * first — the planes/ tree, the XZ / YZ cut store, then `readBricks` — and one that
+   * fails is dropped for the session (the next answers).
+   *   readBricks(y0, y1, z0, z1, chans, signal) → one block per channel, [plane][row][column]
+   *   signals() → the session's own signals, linked with the request's
+   * → { readBlock, backend, bandRows, zChunk }; readBlock({ y0, y1, z0, z1, channels, signal })
+   *   → { width, rows, depth, data } (rows y0..y1, planes z0..z1 of `indices`).
+   */
+  function _makeStudioReader(o) {
+    const { level, axis, indices, width, height, channelCount, planesTree, cutTree, cutKind, readBricks, assertFrame } = o;
+    const depth = indices.length;
+    const allChannels = Array.from({ length: channelCount }, (_, c) => c);
+    const roundUp64 = (n) => Math.ceil(n / 64) * 64;
+    let planesOk = Boolean(planesTree);
+    let cutOk = Boolean(cutTree);
+    const backendName = () => (planesOk ? 'planes' : (cutOk ? cutKind : (o.bricksBackend || 'bricks')));
 
     const readPlanes = async (y0, y1, z0, z1, chans, signal) => {
       const rows = y1 - y0;
@@ -3065,27 +3114,15 @@ const ViewerApp = (() => {
       return out;
     };
 
-    const readBricks = async (y0, y1, z0, z1, chans, signal) => {
-      const rows = y1 - y0;
-      const count = z1 - z0;
-      const first = indices[z0];
-      const end = indices[z1 - 1] + 1;
-      const box = axis === 'z' ? { x0: 0, x1: width, y0, y1, z0: first, z1: end }
-        : axis === 'y' ? { x0: 0, x1: width, y0: first, y1: end, z0: y0, z1: y1 }
-          : { x0: first, x1: end, y0: 0, y1: width, z0: y0, z1: y1 };
-      const region = await DataAccess.readRegion(box, chans, { level, signal, handle });
-      return region.data.map(src => _studioRegionToBlock(src, axis, width, rows, count));
-    };
-
     const readBlock = async (request = {}) => {
       const { y0, y1, z0, z1 } = request;
-      if (released) throw _studioError('STUDIO_SESSION_RELEASED', 'The Studio source session was released.');
+      if (o.isReleased()) throw o.releasedError();
       if (!(Number.isInteger(y0) && Number.isInteger(y1) && y0 >= 0 && y1 > y0 && y1 <= height)) throw new RangeError(`rows ${y0}..${y1} outside 0..${height}`);
       if (!(Number.isInteger(z0) && Number.isInteger(z1) && z0 >= 0 && z1 > z0 && z1 <= depth)) throw new RangeError(`planes ${z0}..${z1} outside 0..${depth}`);
       const chans = Array.isArray(request.channels) && request.channels.length ? request.channels.map(Number) : allChannels;
       for (const c of chans) if (!Number.isInteger(c) || c < 0 || c >= channelCount) throw new RangeError(`channel ${c} outside 0..${channelCount - 1}`);
       assertFrame();
-      const link = _linkSignals([outer, sessionAbort.signal, request.signal]);
+      const link = _linkSignals([...o.signals(), request.signal]);
       try {
         const isAbort = () => link.signal.aborted;
         let data = null;
@@ -3112,17 +3149,909 @@ const ViewerApp = (() => {
     };
 
     return {
-      level,
-      width,
-      height,
-      depth,
-      bandRows: planesTree ? roundUp64(Number(planesTree.tileSize) || 512) : (cutTree ? roundUp64(height) : 64),
-      zChunk: planesTree || cutTree ? 8 : 64,
       readBlock,
-      estimateBytes: () => bytes,
-      assertFrame,
-      release,
-      backend: backendName
+      backend: backendName,
+      bandRows: o.bandRows || (planesTree ? roundUp64(Number(planesTree.tileSize) || 512) : (cutTree ? roundUp64(height) : 64)),
+      zChunk: o.zChunk || (planesTree || cutTree ? 8 : 64)
+    };
+  }
+
+  // ── The Studio library (`ctx.studio.library`, PLAN-wave3 §3) ───────────────────────────────
+  // Any dataset of the site, read through the lossless sources the Studio's own figure uses —
+  // the planes/ tree, the cut store, the bricks' `ll` column — without mounting it:
+  //   a dataset of THIS page (mounted) is read through BrickLoader.pinTree / withMount, any
+  //   timepoint of it; another dataset's tree (manifest fetched, validated, never mounted) is read
+  //   through PlaneLoader and CutStore alone. A TIFF of its download/ folder is indexed by
+  //   api/tiff-index. Nothing here touches the viewer's atlas, its timeline or the VRAM budget.
+  const _LIB_TYPES = ['3d', '2d', 'live'];
+  const _LIB_IDLE_MS = 5 * 60 * 1000;
+  // the names api/tiff-index accepts (both twins): one segment, no parentheses, no non-ASCII
+  const _LIB_TIFF_NAME = /^[A-Za-z0-9_][A-Za-z0-9._ -]*\.(tif|tiff)$/i;
+  const _LIB_CUT_CHUNK_BYTES = 16 * 1024 * 1024;  // decoded bytes of whole 8³ cut super-block records per CutStore call
+  const _LIB_CUT_CHUNK_MIN = 512;                  // … never fewer cut bricks than one full record
+  const _LIB_BRICK_CHUNK = 64;   // 64³ bricks (one 4×4×4 pack = 16 MiB decoded) per BrickLoader batch: the consumer awaits each one
+  const _LIB_TREES_PER_DATASET = 4;  // frames of one dataset whose tree (index, pin) stays cached
+  const _libTrees = new Map();      // `<id>|<timepoint>` → { id, promise, timer } (insertion order = least recently used first)
+  const _libPlanes = new Map();     // planes base → { promise, timer }
+  const _libSessions = new Set();   // { id, abort } of every open session
+  let _libGate = Promise.resolve(); // one library read stream at a time
+  let _libApi = null;
+
+  /** An Error with a LIBRARY_* code; `needsViewer` = "open the dataset in the viewer to do this". */
+  function _libError(code, message, extra) {
+    return Object.assign(new Error(message || code), { code, needsViewer: false, datasetId: null }, extra || {});
+  }
+
+  function _libAbortError() {
+    return new DOMException('The library read was cancelled', 'AbortError');
+  }
+
+  /** `promise`, or an AbortError as soon as `signal` aborts (the work behind goes on). */
+  function _libWait(promise, signal) {
+    if (!signal) return promise;
+    if (signal.aborted) { Promise.resolve(promise).catch(() => {}); return Promise.reject(_libAbortError()); }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(_libAbortError());
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+        (e) => { signal.removeEventListener('abort', onAbort); reject(e); }
+      );
+    });
+  }
+
+  /** The library's one read stream: resolves with its release function. */
+  function _libAcquire(signal) {
+    const previous = _libGate;
+    let release;
+    const mine = new Promise((resolve) => { release = resolve; });
+    _libGate = previous.then(() => mine);
+    return _libWait(previous, signal).then(() => release, (err) => { previous.then(release); throw err; });
+  }
+
+  function _libRecord(id) {
+    const key = String(id || '');
+    let rec = typeof Catalog !== 'undefined' && Catalog.getById ? Catalog.getById(key) : null;
+    if (!rec && datasetMeta && datasetMeta.id === key) rec = datasetMeta;
+    if (!rec || !_LIB_TYPES.includes(rec.type) || rec.hidden) {
+      throw _libError('LIBRARY_UNKNOWN', `Unknown dataset ${key}`, { datasetId: key });
+    }
+    return rec;
+  }
+
+  /** The dataset BrickLoader has mounted on this page (a photograph never is). */
+  function _libMounted(rec) {
+    return Boolean(datasetMeta && datasetMeta.id === rec.id && rec.type !== '2d'
+      && typeof BrickLoader !== 'undefined' && BrickLoader.isReady?.());
+  }
+
+  function _libFormat(rec) {
+    return Number(rec.formatVersion) || 1;
+  }
+
+  function _libTimepointCount(rec) {
+    if (rec.type !== 'live') return null;
+    const n = Number(rec.dimensions?.t);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+
+  /** The 0-based frame of a `live` dataset (`required`: the caller asked for pixels); null for any other. */
+  function _libTimepoint(rec, timepoint, required) {
+    if (rec.type !== 'live') return null;
+    if (timepoint === undefined || timepoint === null) {
+      if (required) throw _libError('LIBRARY_TIMEPOINT', 'A timelapse needs its timepoint', { datasetId: rec.id });
+      return 0;
+    }
+    const count = _libTimepointCount(rec);
+    if (!Number.isInteger(timepoint) || timepoint < 0 || (count !== null && timepoint >= count)) {
+      throw _libError('LIBRARY_TIMEPOINT', `Timepoint ${timepoint} is outside the timelapse`, { datasetId: rec.id });
+    }
+    return timepoint;
+  }
+
+  /** The physical size (µm) of the volume: the catalog's, else voxel size × dimensions, else the voxel counts. */
+  function _libPhysical(rec, dims0) {
+    const p = rec.physicalSizeUm;
+    if (p && p.x > 0 && p.y > 0 && p.z > 0) return { x: Number(p.x), y: Number(p.y), z: Number(p.z), calibrated: true };
+    const v = rec.voxel_size;
+    if (v && v.x > 0 && v.y > 0 && v.z > 0 && dims0) return { x: v.x * dims0.x, y: v.y * dims0.y, z: v.z * dims0.z, calibrated: true };
+    return dims0 ? { x: dims0.x, y: dims0.y, z: dims0.z, calibrated: false } : null;
+  }
+
+  /** `t000`-style folder name of a frame. */
+  function _libFrameName(tp) {
+    return `t${String(tp).padStart(3, '0')}`;
+  }
+
+  /**
+   * The tree of a dataset's frame, once: path + manifest (the very ones the viewer mounts for it),
+   * its level dimensions, a BrickLoader pin when the dataset is the mounted one. A manifest that
+   * is not valid is refused (LIBRARY_BAD_MANIFEST), never partially read.
+   */
+  async function _libLoadTree(rec, tp) {
+    const mounted = _libMounted(rec);
+    const brickDir = rec.qualities?.native?.directory || 'bricks';
+    const base = `DATA_WEB/${rec.id}`;
+    let path = null;
+    let manifest = null;
+    let subPath = '';
+    let pin = null;
+    if (mounted) {
+      if (rec.type === 'live') {
+        const sel = typeof VolumeViewer !== 'undefined' ? VolumeViewer.selectBrickManifest?.(_brickManifest, tp) : null;
+        if (!sel || !sel.available) throw _libError('LIBRARY_TIMEPOINT', `No bricks for timepoint ${tp}`, { datasetId: rec.id });
+        subPath = sel.subPath || _libFrameName(tp);
+        path = `${_basePath}/${brickDir}/${subPath}`;
+        manifest = sel.manifest;
+      } else {
+        const shown = VolumeViewer.getDisplayedTree?.() || null;
+        path = shown?.path || BrickLoader.getBasePath?.() || null;
+        manifest = shown?.manifest || BrickLoader.getManifest?.() || null;
+      }
+      if (!path || !manifest) throw _libError('LIBRARY_SOURCE_LOST', 'The mounted dataset has no brick tree', { datasetId: rec.id });
+      try {
+        pin = await BrickLoader.pinTree(path, manifest);
+      } catch (err) {
+        console.error('[ViewerApp] The library could not pin a tree.', err);
+        throw _libError('LIBRARY_SOURCE_LOST', 'The tree could not be pinned', { datasetId: rec.id });
+      }
+    } else {
+      let root = null;
+      try {
+        const resp = await fetch(`${base}/${brickDir}/manifest.json`, { cache: 'no-cache' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        root = await resp.json();
+      } catch (err) {
+        console.error('[ViewerApp] The library could not read a brick manifest.', err);
+        throw _libError('LIBRARY_BAD_MANIFEST', 'The brick manifest could not be read', { datasetId: rec.id });
+      }
+      let sel = { available: true, manifest: root, subPath: '' };
+      if (typeof VolumeViewer !== 'undefined' && VolumeViewer.selectBrickManifest) sel = VolumeViewer.selectBrickManifest(root, tp === null ? 0 : tp);
+      if (!sel || !sel.available) throw _libError('LIBRARY_TIMEPOINT', `No bricks for timepoint ${tp}`, { datasetId: rec.id });
+      manifest = sel.manifest;
+      subPath = sel.subPath || '';
+      try {
+        BrickLoader.validateManifest(manifest);
+      } catch (err) {
+        console.error('[ViewerApp] The library refused a brick manifest.', err);
+        throw _libError('LIBRARY_BAD_MANIFEST', 'The brick manifest is not valid', { datasetId: rec.id });
+      }
+      path = subPath ? `${base}/${brickDir}/${subPath}` : `${base}/${brickDir}`;
+    }
+    // The level dimensions, from the pinned mount or from the manifest.
+    let dims = [];
+    if (pin) {
+      BrickLoader.withMount(pin, () => {
+        for (let k = 0; ; k++) {
+          const d = BrickLoader.getDimensions(k);
+          if (!d) break;
+          dims.push({ x: d.x, y: d.y, z: d.z, brickSize: d.brickSize || 64, channels: Number(d.channels) || 0 });
+        }
+      });
+    } else {
+      const channels = Array.isArray(manifest.channels) ? manifest.channels.length : (Number(manifest.channels) || 0);
+      dims = (Array.isArray(manifest.levels) ? manifest.levels : []).map((l) => {
+        const d = (l && (l.dimensions || l.dims)) || null;
+        return d ? { x: d.x, y: d.y, z: d.z, brickSize: Number(manifest.brickSize) || 64, channels } : null;
+      });
+    }
+    if (!dims.length || dims.some((d) => !d || !(d.x > 0 && d.y > 0 && d.z > 0))) {
+      throw _libError('LIBRARY_BAD_MANIFEST', 'The brick manifest holds no usable level', { datasetId: rec.id });
+    }
+    const channelCount = dims[0].channels || Number(rec.dimensions?.c) || (Array.isArray(rec.channels) ? rec.channels.length : 0) || 1;
+    return {
+      id: rec.id, tp, path, manifest, subPath, pin, mounted, dims, channels: channelCount,
+      v5: manifest.schema === 'iribhm-bricks-v5' || manifest.schema === 'iribhm-bricks-v6',
+      treeKey: _studioTreeKey({ path, manifest })
+    };
+  }
+
+  function _libTreeDrop(key, entry) {
+    if (_libTrees.get(key) === entry) { clearTimeout(entry.timer); _libTrees.delete(key); }
+  }
+
+  /** The cached tree of a frame: ≤ 4 per dataset (least recently used out), 5 min idle, rebuilt once when its pin is stale. */
+  async function _libTree(rec, tp, signal) {
+    const key = `${rec.id}|${tp === null ? '' : tp}`;
+    for (let attempt = 0; ; attempt++) {
+      let entry = _libTrees.get(key);
+      if (entry) {
+        _libTrees.delete(key);                    // most recently used goes last
+        _libTrees.set(key, entry);
+      } else {
+        entry = { id: rec.id, promise: _libLoadTree(rec, tp), timer: null };
+        _libTrees.set(key, entry);
+        const mine = entry;
+        mine.promise.catch(() => _libTreeDrop(key, mine));
+        let count = 0;
+        for (const e of _libTrees.values()) if (e.id === rec.id) count++;
+        for (const [k, e] of [..._libTrees]) {
+          if (count <= _LIB_TREES_PER_DATASET) break;
+          if (e.id === rec.id && e !== mine) { _libTreeDrop(k, e); count--; }
+        }
+      }
+      clearTimeout(entry.timer);
+      const held = entry;
+      held.timer = setTimeout(() => _libTreeDrop(key, held), _LIB_IDLE_MS);
+      const tree = await _libWait(held.promise, signal);
+      // A pinned mount outlived by a dataset switch (BRICKS_MOUNT_CHANGED), or a tree read before the
+      // dataset was mounted: forget it and read the tree again, once.
+      let stale = false;
+      if (tree.mounted) {
+        try { BrickLoader.withMount(tree.pin, () => 0); } catch (err) { stale = true; }
+        if (!stale && !_libMounted(rec)) stale = true;
+      }
+      if (!stale || attempt > 0) return tree;
+      _libTreeDrop(key, held);
+    }
+  }
+
+  /** The levels of a tree: dimensions, voxel size (µm) and the size of an XY plane. */
+  function _libLevels(rec, tree) {
+    const physical = _libPhysical(rec, tree.dims[0]);
+    return tree.dims.map((d, level) => ({
+      level,
+      dims: { x: d.x, y: d.y, z: d.z },
+      voxelUm: { x: physical.x / d.x, y: physical.y / d.y, z: physical.z / d.z },
+      width: d.x,
+      height: d.y
+    }));
+  }
+
+  /** What a dataset can be asked for (PLAN §3.1, "Sources per case"). */
+  function _libCapabilities(rec, tree) {
+    const none = (reasonCode) => ({ available: false, levels: [], backend: 'none', reasonCode });
+    if (!tree) return { z: none('LIBRARY_FORMAT_UNSUPPORTED'), oblique: none('LIBRARY_OBLIQUE_UNSUPPORTED') };
+    const format = _libFormat(rec);
+    const all = tree.dims.map((_, k) => k);
+    if (tree.mounted) {
+      const cuts = tree.v5 && all.filter(k => _cutDepthOf(tree.manifest, k));
+      return {
+        z: { available: true, levels: all, backend: format >= 2 ? 'planes' : 'bricks' },
+        oblique: { available: true, levels: all, backend: cuts && cuts.length ? 'cuts' : 'bricks' }
+      };
+    }
+    if (tree.v5) {
+      const cuts = all.filter(k => _cutDepthOf(tree.manifest, k));
+      return {
+        // level 0 is read from planes/, the coarser levels from the cut store (openPlanes' cut reader)
+        z: { available: true, levels: all, backend: 'planes', backends: Object.fromEntries(all.map(k => [k, k === 0 ? 'planes' : 'cuts'])) },
+        oblique: cuts.length ? { available: true, levels: cuts, backend: 'cuts' } : none('LIBRARY_OBLIQUE_UNSUPPORTED')
+      };
+    }
+    if (format >= 2) return { z: { available: true, levels: [0], backend: 'planes' }, oblique: none('LIBRARY_OBLIQUE_UNSUPPORTED') };
+    return { z: none('LIBRARY_FORMAT_UNSUPPORTED'), oblique: none('LIBRARY_OBLIQUE_UNSUPPORTED') };
+  }
+
+  /** The `.tif` / `.tiff` files of the root of a dataset's download/ folder (the downloads listing). */
+  async function _libTiffs(rec, signal) {
+    const qs = `dataset=${encodeURIComponent(rec.id)}&path=`;
+    for (const url of [`api/downloads?${qs}`, `api/downloads.php?${qs}`]) {
+      try {
+        const resp = await fetch(url, { cache: 'no-store', signal });
+        if (!resp.ok) continue;
+        const doc = await resp.json();
+        return (Array.isArray(doc.entries) ? doc.entries : [])
+          .filter(e => e && e.kind === 'file' && _LIB_TIFF_NAME.test(String(e.name || '')))
+          .map(e => ({ file: e.name, url: e.href || `DATA_WEB/${rec.id}/download/${e.name}`, sizeBytes: Number.isFinite(e.sizeBytes) ? e.sizeBytes : null }));
+      } catch (err) {
+        if (err?.name === 'AbortError') throw err;
+      }
+    }
+    return [];
+  }
+
+  /** `ctx.studio.library.list()` — sync, from the catalog (hidden datasets are not in it). */
+  function _libList() {
+    const rows = typeof Catalog !== 'undefined' && Catalog.getAll ? Catalog.getAll() : [];
+    return rows.filter(d => d && _LIB_TYPES.includes(d.type) && !d.hidden).map((d) => {
+      const dim = d.dimensions && d.dimensions.x > 0 ? { x: d.dimensions.x, y: d.dimensions.y, z: d.dimensions.z } : null;
+      const p = d.physicalSizeUm;
+      return {
+        id: d.id,
+        name: d.name,
+        type: d.type,
+        stage: d.stage ?? null,
+        embryo: d.embryo ?? null,
+        formatVersion: _libFormat(d),
+        dims: dim,
+        channels: (Array.isArray(d.channels) ? d.channels : []).map(c => ({ name: c.name, color: c.color || null })),
+        physicalUm: p && p.x > 0 && p.y > 0 ? { x: p.x, y: p.y, z: p.z > 0 ? p.z : null } : null,
+        thumbnail: `DATA_WEB/${d.id}/thumbnail.webp`,
+        timepoints: _libTimepointCount(d),
+        mounted: _libMounted(d)
+      };
+    });
+  }
+
+  /** `ctx.studio.library.describe(id, { timepoint, signal })` */
+  async function _libDescribe(id, options = {}) {
+    const rec = _libRecord(id);
+    const signal = options.signal || null;
+    const tp = _libTimepoint(rec, options.timepoint, false);
+    const tiffs = await _libTiffs(rec, signal);
+    const out = {
+      id: rec.id, name: rec.name, type: rec.type, formatVersion: _libFormat(rec), timepoint: tp,
+      timepoints: _libTimepointCount(rec), mounted: _libMounted(rec), treeKey: null,
+      channels: [], physicalUm: null, levels: [], z: null, oblique: null, tiffs, photo: null
+    };
+    const nc = Math.max(Array.isArray(rec.channels) ? rec.channels.length : 0, Number(rec.dimensions?.c) || 0);
+    const channelsOf = (count) => Array.from({ length: count }, (_, i) => {
+      const c = (Array.isArray(rec.channels) && rec.channels[i]) || {};
+      const scale = Number(c.max) > 0 && Number(c.max) <= 1 ? 255 : 1;      // the catalog keeps fractions
+      return { index: i, name: c.name || `Channel ${i + 1}`, color: c.color || null, window: { min: Math.round((Number(c.min) || 0) * scale), max: Math.round((Number(c.max) > 0 ? Number(c.max) : 255 / scale) * scale) } };
+    });
+    if (rec.type === '2d') {
+      const img = rec.image || {};
+      const base = `DATA_WEB/${rec.id}`;
+      out.channels = channelsOf(nc);
+      out.physicalUm = rec.physicalSizeUm ? { x: rec.physicalSizeUm.x, y: rec.physicalSizeUm.y, z: null } : null;
+      out.photo = {
+        imageUrl: `${base}/${img.native || 'image.webp'}`,
+        previewUrl: `${base}/${img.preview || 'preview.webp'}`,
+        width: img.width || rec.dimensions?.x || null,
+        height: img.height || rec.dimensions?.y || null,
+        pixelSizeUm: rec.pixelSizeUm ? { x: rec.pixelSizeUm.x, y: rec.pixelSizeUm.y } : null
+      };
+      Object.assign(out, _libCapabilities(rec, null));
+      return out;
+    }
+    const tree = await _libTree(rec, tp, signal);
+    const physical = _libPhysical(rec, tree.dims[0]);
+    out.treeKey = tree.treeKey;
+    out.channels = channelsOf(tree.channels);
+    out.physicalUm = { x: physical.x, y: physical.y, z: physical.z, calibrated: physical.calibrated };
+    out.levels = _libLevels(rec, tree);
+    Object.assign(out, _libCapabilities(rec, tree));
+    return out;
+  }
+
+  /** The planes/ tree of a frame (cached per base, 5 min idle), or null when it cannot be opened. */
+  function _libPlanesTree(rec, tree) {
+    if (_libFormat(rec) < 2 || typeof PlaneLoader === 'undefined' || typeof PlaneCodec === 'undefined') return Promise.resolve(null);
+    const brickDir = rec.qualities?.native?.directory || 'bricks';
+    const planesBase = rec.type === 'live'
+      ? `DATA_WEB/${rec.id}/planes/${tree.subPath || _libFrameName(tree.tp)}`
+      : `DATA_WEB/${rec.id}/planes`;
+    let entry = _libPlanes.get(planesBase);
+    if (!entry) {
+      const d0 = tree.dims[0];
+      const promise = PlaneLoader.open(planesBase, {
+        dimensions: { x: d0.x, y: d0.y, z: d0.z },
+        channels: tree.channels > 0 ? tree.channels : null,
+        sourceManifestUrl: `DATA_WEB/${rec.id}/${brickDir}/manifest.json`
+      }).catch((err) => {
+        const permanent = ['PLANES_INVALID', 'MIPS_INVALID', 'PLANES_STALE', 'PLANES_NO_CODEC'].includes(err?.code)
+          || (err?.code === 'PLANES_HTTP' && /\bHTTP (404|410)\b/.test(String(err?.message || '')));
+        if (!permanent && _libPlanes.get(planesBase) === entry) _libPlanes.delete(planesBase);
+        console.warn(`[ViewerApp] ${planesBase} is not usable; the library reads another source.`, err?.message || err);
+        return null;
+      });
+      entry = { promise, timer: null };
+      _libPlanes.set(planesBase, entry);
+    }
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => { if (_libPlanes.get(planesBase) === entry) _libPlanes.delete(planesBase); }, _LIB_IDLE_MS);
+    return entry.promise;
+  }
+
+  /**
+   * Level-k indices of the planes level-0 z `first..last` cover: every level-k plane that overlaps
+   * [first, last + 1) of the level-0 axis, so a coarser level never drops a plane.
+   */
+  function _libMapPlanes(first, last, dim0, dimK) {
+    if (dimK === dim0) return Array.from({ length: last - first + 1 }, (_, i) => first + i);
+    const lo = Math.max(0, Math.min(dimK - 1, Math.floor((first * dimK) / dim0)));
+    const hi = Math.max(lo, Math.min(dimK - 1, Math.ceil(((last + 1) * dimK) / dim0) - 1));
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  }
+
+  /**
+   * z planes of one cut-store level. A cut brick is 32 × 32 × bz: the planes of one layer `cz` all lie in
+   * the SAME bricks, so each (layer, channel) of a block is ONE loadCutBricks call for the band's bricks and
+   * every needed plane of the layer is copied out of each delivered brick — never one fetch per plane.
+   */
+  function _libCutPlaneReader(cutTree, level, bz, dims, width, height, indices) {
+    return async (y0, y1, z0, z1, chans, signal) => {
+      const rows = y1 - y0;
+      const C = 32;
+      const out = chans.map(() => new Uint8Array(width * rows * (z1 - z0)));
+      const layers = new Map();                 // cz → [{ i, layer }]
+      for (let i = 0; i < z1 - z0; i++) {
+        const z = indices[z0 + i];
+        const cz = Math.floor(z / bz);
+        let list = layers.get(cz);
+        if (!list) layers.set(cz, list = []);
+        list.push({ i, layer: z - cz * bz });
+      }
+      for (const [cz, planes] of layers) {
+        const list = [];
+        for (let cy = Math.floor(y0 / C); cy * C < y1; cy++) for (let cx = 0; cx * C < width; cx++) list.push({ cx, cy, cz });
+        for (let k = 0; k < chans.length; k++) {
+          await cutTree.loadCutBricks(level, chans[k], bz, list, {
+            signal,
+            onBrick: ({ cx, cy, data }) => {
+              const w = Math.min(C, width - cx * C), h = Math.min(C, height - cy * C);
+              for (const { i, layer } of planes) {
+                for (let y = 0; y < h; y++) {
+                  const row = cy * C + y;
+                  if (row < y0 || row >= y1) continue;
+                  out[k].set(data.subarray((layer * C + y) * C, (layer * C + y) * C + w), (i * rows + (row - y0)) * width + cx * C);
+                }
+              }
+            }
+          });
+        }
+      }
+      return out;
+    };
+  }
+
+  /** `ctx.studio.library.openPlanes(id, { axis: 'z', first, last, level, timepoint, signal })` */
+  async function _libOpenPlanes(id, options = {}) {
+    const rec = _libRecord(id);
+    const signal = options.signal || null;
+    const fail = (code, message, needsViewer = false) => _libError(code, message, { datasetId: rec.id, needsViewer });
+    if ((options.axis || 'z') !== 'z') throw fail('LIBRARY_BAD_ARGS', 'Only the z axis is offered');
+    if (rec.type === '2d') throw fail('LIBRARY_FORMAT_UNSUPPORTED', 'A photograph has no z-stack');
+    const tp = _libTimepoint(rec, options.timepoint, true);
+    const format = _libFormat(rec);
+    const tree = await _libTree(rec, tp, signal);
+    const level = Number.isInteger(options.level) ? options.level : 0;
+    if (level < 0 || level >= tree.dims.length) throw fail('LIBRARY_LEVEL_UNSUPPORTED', `Level ${level} does not exist`);
+    if (!tree.mounted) {
+      if (format < 2) throw fail('LIBRARY_FORMAT_UNSUPPORTED', 'This dataset must be opened in the viewer', true);
+      if (level > 0 && !tree.v5) throw fail('LIBRARY_LEVEL_UNSUPPORTED', 'Only the native level is read outside the viewer', true);
+    }
+    const dim0 = tree.dims[0].z, dimK = tree.dims[level].z;
+    const first = options.first, last = options.last;
+    if (!(Number.isInteger(first) && Number.isInteger(last) && first >= 0 && last >= first && last < dim0)) {
+      throw fail('LIBRARY_BAD_ARGS', `Planes ${first}..${last} are outside 0..${dim0 - 1}`);
+    }
+    const indices = _libMapPlanes(first, last, dim0, dimK);
+    const width = tree.dims[level].x;
+    const height = tree.dims[level].y;
+    const channelCount = tree.channels;
+
+    const controller = new AbortController();
+    const entry = { id: rec.id, abort: () => release() };
+    let released = false;
+    let planeCuts = null;
+    const release = () => {
+      if (released) return;
+      released = true;
+      controller.abort();
+      planeCuts = null;
+      _libSessions.delete(entry);
+      signal?.removeEventListener?.('abort', release);
+    };
+    if (signal?.aborted) throw _libAbortError();
+    signal?.addEventListener?.('abort', release, { once: true });
+    _libSessions.add(entry);
+    try {
+      // Backends, finest first (PLAN §3.1 table): planes/ at level 0, then the cut store, then the bricks of a mounted tree.
+      let planesTree = null;
+      if (level === 0) {
+        planesTree = await _libWait(_libPlanesTree(rec, tree), signal);
+        if (planesTree && !(planesTree.dimensions?.x === width && planesTree.dimensions?.y === height)) planesTree = null;
+      }
+      let readBricks;
+      let cutReader = false;
+      if (tree.mounted) {
+        readBricks = async (y0, y1, z0, z1, chans, sig) => {
+          const box = { x0: 0, x1: width, y0, y1, z0: indices[z0], z1: indices[z1 - 1] + 1 };
+          const region = await DataAccess.readRegion(box, chans, { level, signal: sig, handle: tree.pin });
+          return region.data;
+        };
+      } else if (tree.v5 && _cutDepthOf(tree.manifest, level) && typeof CutStore !== 'undefined') {
+        const cutTree = CutStore.open(tree.path, tree.manifest);
+        // The session's store is dropped by release(): on a host without Range it holds whole pack bodies.
+        planeCuts = cutTree;
+        cutReader = true;
+        readBricks = _libCutPlaneReader(cutTree, level, _cutDepthOf(tree.manifest, level), tree.dims[level], width, height, indices);
+      } else {
+        readBricks = async () => { throw fail('LIBRARY_FORMAT_UNSUPPORTED', 'This dataset must be opened in the viewer', true); };
+      }
+      if (!tree.mounted && level === 0 && !planesTree && !tree.v5) throw fail('LIBRARY_FORMAT_UNSUPPORTED', 'The planes of this dataset are not readable here', true);
+      const assertFrame = () => {
+        if (released) throw fail('LIBRARY_RELEASED', 'The library session was released');
+        if (tree.pin) {
+          try { BrickLoader.withMount(tree.pin, () => 0); } catch (err) { throw fail('LIBRARY_SOURCE_LOST', 'The dataset is no longer mounted'); }
+        }
+      };
+      const reader = _makeStudioReader({
+        level, axis: 'z', indices, width, height, channelCount, planesTree, cutTree: null, cutKind: 'xz', readBricks, assertFrame,
+        // a cut reader reads whole layers of cut bricks: a band = the level, a block = whole layers
+        ...(cutReader ? { bricksBackend: 'cuts', bandRows: Math.ceil(height / 64) * 64, zChunk: Math.max(16, _cutDepthOf(tree.manifest, level)) } : {}),
+        signals: () => [signal, controller.signal],
+        isReleased: () => released,
+        releasedError: () => fail('LIBRARY_RELEASED', 'The library session was released')
+      });
+      let bytes = 0;
+      const allChannels = Array.from({ length: channelCount }, (_, c) => c);
+      if (tree.pin) {
+        try { bytes = BrickLoader.withMount(tree.pin, () => _studioBrickBytes(level, 'z', indices[0], indices[indices.length - 1], channelCount)); } catch (err) { bytes = 0; }
+      }
+      if (planesTree) {
+        try {
+          const est = await planesTree.estimate(indices, allChannels, { x0: 0, y0: 0, x1: width, y1: height }, { sample: 16, signal: signal || undefined });
+          if (est && Number.isFinite(est.bytes)) bytes = est.bytes;
+        } catch (err) { /* the brick estimate stands */ }
+      }
+      const voxel = _libLevels(rec, tree)[level].voxelUm;
+      return {
+        level, width, height, depth: indices.length, indices,
+        bandRows: reader.bandRows, zChunk: reader.zChunk,
+        calibration: { pixelWidth: voxel.x, pixelHeight: voxel.y, unit: 'µm' },
+        // one library read stream at a time (PLAN §3.1): a block waits for an oblique run, and the reverse
+        readBlock: async (request = {}) => {
+          if (released) throw fail('LIBRARY_RELEASED', 'The library session was released');
+          const link = _linkSignals([signal, controller.signal, request.signal]);
+          let gate = null;
+          try {
+            gate = await _libAcquire(link.signal);
+            return await reader.readBlock(request);
+          } finally {
+            gate?.();
+            link.dispose();
+          }
+        },
+        estimateBytes: () => bytes,
+        assertFrame,
+        release,
+        backend: reader.backend
+      };
+    } catch (err) {
+      release();
+      throw err;
+    }
+  }
+
+  /** The inspector's plane spec of a library oblique request, validated. */
+  function _libSlicerSpec(spec, rec) {
+    const s = spec || {};
+    const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+    const depth = num(s.depth, 0.5);
+    const steps = Math.round(num(s.thickness, 1));
+    const projection = s.projection || 'single';
+    if (!['single', 'max', 'mean'].includes(projection) || depth < 0 || depth > 1 || steps < 1 || steps > 64) {
+      throw _libError('LIBRARY_BAD_ARGS', 'The oblique plane is not valid', { datasetId: rec.id });
+    }
+    const out = {
+      mode: 'oblique', value: depth, yaw: num(s.yaw, 0), pitch: num(s.pitch, 0), roll: num(s.roll, 0),
+      slabThickness: projection === 'single' ? 1 : steps,
+      projection: projection === 'max' ? 'mip' : projection === 'mean' ? 'average' : 'single'
+    };
+    if (Number(s.stepNorm) > 0) out.slabStepNorm = Number(s.stepNorm);
+    return out;
+  }
+
+  /**
+   * The slicer's own mapping of an output pixel to texture space, made explicit (PLAN §3.1, G).
+   * The slice shader draws pixel (X, Y) of its R × R frame at
+   *   pc = ((X + ½)/R − ½ , ½ − (Y + ½)/R) · 2E                   (E = sliceExtent, cropRect's frame)
+   *   t  = origin + ½ + pc.x·right + pc.y·up + (s − (N − 1)/2)·δ·step      (unwarped: texCoord(p) = p + ½)
+   * and the output is the crop window [x0, x0 + w) × [y0, y0 + h) of that frame, so with
+   * X = x0 + px, Y = y0 + py:
+   *   o = origin + ½ + right·(x0/R − ½)·2E + up·(½ − y0/R)·2E,   a = right·2E/R,   b = −up·2E/R,   c = δ·step.
+   * → { G, pixelUm } or null when the plane misses the volume.
+   */
+  function _libGeometry(slicerSpec, dims, physical) {
+    const raw = VolumeSlicer.planeGeometry(slicerSpec, physical, null);
+    const E = raw.extent;
+    const renderRes = _nativeStudioRenderSize(slicerSpec, dims, 2 * E);
+    const plain = StudioPlaneOps.plainGeometry(raw);
+    const crop = StudioPlaneOps.cropRect(plain, renderRes, null);
+    if (!crop) return null;
+    const R = renderRes;
+    const k = (2 * E) / R;
+    const v = (p) => [p.x, p.y, p.z];
+    const origin = v(plain.origin), right = v(plain.right), up = v(plain.up), step = v(plain.step);
+    const fx = (crop.x / R - 0.5) * 2 * E, fy = (0.5 - crop.y / R) * 2 * E;
+    const G = {
+      dims: { x: dims.x, y: dims.y, z: dims.z },
+      width: crop.x2 - crop.x + 1,
+      height: crop.y2 - crop.y + 1,
+      o: origin.map((c, i) => c + 0.5 + right[i] * fx + up[i] * fy),
+      a: right.map(c => c * k),
+      b: up.map(c => -c * k),
+      c: step.map(c => c * plain.delta),
+      steps: plain.steps,
+      projected: plain.projected,
+      projMode: plain.projected ? (plain.projMode === 1 ? 'max' : 'mean') : null
+    };
+    const axis = (x) => (Number(x) > 0 ? Number(x) : 1);
+    const maxP = Math.max(axis(physical?.x), axis(physical?.y), axis(physical?.z));
+    const um = (2 * E * maxP) / R;
+    return { G, pixelUm: { x: um, y: um }, renderRes, crop };
+  }
+
+  /** Every 64³ brick of a level's grid (for a tree that is not mounted: the cut store skips what is not stored). */
+  function _libAllBricks(dims) {
+    const bs = dims.brickSize || 64;
+    const out = [];
+    for (let bz = 0; bz * bs < dims.z; bz++) for (let by = 0; by * bs < dims.y; by++) for (let bx = 0; bx * bs < dims.x; bx++) out.push({ bx, by, bz });
+    return out;
+  }
+
+  /** `ctx.studio.library.openOblique(id, { spec, level, timepoint, signal })` */
+  async function _libOpenOblique(id, options = {}) {
+    const rec = _libRecord(id);
+    const signal = options.signal || null;
+    const fail = (code, message, needsViewer = false) => _libError(code, message, { datasetId: rec.id, needsViewer });
+    if (rec.type === '2d') throw fail('LIBRARY_OBLIQUE_UNSUPPORTED', 'A photograph has no oblique plane');
+    const tp = _libTimepoint(rec, options.timepoint, true);
+    const tree = await _libTree(rec, tp, signal);
+    const level = Number.isInteger(options.level) ? options.level : 0;
+    if (level < 0 || level >= tree.dims.length) throw fail('LIBRARY_LEVEL_UNSUPPORTED', `Level ${level} does not exist`);
+    const bz = tree.v5 ? _cutDepthOf(tree.manifest, level) : null;
+    if (!tree.mounted && !(tree.v5 && bz)) throw fail('LIBRARY_OBLIQUE_UNSUPPORTED', 'This dataset must be opened in the viewer', true);
+    const slicerSpec = _libSlicerSpec(options.spec, rec);
+    const dims = tree.dims[level];
+    const physical = _libPhysical(rec, tree.dims[0]);
+    const geometry = _libGeometry(slicerSpec, dims, physical);
+    if (!geometry) throw fail('LIBRARY_PLANE_MISSES', 'The plane does not meet the volume');
+    const { G, pixelUm } = geometry;
+    const geomOptions = { physical, space: null };
+    // The bricks of the tree the plane crosses: the mounted tree's own, or every brick of the level's grid.
+    const bricks = tree.mounted
+      ? BrickLoader.withMount(tree.pin, () => _nativeSliceBricksForSpec(slicerSpec, dims, level, { ...geomOptions, activeBricks: BrickLoader.activeBricks(level) }))
+      : _nativeSliceBricksForSpec(slicerSpec, dims, level, { ...geomOptions, activeBricks: _libAllBricks(dims) });
+    const useCuts = Boolean(bz) && typeof CutStore !== 'undefined';
+    const cutList = useCuts ? _cutBricksForSpec(slicerSpec, dims, bricks, bz, geomOptions) : null;
+    const channelCount = tree.channels;
+    const allChannels = Array.from({ length: channelCount }, (_, c) => c);
+
+    const controller = new AbortController();
+    const entry = { id: rec.id, abort: () => release() };
+    let released = false;
+    let cutTree = null;
+    const dropCuts = () => { cutTree = null; };
+    const release = () => {
+      if (released) return;
+      released = true;
+      controller.abort();
+      dropCuts();
+      _libSessions.delete(entry);
+      signal?.removeEventListener?.('abort', release);
+    };
+    if (signal?.aborted) throw _libAbortError();
+    signal?.addEventListener?.('abort', release, { once: true });
+    _libSessions.add(entry);
+
+    const boxOfBrick = (b) => ({ x0: b.bx * 64, y0: b.by * 64, z0: b.bz * 64, x1: Math.min(dims.x, b.bx * 64 + 64), y1: Math.min(dims.y, b.by * 64 + 64), z1: Math.min(dims.z, b.bz * 64 + 64) });
+    const boxOfCut = (b) => ({ x0: b.cx * 32, y0: b.cy * 32, z0: b.cz * bz, x1: Math.min(dims.x, b.cx * 32 + 32), y1: Math.min(dims.y, b.cy * 32 + 32), z1: Math.min(dims.z, b.cz * bz + bz) });
+    // Units in record order, so a chunk of whole records is a few contiguous byte runs: cut bricks by their
+    // 8³ super-block (sz, sy, sx) then local index, bricks by their 4×4×4 pack. `chunks` = the batches of a read.
+    const SUPER = 8, PACK = 4;
+    const cutOrder = (b) => { const sx = Math.floor(b.cx / SUPER), sy = Math.floor(b.cy / SUPER), sz = Math.floor(b.cz / SUPER); return [sz, sy, sx, ((b.cz % SUPER) * SUPER + (b.cy % SUPER)) * SUPER + (b.cx % SUPER)]; };
+    const brickOrder = (b) => [Math.floor(b.bz / PACK), Math.floor(b.by / PACK), Math.floor(b.bx / PACK), ((b.bz % PACK) * PACK + (b.by % PACK)) * PACK + (b.bx % PACK)];
+    const byOrder = (a, b) => { for (let i = 0; i < 4; i++) if (a.order[i] !== b.order[i]) return a.order[i] - b.order[i]; return 0; };
+    const units = (useCuts
+      ? cutList.map(b => ({ key: `${b.cx}_${b.cy}_${b.cz}`, box: boxOfCut(b), cut: b, order: cutOrder(b) }))
+      : bricks.map(b => ({ key: `${b.bx}_${b.by}_${b.bz}`, box: boxOfBrick(b), brick: b, order: brickOrder(b) }))).sort(byOrder);
+    const chunks = (() => {
+      const limit = useCuts ? Math.max(_LIB_CUT_CHUNK_MIN, Math.floor(_LIB_CUT_CHUNK_BYTES / (32 * 32 * bz))) : _LIB_BRICK_CHUNK;
+      const out = [];
+      let cur = [], curGroup = null, group = [];
+      const flushGroup = () => {
+        if (!group.length) return;
+        if (cur.length && cur.length + group.length > limit) { out.push(cur); cur = []; }
+        cur.push(...group);
+        group = [];
+      };
+      for (const u of units) {
+        const g = u.order.slice(0, 3).join('_');
+        if (g !== curGroup) { flushGroup(); curGroup = g; }
+        group.push(u);
+      }
+      flushGroup();
+      if (cur.length) out.push(cur);
+      return out;
+    })();
+
+    const estimateBytes = () => {
+      if (useCuts) return cutList.length * channelCount * Math.ceil((32 * 32 * bz) / 4);
+      try {
+        return BrickLoader.withMount(tree.pin, () => BrickLoader.estimateTaskBytes?.(bricks.flatMap(b => allChannels.map(c => ({ bx: b.bx, by: b.by, bz: b.bz, lod: level, channel: c, column: 'll' })))) || 0);
+      } catch (err) { return 0; }
+    };
+
+    async function readChannel(c, link, onBrick, tally) {
+      const done = new Set();
+      const failedKeys = new Set();
+      const deliver = async (u, data) => {
+        await onBrick({ channel: c, box: u.box, data });
+        if (link.signal.aborted) throw _libAbortError();
+        done.add(u.key);
+        tally.delivered++;
+      };
+      if (useCuts) {
+        if (!cutTree) cutTree = CutStore.open(tree.path, tree.manifest);
+        for (const chunk of chunks) {
+          const got = new Map();
+          let ok = false;
+          for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+            try {
+              await cutTree.loadCutBricks(level, c, bz, chunk.map(u => u.cut), { signal: link.signal, onBrick: (b) => got.set(`${b.cx}_${b.cy}_${b.cz}`, b.data) });
+              ok = true;
+            } catch (err) {
+              if (link.signal.aborted || err?.name === 'AbortError') throw _libAbortError();
+              console.warn('[ViewerApp] A cut-brick read failed.', err?.message || err);
+            }
+          }
+          for (const u of chunk) {
+            const raw = got.get(u.key);
+            if (!raw) {
+              // not stored (the packer dropped an all-zero cut brick) = zero voxels; failed only when the read gave up
+              if (!ok) { failedKeys.add(u.key); tally.failed.push({ channel: c, ...u.box }); }
+              continue;
+            }
+            const w = u.box.x1 - u.box.x0, h = u.box.y1 - u.box.y0, d = u.box.z1 - u.box.z0;
+            let data = raw;
+            if (!(w === 32 && h === 32 && d === bz)) {
+              data = new Uint8Array(w * h * d);
+              for (let z = 0; z < d; z++) for (let y = 0; y < h; y++) data.set(raw.subarray((z * 32 + y) * 32, (z * 32 + y) * 32 + w), (z * h + y) * w);
+            }
+            await deliver(u, data);
+          }
+        }
+      } else {
+        const fmt = BrickLoader.withMount(tree.pin, () => BrickLoader.getFormat());
+        const apron = Number(fmt.apron) || 0;
+        // BrickLoader honours `region` on a grid-packed tree only (every v3+ tree, a v2 'grid' one): a v2
+        // 'vertical' tree hands back the whole brick, cropped here.
+        const grid = Number(fmt.version) >= 3 || tree.manifest.brickPacking?.mode === 'grid';
+        const bs = Number(fmt.brickSize) || 64;
+        for (const chunk of chunks) {
+          const got = new Map();
+          const tasks = chunk.map(u => {
+            const b = u.box;
+            const task = { bx: u.brick.bx, by: u.brick.by, bz: u.brick.bz, lod: level, channel: c, column: 'll' };
+            if (grid) task.region = { x0: apron, x1: apron + (b.x1 - b.x0), y0: apron, y1: apron + (b.y1 - b.y0), z0: apron, z1: apron + (b.z1 - b.z0) };
+            return task;
+          });
+          const result = await BrickLoader.loadBrickTasks(tasks, {
+            mount: tree.pin, byteRanges: true, streamOnly: true, group: 'studio-library', cancelPrevious: false, signal: link.signal,
+            onBrickLoaded: (row) => got.set(`${row.bx}_${row.by}_${row.bz}`, row.data)
+          });
+          if (link.signal.aborted || result?.summary?.cancelled) throw _libAbortError();
+          for (const u of chunk) {
+            let raw = got.get(u.key);
+            const w = u.box.x1 - u.box.x0, h = u.box.y1 - u.box.y0, d = u.box.z1 - u.box.z0;
+            const n = w * h * d;
+            if (raw && !grid && raw.length === bs * bs * bs && n !== raw.length) {
+              const part = new Uint8Array(n);
+              for (let z = 0; z < d; z++) for (let y = 0; y < h; y++) part.set(raw.subarray((z * bs + y) * bs, (z * bs + y) * bs + w), (z * h + y) * w);
+              raw = part;
+            }
+            if (!raw || raw.length !== n) {
+              // A brick the packer did not store is zeros and never reported; one that failed is.
+              const failed = (result?.summary?.failed || []).some(f => f.bx === u.brick.bx && f.by === u.brick.by && f.bz === u.brick.bz);
+              if (failed || (raw && raw.length !== n)) { failedKeys.add(u.key); tally.failed.push({ channel: c, ...u.box }); }
+              continue;
+            }
+            await deliver(u, raw);
+          }
+        }
+      }
+      for (const u of units) if (!done.has(u.key) && !failedKeys.has(u.key)) tally.empty.push({ channel: c, ...u.box });
+    }
+
+    async function run(request = {}) {
+      if (released) throw fail('LIBRARY_RELEASED', 'The library session was released');
+      const onBrick = request.onBrick;
+      if (typeof onBrick !== 'function') throw fail('LIBRARY_BAD_ARGS', 'run needs an onBrick callback');
+      const wanted = Array.isArray(request.channels) && request.channels.length ? request.channels.map(Number) : allChannels;
+      for (const c of wanted) if (!Number.isInteger(c) || c < 0 || c >= channelCount) throw fail('LIBRARY_BAD_ARGS', `Channel ${c} does not exist`);
+      const link = _linkSignals([signal, controller.signal, request.signal]);
+      const tally = { delivered: 0, failed: [], empty: [] };
+      let gate = null;
+      try {
+        gate = await _libAcquire(link.signal);
+        if (tree.pin) {
+          try { BrickLoader.withMount(tree.pin, () => 0); } catch (err) { throw fail('LIBRARY_SOURCE_LOST', 'The dataset is no longer mounted'); }
+        }
+        for (const c of wanted) await readChannel(c, link, onBrick, tally);
+      } finally {
+        gate?.();
+        link.dispose();
+        dropCuts();      // a host without Range support holds whole packs in the store: not past the run
+      }
+      return tally;
+    }
+
+    return { level, width: G.width, height: G.height, pixelUm, channels: channelCount, geometry: G, estimateBytes, run, release };
+  }
+
+  /** `ctx.studio.library.tiffIndex(id, file, { signal })` — api/tiff-index, then api/tiff-index.php. */
+  async function _libTiffIndex(id, file, options = {}) {
+    const rec = _libRecord(id);
+    const name = String(file || '');
+    const qs = `dataset=${encodeURIComponent(rec.id)}&file=${encodeURIComponent(name)}`;
+    let last = null;
+    for (const url of [`api/tiff-index?${qs}`, `api/tiff-index.php?${qs}`]) {
+      let resp;
+      try {
+        resp = await fetch(url, { signal: options.signal });
+      } catch (err) {
+        if (err?.name === 'AbortError') throw err;
+        last = { status: 0, serverCode: null };
+        continue;
+      }
+      if (resp.ok) {
+        let doc = null;
+        try { doc = await resp.json(); } catch (err) { last = { status: resp.status, serverCode: 'bad_json' }; continue; }
+        const ok = doc && doc.v === 1 && Number(doc.pages) > 0 && Number(doc.width) > 0 && Number(doc.height) > 0
+          && typeof doc.url === 'string' && doc.strips && typeof doc.strips.offsets === 'string' && typeof doc.strips.byteCounts === 'string';
+        if (!ok) { last = { status: resp.status, serverCode: 'bad_index' }; continue; }
+        // Absolute, each path segment percent-encoded (real names hold spaces): a relative URL read inside
+        // a worker would resolve against the worker's own script.
+        const encoded = doc.url.split('/').map(encodeURIComponent).join('/');
+        return { ...doc, urlRelative: doc.url, url: new URL(encoded, document.baseURI).href };
+      }
+      let serverCode = null;
+      try { serverCode = (await resp.json())?.error ?? null; } catch (err) { /* not JSON */ }
+      last = { status: resp.status, serverCode };
+      // A real JSON error of the endpoint (422 malformed, 400 invalid_file…) is its answer: stop. A 404, or any
+      // answer that is not the endpoint's JSON (a host without the extensionless route answers 403/405/500
+      // HTML), → try the .php.
+      if (serverCode !== null && resp.status !== 404) break;
+    }
+    console.error('[ViewerApp] The TIFF index could not be read.', last);
+    throw _libError('LIBRARY_TIFF_INDEX', 'The TIFF index could not be read', { datasetId: rec.id, status: last ? last.status : 0, serverCode: last ? last.serverCode : null });
+  }
+
+  /** `ctx.studio.library.preview(id, { z } | { spec }, { size, timepoint, signal })` — the mounted dataset only. */
+  async function _libPreview(id, what = {}, options = {}) {
+    const rec = _libRecord(id);
+    if (!_libMounted(rec) || typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderWithMaterial) return null;
+    const tp = _libTimepoint(rec, options.timepoint, false);
+    if (rec.type === 'live' && _shownTimepoint() !== tp) return null;
+    const material = VolumeViewer.getMaterial?.();
+    if (!material) return null;
+    // A stabilised timelapse samples through the warp: its plane value sweeps the display box, so the
+    // value computed below would show another plane. The library reads the raw frame: no preview there.
+    if (typeof VolumeSlicer.samplingSpace === 'function' && VolumeSlicer.samplingSpace(material)) return null;
+    let spec;
+    if (what && what.spec) {
+      spec = _libSlicerSpec(what.spec, rec);
+    } else {
+      const dims = BrickLoader.getDimensions(0);
+      const z = Number(what && what.z);
+      if (!dims || !Number.isInteger(z) || z < 0 || z >= dims.z) return null;
+      spec = { mode: 'xy', value: (z + 0.5) / dims.z, slabThickness: 1, projection: 'single' };
+    }
+    const size = Math.max(64, Math.min(1024, Math.round(Number(options.size) || 256)));
+    const canvas = VolumeSlicer.renderWithMaterial(material, spec, size, _currentChannelState());
+    if (!canvas || typeof createImageBitmap !== 'function') return null;
+    try {
+      return await createImageBitmap(canvas);
+    } finally {
+      VolumeSlicer.releaseHiPass?.();
+    }
+  }
+
+  /** `ctx.studio.library.release(id)` — the readers, planes trees and sessions held for `id`; idempotent. */
+  function _libRelease(id) {
+    const key = String(id || '');
+    for (const [k, e] of [..._libTrees]) if (e.id === key) { clearTimeout(e.timer); _libTrees.delete(k); e.promise.catch(() => {}); }
+    for (const [base, entry] of [..._libPlanes]) {
+      if (base.startsWith(`DATA_WEB/${key}/`)) { clearTimeout(entry.timer); _libPlanes.delete(base); }
+    }
+    for (const s of [..._libSessions]) if (s.id === key) { s.abort(); _libSessions.delete(s); }
+  }
+
+  function _libraryFacade() {
+    return {
+      list: () => _libList(),
+      describe: (id, options) => _libDescribe(id, options),
+      openPlanes: (id, options) => _libOpenPlanes(id, options),
+      openOblique: (id, options) => _libOpenOblique(id, options),
+      tiffIndex: (id, file, options) => _libTiffIndex(id, file, options),
+      preview: (id, what, options) => _libPreview(id, what, options),
+      viewerUrl: (id) => Utils.datasetUrl(_libRecord(id)),
+      release: (id) => _libRelease(id)
     };
   }
 
@@ -3134,7 +4063,9 @@ const ViewerApp = (() => {
       isOpen: () => (none ? false : StudioEditor.isOpen()),
       getDocument: () => (none ? null : StudioEditor.getDocument()),
       getSliceRaw: () => (none || typeof StudioEditor.getSliceRaw !== 'function' ? null : StudioEditor.getSliceRaw()),
-      source: { describe: () => _studioSourceDescribe(), open: (options) => _studioSourceOpen(options) }
+      source: { describe: () => _studioSourceDescribe(), open: (options) => _studioSourceOpen(options) },
+      // built on first use: the library holds caches and sessions, a plugin that never opens from it costs nothing
+      get library() { return _libApi || (_libApi = _libraryFacade()); }
     };
   }
 
@@ -3924,15 +4855,20 @@ const ViewerApp = (() => {
    * either side. (A whole voxel of slack each way pulled a second brick layer in at
    * one plane position in 32 and doubled that cut's download.)
    */
-  function _nativeSliceBricksForSpec(spec, dims, lod = 0) {
-    if (typeof BrickLoader === 'undefined' || !BrickLoader.activeBricks) return [];
+  function _nativeSliceBricksForSpec(spec, dims, lod = 0, opts = null) {
+    // `opts` = { physical, space, activeBricks }: the Studio library plans a plane of a tree that
+    // is not the one on screen (its own physical size, the raw frame `space: null`, the bricks of
+    // THAT tree). Omitted: the mounted state, as the figure's native pass reads it.
+    const given = opts && Array.isArray(opts.activeBricks) ? opts.activeBricks : null;
+    if (!given && (typeof BrickLoader === 'undefined' || !BrickLoader.activeBricks)) return [];
     if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.planeGeometry) return [];
     // A stabilised timelapse samples the texture at W·x (VOLUME_WARP): the plane the
     // shader reads is the affine image of the cube plane, and planeGeometry gives its
     // centre, normal (L⁻ᵀ·m) and slab half-thickness in texture space. The live
     // material is the one the native pass clones for its throwaway atlas, right after.
-    const space = VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null;
-    const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.(), space);
+    const space = opts && opts.space !== undefined ? opts.space
+      : (VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null);
+    const geom = VolumeSlicer.planeGeometry(spec, opts && opts.physical ? opts.physical : VolumeViewer.getPhysicalSize?.(), space);
     const n = geom.normal;
     const nc = geom.center;
     const bs = dims.brickSize || 64;
@@ -3976,7 +4912,7 @@ const ViewerApp = (() => {
     const anz = Math.abs(n.z);
 
     const bricks = [];
-    for (const b of BrickLoader.activeBricks(lod)) {
+    for (const b of (given || BrickLoader.activeBricks(lod))) {
       const ox = b.bx * bs;
       const oy = b.by * bs;
       const oz = b.bz * bs;
@@ -4034,7 +4970,7 @@ const ViewerApp = (() => {
     return bricks;
   }
 
-  function _nativeStudioRenderSize(spec, dims) {
+  function _nativeStudioRenderSize(spec, dims, frameUnits = null) {
     let maxDim = Math.max(dims.x || 1, dims.y || 1);
     if (spec.mode === 'xz') maxDim = Math.max(dims.x || 1, dims.z || 1);
     else if (spec.mode === 'yz') maxDim = Math.max(dims.y || 1, dims.z || 1);
@@ -4044,7 +4980,7 @@ const ViewerApp = (() => {
     // The slicer renders it in tiles and only the crop is read back, so the frame is
     // not held to a render-target size: 8192 used to decimate the 5735² datasets to
     // 0.95 px per voxel. 16384 px is the canvas side browsers reliably draw.
-    const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
+    const units = Number(frameUnits) > 0 ? Number(frameUnits) : typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
       ? VolumeSlicer.getPlaneExtentUnits(VolumeViewer.getMaterial?.())
       : 1.5;
     return Math.max(512, Math.min(16384, Math.ceil(maxDim * units)));
@@ -4326,9 +5262,11 @@ const ViewerApp = (() => {
    * slicer samples — the same test as for the bricks, on boxes up to 64× thinner.
    * → [{ cx, cy, cz, brick }] (brick = its 64³ brick).
    */
-  function _cutBricksForSpec(spec, dims, bricks, bz) {
-    const space = VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null;
-    const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.(), space);
+  function _cutBricksForSpec(spec, dims, bricks, bz, opts = null) {
+    // `opts` = { physical, space }: see _nativeSliceBricksForSpec.
+    const space = opts && opts.space !== undefined ? opts.space
+      : (VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null);
+    const geom = VolumeSlicer.planeGeometry(spec, opts && opts.physical ? opts.physical : VolumeViewer.getPhysicalSize?.(), space);
     const n = geom.normal;
     const nc = geom.center;
     const dx = Math.max(1, dims.x), dy = Math.max(1, dims.y), dz = Math.max(1, dims.z);

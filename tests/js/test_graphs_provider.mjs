@@ -344,7 +344,7 @@ const SPECS = [
   const self = Object.assign(Object.create(G), {
     _t: t,
     _provider: {
-      touch() {},
+      touch() {}, check() {}, currentKey: () => null,
       compute: (table, spec) => { computed.push(spec.n); return new Promise(r => gates.push(() => r({ kind: 'xy', series: [], info: null, n: spec.n }))); },
       describe: () => ({ tables: [] })
     }

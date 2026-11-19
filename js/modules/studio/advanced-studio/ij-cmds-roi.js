@@ -200,13 +200,13 @@
   IJApp.extend({
     pkg: 'roi',
     commands: [
-      { id: 'selSpecify', menu: ['Edit', 'Selection'], order: 40, separatorBefore: true, enabled: idle, run: specify },
-      { id: 'selToBoundingBox', menu: ['Edit', 'Selection'], order: 50, enabled: (st) => hasRoi(st) && typeof IJRoiTools !== 'undefined', run: toBoundingBox },
-      { id: 'selEnlarge', menu: ['Edit', 'Selection'], order: 60, enabled: hasArea, run: enlarge },
-      { id: 'selFitEllipse', menu: ['Edit', 'Selection'], order: 70, enabled: hasArea, run: fitEllipse },
-      { id: 'selConvexHull', menu: ['Edit', 'Selection'], order: 80, enabled: (st) => hasRoi(st) && st.roi.type !== 'line' && st.roi.type !== 'angle', run: convexHull },
-      { id: 'selCreateMask', menu: ['Edit', 'Selection'], order: 90, separatorBefore: true, long: true, enabled: idle, run: createMask },
-      { id: 'selCreateSelection', menu: ['Edit', 'Selection'], order: 100, long: true, enabled: idle, run: createSelection }
+      { id: 'selSpecify', menu: ['Edit', 'Selection'], order: 190, enabled: idle, run: specify },
+      { id: 'selToBoundingBox', menu: ['Edit', 'Selection'], order: 210, enabled: (st) => hasRoi(st) && typeof IJRoiTools !== 'undefined', run: toBoundingBox },
+      { id: 'selEnlarge', menu: ['Edit', 'Selection'], order: 170, enabled: hasArea, run: enlarge },
+      { id: 'selFitEllipse', menu: ['Edit', 'Selection'], order: 60, enabled: hasArea, run: fitEllipse },
+      { id: 'selConvexHull', menu: ['Edit', 'Selection'], order: 90, enabled: (st) => hasRoi(st) && st.roi.type !== 'line' && st.roi.type !== 'angle', run: convexHull },
+      { id: 'selCreateMask', menu: ['Edit', 'Selection'], order: 120, long: true, enabled: idle, run: createMask },
+      { id: 'selCreateSelection', menu: ['Edit', 'Selection'], order: 110, long: true, enabled: idle, run: createSelection }
     ],
     errors: {
       IJ_ROI_REDIRECT_SIZE: 'err.roiRedirectSize',

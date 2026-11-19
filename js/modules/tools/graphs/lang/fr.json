@@ -142,6 +142,17 @@
   "preset_msdLog": "Déplacement quadratique moyen (log–log)",
   "note_subsampled": "Nuage tracé à partir d'une ligne sur {n}.",
   "note_series-capped": "Seules les 24 premières courbes sont tracées.",
-  "note_missing": "Pas de réponse pour ce graphique de : {names}.",
-  "note_rangesDiffer": "Les positions en µm couvrent l'étendue propre à chaque jeu de données ; utilisez les variables en % pour les aligner."
+  "note_missing": "Non tracé pour : {names} (il lui manque une variable de ce graphique, ou il n'a pas répondu).",
+  "note_rangesDiffer": "Les positions en µm couvrent l'étendue propre à chaque jeu de données ; utilisez les variables en % pour les aligner.",
+  "table_line": "Intensité le long d'une mesure",
+  "var_d": "Distance le long de la ligne",
+  "var_dr": "Position le long de la ligne (% de sa longueur)",
+  "var_line": "Mesure",
+  "var_tr": "Temps (% de l'acquisition)",
+  "var_divTr": "Moment de division (% de l'acquisition)",
+  "preset_lineProfile": "Intensité le long des lignes de mesure",
+  "preset_lineProfileRel": "Intensité le long des lignes, en % de leur longueur",
+  "lineInfo": "{n} ligne(s) de mesure échantillonnée(s) tous les {size} µm sur les voxels de l'image affichée, lecture sans perte.",
+  "err_export": "L'image n'a pas pu être enregistrée.",
+  "note_msd-sampled": "Le déplacement quadratique moyen utilise un échantillon régulier des cellules (le jeu de trajectoires est grand) ; tous les décalages sont conservés."
 }

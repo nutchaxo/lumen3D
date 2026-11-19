@@ -6,7 +6,7 @@
    Classic script, no ESM. Page only (needs the DOM). Globals:
      IJViewPure  pure helpers (zoom ladder, transforms, tile maths, LRU, menu model,
                  value parsing, ROI geometry, formatting) — testable in Node
-     IJDisplay   tiled WebGL2 renderer
+     (the tiled WebGL2 renderer, IJView and the workspace layout live in ij-layout.js)
      IJWindows   dialogs (field types: see IJViewPure.FIELD_TYPES), floating windows, confirm
      IJPlot      the generic plot window's drawing (draw, extent, niceTicks) and CSV text
      IJShell     ImageJ chrome + pointer handling
@@ -292,7 +292,7 @@ const IJViewPure = (() => {
   }
 
   // --- Menu tree + keyboard model
-  const TOP_ORDER = ['File', 'Edit', 'Image', 'Process', 'Analyze', 'Window', 'Help'];
+  const TOP_ORDER = ['File', 'Edit', 'Image', 'Process', 'Analyze', 'Plugins', 'Window', 'Help'];
 
   /**
    * Menu tree from the command registry.
@@ -937,1016 +937,6 @@ const IJViewPure = (() => {
 })();
 
 /* ============================================================
-   IJDisplay — tiled WebGL2 renderer
-   ============================================================ */
-const IJDisplay = (() => {
-  'use strict';
-  const P = IJViewPure;
-  const MiB = 1024 * 1024;
-  const MAX_INFLIGHT = 6;
-  const OVERLAY_MODES = { red: 1, bw: 2, overunder: 3 };
-
-  const VERT = `#version 300 es
-in vec2 aPos;
-uniform vec4 uDest;
-uniform vec3 uView;
-uniform vec2 uSize;
-uniform float uFlipY;
-out vec2 vImg;
-void main() {
-  vec2 img = mix(uDest.xy, uDest.zw, aPos);
-  vec2 s = img * uView.x + uView.yz;
-  vec2 clip = vec2(s.x / uSize.x * 2.0 - 1.0, 1.0 - s.y / uSize.y * 2.0);
-  clip.y *= uFlipY;
-  vImg = img;
-  gl_Position = vec4(clip, 0.0, 1.0);
-}`;
-
-  // Display maths (ImageJ): 8-bit  idx = floor((v-min)*256/(max-min+1));
-  //                          16-bit idx = floor((v-min)*256/(max-min+1)+0.5);
-  //                          32-bit idx = floor((v-min)/(max-min)*255+0.5); all clamped to 0..255,
-  // then the LUT (Invert LUT = 255-idx). The threshold overlays compare the RAW value.
-  const FRAG = (isInt) => `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-precision highp usampler2D;
-#define INT ${isInt ? 1 : 0}
-#if INT
-uniform usampler2D uTex;
-#define FETCH(tc) float(texelFetch(uTex, tc, 0).r)
-#else
-uniform sampler2D uTex;
-#define FETCH(tc) texelFetch(uTex, tc, 0).r
-#endif
-uniform sampler2D uLut;
-uniform vec2 uSrcOrigin;
-uniform float uSrcScale;
-uniform ivec2 uTexSize;
-uniform float uMin;
-uniform float uMax;
-uniform int uInvert;
-uniform int uBits;
-uniform int uOverlay;
-uniform vec2 uThr;
-uniform vec4 uHole;
-uniform int uHasHole;
-in vec2 vImg;
-out vec4 outColor;
-void main() {
-  if (uHasHole == 1 && vImg.x >= uHole.x && vImg.y >= uHole.y && vImg.x < uHole.z && vImg.y < uHole.w) discard;
-  ivec2 tc = clamp(ivec2(floor((vImg - uSrcOrigin) / uSrcScale)), ivec2(0), uTexSize - ivec2(1));
-  float v = FETCH(tc);
-  if (uOverlay != 0 && v != v) discard;
-  if (uOverlay == 1) {
-    if (v < uThr.x || v > uThr.y) discard;
-    outColor = vec4(1.0, 0.0, 0.0, 1.0);
-    return;
-  }
-  if (uOverlay == 2) {
-    float inside = (v >= uThr.x && v <= uThr.y) ? 0.0 : 1.0;
-    outColor = vec4(vec3(inside), 1.0);
-    return;
-  }
-  if (uOverlay == 3) {
-    if (v < uThr.x) { outColor = vec4(0.0, 0.0, 1.0, 1.0); return; }
-    if (v > uThr.y) { outColor = vec4(0.0, 1.0, 0.0, 1.0); return; }
-  }
-  if (v != v) v = uMin;
-  float idx;
-  if (uBits == 8) idx = floor((v - uMin) * 256.0 / (uMax - uMin + 1.0));
-  else if (uBits == 16) idx = floor((v - uMin) * 256.0 / (uMax - uMin + 1.0) + 0.5);
-  else idx = floor((v - uMin) / max(uMax - uMin, 1e-30) * 255.0 + 0.5);
-  idx = clamp(idx, 0.0, 255.0);
-  if (uInvert == 1) idx = 255.0 - idx;
-  outColor = vec4(texelFetch(uLut, ivec2(int(idx), 0), 0).rgb, 1.0);
-}`;
-
-  const UNIFORMS = ['uDest', 'uView', 'uSize', 'uFlipY', 'uTex', 'uLut', 'uSrcOrigin', 'uSrcScale', 'uTexSize',
-    'uMin', 'uMax', 'uInvert', 'uBits', 'uOverlay', 'uThr', 'uHole', 'uHasHole'];
-
-  function err(code, message) { const e = new Error(message || code); e.code = code; return e; }
-
-  /**
-   * IJDisplay.create(host, options)
-   *   options.onViewChange({ zoom, ox, oy, level, loading, width, height })
-   *   options.onTileError(err)   a provider rejection (the tile is retried later)
-   *   options.getLut(name) -> Uint8Array(768) | null   (default: IJLuts when present)
-   *   options.background  [r,g,b] 0..1 around the image
-   *   options.SVRManager  the platform budget source (default: the global when present)
-   */
-  function create(host, options = {}) {
-    const opts = options || {};
-    const doc = host.ownerDocument || document;
-    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
-    const raf = (fn) => (win && win.requestAnimationFrame ? win.requestAnimationFrame(fn) : setTimeout(fn, 16));
-    const caf = (id) => (win && win.cancelAnimationFrame ? win.cancelAnimationFrame(id) : clearTimeout(id));
-    const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    const background = opts.background || [0.17, 0.17, 0.19];
-
-    const glCanvas = doc.createElement('canvas');
-    glCanvas.className = 'ij-gl-canvas';
-    const overlay = doc.createElement('canvas');
-    overlay.className = 'ij-overlay-canvas';
-    for (const c of [glCanvas, overlay]) {
-      c.style.position = 'absolute'; c.style.left = '0'; c.style.top = '0';
-      c.style.width = '100%'; c.style.height = '100%'; c.style.display = 'block';
-    }
-    overlay.style.pointerEvents = 'none';
-    try {
-      if (win && win.getComputedStyle && win.getComputedStyle(host).position === 'static') host.style.position = 'relative';
-    } catch (e) { /* detached host */ }
-    host.style.overflow = 'hidden';
-    host.appendChild(glCanvas);
-    host.appendChild(overlay);
-    const octx = overlay.getContext('2d');
-
-    const cleanups = [];
-    const listen = (el, ev, fn, o) => { el.addEventListener(ev, fn, o); cleanups.push(() => el.removeEventListener(ev, fn, o)); };
-
-    // ---- GL state ------------------------------------------------------
-    let gl = null, lost = false, destroyed = false;
-    let programs = null, vao = null, quadBuf = null, currentProg = null;
-    const luts = new Map();
-    const lutIds = new WeakMap();
-    let lutCounter = 0;
-    let rampLut = null;
-
-    function buildProgram(isInt) {
-      const compile = (type, src) => {
-        const sh = gl.createShader(type);
-        gl.shaderSource(sh, src);
-        gl.compileShader(sh);
-        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-          const log = gl.getShaderInfoLog(sh);
-          gl.deleteShader(sh);
-          console.error('IJDisplay shader:', log);
-          throw err('IJ_GL_SHADER', 'shader compile failed');
-        }
-        return sh;
-      };
-      const vs = compile(gl.VERTEX_SHADER, VERT), fs = compile(gl.FRAGMENT_SHADER, FRAG(isInt));
-      const prog = gl.createProgram();
-      gl.attachShader(prog, vs); gl.attachShader(prog, fs);
-      gl.bindAttribLocation(prog, 0, 'aPos');
-      gl.linkProgram(prog);
-      gl.deleteShader(vs); gl.deleteShader(fs);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        console.error('IJDisplay link:', gl.getProgramInfoLog(prog));
-        gl.deleteProgram(prog);
-        throw err('IJ_GL_SHADER', 'program link failed');
-      }
-      const u = {};
-      for (const n of UNIFORMS) u[n] = gl.getUniformLocation(prog, n);
-      gl.useProgram(prog);
-      gl.uniform1i(u.uTex, 0);
-      gl.uniform1i(u.uLut, 1);
-      return { prog, u };
-    }
-
-    function initGL() {
-      gl = glCanvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
-      if (!gl) throw err('IJ_NO_WEBGL2', 'WebGL2 unavailable');
-      programs = { int: buildProgram(true), float: buildProgram(false) };
-      quadBuf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
-      vao = gl.createVertexArray();
-      gl.bindVertexArray(vao);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      currentProg = null;
-    }
-
-    // ---- LUTs -------------------------------------------------------------
-    function ramp() {
-      if (!rampLut) {
-        rampLut = new Uint8Array(768);
-        for (let i = 0; i < 256; i++) { rampLut[i * 3] = i; rampLut[i * 3 + 1] = i; rampLut[i * 3 + 2] = i; }
-      }
-      return rampLut;
-    }
-    function lutBytes(spec) {
-      try {
-        if (spec && typeof spec === 'object' && spec.length === 768) return spec;
-        if (typeof spec === 'string') {
-          const viaOpt = opts.getLut ? opts.getLut(spec) : null;
-          if (viaOpt && viaOpt.length === 768) return viaOpt;
-          if (typeof IJLuts !== 'undefined') {
-            const b = spec.charAt(0) === '#' ? IJLuts.fromColor(spec) : IJLuts.get(spec);
-            if (b && b.length === 768) return b;
-          }
-        }
-      } catch (e) { console.error('IJDisplay LUT', e); }
-      return ramp();
-    }
-    function lutTexture(spec) {
-      let key;
-      if (spec && typeof spec === 'object') {
-        if (!lutIds.has(spec)) lutIds.set(spec, ++lutCounter);
-        key = 'a:' + lutIds.get(spec);
-      } else key = 'n:' + String(spec || 'Grays');
-      let tex = luts.get(key);
-      if (tex) return tex;
-      tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGB8, 256, 1);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGB, gl.UNSIGNED_BYTE, lutBytes(spec));
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      luts.set(key, tex);
-      return tex;
-    }
-    function dropLuts() {
-      if (gl && !lost) for (const t of luts.values()) gl.deleteTexture(t);
-      luts.clear();
-    }
-
-    // ---- Image / display state ------------------------------------------------
-    let info = null, nCh = 0, maxLevel = 0;
-    let dstate = { mode: 'composite', active: 0, channels: [], visible: [] };
-    let provider = null;
-    const tiles = new Map();          // key -> { tex, bytes, float, bits, w, h, c, level, tx, ty, stale }
-    const lru = P.createLru();
-    const inflight = new Map();       // key -> generation
-    let wanted = [];
-    const failedUntil = new Map();
-    const failCount = new Map();
-    let chGen = [];
-    let thr = null;
-    let preview = null;               // { level, x0, y0, w, h, bits, tex: {c: {tex,float,w,h}} }
-    let rois = { active: null, all: [], showAll: false, handles: true };
-    let draft = null;
-    let view = { zoom: 1, ox: 0, oy: 0 };
-    let size = { w: 0, h: 0, dpr: 1 };
-    let fitMode = true;
-    let pendingFit = false;
-    let rafId = 0, needRender = false;
-    let budgetCap = 256 * MiB;
-    let lastLoading = false, lastNotified = '';
-    let lastStats = { level: 0, fallback: false };
-    const frameUsed = new Set();
-
-    const keyOf = (c, L, tx, ty) => `${c}|${L}|${tx}|${ty}`;
-
-    function budgetBytes() {
-      let platformBudget = null, live = 0;
-      const S = opts.SVRManager || (typeof SVRManager !== 'undefined' ? SVRManager : null);
-      if (S && gl) {
-        try {
-          platformBudget = S.vramBudget({ getContext: () => gl });
-          live = S.liveAtlasBytes();
-        } catch (e) { platformBudget = null; }
-      }
-      return P.tileBudgetBytes({ cap: budgetCap, platformBudget, liveBytes: live });
-    }
-
-    function deleteTile(key) {
-      const t = tiles.get(key);
-      if (!t) return;
-      tiles.delete(key);
-      lru.remove(key);
-      if (gl && !lost && t.tex) gl.deleteTexture(t.tex);
-    }
-    function dropAllTiles() {
-      for (const key of Array.from(tiles.keys())) deleteTile(key);
-      lru.clear();
-      inflight.clear();
-      failedUntil.clear();
-      failCount.clear();
-      wanted = [];
-    }
-    function dropPreview() {
-      if (preview && gl && !lost) for (const p of Object.values(preview.tex)) gl.deleteTexture(p.tex);
-      preview = null;
-    }
-
-    // ---- Textures ----------------------------------------------------------------
-    function formatFor(bits) {
-      if (bits === 8) return { internal: gl.R8UI, format: gl.RED_INTEGER, type: gl.UNSIGNED_BYTE, bpp: 1, float: false };
-      if (bits === 16) return { internal: gl.R16UI, format: gl.RED_INTEGER, type: gl.UNSIGNED_SHORT, bpp: 2, float: false };
-      return { internal: gl.R32F, format: gl.RED, type: gl.FLOAT, bpp: 4, float: true };
-    }
-    function typed(bits, data) {
-      if (bits === 8) return data instanceof Uint8Array ? data : new Uint8Array(data);
-      if (bits === 16) return data instanceof Uint16Array ? data : new Uint16Array(data.buffer ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : data);
-      return data instanceof Float32Array ? data : new Float32Array(data.buffer ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : data);
-    }
-    /** Uploads a w x h single-channel image; throws IJ_TILE_UPLOAD on a size mismatch or GPU OOM. */
-    function uploadTexture(bits, w, h, data) {
-      const f = formatFor(bits);
-      const arr = typed(bits, data);
-      if (arr.length < w * h) throw err('IJ_TILE_UPLOAD', 'tile data shorter than its size');
-      const tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, f.internal, w, h);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, f.format, f.type, arr);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      const e = gl.getError();
-      if (e !== gl.NO_ERROR) {
-        gl.deleteTexture(tex);
-        const x = err('IJ_TILE_UPLOAD', 'GL error ' + e);
-        x.oom = e === gl.OUT_OF_MEMORY;
-        throw x;
-      }
-      return { tex, float: f.float, bytes: w * h * f.bpp };
-    }
-
-    function evictToBudget() {
-      const budget = budgetBytes();
-      for (const key of lru.evict(budget, frameUsed)) {
-        const t = tiles.get(key);
-        if (t) { tiles.delete(key); if (gl && !lost && t.tex) gl.deleteTexture(t.tex); }
-      }
-    }
-
-    // ---- Tile requests -------------------------------------------------------------
-    function want(c, L, tx, ty) {
-      const key = keyOf(c, L, tx, ty);
-      if (inflight.has(key)) return;
-      const have = tiles.get(key);
-      if (have && !have.stale) return;
-      const until = failedUntil.get(key);
-      if (until && until > nowMs()) return;
-      if (wanted.some((w) => w.key === key)) return;
-      wanted.push({ key, c, L, tx, ty });
-    }
-
-    function pump() {
-      while (provider && inflight.size < MAX_INFLIGHT && wanted.length) {
-        const w = wanted.shift();
-        if (inflight.has(w.key)) continue;
-        startLoad(w);
-      }
-    }
-
-    /** Retry after 2 s, 4 s, 8 s, 16 s; then the tile stays empty until invalidated. */
-    function markFailed(key) {
-      const n = (failCount.get(key) || 0) + 1;
-      failCount.set(key, n);
-      failedUntil.set(key, n > 4 ? Infinity : nowMs() + 1000 * 2 ** n);
-    }
-
-    function startLoad({ key, c, L, tx, ty }) {
-      const gen = chGen[c];
-      inflight.set(key, gen);
-      let p;
-      try { p = Promise.resolve(provider(c, L, tx, ty)); } catch (e) { p = Promise.reject(e); }
-      p.then((tile) => {
-        if (inflight.get(key) === gen) inflight.delete(key);
-        if (destroyed || lost || chGen[c] !== gen || !tile || !gl) { pump(); return; }
-        try {
-          const up = uploadTexture(tile.bitDepth, tile.width, tile.height, tile.data);
-          const old = tiles.get(key);
-          if (old && old.tex) gl.deleteTexture(old.tex);
-          tiles.set(key, { tex: up.tex, bytes: up.bytes, float: up.float, bits: tile.bitDepth, w: tile.width, h: tile.height, c, level: L, tx, ty, stale: false });
-          lru.add(key, up.bytes, L === maxLevel);
-          evictToBudget();
-        } catch (e) {
-          markFailed(key);
-          if (e && e.oom) { budgetCap = Math.max(32 * MiB, Math.floor(lru.total / 2)); evictToBudget(); }
-          if (opts.onTileError) { try { opts.onTileError(e); } catch (x) { /* controller error */ } }
-          else console.error('IJDisplay tile upload', e);
-        }
-        requestRender();
-      }).catch((e) => {
-        if (inflight.get(key) === gen) inflight.delete(key);
-        markFailed(key);
-        if (!destroyed) {
-          if (opts.onTileError) { try { opts.onTileError(e); } catch (x) { /* controller error */ } }
-          else console.error('IJDisplay tile', e);
-          const n = failCount.get(key) || 1;
-          if (n <= 4) setTimeout(() => { if (!destroyed) requestRender(); }, 1000 * 2 ** n + 100);
-        }
-        pump();
-      });
-    }
-
-    // ---- Drawing ----------------------------------------------------------------------
-    function bindProgram(entry) {
-      if (currentProg !== entry) { gl.useProgram(entry.prog); currentProg = entry; }
-    }
-
-    function channelsToDraw() {
-      if (!info) return [];
-      if (dstate.mode === 'composite') {
-        const out = [];
-        for (let c = 0; c < nCh; c++) if (dstate.visible[c] !== false) out.push(c);
-        return out;
-      }
-      return nCh ? [Math.min(nCh - 1, Math.max(0, dstate.active | 0))] : [];
-    }
-
-    function lutSpecFor(c) {
-      if (dstate.mode === 'gray') return 'Grays';
-      const d = dstate.channels[c] || {};
-      return d.lut || 'Grays';
-    }
-
-    /** Draws one channel: for every tile of `level` in `list` the resident texture, else a
-     *  coarser resident one (when `fallbackOk`), into `target` (device px). Returns
-     *  { drawn, missing }. */
-    function paintChannel(c, target, level, list, getTile, overlayMode, hole) {
-      const d = dstate.channels[c] || {};
-      const lutTex = lutTexture(lutSpecFor(c));
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, lutTex);
-      let drawn = 0, missing = 0;
-      for (const { tx, ty } of list) {
-        const src = getTile(c, level, tx, ty);
-        if (!src) { missing++; continue; }
-        const rect = P.tileImageRect(level, tx, ty, info.width, info.height);
-        drawTexture(src.float ? programs.float : programs.int, target, src, rect, d, overlayMode, hole, src.bits);
-        drawn++;
-      }
-      return { drawn, missing };
-    }
-
-    /** src = { tex, w, h, float, bits, origin:[x,y], scale } */
-    function drawTexture(entry, target, src, rect, d, overlayMode, hole, bits) {
-      bindProgram(entry);
-      const u = entry.u;
-      gl.uniform4f(u.uDest, rect.x0, rect.y0, rect.x1, rect.y1);
-      gl.uniform3f(u.uView, target.zoom, target.ox, target.oy);
-      gl.uniform2f(u.uSize, target.w, target.h);
-      gl.uniform1f(u.uFlipY, target.flip || 1);
-      gl.uniform2f(u.uSrcOrigin, src.origin[0], src.origin[1]);
-      gl.uniform1f(u.uSrcScale, src.scale);
-      gl.uniform2i(u.uTexSize, src.w, src.h);
-      gl.uniform1f(u.uMin, Number.isFinite(d.min) ? d.min : 0);
-      gl.uniform1f(u.uMax, Number.isFinite(d.max) ? d.max : (bits === 8 ? 255 : 65535));
-      gl.uniform1i(u.uInvert, d.invert ? 1 : 0);
-      gl.uniform1i(u.uBits, bits);
-      gl.uniform1i(u.uOverlay, overlayMode);
-      if (overlayMode && thr) gl.uniform2f(u.uThr, thr.lower, thr.upper);
-      if (hole) { gl.uniform4f(u.uHole, hole.x0, hole.y0, hole.x1, hole.y1); gl.uniform1i(u.uHasHole, 1); }
-      else gl.uniform1i(u.uHasHole, 0);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, src.tex);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    }
-
-    /** Interactive tile lookup: the tile itself (refreshed when stale) or the nearest
-     *  coarser resident one; registers what is still needed. */
-    function interactiveTile(c, L, tx, ty) {
-      const key = keyOf(c, L, tx, ty);
-      const t = tiles.get(key);
-      if (t) {
-        lru.touch(key); frameUsed.add(key);
-        if (t.stale) want(c, L, tx, ty);
-        return { tex: t.tex, w: t.w, h: t.h, float: t.float, bits: t.bits, origin: [tx * P.TILE * 2 ** L, ty * P.TILE * 2 ** L], scale: 2 ** L };
-      }
-      want(c, L, tx, ty);
-      lastStats.fallback = true;
-      for (let L2 = L + 1; L2 <= maxLevel; L2++) {
-        const p = P.parentTile(L, tx, ty, L2);
-        const k2 = keyOf(c, L2, p.tx, p.ty);
-        const t2 = tiles.get(k2);
-        if (t2) {
-          lru.touch(k2); frameUsed.add(k2);
-          return { tex: t2.tex, w: t2.w, h: t2.h, float: t2.float, bits: t2.bits, origin: [p.tx * P.TILE * 2 ** L2, p.ty * P.TILE * 2 ** L2], scale: 2 ** L2 };
-        }
-        want(c, L2, p.tx, p.ty);
-      }
-      return null;
-    }
-
-    function previewHole(c) {
-      if (!preview || !preview.tex[c]) return null;
-      const s = 2 ** preview.level;
-      return { x0: preview.x0 * s, y0: preview.y0 * s, x1: Math.min(info.width, (preview.x0 + preview.w) * s), y1: Math.min(info.height, (preview.y0 + preview.h) * s) };
-    }
-
-    function paintPreview(c, target) {
-      const hole = previewHole(c);
-      if (!hole) return;
-      const p = preview.tex[c];
-      const d = dstate.channels[c] || {};
-      const src = { tex: p.tex, w: p.w, h: p.h, float: p.float, bits: preview.bits, origin: [preview.x0 * 2 ** preview.level, preview.y0 * 2 ** preview.level], scale: 2 ** preview.level };
-      drawTexture(p.float ? programs.float : programs.int, target, src, hole, d, 0, null, preview.bits);
-    }
-
-    function render() {
-      rafId = 0;
-      if (destroyed) return;
-      needRender = false;
-      if (!gl || lost) return;
-      const dpr = size.dpr;
-      const target = { zoom: view.zoom * dpr, ox: view.ox * dpr, oy: view.oy * dpr, w: glCanvas.width, h: glCanvas.height, flip: 1 };
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, glCanvas.width, glCanvas.height);
-      gl.disable(gl.SCISSOR_TEST);
-      gl.disable(gl.BLEND);
-      gl.clearColor(background[0], background[1], background[2], 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      frameUsed.clear();
-      wanted = [];
-      lastStats = { level: 0, fallback: false };
-      if (info && size.w > 0) {
-        const L = P.levelForZoom(view.zoom, maxLevel);
-        lastStats.level = L;
-        // black image area (additive composition starts from black)
-        const sx0 = Math.max(0, Math.floor(target.ox)), sy0 = Math.max(0, Math.floor(target.oy));
-        const sx1 = Math.min(target.w, Math.ceil(target.ox + info.width * target.zoom));
-        const sy1 = Math.min(target.h, Math.ceil(target.oy + info.height * target.zoom));
-        if (sx1 > sx0 && sy1 > sy0) {
-          gl.enable(gl.SCISSOR_TEST);
-          gl.scissor(sx0, target.h - sy1, sx1 - sx0, sy1 - sy0);
-          gl.clearColor(0, 0, 0, 1);
-          gl.clear(gl.COLOR_BUFFER_BIT);
-          gl.disable(gl.SCISSOR_TEST);
-        }
-        gl.bindVertexArray(vao);
-        const list = P.visibleTiles(view, size.w, size.h, info.width, info.height, L);
-        const chans = channelsToDraw();
-        gl.enable(gl.BLEND);
-        gl.blendEquation(gl.FUNC_ADD);
-        gl.blendFunc(gl.ONE, gl.ONE);
-        for (const c of chans) {
-          want(c, maxLevel, 0, 0);
-          paintChannel(c, target, L, list, interactiveTile, 0, previewHole(c));
-          paintPreview(c, target);
-        }
-        if (thr && thr.channel < nCh) {
-          gl.disable(gl.BLEND);
-          paintChannel(thr.channel, target, L, list, interactiveTile, OVERLAY_MODES[thr.mode] || 1, null);
-        }
-        gl.disable(gl.BLEND);
-        evictToBudget();
-        pump();
-      }
-      drawOverlay();
-      notify();
-    }
-
-    function requestRender() {
-      if (destroyed) return;
-      needRender = true;
-      if (!rafId) rafId = raf(render);
-    }
-
-    function curLoading() { return !!info && (lastStats.fallback || inflight.size > 0 || wanted.length > 0); }
-
-    function notify() {
-      const loading = curLoading();
-      const payload = { zoom: view.zoom, ox: view.ox, oy: view.oy, level: lastStats.level, loading, width: info ? info.width : 0, height: info ? info.height : 0 };
-      const k = `${payload.zoom}|${payload.ox}|${payload.oy}|${payload.level}|${loading}|${payload.width}x${payload.height}`;
-      if (k === lastNotified) return;
-      lastNotified = k;
-      lastLoading = loading;
-      if (opts.onViewChange) { try { opts.onViewChange(payload); } catch (e) { console.error('IJDisplay onViewChange', e); } }
-    }
-
-    // ---- ROI overlay ----------------------------------------------------------------------
-    // Items a tool draws above the selection (Find Maxima points, Rotate's grid, …), in image
-    // coordinates: { kind:'points', pts:[x, y, x, y …], color } | { kind:'polyline', pts, color, closed? } |
-    // { kind:'grid', lines:[[x1, y1, x2, y2], …], color } | { kind:'rect', x, y, w, h, color }.
-    let overlayItems = null;
-    function setOverlay(items) {
-      overlayItems = Array.isArray(items) && items.length ? items.slice(0, 64) : null;
-      requestRender();
-    }
-    function drawItems(X, Y, z) {
-      if (!overlayItems) return;
-      for (const it of overlayItems) {
-        if (!it || typeof it !== 'object') continue;
-        const color = typeof it.color === 'string' ? it.color : '#00ffff';
-        octx.strokeStyle = color; octx.fillStyle = color; octx.lineWidth = 1; octx.lineJoin = 'round';
-        if (it.kind === 'points' && it.pts) {
-          // one marker per point, drawn as a dot; capped so a noisy image cannot freeze the page
-          const n = Math.min(it.pts.length >> 1, 200000);
-          for (let i = 0; i < n; i++) {
-            const sx = X(it.pts[2 * i]), sy = Y(it.pts[2 * i + 1]);
-            if (sx < -4 || sy < -4 || sx > overlay.width + 4 || sy > overlay.height + 4) continue;
-            octx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
-          }
-        } else if (it.kind === 'polyline' && it.pts && it.pts.length >= 4) {
-          octx.beginPath();
-          for (let i = 0; i + 1 < it.pts.length; i += 2) (i ? octx.lineTo(X(it.pts[i]), Y(it.pts[i + 1])) : octx.moveTo(X(it.pts[i]), Y(it.pts[i + 1])));
-          if (it.closed) octx.closePath();
-          octx.stroke();
-        } else if (it.kind === 'grid' && Array.isArray(it.lines)) {
-          octx.beginPath();
-          for (const l of it.lines.slice(0, 4096)) { octx.moveTo(X(l[0]), Y(l[1])); octx.lineTo(X(l[2]), Y(l[3])); }
-          octx.stroke();
-        } else if (it.kind === 'rect' && Number.isFinite(it.x)) {
-          octx.strokeRect(X(it.x), Y(it.y), it.w * z, it.h * z);
-        }
-      }
-    }
-    function drawOverlay() {
-      if (!octx) return;
-      const dpr = size.dpr;
-      octx.setTransform(1, 0, 0, 1, 0, 0);
-      octx.clearRect(0, 0, overlay.width, overlay.height);
-      if (!info) return;
-      octx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const z = view.zoom;
-      const X = (x) => x * z + view.ox, Y = (y) => y * z + view.oy;
-
-      const path = (roi) => {
-        octx.beginPath();
-        switch (roi.type) {
-          case 'rect': octx.rect(X(roi.x), Y(roi.y), roi.w * z, roi.h * z); return true;
-          case 'oval': octx.ellipse(X(roi.x + roi.w / 2), Y(roi.y + roi.h / 2), Math.max(0, roi.w * z / 2), Math.max(0, roi.h * z / 2), 0, 0, Math.PI * 2); return true;
-          case 'polygon': case 'freehand': {
-            const pts = roi.points || [];
-            pts.forEach(([x, y], i) => (i ? octx.lineTo(X(x), Y(y)) : octx.moveTo(X(x), Y(y))));
-            if (pts.length > 2) octx.closePath();
-            return true;
-          }
-          case 'line': octx.moveTo(X(roi.x1), Y(roi.y1)); octx.lineTo(X(roi.x2), Y(roi.y2)); return false;
-          case 'polyline': case 'angle': {
-            const pts = roi.points || [];
-            pts.forEach(([x, y], i) => (i ? octx.lineTo(X(x), Y(y)) : octx.moveTo(X(x), Y(y))));
-            return false;
-          }
-          default: return false;
-        }
-      };
-      const stroke = (color, width) => {
-        octx.lineJoin = 'round';
-        octx.lineWidth = width + 2; octx.strokeStyle = 'rgba(0,0,0,0.55)'; octx.stroke();
-        octx.lineWidth = width; octx.strokeStyle = color; octx.stroke();
-      };
-      const drawRoi = (roi, color, label) => {
-        if (!roi) return;
-        if (roi.type === 'point') {
-          for (const [x, y] of roi.points || []) {
-            const sx = X(x), sy = Y(y);
-            octx.beginPath(); octx.moveTo(sx - 5, sy); octx.lineTo(sx + 5, sy); octx.moveTo(sx, sy - 5); octx.lineTo(sx, sy + 5);
-            stroke(color, 1);
-            octx.beginPath(); octx.arc(sx, sy, 2.5, 0, Math.PI * 2); octx.fillStyle = color; octx.fill();
-          }
-        } else if (roi.type === 'mask') {
-          const runs = roi.rle || [];
-          if (runs.length && runs.length <= 20000 && roi.w > 0) {
-            octx.fillStyle = 'rgba(255,255,0,0.28)';
-            let pos = 0, on = false;
-            for (const run of runs) {
-              if (on) {
-                let p = pos, rem = run;
-                while (rem > 0) {
-                  const row = Math.floor(p / roi.w), col = p % roi.w, len = Math.min(rem, roi.w - col);
-                  octx.fillRect(X(roi.x + col), Y(roi.y + row), len * z, z);
-                  p += len; rem -= len;
-                }
-              }
-              pos += run; on = !on;
-            }
-          }
-          octx.beginPath(); octx.setLineDash([4, 3]); octx.rect(X(roi.x), Y(roi.y), roi.w * z, roi.h * z); stroke(color, 1); octx.setLineDash([]);
-        } else {
-          if (roi.type === 'line' && roi.width > 1) {
-            octx.beginPath(); octx.moveTo(X(roi.x1), Y(roi.y1)); octx.lineTo(X(roi.x2), Y(roi.y2));
-            octx.lineCap = 'butt'; octx.lineWidth = roi.width * z; octx.strokeStyle = 'rgba(255,255,0,0.25)'; octx.stroke();
-          }
-          path(roi);
-          stroke(color, 1.25);
-        }
-        if (label) {
-          const b = P.roiBounds(roi);
-          if (b) {
-            octx.font = '11px sans-serif'; octx.textBaseline = 'top'; octx.fillStyle = 'rgba(0,0,0,0.6)';
-            octx.fillText(label, X(b.x) + 3, Y(b.y) + 3);
-            octx.fillStyle = color; octx.fillText(label, X(b.x) + 2, Y(b.y) + 2);
-          }
-        }
-      };
-
-      if (rois.showAll) {
-        rois.all.forEach((it, i) => {
-          const roi = it && it.roi ? it.roi : it;
-          drawRoi(roi, '#00ffff', String(it && it.label != null ? it.label : i + 1));
-        });
-      }
-      if (rois.active) {
-        drawRoi(rois.active, '#ffff00', null);
-        if (rois.handles) {
-          for (const h of P.roiHandles(rois.active)) {
-            const sx = X(h.x), sy = Y(h.y);
-            octx.fillStyle = '#ffffff'; octx.strokeStyle = '#000000'; octx.lineWidth = 1;
-            octx.fillRect(sx - 3, sy - 3, 6, 6); octx.strokeRect(sx - 3.5, sy - 3.5, 7, 7);
-          }
-        }
-      }
-      drawItems(X, Y, z);
-      if (draft) {
-        const pts = draft.points || [];
-        octx.beginPath();
-        pts.forEach(([x, y], i) => (i ? octx.lineTo(X(x), Y(y)) : octx.moveTo(X(x), Y(y))));
-        if (draft.rubber && pts.length) octx.lineTo(X(draft.rubber[0]), Y(draft.rubber[1]));
-        stroke('#ffff00', 1.25);
-        for (const [x, y] of pts) {
-          octx.fillStyle = '#ffffff'; octx.fillRect(X(x) - 2.5, Y(y) - 2.5, 5, 5);
-        }
-      }
-    }
-
-    // ---- Size / view ----------------------------------------------------------------------
-    function measure() {
-      const dpr = Math.max(1, Math.min(3, (win && win.devicePixelRatio) || 1));
-      const w = Math.max(0, Math.round(host.clientWidth || 0)), h = Math.max(0, Math.round(host.clientHeight || 0));
-      return { w, h, dpr };
-    }
-
-    function applySize() {
-      const m = measure();
-      if (m.w === size.w && m.h === size.h && m.dpr === size.dpr) return;
-      const prev = size;
-      size = m;
-      const pw = Math.max(1, Math.round(m.w * m.dpr)), ph = Math.max(1, Math.round(m.h * m.dpr));
-      glCanvas.width = pw; glCanvas.height = ph;
-      overlay.width = pw; overlay.height = ph;
-      if (info && m.w > 0 && m.h > 0) {
-        if (pendingFit || fitMode || prev.w === 0) { doFit(); pendingFit = false; }
-        else {
-          view = P.clampPan({ zoom: view.zoom, ox: view.ox + (m.w - prev.w) / 2, oy: view.oy + (m.h - prev.h) / 2 }, m.w, m.h, info.width, info.height);
-        }
-      }
-      requestRender();
-    }
-
-    function doFit(snap = false) {
-      if (!info || size.w <= 0 || size.h <= 0) { pendingFit = true; return; }
-      view = P.fitView(size.w, size.h, info.width, info.height, { snap });
-      fitMode = true;
-    }
-
-    function setView(v, user = true) {
-      if (!info) return;
-      view = P.clampPan({ zoom: P.clampZoom(v.zoom), ox: v.ox, oy: v.oy }, size.w, size.h, info.width, info.height);
-      if (user) fitMode = false;
-      requestRender();
-    }
-
-    // ---- Public API --------------------------------------------------------------------------
-    function setImage(imgInfo) {
-      dropAllTiles();
-      dropPreview();
-      thr = null; draft = null; rois = { active: null, all: [], showAll: false, handles: true };
-      info = imgInfo ? { docId: imgInfo.docId, width: imgInfo.width, height: imgInfo.height, bitDepth: imgInfo.bitDepth, calibration: imgInfo.calibration || null } : null;
-      nCh = imgInfo && imgInfo.channels ? imgInfo.channels.length : 0;
-      chGen = new Array(nCh).fill(0).map(() => ++lutCounter);
-      if (info) {
-        maxLevel = P.maxLevelFor(info.width, info.height);
-        const chs = imgInfo.channels.map((ch) => ({ ...(ch.display || {}), min: ch.display ? ch.display.min : 0, max: ch.display ? ch.display.max : (info.bitDepth === 8 ? 255 : 65535) }));
-        const disp = imgInfo.display || {};
-        dstate = { mode: disp.mode || 'composite', active: disp.active || 0, channels: chs, visible: disp.visible ? disp.visible.slice() : chs.map(() => true) };
-        fitMode = true;
-        doFit();
-      } else {
-        dstate = { mode: 'composite', active: 0, channels: [], visible: [] };
-      }
-      requestRender();
-    }
-
-    function setTileProvider(fn) { provider = typeof fn === 'function' ? fn : null; wanted = []; requestRender(); }
-
-    /** Drops what is shown for `channels` (all when omitted): resident tiles keep drawing
-     *  until the fresh ones arrive (no flash). */
-    function invalidate(channels) {
-      const list = Array.isArray(channels) ? channels : Array.from({ length: nCh }, (_, i) => i);
-      for (const c of list) {
-        if (c < 0 || c >= nCh) continue;
-        chGen[c] = ++lutCounter;
-        for (const [key, t] of tiles) if (t.c === c) t.stale = true;
-        for (const key of Array.from(inflight.keys())) if (key.startsWith(c + '|')) inflight.delete(key);
-        for (const key of Array.from(failedUntil.keys())) if (key.startsWith(c + '|')) { failedUntil.delete(key); failCount.delete(key); }
-      }
-      requestRender();
-    }
-
-    /** state: { mode, active, visible:[bool], channels:[{min,max,lut,invert}] } or one channel
-     *  { channel, min?, max?, lut?, invert? }; uniforms only, one draw. */
-    function setDisplay(state) {
-      if (!state) return;
-      if (state.mode) dstate.mode = state.mode;
-      if (Number.isInteger(state.active)) dstate.active = state.active;
-      if (Array.isArray(state.visible)) dstate.visible = state.visible.slice();
-      if (Array.isArray(state.channels)) state.channels.forEach((d, i) => { dstate.channels[i] = { ...(dstate.channels[i] || {}), ...d }; });
-      if (Number.isInteger(state.channel)) {
-        const { channel, ...rest } = state;
-        dstate.channels[channel] = { ...(dstate.channels[channel] || {}), ...rest };
-        delete dstate.channels[channel].channel;
-      }
-      requestRender();
-    }
-
-    function setThresholdOverlay(t) {
-      thr = t && Number.isInteger(t.channel) ? { channel: t.channel, lower: t.lower, upper: t.upper, mode: t.mode || 'red' } : null;
-      requestRender();
-    }
-
-    /** region = { level, x0, y0, w, h, bitDepth, channels: { [c]: typed array } } in level
-     *  pixels, or null. The pixels replace the displayed ones inside the region. */
-    function setPreview(region) {
-      dropPreview();
-      if (region && gl && !lost && info) {
-        const tex = {};
-        try {
-          for (const [k, data] of Object.entries(region.channels || {})) {
-            const up = uploadTexture(region.bitDepth, region.w, region.h, data);
-            tex[k] = { tex: up.tex, float: up.float, w: region.w, h: region.h };
-          }
-          preview = { level: region.level | 0, x0: region.x0, y0: region.y0, w: region.w, h: region.h, bits: region.bitDepth, tex };
-        } catch (e) {
-          for (const p of Object.values(tex)) gl.deleteTexture(p.tex);
-          console.error('IJDisplay preview', e);
-        }
-      }
-      requestRender();
-    }
-
-    /** rois = { active, all: [roi | { roi, label }], showAll, handles } (any key optional) */
-    function setRois(r) {
-      rois = { ...rois, ...(r || {}) };
-      if (!Array.isArray(rois.all)) rois.all = [];
-      requestRender();
-    }
-    /** An unfinished polygon: { points, rubber:[x,y] } or null. */
-    function setDraft(d) { draft = d || null; requestRender(); }
-
-    function zoomAt(sx, sy, dir) {
-      if (!info) return;
-      const nz = P.nextZoom(view.zoom, dir);
-      if (nz === view.zoom) return;
-      setView(P.zoomAround(view, sx, sy, nz));
-    }
-    function setZoom(z, sx = size.w / 2, sy = size.h / 2) { if (info) setView(P.zoomAround(view, sx, sy, P.clampZoom(z))); }
-    function fit() { if (!info) return; doFit(); view = P.clampPan(view, size.w, size.h, info.width, info.height); requestRender(); }
-    function view100() { setZoom(1); }
-    function zoomToRect(rect) { if (info && rect && size.w > 0) setView(P.viewForRect(rect, size.w, size.h)); }
-    function pan(dx, dy) { if (info) setView({ zoom: view.zoom, ox: view.ox + dx, oy: view.oy + dy }); }
-    function setCursor(c) { host.style.cursor = c || ''; }
-
-    function destroyGL() {
-      if (!gl) return;
-      if (!lost) {
-        for (const t of tiles.values()) if (t.tex) gl.deleteTexture(t.tex);
-        for (const t of luts.values()) gl.deleteTexture(t);
-        if (preview) for (const p of Object.values(preview.tex)) gl.deleteTexture(p.tex);
-        if (programs) { gl.deleteProgram(programs.int.prog); gl.deleteProgram(programs.float.prog); }
-        if (quadBuf) gl.deleteBuffer(quadBuf);
-        if (vao) gl.deleteVertexArray(vao);
-      }
-      tiles.clear(); luts.clear(); lru.clear(); preview = null;
-      programs = null; quadBuf = null; vao = null;
-    }
-
-    function destroy() {
-      if (destroyed) return;
-      destroyed = true;
-      if (rafId) caf(rafId);
-      for (const fn of cleanups.splice(0)) fn();
-      if (resizeObserver) resizeObserver.disconnect();
-      destroyGL();
-      inflight.clear(); wanted = []; failedUntil.clear(); provider = null;
-      try {
-        const ext = gl && !lost ? gl.getExtension('WEBGL_lose_context') : null;
-        if (ext) ext.loseContext();
-      } catch (e) { /* already gone */ }
-      gl = null;
-      if (glCanvas.parentNode) glCanvas.parentNode.removeChild(glCanvas);
-      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-    }
-
-    // ---- Export ---------------------------------------------------------------------------------
-    /**
-     * The image rendered at `scale` (output px per image px) into a 2D canvas, LUTs applied,
-     * in offscreen tiles of <= 4096 px. Tiles come from the resident cache or the provider.
-     * Rejects with IJ_NO_IMAGE | IJ_EXPORT_TOO_LARGE | IJ_CANCELLED | IJ_CONTEXT_LOST.
-     */
-    async function renderToCanvas({ scale = 1, signal = null, onProgress = null } = {}) {
-      if (!info || !gl || lost) throw err('IJ_NO_IMAGE');
-      const W = Math.max(1, Math.round(info.width * scale)), H = Math.max(1, Math.round(info.height * scale));
-      if (W > 32767 || H > 32767 || W * H > 268435456) throw err('IJ_EXPORT_TOO_LARGE');
-      if (!provider) throw err('IJ_NO_PROVIDER');
-      const out = doc.createElement('canvas');
-      out.width = W; out.height = H;
-      const o2 = out.getContext('2d');
-      const L = P.levelForZoom(scale, maxLevel);
-      const chans = channelsToDraw();
-      const TW = Math.min(W, 4096), TH = Math.min(H, 4096);
-      const nTilesX = Math.ceil(W / 4096), nTilesY = Math.ceil(H / 4096);
-      let doneTiles = 0;
-      const fbTex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, fbTex);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, TW, TH);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      const fbo = gl.createFramebuffer();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fbTex, 0);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      const pixels = new Uint8Array(TW * TH * 4);
-      const temps = [];
-      const cleanup = () => {
-        for (const t of temps.splice(0)) if (gl && !lost) gl.deleteTexture(t);
-        if (gl && !lost) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(fbo); gl.deleteTexture(fbTex); }
-        requestRender();
-      };
-      try {
-        for (let oy = 0; oy < H; oy += 4096) {
-          for (let ox = 0; ox < W; ox += 4096) {
-            if (signal && signal.aborted) throw err('IJ_CANCELLED');
-            const tw = Math.min(4096, W - ox), th = Math.min(4096, H - oy);
-            const v = { zoom: scale, ox: -ox, oy: -oy };
-            const list = P.visibleTiles(v, tw, th, info.width, info.height, L);
-            // gather the source tiles (resident or fetched), channel by channel
-            const have = new Map();
-            for (const c of chans) {
-              for (const { tx, ty } of list) {
-                const key = keyOf(c, L, tx, ty);
-                const res = tiles.get(key);
-                if (res && !res.stale) { have.set(key, { tex: res.tex, w: res.w, h: res.h, float: res.float, bits: res.bits, origin: [tx * P.TILE * 2 ** L, ty * P.TILE * 2 ** L], scale: 2 ** L }); continue; }
-                const tile = await provider(c, L, tx, ty);
-                if (destroyed || lost || !gl) throw err('IJ_CONTEXT_LOST');
-                if (signal && signal.aborted) throw err('IJ_CANCELLED');
-                const up = uploadTexture(tile.bitDepth, tile.width, tile.height, tile.data);
-                temps.push(up.tex);
-                have.set(key, { tex: up.tex, w: tile.width, h: tile.height, float: up.float, bits: tile.bitDepth, origin: [tx * P.TILE * 2 ** L, ty * P.TILE * 2 ** L], scale: 2 ** L });
-              }
-            }
-            if (destroyed || lost || !gl) throw err('IJ_CONTEXT_LOST');
-            gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-            gl.viewport(0, 0, TW, TH);
-            gl.disable(gl.SCISSOR_TEST);
-            gl.clearColor(0, 0, 0, 1);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-            gl.bindVertexArray(vao);
-            gl.enable(gl.BLEND);
-            gl.blendEquation(gl.FUNC_ADD);
-            gl.blendFunc(gl.ONE, gl.ONE);
-            const target = { zoom: scale, ox: -ox, oy: -oy, w: TW, h: TH, flip: -1 };
-            for (const c of chans) paintChannel(c, target, L, list, (cc, LL, tx, ty) => have.get(keyOf(cc, LL, tx, ty)) || null, 0, null);
-            gl.disable(gl.BLEND);
-            gl.readPixels(0, 0, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            const img = o2.createImageData(tw, th);
-            // readPixels packs the tw x th region tightly (PACK_ROW_LENGTH 0)
-            img.data.set(pixels.subarray(0, tw * th * 4));
-            for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
-            o2.putImageData(img, ox, oy);
-            for (const t of temps.splice(0)) gl.deleteTexture(t);
-            doneTiles++;
-            if (onProgress) onProgress(doneTiles / (nTilesX * nTilesY));
-          }
-        }
-      } finally {
-        cleanup();
-      }
-      return out;
-    }
-
-    // ---- Lifecycle ------------------------------------------------------------------------------
-    listen(glCanvas, 'webglcontextlost', (e) => {
-      e.preventDefault();
-      lost = true;
-      tiles.clear(); lru.clear(); luts.clear(); preview = null; inflight.clear(); wanted = [];
-      for (let c = 0; c < nCh; c++) chGen[c] = ++lutCounter;
-    });
-    listen(glCanvas, 'webglcontextrestored', () => {
-      try {
-        lost = false;
-        initGL();
-        requestRender();
-      } catch (e) { console.error('IJDisplay restore', e); }
-    });
-
-    let resizeObserver = null;
-    initGL();
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => applySize());
-      resizeObserver.observe(host);
-    } else if (win) listen(win, 'resize', applySize);
-    applySize();
-
-    return {
-      element: host, glCanvas, overlayCanvas: overlay,
-      setImage, setTileProvider, invalidate, setDisplay, setThresholdOverlay, setPreview, setRois, setDraft, setOverlay,
-      zoomAt, setZoom, fit, view100, zoomToRect, pan, setCursor,
-      screenToImage: (x, y) => P.screenToImage(view, x, y),
-      imageToScreen: (x, y) => P.imageToScreen(view, x, y),
-      getView: () => ({ ...view, level: lastStats.level, maxLevel, width: info ? info.width : 0, height: info ? info.height : 0, viewportWidth: size.w, viewportHeight: size.h }),
-      getStats: () => ({ residentTiles: tiles.size, residentBytes: lru.total, budgetBytes: budgetBytes(), level: lastStats.level, loading: curLoading(), inflight: inflight.size }),
-      resize: applySize, redraw: requestRender, renderNow: render,
-      renderToCanvas, destroy
-    };
-  }
-
-  return { create, OVERLAY_MODES };
-})();
-
-/* ============================================================
    IJWindows — dialogs, floating windows, confirm
    ============================================================ */
 const IJWindows = (() => {
@@ -1972,7 +962,9 @@ const IJWindows = (() => {
     const doc = () => (root && root.ownerDocument) || document;
     const floatingMap = new Map();
     const modalStack = [];
-    let zTop = 20;
+    // z-index bands (never leave their band): image windows 10-29, tool windows 30-49, menus 60, dialogs 80
+    const toolStack = [];
+    const applyToolZ = () => { toolStack.forEach((w, i) => { w.el.style.zIndex = String(30 + Math.min(i, 19)); }); };
     let cascade = 0;
     let destroyed = false;
 
@@ -2542,17 +1534,48 @@ const IJWindows = (() => {
         cascade++;
       }
       const box = rootBox();
+      // a remembered size is applied BEFORE the position is clamped (a big one must not push the grip off-screen)
+      let keptSize = null;
+      if (saved && pos && Number.isFinite(pos.w) && Number.isFinite(pos.h)) {
+        keptSize = { w: Math.max(200, Math.min(pos.w, box.w || pos.w)), h: Math.max(120, Math.min(pos.h, box.h || pos.h)) };
+        el.style.width = keptSize.w + 'px'; el.style.height = keptSize.h + 'px';
+      }
       const cp = P.clampWindowPos(pos.x, pos.y, el.offsetWidth, el.offsetHeight, box.w, box.h);
       el.style.left = Math.round(cp.x) + 'px';
       el.style.top = Math.round(cp.y) + 'px';
-      el.style.zIndex = String(++zTop);
-
-      const cleanupDrag = makeDraggable(el, bar, (p) => storageSet('lumen3d.ij.win.' + spec.id, JSON.stringify(p)));
-      const raise = () => { el.style.zIndex = String(++zTop); };
+      const grip = d.createElement('div');
+      grip.className = 'ij-resize-grip';
+      grip.setAttribute('aria-hidden', 'true');
+      el.appendChild(grip);
+      // a drag stores the position only; the size is stored once the user resized the window by its grip
+      const saveBox = (withSize) => {
+        if (withSize) keptSize = { w: el.offsetWidth, h: el.offsetHeight };
+        const o = { x: el.offsetLeft, y: el.offsetTop };
+        if (keptSize) { o.w = keptSize.w; o.h = keptSize.h; }
+        storageSet('lumen3d.ij.win.' + spec.id, JSON.stringify(o));
+      };
+      const cleanupDrag = makeDraggable(el, bar, () => saveBox(false));
+      let rs = null;
+      const gripDown = (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        rs = { x: e.clientX, y: e.clientY, w: el.offsetWidth, h: el.offsetHeight };
+        try { grip.setPointerCapture(e.pointerId); } catch (x) { /* synthetic */ }
+      };
+      const gripMove = (e) => {
+        if (!rs) return;
+        el.style.width = Math.max(200, Math.round(rs.w + e.clientX - rs.x)) + 'px';
+        el.style.height = Math.max(120, Math.round(rs.h + e.clientY - rs.y)) + 'px';
+      };
+      const gripUp = () => { if (rs) { rs = null; saveBox(true); } };
+      grip.addEventListener('pointerdown', gripDown); grip.addEventListener('pointermove', gripMove);
+      grip.addEventListener('pointerup', gripUp); grip.addEventListener('pointercancel', gripUp);
+      const raise = () => { const i = toolStack.indexOf(win); if (i >= 0) toolStack.push(toolStack.splice(i, 1)[0]); applyToolZ(); };
       el.addEventListener('pointerdown', raise);
       let open = true;
       const win = {
         id: spec.id, el, content,
+        getTitle: () => titleEl.textContent,
         setTitle(s) { titleEl.textContent = s; },
         focus() { raise(); try { el.focus({ preventScroll: true }); } catch (e) { /* ignore */ } },
         move(x, y) {
@@ -2565,6 +1588,11 @@ const IJWindows = (() => {
           if (!open) return;
           open = false;
           floatingMap.delete(spec.id);
+          const si = toolStack.indexOf(win);
+          if (si >= 0) toolStack.splice(si, 1);
+          applyToolZ();
+          grip.removeEventListener('pointerdown', gripDown); grip.removeEventListener('pointermove', gripMove);
+          grip.removeEventListener('pointerup', gripUp); grip.removeEventListener('pointercancel', gripUp);
           cleanupDrag();
           el.removeEventListener('pointerdown', raise);
           closeBtn.removeEventListener('click', win.close);
@@ -2582,6 +1610,8 @@ const IJWindows = (() => {
       closeBtn.addEventListener('click', win.close);
       el.addEventListener('keydown', onWinKey);
       floatingMap.set(spec.id, win);
+      toolStack.push(win);
+      applyToolZ();
       return win;
     }
 
@@ -2611,6 +1641,8 @@ const IJWindows = (() => {
       dialog, floating, confirm,
       hasModal: () => modalStack.length > 0,
       get: (id) => floatingMap.get(id) || null,
+      /** Open tool / plot / table / panel windows, bottom to top: [{ id, title, win }]. */
+      list: () => toolStack.map((w) => ({ id: w.id, title: w.getTitle(), win: w })),
       setRoot(r) { root = r; },
       closeAll, reflow, destroy
     };
@@ -2882,15 +1914,20 @@ const IJShell = (() => {
    *   t(key, fallback)
    *   commands            the command registry (see IJViewPure.buildMenuTree)
    *   getState()          app state handed to command.enabled(state)
-   *   tools               [{ id, labelKey?, label? } | { separator: true }] (default: ImageJ's set)
-   *   onCommand(cmd, { source: 'menu' | 'key' })
+   *   tools               [{ id, labelKey?, label?, icon?, cursor?, hidden?, ext? } | { separator: true }] (default: ImageJ's set);
+   *                       `ext` = a tool of a package: its pointer events go to onToolPointer; `hidden` = no button until selected
+   *   onCommand(cmd, { source: 'menu' | 'key', alt, shift })
    *   onTool(id)  onToolOptions(id)  (double-click on line / point)
    *   onRoi(roi | null, { final, source: 'draw' | 'move' | 'resize' | 'nudge' | 'clear' })
    *   onChannel(index)    onCancel()
    *   readPixel(x, y) -> Promise<number[]>   coalesced, <= 1 in flight
    *   isActive()          false while the shell is hidden (shortcuts ignored)
-   *   display             options for IJDisplay.create (onTileError, getLut, SVRManager, ...)
-   * shell: { el, stage, display, windows, setImage, clearImage, setDisplayState, setTool, getTool,
+   *   display             options for IJRenderer.create (onTileError, getLut, SVRManager, ...) + onViewChange(v, docId)
+   *   onActivate(docId)   onCloseImage(docId)   onLayoutChange(kind)   selectionColor
+   *   onToolPointer(docId, { type: 'down'|'move'|'up'|'cancel', x, y, button, shift, alt, ctrl })   image coordinates, while an `ext` tool is selected
+   *   onMenuOpen(topName)   a top menu is about to open (the app refreshes its dynamic Window list)
+   *   onCursor(docId, x, y, sx, sy)   the pointer over a view (image + stage pixel coordinates); onCursor(docId, null) when it leaves
+   * shell: { el, workspace, layout (IJLayout), renderer, view(docId), activeView(), windows, setImage(info, {placement}), clearImage, setDisplayState, setTool, getTool,
    *   setActiveRoi, getActiveRoi, setRois, setStatus, setProgress, setWarning, setLineWidth,
    *   refreshMenus, closeMenus, setTitle, destroy }
    */
@@ -2916,27 +1953,8 @@ const IJShell = (() => {
     const toolbar = el('div', 'ij-toolbar');
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-label', t('view.toolbar', 'Tools'));
-    const imageWin = el('div', 'ij-image-window');
-    imageWin.style.flex = '1 1 auto'; imageWin.style.minHeight = '0'; imageWin.style.display = 'flex'; imageWin.style.flexDirection = 'column';
-    const titlebar = el('div', 'ij-titlebar');
-    const titleName = el('span', 'ij-title-name');
-    const titleZoom = el('span', 'ij-title-zoom');
-    const titleBadge = el('span', 'ij-title-badge', t('view.previewBadge', 'preview'));
-    titleBadge.hidden = true;
-    titlebar.append(titleName, titleZoom, titleBadge);
-    const subtitle = el('div', 'ij-subtitle');
-    const stage = el('div', 'ij-stage');
-    stage.tabIndex = 0;
-    stage.style.flex = '1 1 auto'; stage.style.minHeight = '0'; stage.style.position = 'relative';
-    stage.setAttribute('aria-label', t('view.stage', 'Image'));
-    const channelBar = el('div', 'ij-channel-bar');
-    channelBar.hidden = true;
-    const channelLabel = el('span', 'ij-channel-label');
-    const channelSlider = el('input', 'ij-channel-slider');
-    channelSlider.type = 'range'; channelSlider.min = '1'; channelSlider.max = '1'; channelSlider.step = '1'; channelSlider.value = '1';
-    channelSlider.setAttribute('aria-label', t('view.channel', 'Channel'));
-    channelBar.append(channelLabel, channelSlider);
-    imageWin.append(titlebar, subtitle, stage, channelBar);
+    const wsHost = el('div', 'ij-workspace-host');
+    wsHost.style.flex = '1 1 auto'; wsHost.style.minHeight = '0'; wsHost.style.display = 'flex'; wsHost.style.flexDirection = 'column'; wsHost.style.position = 'relative';
     const statusbar = el('div', 'ij-statusbar');
     statusbar.setAttribute('aria-label', t('view.statusbar', 'Status'));
     // only the message is a live region: the pointer readout changes on every move
@@ -2957,31 +1975,79 @@ const IJShell = (() => {
     const warning = el('span', 'ij-warning');
     warning.hidden = true;
     statusbar.append(statusPos, statusText, progress, progressLabel, cancelBtn, warning);
-    shell.append(menubar, toolbar, imageWin, statusbar);
+    shell.append(menubar, toolbar, wsHost, statusbar);
 
-    const windows = IJWindows.create({ root: shell, t: opts.t, focusTarget: () => stage });
 
-    // ---- Display ------------------------------------------------------------------------------------
-    let info = null;
-    let loadingNow = false;
-    const display = IJDisplay.create(stage, {
-      ...(opts.display || {}),
-      onViewChange: (v) => {
-        updateTitle(v);
-        if (opts.display && opts.display.onViewChange) opts.display.onViewChange(v);
-      }
-    });
+    const windows = IJWindows.create({ root: shell, t: opts.t, focusTarget: () => focusTargetEl() });
 
-    function updateTitle(v) {
-      const z = v || display.getView();
-      titleZoom.textContent = info ? ` (${P.formatZoomPct(z.zoom)}%)` : '';
-      loadingNow = !!(v && v.loading);
-      titleBadge.hidden = !(info && loadingNow);
+    // ---- Renderer, layout, views ------------------------------------------------------------------------
+    // ONE renderer (one WebGL2 context) for the whole app; one IJView + one pointer controller per document.
+    const ctls = new Map();          // docId -> controller
+    let activeDoc = null;
+    const dopts = opts.display || {};
+    const renderer = IJRenderer.create({ ...dopts, document: doc });
+    function focusTargetEl() { const c = activeDoc !== null ? ctls.get(activeDoc) : null; return c ? c.stage : wsHost; }
+    function activeCtl() { return activeDoc !== null ? ctls.get(activeDoc) || null : null; }
+
+    function onViewChange(docId, v) {
+      layout.setTabInfo(docId, { zoomPct: P.formatZoomPct(v.zoom) });
+      const c = ctls.get(docId);
+      if (c) c.badge.hidden = !(c.info && v.loading);
+      if (dopts.onViewChange) dopts.onViewChange(v, docId);
     }
+
+    function makePane(docId) {
+      const pane = el('div', 'ij-pane');
+      pane.style.display = 'flex'; pane.style.flexDirection = 'column'; pane.style.minHeight = '0'; pane.style.minWidth = '0'; pane.style.flex = '1 1 auto';
+      const head = el('div', 'ij-pane-head');
+      const subtitle = el('div', 'ij-subtitle');
+      const badge = el('span', 'ij-title-badge', t('view.previewBadge', 'preview'));
+      badge.hidden = true;
+      head.append(subtitle, badge);
+      const stage = el('div', 'ij-stage');
+      stage.tabIndex = 0;
+      stage.style.flex = '1 1 auto'; stage.style.minHeight = '0'; stage.style.position = 'relative';
+      stage.dataset.docId = String(docId);
+      stage.setAttribute('aria-label', t('view.stage', 'Image'));
+      const channelBar = el('div', 'ij-channel-bar');
+      channelBar.hidden = true;
+      const channelLabel = el('span', 'ij-channel-label');
+      const channelSlider = el('input', 'ij-channel-slider');
+      channelSlider.type = 'range'; channelSlider.min = '1'; channelSlider.max = '1'; channelSlider.step = '1'; channelSlider.value = '1';
+      channelSlider.setAttribute('aria-label', t('view.channel', 'Channel'));
+      channelBar.append(channelLabel, channelSlider);
+      pane.append(head, stage, channelBar);
+      const view = IJView.create(renderer, stage, { docId, onViewChange: (v) => onViewChange(docId, v), selectionColor: opts.selectionColor });
+      const ctl = makeController(docId, stage, view, { subtitle, badge, channelBar, channelLabel, channelSlider });
+      ctls.set(docId, ctl);
+      return { el: pane, view, stage };
+    }
+    function destroyPane(docId) {
+      const c = ctls.get(docId);
+      ctls.delete(docId);
+      if (c) c.destroy();
+      if (c && c.view && c.view.destroy) c.view.destroy();
+      if (activeDoc === docId) activeDoc = null;
+    }
+    const layout = IJLayout.create(wsHost, {
+      t: opts.t, makePane, destroyPane,
+      onActivate: (docId) => {
+        for (const [d, c] of ctls) if (d !== docId) c.cancelPolygon();
+        activeDoc = docId;
+        if (opts.onActivate) opts.onActivate(docId);
+      },
+      onClose: (docId) => { if (opts.onCloseImage) opts.onCloseImage(docId); else layout.remove(docId); },
+      onChange: (kind) => { if (opts.onLayoutChange) opts.onLayoutChange(kind); }
+    });
 
     // ---- Tools ---------------------------------------------------------------------------------------
     let tool = 'rect';
     const toolButtons = new Map();
+    // Tools a package registered (IJApp.extend({ tools })): { id, labelKey, icon?, cursor?, hidden?, ext: true }. The
+    // pointer events of the stage go to opts.onToolPointer(docId, { type, x, y, button, shift, alt, ctrl }) while one is
+    // selected; a `hidden` one has no button until it is selected (shell.setTool(id)).
+    const extTools = new Map();
+    const hiddenTools = new Set();
     let lineWidth = 1;
     for (const td of (opts.tools || DEFAULT_TOOLS)) {
       if (td.separator) { toolbar.appendChild(el('span', 'ij-tool-sep')); continue; }
@@ -2990,10 +2056,12 @@ const IJShell = (() => {
       b.dataset.tool = td.id;
       const label = td.labelKey ? t(td.labelKey, td.label || TOOL_FALLBACK[td.id] || td.id) : t('view.tool.' + td.id, td.label || TOOL_FALLBACK[td.id] || td.id);
       b.title = label; b.setAttribute('aria-label', label); b.setAttribute('aria-pressed', 'false');
-      b.appendChild(svgIcon(doc, td.id));
+      b.appendChild(svgIcon(doc, td.icon && ICONS[td.icon] ? td.icon : td.id));
+      if (td.ext) extTools.set(td.id, td);
+      if (td.hidden) { hiddenTools.add(td.id); b.hidden = true; }
       listen(b, 'click', () => setTool(td.id, true));
       listen(b, 'dblclick', () => {
-        if (td.id === 'zoom') display.view100();
+        if (td.id === 'zoom') { const c = activeCtl(); if (c) c.view.view100(); }
         else if ((td.id === 'line' || td.id === 'point' || td.id === 'wand') && opts.onToolOptions) opts.onToolOptions(td.id);
       });
       toolbar.appendChild(b);
@@ -3001,13 +2069,14 @@ const IJShell = (() => {
     }
     function setTool(id, notify) {
       if (!toolButtons.has(id)) return;
-      if (tool !== id) cancelPolygon();
+      if (tool !== id) for (const c of ctls.values()) c.cancelPolygon();
       tool = id;
       for (const [k, b] of toolButtons) {
         b.classList.toggle('is-active', k === id);
         b.setAttribute('aria-pressed', k === id ? 'true' : 'false');
+        if (hiddenTools.has(k)) b.hidden = k !== id;
       }
-      stageCursor();
+      for (const c of ctls.values()) c.stageCursor();
       if (notify && opts.onTool) opts.onTool(id);
     }
 
@@ -3044,6 +2113,7 @@ const IJShell = (() => {
         listenTitle(b, 'click', (e) => {
           e.preventDefault();
           if (menuState.open && menuState.stack[0] === i) { closeMenus(); return; }
+          if (opts.onMenuOpen) { try { opts.onMenuOpen(tree[i].name); } catch (x) { console.error('IJShell onMenuOpen', x); } }
           menuState = { open: true, stack: [i, P.firstSelectable(tree[i].items)] };
           armed = true;
           renderMenus();
@@ -3051,6 +2121,7 @@ const IJShell = (() => {
         });
         listenTitle(b, 'pointerenter', () => {
           if (armed && menuState.open && menuState.stack[0] !== i) {
+            if (opts.onMenuOpen) { try { opts.onMenuOpen(tree[i].name); } catch (x) { console.error('IJShell onMenuOpen', x); } }
             menuState = { open: true, stack: [i, P.firstSelectable(tree[i].items)] };
             renderMenus();
           }
@@ -3108,7 +2179,7 @@ const IJShell = (() => {
             e.stopPropagation();
             if (it.disabled) return;
             if (it.type === 'group') { menuState = { open: true, stack: [...menuState.stack.slice(0, d + 1).map((v, k) => (k === d ? idx : v)), P.firstSelectable(it.children)] }; renderMenus(); return; }
-            runCommand(it.command, 'menu');
+            runCommand(it.command, 'menu', e);
           });
           panel.appendChild(row);
         });
@@ -3138,10 +2209,11 @@ const IJShell = (() => {
       renderMenus();
     }
 
-    function runCommand(cmd, source) {
+    // `ev` = the click / key event: the modifiers it carried go to the command (IJ.altKeyDown(), IJ.shiftKeyDown())
+    function runCommand(cmd, source, ev) {
       closeMenus();
-      stage.focus({ preventScroll: true });
-      if (opts.onCommand) opts.onCommand(cmd, { source });
+      try { focusTargetEl().focus({ preventScroll: true }); } catch (e) { /* no view yet */ }
+      if (opts.onCommand) opts.onCommand(cmd, { source, alt: !!(ev && ev.altKey), shift: !!(ev && ev.shiftKey) });
     }
 
     listen(menubar, 'keydown', (e) => {
@@ -3151,8 +2223,8 @@ const IJShell = (() => {
       e.preventDefault(); e.stopPropagation();
       const r = P.menuKey(tree, menuState, k);
       menuState = r.state;
-      if (r.activate) { runCommand(r.activate.command, 'key'); return; }
-      if (!menuState.open && k === 'Escape') { stage.focus({ preventScroll: true }); }
+      if (r.activate) { runCommand(r.activate.command, 'key', e); return; }
+      if (!menuState.open && k === 'Escape') { try { focusTargetEl().focus({ preventScroll: true }); } catch (x) { /* none */ } }
       renderMenus();
       const b = titleButtons[menuState.stack[0]];
       if (b) b.focus();
@@ -3176,53 +2248,6 @@ const IJShell = (() => {
     }
     refreshMenus();
 
-    // ---- Image / title / channels ---------------------------------------------------------------------------
-    function setImage(imgInfo) {
-      info = imgInfo || null;
-      if (!info) { clearImage(); return; }
-      titleName.textContent = info.name || '';
-      subtitle.textContent = P.formatSubtitle(info);
-      const n = info.channels ? info.channels.length : 1;
-      channelSlider.max = String(Math.max(1, n));
-      const active = Math.min(n - 1, Math.max(0, (info.display && info.display.active) || 0));
-      channelSlider.value = String(active + 1);
-      channelBar.hidden = n < 2;
-      channelLabel.textContent = `c: ${active + 1}/${n}`;
-      display.setImage(info);
-      updateTitle(display.getView());
-      statusPos.textContent = '';
-    }
-    /** The image description changed without its pixels moving (a new calibration, a new name): the
-     *  title lines follow, the view, the selection and the tiles stay. */
-    function updateInfo(imgInfo) {
-      if (!imgInfo || !info) return;
-      info = imgInfo;
-      titleName.textContent = info.name || '';
-      subtitle.textContent = P.formatSubtitle(info);
-    }
-    function clearImage() {
-      info = null;
-      titleName.textContent = ''; titleZoom.textContent = ''; subtitle.textContent = '';
-      titleBadge.hidden = true; channelBar.hidden = true;
-      display.setImage(null);
-      activeRoi = null; polyDraft = null;
-    }
-    function setTitle(name) { if (info) info.name = name; titleName.textContent = name || ''; }
-    function setDisplayState(state) {
-      display.setDisplay(state);
-      if (state && Number.isInteger(state.active) && info) {
-        const n = info.channels.length;
-        channelSlider.value = String(state.active + 1);
-        channelLabel.textContent = `c: ${state.active + 1}/${n}`;
-      }
-    }
-    listen(channelSlider, 'input', () => {
-      const idx = Number(channelSlider.value) - 1;
-      channelLabel.textContent = `c: ${idx + 1}/${channelSlider.max}`;
-      display.setDisplay({ active: idx });
-      if (opts.onChannel) opts.onChannel(idx);
-    });
-
     // ---- Status bar -------------------------------------------------------------------------------------------
     function setStatus(text) { statusText.textContent = text || ''; }
     function setProgress(p) {
@@ -3244,285 +2269,385 @@ const IJShell = (() => {
     function setWarning(text) { warning.hidden = !text; warning.textContent = text || ''; }
     listen(cancelBtn, 'click', () => { if (opts.onCancel) opts.onCancel(); });
 
-    // ---- Pixel read-out (<= 1 request in flight) ------------------------------------------------------------------------
-    let pxPending = null, pxBusy = false;
-    function showPos(ix, iy, values) {
-      if (!info) { statusPos.textContent = ''; return; }
-      statusPos.textContent = P.formatStatus({ x: ix, y: iy, calibration: info.calibration, values, bitDepth: info.bitDepth });
-    }
-    async function pxFlush() {
-      if (pxBusy) return;
-      pxBusy = true;
-      try {
-        while (pxPending && !destroyed) {
-          const q = pxPending; pxPending = null;
-          let values = null;
-          try { values = opts.readPixel ? await opts.readPixel(q.x, q.y) : null; } catch (e) { values = null; }
-          if (destroyed) break;
-          if (!pxPending) showPos(q.x, q.y, values);
-        }
-      } finally { pxBusy = false; }
-    }
-    function readout(ix, iy) {
-      if (!info) return;
-      const x = Math.floor(ix), y = Math.floor(iy);
-      if (x < 0 || y < 0 || x >= info.width || y >= info.height) { statusPos.textContent = ''; pxPending = null; return; }
-      if (!opts.readPixel) { showPos(x, y, null); return; }
-      pxPending = { x, y };
-      pxFlush();
-    }
-
-    // ---- ROI interaction ------------------------------------------------------------------------------------------------
-    let activeRoi = null;
-    let polyDraft = null;       // { points:[[x,y]], rubber }
-    let drag = null;
     let spaceDown = false;
-    let wheelAcc = 0;
-    let hoverCursor = '';
-    let rois = { all: [], showAll: false };
-
-    function pushRois() { display.setRois({ active: activeRoi, all: rois.all, showAll: rois.showAll, handles: true }); }
-    function emitRoi(roi, final, source) { if (opts.onRoi) opts.onRoi(roi, { final, source }); }
-    function commitRoi(roi, source, final = true) {
-      activeRoi = roi;
-      pushRois();
-      if (roi) setStatus(P.describeRoi(roi, info && info.calibration));
-      emitRoi(roi, final, source);
-    }
-    function cancelPolygon() { if (polyDraft) { polyDraft = null; display.setDraft(null); } }
-
-    function stagePoint(e) {
-      const r = stage.getBoundingClientRect();
-      return { sx: e.clientX - r.left, sy: e.clientY - r.top };
-    }
-    function tolImg() { return 6 / Math.max(display.getView().zoom, 1e-6); }
-
-    function stageCursor() {
-      let c = 'default';
-      if (tool === 'hand' || spaceDown) c = drag && drag.kind === 'pan' ? 'grabbing' : 'grab';
-      else if (tool === 'zoom') c = 'zoom-in';
-      else if (ROI_TOOLS.has(tool)) c = 'crosshair';
-      display.setCursor(hoverCursor || c);
-    }
-
-    function finishPolygon(close) {
-      if (!polyDraft) return;
-      const pts = polyDraft.points, kind = polyDraft.kind;
-      polyDraft = null;
-      display.setDraft(null);
-      // a segmented line (finished by a double click / Enter) and an angle (its third click) are open: the Enter / double click of a polygon closes it
-      if (kind === 'polyline') {
-        if (pts.length >= 2) commitRoi({ type: 'polyline', points: pts, width: lineWidth }, 'draw'); else commitRoi(null, 'clear');
-      } else if (kind === 'angle') {
-        if (pts.length === 3) commitRoi({ type: 'angle', points: pts }, 'draw'); else commitRoi(null, 'clear');
-      } else if (close && pts.length >= 3) commitRoi({ type: 'polygon', points: pts }, 'draw');
-      else if (pts.length === 2 && !close) commitRoi({ type: 'line', x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1], width: 1 }, 'draw');
-      else commitRoi(null, 'clear');
-    }
-
-    function onPointerDown(e) {
-      if (!info) return;
-      stage.focus({ preventScroll: true });
-      const { sx, sy } = stagePoint(e);
-      const p = display.screenToImage(sx, sy);
-      const panning = e.button === 1 || spaceDown || tool === 'hand';
-      if (panning && (e.button === 0 || e.button === 1)) {
-        drag = { kind: 'pan', lx: e.clientX, ly: e.clientY, id: e.pointerId };
-        stage.setPointerCapture(e.pointerId);
-        stageCursor(); e.preventDefault();
-        return;
+    function makeController(docId, stage, view, parts) {
+      const { subtitle, badge, channelBar, channelLabel, channelSlider } = parts;
+      let info = null;
+      const lst = [];
+      const listen = (target, ev, fn, o) => { target.addEventListener(ev, fn, o); lst.push(() => target.removeEventListener(ev, fn, o)); };
+      // ---- Pixel read-out (<= 1 request in flight) ------------------------------------------------------------------------
+      let pxPending = null, pxBusy = false;
+      function showPos(ix, iy, values) {
+        if (!info) { statusPos.textContent = ''; return; }
+        statusPos.textContent = P.formatStatus({ x: ix, y: iy, calibration: info.calibration, values, bitDepth: info.bitDepth });
       }
-      if (tool === 'zoom') {
-        if (e.button === 2 || e.altKey) { display.zoomAt(sx, sy, -1); return; }
-        if (e.button !== 0) return;
-        drag = { kind: 'zoomrect', sx, sy, cx: sx, cy: sy, id: e.pointerId };
-        stage.setPointerCapture(e.pointerId);
-        return;
+      async function pxFlush() {
+        if (pxBusy) return;
+        pxBusy = true;
+        try {
+          while (pxPending && !destroyed) {
+            const q = pxPending; pxPending = null;
+            let values = null;
+            try { values = opts.readPixel ? await opts.readPixel(q.x, q.y, docId) : null; } catch (e) { values = null; }
+            if (destroyed) break;
+            if (!pxPending) showPos(q.x, q.y, values);
+          }
+        } finally { pxBusy = false; }
       }
-      if (e.button !== 0 || !ROI_TOOLS.has(tool)) return;
+      function readout(ix, iy) {
+        if (!info) return;
+        const x = Math.floor(ix), y = Math.floor(iy);
+        if (x < 0 || y < 0 || x >= info.width || y >= info.height) { statusPos.textContent = ''; pxPending = null; return; }
+        if (!opts.readPixel) { showPos(x, y, null); return; }
+        pxPending = { x, y };
+        pxFlush();
+      }
 
-      // the wand traces what is under the click: the controller does it (the engine owns the pixels)
-      if (tool === 'wand') {
-        if (opts.onWand) opts.onWand(Math.floor(p.x), Math.floor(p.y), { shift: e.shiftKey, alt: e.altKey });
-        return;
+      // ---- ROI interaction ------------------------------------------------------------------------------------------------
+      let activeRoi = null;
+      let polyDraft = null;       // { points:[[x,y]], rubber }
+      let drag = null;
+      let wheelAcc = 0;
+      let hoverCursor = '';
+      let rois = { all: [], showAll: false };
+
+      function pushRois() { view.setRois({ active: activeRoi, all: rois.all, showAll: rois.showAll, handles: true }); }
+      function emitRoi(roi, final, source) { if (opts.onRoi) opts.onRoi(roi, { final, source, docId }); }
+      function commitRoi(roi, source, final = true) {
+        activeRoi = roi;
+        pushRois();
+        if (roi) setStatus(P.describeRoi(roi, info && info.calibration));
+        emitRoi(roi, final, source);
       }
-      const tol = tolImg();
-      // segmented line / angle in progress: a vertex per click (pixel-centre integers, as a line); an angle ends at its third
-      if ((tool === 'polyline' || tool === 'angle') && polyDraft) {
-        const pt = [Math.floor(p.x), Math.floor(p.y)];
-        const last = polyDraft.points[polyDraft.points.length - 1];
-        if (tool === 'polyline' && e.detail >= 2 && last && last[0] === pt[0] && last[1] === pt[1]) { finishPolygon(false); return; }
-        polyDraft.points.push(pt);
-        if (tool === 'angle' && polyDraft.points.length === 3) { finishPolygon(false); return; }
-        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
-        return;
+      function cancelPolygon() { if (polyDraft) { polyDraft = null; view.setDraft(null); } }
+
+      function stagePoint(e) {
+        const r = stage.getBoundingClientRect();
+        return { sx: e.clientX - r.left, sy: e.clientY - r.top };
       }
-      // polygon in progress: add a vertex (close on the first one / double click)
-      if (tool === 'polygon' && polyDraft) {
-        const pt = [Math.round(p.x), Math.round(p.y)];
-        const first = polyDraft.points[0];
-        const near = first && Math.hypot((first[0] - pt[0]) * display.getView().zoom, (first[1] - pt[1]) * display.getView().zoom) < 8;
-        if (near && polyDraft.points.length >= 3) { finishPolygon(true); return; }
-        if (e.detail >= 2 && polyDraft.points.length >= 3) { finishPolygon(true); return; }
-        polyDraft.points.push(pt);
-        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
-        return;
+      function tolImg() { return 6 / Math.max(view.getView().zoom, 1e-6); }
+
+      function stageCursor() {
+        let c = 'default';
+        if (tool === 'hand' || spaceDown) c = drag && drag.kind === 'pan' ? 'grabbing' : 'grab';
+        else if (tool === 'zoom') c = 'zoom-in';
+        else if (ROI_TOOLS.has(tool)) c = 'crosshair';
+        else if (extTools.has(tool)) c = extTools.get(tool).cursor || 'crosshair';
+        view.setCursor(hoverCursor || c);
       }
-      // handles and move of the existing selection
-      if (activeRoi) {
-        const h = P.handleAt(activeRoi, p.x, p.y, tol);
-        if (h) {
-          drag = { kind: 'resize', handle: h.id, start: activeRoi, id: e.pointerId };
+
+      function finishPolygon(close) {
+        if (!polyDraft) return;
+        const pts = polyDraft.points, kind = polyDraft.kind;
+        polyDraft = null;
+        view.setDraft(null);
+        // a segmented line (finished by a double click / Enter) and an angle (its third click) are open: the Enter / double click of a polygon closes it
+        if (kind === 'polyline') {
+          if (pts.length >= 2) commitRoi({ type: 'polyline', points: pts, width: lineWidth }, 'draw'); else commitRoi(null, 'clear');
+        } else if (kind === 'angle') {
+          if (pts.length === 3) commitRoi({ type: 'angle', points: pts }, 'draw'); else commitRoi(null, 'clear');
+        } else if (close && pts.length >= 3) commitRoi({ type: 'polygon', points: pts }, 'draw');
+        else if (pts.length === 2 && !close) commitRoi({ type: 'line', x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1], width: 1 }, 'draw');
+        else commitRoi(null, 'clear');
+      }
+
+      function onPointerDown(e) {
+        if (!info) return;
+        stage.focus({ preventScroll: true });
+        const { sx, sy } = stagePoint(e);
+        const p = view.screenToImage(sx, sy);
+        const panning = e.button === 1 || spaceDown || tool === 'hand';
+        if (panning && (e.button === 0 || e.button === 1)) {
+          drag = { kind: 'pan', lx: e.clientX, ly: e.clientY, id: e.pointerId };
+          stage.setPointerCapture(e.pointerId);
+          stageCursor(); e.preventDefault();
+          return;
+        }
+        if (tool === 'zoom') {
+          if (e.button === 2 || e.altKey) { view.zoomAt(sx, sy, -1); return; }
+          if (e.button !== 0) return;
+          drag = { kind: 'zoomrect', sx, sy, cx: sx, cy: sy, id: e.pointerId };
           stage.setPointerCapture(e.pointerId);
           return;
         }
-        if (!(tool === 'point' && !e.shiftKey) && P.hitRoi(activeRoi, p.x, p.y, (activeRoi.type === 'line' || activeRoi.type === 'polyline' || activeRoi.type === 'angle') ? tol : 0)) {
-          drag = { kind: 'move', start: activeRoi, p0: p, moved: false, id: e.pointerId };
+        // a tool of a package: it gets the pointer, the shell draws nothing
+        if (extTools.has(tool) && opts.onToolPointer) {
+          drag = { kind: 'ext', id: e.pointerId };
           stage.setPointerCapture(e.pointerId);
+          opts.onToolPointer(docId, { type: 'down', x: p.x, y: p.y, button: e.button, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey });
+          e.preventDefault();
           return;
         }
-      }
-      // a new selection
-      if (tool === 'point') {
-        const pt = [Math.floor(p.x) + 0.5, Math.floor(p.y) + 0.5];
-        const pts = e.shiftKey && activeRoi && activeRoi.type === 'point' ? activeRoi.points.concat([pt]) : [pt];
-        commitRoi({ type: 'point', points: pts }, 'draw');
-        return;
-      }
-      if (tool === 'polyline' || tool === 'angle') {
-        polyDraft = { kind: tool, points: [[Math.floor(p.x), Math.floor(p.y)]], rubber: null };
-        activeRoi = null; pushRois();
-        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
-        emitRoi(null, false, 'clear');
-        return;
-      }
-      if (tool === 'polygon') {
-        polyDraft = { kind: 'polygon', points: [[Math.round(p.x), Math.round(p.y)]], rubber: null };
-        activeRoi = null; pushRois();
-        display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
-        emitRoi(null, false, 'clear');
-        return;
-      }
-      activeRoi = null;
-      drag = { kind: 'draw', tool, p0: p, pts: tool === 'freehand' ? [[Math.floor(p.x), Math.floor(p.y)]] : null, id: e.pointerId };
-      stage.setPointerCapture(e.pointerId);
-      if (activeRoi === null) { pushRois(); }
-    }
+        if (e.button !== 0 || !ROI_TOOLS.has(tool)) return;
 
-    function onPointerMove(e) {
-      if (!info) return;
-      const { sx, sy } = stagePoint(e);
-      const p = display.screenToImage(sx, sy);
-      readout(p.x, p.y);
-      if (drag) {
-        switch (drag.kind) {
-          case 'pan':
-            display.pan(e.clientX - drag.lx, e.clientY - drag.ly);
-            drag.lx = e.clientX; drag.ly = e.clientY;
+        // the wand traces what is under the click: the controller does it (the engine owns the pixels)
+        if (tool === 'wand') {
+          if (opts.onWand) opts.onWand(Math.floor(p.x), Math.floor(p.y), { shift: e.shiftKey, alt: e.altKey });
+          return;
+        }
+        const tol = tolImg();
+        // segmented line / angle in progress: a vertex per click (pixel-centre integers, as a line); an angle ends at its third
+        if ((tool === 'polyline' || tool === 'angle') && polyDraft) {
+          const pt = [Math.floor(p.x), Math.floor(p.y)];
+          const last = polyDraft.points[polyDraft.points.length - 1];
+          if (tool === 'polyline' && e.detail >= 2 && last && last[0] === pt[0] && last[1] === pt[1]) { finishPolygon(false); return; }
+          polyDraft.points.push(pt);
+          if (tool === 'angle' && polyDraft.points.length === 3) { finishPolygon(false); return; }
+          view.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+          return;
+        }
+        // polygon in progress: add a vertex (close on the first one / double click)
+        if (tool === 'polygon' && polyDraft) {
+          const pt = [Math.round(p.x), Math.round(p.y)];
+          const first = polyDraft.points[0];
+          const near = first && Math.hypot((first[0] - pt[0]) * view.getView().zoom, (first[1] - pt[1]) * view.getView().zoom) < 8;
+          if (near && polyDraft.points.length >= 3) { finishPolygon(true); return; }
+          if (e.detail >= 2 && polyDraft.points.length >= 3) { finishPolygon(true); return; }
+          polyDraft.points.push(pt);
+          view.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+          return;
+        }
+        // handles and move of the existing selection
+        if (activeRoi) {
+          const h = P.handleAt(activeRoi, p.x, p.y, tol);
+          if (h) {
+            drag = { kind: 'resize', handle: h.id, start: activeRoi, id: e.pointerId };
+            stage.setPointerCapture(e.pointerId);
+            return;
+          }
+          if (!(tool === 'point' && !e.shiftKey) && P.hitRoi(activeRoi, p.x, p.y, (activeRoi.type === 'line' || activeRoi.type === 'polyline' || activeRoi.type === 'angle') ? tol : 0)) {
+            drag = { kind: 'move', start: activeRoi, p0: p, moved: false, id: e.pointerId };
+            stage.setPointerCapture(e.pointerId);
+            return;
+          }
+        }
+        // a new selection
+        if (tool === 'point') {
+          const pt = [Math.floor(p.x) + 0.5, Math.floor(p.y) + 0.5];
+          const pts = e.shiftKey && activeRoi && activeRoi.type === 'point' ? activeRoi.points.concat([pt]) : [pt];
+          commitRoi({ type: 'point', points: pts }, 'draw');
+          return;
+        }
+        if (tool === 'polyline' || tool === 'angle') {
+          polyDraft = { kind: tool, points: [[Math.floor(p.x), Math.floor(p.y)]], rubber: null };
+          activeRoi = null; pushRois();
+          view.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+          emitRoi(null, false, 'clear');
+          return;
+        }
+        if (tool === 'polygon') {
+          polyDraft = { kind: 'polygon', points: [[Math.round(p.x), Math.round(p.y)]], rubber: null };
+          activeRoi = null; pushRois();
+          view.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+          emitRoi(null, false, 'clear');
+          return;
+        }
+        activeRoi = null;
+        drag = { kind: 'draw', tool, p0: p, pts: tool === 'freehand' ? [[Math.floor(p.x), Math.floor(p.y)]] : null, id: e.pointerId };
+        stage.setPointerCapture(e.pointerId);
+        if (activeRoi === null) { pushRois(); }
+      }
+
+      function onPointerMove(e) {
+        if (!info) return;
+        const { sx, sy } = stagePoint(e);
+        const p = view.screenToImage(sx, sy);
+        readout(p.x, p.y);
+        if (opts.onCursor) opts.onCursor(docId, p.x, p.y, sx, sy);
+        if (drag) {
+          switch (drag.kind) {
+            case 'ext':
+              if (opts.onToolPointer) opts.onToolPointer(docId, { type: 'move', x: p.x, y: p.y, button: 0, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey });
+              break;
+            case 'pan':
+              view.pan(e.clientX - drag.lx, e.clientY - drag.ly);
+              drag.lx = e.clientX; drag.ly = e.clientY;
+              break;
+            case 'zoomrect': drag.cx = sx; drag.cy = sy; {
+              const a = view.screenToImage(drag.sx, drag.sy);
+              view.setRois({ active: { type: 'rect', x: Math.min(a.x, p.x), y: Math.min(a.y, p.y), w: Math.abs(p.x - a.x), h: Math.abs(p.y - a.y) }, handles: false });
+            } break;
+            case 'draw': {
+              let roi;
+              if (drag.tool === 'rect' || drag.tool === 'oval') roi = P.roiFromDrag(drag.tool, drag.p0, p, { shift: e.shiftKey, alt: e.altKey });
+              else if (drag.tool === 'line') roi = P.lineFromDrag(drag.p0, p, { shift: e.shiftKey, width: lineWidth });
+              else {
+                const last = drag.pts[drag.pts.length - 1];
+                const pt = [Math.floor(p.x), Math.floor(p.y)];
+                if (pt[0] !== last[0] || pt[1] !== last[1]) drag.pts.push(pt);
+                roi = { type: 'freehand', points: drag.pts };
+              }
+              activeRoi = roi; drag.roi = roi;
+              view.setRois({ active: roi, handles: false });
+              setStatus(P.describeRoi(roi, info.calibration));
+              emitRoi(roi, false, 'draw');
+            } break;
+            case 'move': {
+              const dx = Math.round(p.x - drag.p0.x), dy = Math.round(p.y - drag.p0.y);
+              if (dx || dy) drag.moved = true;
+              const roi = P.translateRoi(drag.start, dx, dy);
+              activeRoi = roi; drag.roi = roi;
+              view.setRois({ active: roi, handles: false });
+              setStatus(P.describeRoi(roi, info.calibration));
+              emitRoi(roi, false, 'move');
+            } break;
+            case 'resize': {
+              const roi = P.moveHandle(drag.start, drag.handle, p.x, p.y, { shift: e.shiftKey });
+              activeRoi = roi; drag.roi = roi;
+              view.setRois({ active: roi, handles: false });
+              setStatus(P.describeRoi(roi, info.calibration));
+              emitRoi(roi, false, 'resize');
+            } break;
+            default: break;
+          }
+          return;
+        }
+        if (polyDraft) view.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
+        // hover cursor over the selection
+        let c = '';
+        if (activeRoi && ROI_TOOLS.has(tool) && !spaceDown) {
+          const h = P.handleAt(activeRoi, p.x, p.y, tolImg());
+          if (h) c = P.handleCursor(h.id);
+          else if (P.hitRoi(activeRoi, p.x, p.y, 0)) c = 'move';
+        }
+        if (c !== hoverCursor) { hoverCursor = c; stageCursor(); }
+      }
+
+      function endDrag(e, cancelled) {
+        if (!drag) return;
+        const d = drag;
+        drag = null;
+        try { stage.releasePointerCapture(d.id); } catch (x) { /* already released */ }
+        switch (d.kind) {
+          case 'ext':
+            if (opts.onToolPointer) {
+              const q = e ? stagePoint(e) : { sx: 0, sy: 0 };
+              const ip = e ? view.screenToImage(q.sx, q.sy) : { x: NaN, y: NaN };
+              opts.onToolPointer(docId, { type: cancelled ? 'cancel' : 'up', x: ip.x, y: ip.y, button: 0, shift: !!(e && e.shiftKey), alt: !!(e && e.altKey), ctrl: !!(e && (e.ctrlKey || e.metaKey)) });
+            }
             break;
-          case 'zoomrect': drag.cx = sx; drag.cy = sy; {
-            const a = display.screenToImage(drag.sx, drag.sy);
-            display.setRois({ active: { type: 'rect', x: Math.min(a.x, p.x), y: Math.min(a.y, p.y), w: Math.abs(p.x - a.x), h: Math.abs(p.y - a.y) }, handles: false });
+          case 'pan': stageCursor(); break;
+          case 'zoomrect': {
+            view.setRois({ active: activeRoi, handles: true });
+            if (cancelled) break;
+            const { sx, sy } = e ? stagePoint(e) : { sx: d.cx, sy: d.cy };
+            if (Math.hypot(sx - d.sx, sy - d.sy) < 4) view.zoomAt(d.sx, d.sy, 1);
+            else {
+              const a = view.screenToImage(d.sx, d.sy), b = view.screenToImage(sx, sy);
+              view.zoomToRect({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) });
+            }
           } break;
           case 'draw': {
-            let roi;
-            if (drag.tool === 'rect' || drag.tool === 'oval') roi = P.roiFromDrag(drag.tool, drag.p0, p, { shift: e.shiftKey, alt: e.altKey });
-            else if (drag.tool === 'line') roi = P.lineFromDrag(drag.p0, p, { shift: e.shiftKey, width: lineWidth });
-            else {
-              const last = drag.pts[drag.pts.length - 1];
-              const pt = [Math.floor(p.x), Math.floor(p.y)];
-              if (pt[0] !== last[0] || pt[1] !== last[1]) drag.pts.push(pt);
-              roi = { type: 'freehand', points: drag.pts };
-            }
-            activeRoi = roi; drag.roi = roi;
-            display.setRois({ active: roi, handles: false });
-            setStatus(P.describeRoi(roi, info.calibration));
-            emitRoi(roi, false, 'draw');
+            let roi = d.roi || null;
+            if (cancelled) roi = null;
+            else if (roi && (roi.type === 'rect' || roi.type === 'oval') && (roi.w < 1 || roi.h < 1)) roi = null;
+            else if (roi && roi.type === 'line' && roi.x1 === roi.x2 && roi.y1 === roi.y2) roi = null;
+            else if (roi && roi.type === 'freehand' && roi.points.length < 3) roi = null;
+            commitRoi(roi, roi ? 'draw' : 'clear');
+            if (!roi) setStatus('');
           } break;
-          case 'move': {
-            const dx = Math.round(p.x - drag.p0.x), dy = Math.round(p.y - drag.p0.y);
-            if (dx || dy) drag.moved = true;
-            const roi = P.translateRoi(drag.start, dx, dy);
-            activeRoi = roi; drag.roi = roi;
-            display.setRois({ active: roi, handles: false });
-            setStatus(P.describeRoi(roi, info.calibration));
-            emitRoi(roi, false, 'move');
-          } break;
-          case 'resize': {
-            const roi = P.moveHandle(drag.start, drag.handle, p.x, p.y, { shift: e.shiftKey });
-            activeRoi = roi; drag.roi = roi;
-            display.setRois({ active: roi, handles: false });
-            setStatus(P.describeRoi(roi, info.calibration));
-            emitRoi(roi, false, 'resize');
+          case 'move': case 'resize': {
+            const roi = d.roi || d.start;
+            if (cancelled) commitRoi(d.start, d.kind);
+            else commitRoi(roi, d.kind);
           } break;
           default: break;
         }
-        return;
       }
-      if (polyDraft) display.setDraft({ points: polyDraft.points, rubber: [p.x, p.y] });
-      // hover cursor over the selection
-      let c = '';
-      if (activeRoi && ROI_TOOLS.has(tool) && !spaceDown) {
-        const h = P.handleAt(activeRoi, p.x, p.y, tolImg());
-        if (h) c = P.handleCursor(h.id);
-        else if (P.hitRoi(activeRoi, p.x, p.y, 0)) c = 'move';
-      }
-      if (c !== hoverCursor) { hoverCursor = c; stageCursor(); }
-    }
 
-    function endDrag(e, cancelled) {
-      if (!drag) return;
-      const d = drag;
-      drag = null;
-      try { stage.releasePointerCapture(d.id); } catch (x) { /* already released */ }
-      switch (d.kind) {
-        case 'pan': stageCursor(); break;
-        case 'zoomrect': {
-          display.setRois({ active: activeRoi, handles: true });
-          if (cancelled) break;
-          const { sx, sy } = e ? stagePoint(e) : { sx: d.cx, sy: d.cy };
-          if (Math.hypot(sx - d.sx, sy - d.sy) < 4) display.zoomAt(d.sx, d.sy, 1);
-          else {
-            const a = display.screenToImage(d.sx, d.sy), b = display.screenToImage(sx, sy);
-            display.zoomToRect({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) });
+      listen(stage, 'pointerdown', onPointerDown);
+      listen(stage, 'pointermove', onPointerMove);
+      listen(stage, 'pointerup', (e) => endDrag(e, false));
+      listen(stage, 'pointercancel', (e) => endDrag(e, true));
+      listen(stage, 'pointerleave', () => { if (!drag) statusPos.textContent = ''; pxPending = null; if (opts.onCursor && !drag) opts.onCursor(docId, null); });
+      listen(stage, 'contextmenu', (e) => { if (tool === 'zoom') e.preventDefault(); });
+      listen(stage, 'dblclick', (e) => {
+        if (tool === 'polygon' && polyDraft && polyDraft.points.length >= 3) { e.preventDefault(); finishPolygon(true); }
+        else if (tool === 'polyline' && polyDraft && polyDraft.points.length >= 2) { e.preventDefault(); finishPolygon(false); }
+      });
+      listen(stage, 'wheel', (e) => {
+        if (!info) return;
+        e.preventDefault();
+        const r = P.wheelSteps(wheelAcc, e.deltaY, e.deltaMode);
+        wheelAcc = r.acc;
+        const { sx, sy } = stagePoint(e);
+        for (let i = 0; i < Math.abs(r.steps); i++) view.zoomAt(sx, sy, r.steps > 0 ? 1 : -1);
+      }, { passive: false });
+
+
+      function keyDown(e) {
+        if (polyDraft) {
+          if (e.key === 'Enter') { e.preventDefault(); finishPolygon(polyDraft.kind === 'polygon'); return true; }
+          if (e.key === 'Escape') { e.preventDefault(); cancelPolygon(); commitRoi(null, 'clear'); return true; }
+          if (e.key === 'Backspace') {
+            e.preventDefault();
+            polyDraft.points.pop();
+            if (!polyDraft.points.length) { cancelPolygon(); return true; }
+            view.setDraft({ points: polyDraft.points, rubber: null });
+            return true;
           }
-        } break;
-        case 'draw': {
-          let roi = d.roi || null;
-          if (cancelled) roi = null;
-          else if (roi && (roi.type === 'rect' || roi.type === 'oval') && (roi.w < 1 || roi.h < 1)) roi = null;
-          else if (roi && roi.type === 'line' && roi.x1 === roi.x2 && roi.y1 === roi.y2) roi = null;
-          else if (roi && roi.type === 'freehand' && roi.points.length < 3) roi = null;
-          commitRoi(roi, roi ? 'draw' : 'clear');
-          if (!roi) setStatus('');
-        } break;
-        case 'move': case 'resize': {
-          const roi = d.roi || d.start;
-          if (cancelled) commitRoi(d.start, d.kind);
-          else commitRoi(roi, d.kind);
-        } break;
-        default: break;
+        }
+        if (drag && e.key === 'Escape') { e.preventDefault(); endDrag(null, true); return true; }
+        if (activeRoi && stage.contains(e.target) && e.key.startsWith('Arrow') && !e.ctrlKey && !e.metaKey) {
+          const step = e.shiftKey ? 10 : 1;
+          const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+          const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+          if (dx || dy) { e.preventDefault(); commitRoi(P.translateRoi(activeRoi, dx, dy), 'nudge'); return true; }
+        }
+        return false;
       }
-    }
 
-    listen(stage, 'pointerdown', onPointerDown);
-    listen(stage, 'pointermove', onPointerMove);
-    listen(stage, 'pointerup', (e) => endDrag(e, false));
-    listen(stage, 'pointercancel', (e) => endDrag(e, true));
-    listen(stage, 'pointerleave', () => { if (!drag) statusPos.textContent = ''; pxPending = null; });
-    listen(stage, 'contextmenu', (e) => { if (tool === 'zoom') e.preventDefault(); });
-    listen(stage, 'dblclick', (e) => {
-      if (tool === 'polygon' && polyDraft && polyDraft.points.length >= 3) { e.preventDefault(); finishPolygon(true); }
-      else if (tool === 'polyline' && polyDraft && polyDraft.points.length >= 2) { e.preventDefault(); finishPolygon(false); }
-    });
-    listen(stage, 'wheel', (e) => {
-      if (!info) return;
-      e.preventDefault();
-      const r = P.wheelSteps(wheelAcc, e.deltaY, e.deltaMode);
-      wheelAcc = r.acc;
-      const { sx, sy } = stagePoint(e);
-      for (let i = 0; i < Math.abs(r.steps); i++) display.zoomAt(sx, sy, r.steps > 0 ? 1 : -1);
-    }, { passive: false });
+      // ---- the image of this view ----------------------------------------------------------------------------
+      function setImage(imgInfo) {
+        info = imgInfo || null;
+        if (!info) { activeRoi = null; polyDraft = null; view.setImage(null); return; }
+        subtitle.textContent = P.formatSubtitle(info);
+        const n = info.channels ? info.channels.length : 1;
+        channelSlider.max = String(Math.max(1, n));
+        const active = Math.min(n - 1, Math.max(0, (info.display && info.display.active) || 0));
+        channelSlider.value = String(active + 1);
+        channelBar.hidden = n < 2;
+        channelLabel.textContent = `c: ${active + 1}/${n}`;
+        view.setImage(info);
+        statusPos.textContent = '';
+      }
+      function updateInfo(imgInfo) {
+        if (!imgInfo || !info) return;
+        info = imgInfo;
+        subtitle.textContent = P.formatSubtitle(info);
+        view.updateInfo(imgInfo);
+      }
+      function setDisplayState(state) {
+        view.setDisplay(state);
+        if (state && Number.isInteger(state.active) && info) {
+          channelSlider.value = String(state.active + 1);
+          channelLabel.textContent = `c: ${state.active + 1}/${info.channels.length}`;
+        }
+      }
+      listen(channelSlider, 'input', () => {
+        const idx = Number(channelSlider.value) - 1;
+        channelLabel.textContent = `c: ${idx + 1}/${channelSlider.max}`;
+        view.setDisplay({ active: idx });
+        if (opts.onChannel) opts.onChannel(idx, docId);
+      });
+      listen(stage, 'blur', () => { if (spaceDown) { spaceDown = false; stageCursor(); } });
+      function destroy() {
+        for (const fn of lst.splice(0)) fn();
+        pxPending = null;
+        activeRoi = null; polyDraft = null;
+      }
+      return {
+        docId, stage, view, subtitle, badge, channelBar,
+        get info() { return info; },
+        get polyDraft() { return polyDraft; },
+        get activeRoi() { return activeRoi; },
+        get drag() { return drag; },
+        setImage, updateInfo, setDisplayState, keyDown, stageCursor, cancelPolygon, destroy,
+        setActiveRoi(roi) { activeRoi = roi || null; cancelPolygon(); pushRois(); setStatus(roi ? P.describeRoi(roi, info && info.calibration) : ''); },
+        setRois(r) { rois = { all: (r && r.all) || [], showAll: !!(r && r.showAll) }; pushRois(); },
+        commitRoi
+      };
+    }
 
     // ---- Keyboard ---------------------------------------------------------------------------------------------------------
     const shortcutMap = new Map();
@@ -3542,30 +2667,14 @@ const IJShell = (() => {
       if (typeof Dialog !== 'undefined' && Dialog && typeof Dialog.isOpen === 'function' && Dialog.isOpen()) return;
       if (isTypingTarget(e.target)) return;
       if (menuState.open && menubar.contains(e.target)) return;
-      if (e.key === ' ' && (e.target === stage || (e.target && shell.contains && shell.contains(e.target)))) {
-        if (!spaceDown) { spaceDown = true; stageCursor(); }
+      const ac = activeCtl();
+      if (e.key === ' ' && ac && (e.target === ac.stage || (e.target && shell.contains && shell.contains(e.target)))) {
+        if (!spaceDown) { spaceDown = true; for (const c of ctls.values()) c.stageCursor(); }
         e.preventDefault();
         return;
       }
-      if (polyDraft) {
-        if (e.key === 'Enter') { e.preventDefault(); finishPolygon(polyDraft.kind === 'polygon'); return; }
-        if (e.key === 'Escape') { e.preventDefault(); cancelPolygon(); commitRoi(null, 'clear'); return; }
-        if (e.key === 'Backspace') {
-          e.preventDefault();
-          polyDraft.points.pop();
-          if (!polyDraft.points.length) { cancelPolygon(); return; }
-          display.setDraft({ points: polyDraft.points, rubber: null });
-          return;
-        }
-      }
-      if (drag && e.key === 'Escape') { e.preventDefault(); endDrag(null, true); return; }
+      if (ac && ac.keyDown(e)) return;
       if (e.key === 'Escape' && !progress.hidden && !cancelBtn.hidden) { e.preventDefault(); if (opts.onCancel) opts.onCancel(); return; }
-      if (activeRoi && stage.contains(e.target) && e.key.startsWith('Arrow') && !e.ctrlKey && !e.metaKey) {
-        const step = e.shiftKey ? 10 : 1;
-        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-        const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-        if (dx || dy) { e.preventDefault(); commitRoi(P.translateRoi(activeRoi, dx, dy), 'nudge'); return; }
-      }
       const sc = P.shortcutFromEvent(e);
       if (!sc) return;
       const cmd = shortcutMap.get(sc);
@@ -3573,14 +2682,13 @@ const IJShell = (() => {
       let enabled = true;
       if (typeof cmd.enabled === 'function') { try { enabled = !!cmd.enabled(opts.getState ? opts.getState() : null); } catch (x) { enabled = false; } }
       e.preventDefault();
-      if (enabled && opts.onCommand) { closeMenus(); opts.onCommand(cmd, { source: 'key' }); }
+      if (enabled && opts.onCommand) { closeMenus(); opts.onCommand(cmd, { source: 'key', alt: !!e.altKey, shift: !!e.shiftKey }); }
     }
     function onKeyUp(e) {
-      if (e.key === ' ' && spaceDown) { spaceDown = false; stageCursor(); }
+      if (e.key === ' ' && spaceDown) { spaceDown = false; for (const c of ctls.values()) c.stageCursor(); }
     }
     listen(doc, 'keydown', onKeyDown);
     listen(doc, 'keyup', onKeyUp);
-    listen(stage, 'blur', () => { if (spaceDown) { spaceDown = false; stageCursor(); } });
 
     setTool('rect', false);
 
@@ -3591,18 +2699,37 @@ const IJShell = (() => {
       for (const fn of cleanups.splice(0)) fn();
       for (const fn of titleCleanups.splice(0)) fn();
       windows.destroy();
-      display.destroy();
-      pxPending = null;
+      layout.destroy();
+      renderer.destroy();
       if (shell.parentNode) shell.parentNode.removeChild(shell);
     }
+    const ctlOf = (docId) => (docId === undefined || docId === null ? activeCtl() : ctls.get(docId) || null);
 
     return {
-      el: shell, stage, display, windows, menubar, statusBar: statusbar,
-      setImage, clearImage, setTitle, setDisplayState, updateInfo,
+      el: shell, workspace: wsHost, layout, renderer, windows, menubar, statusBar: statusbar,
+      view: (docId) => layout.view(docId),
+      activeView: () => (activeDoc !== null ? layout.view(activeDoc) : null),
+      activeDocId: () => activeDoc,
+      /** Shows `imgInfo` in its own view (created on first call, placed as `o.placement` says). */
+      setImage(imgInfo, o) {
+        if (!imgInfo) return;
+        if (!layout.has(imgInfo.docId)) layout.add(imgInfo.docId, o || {});
+        const c = ctls.get(imgInfo.docId);
+        if (!c) return;
+        c.setImage(imgInfo);
+        layout.setTabInfo(imgInfo.docId, { name: imgInfo.name || '' });
+      },
+      updateInfo(imgInfo) { const c = ctlOf(imgInfo && imgInfo.docId); if (c) { c.updateInfo(imgInfo); layout.setTabInfo(c.docId, { name: imgInfo.name || '' }); } },
+      removeImage(docId) { layout.remove(docId); },
+      /** No docId: every view goes (the empty workspace). */
+      clearImage(docId) { if (docId === undefined || docId === null) { layout.clear(); activeDoc = null; } else layout.remove(docId); },
+      setTitle(name, docId) { const c = ctlOf(docId); if (c) layout.setTabInfo(c.docId, { name: name || '' }); },
+      setTabInfo: (docId, o) => layout.setTabInfo(docId, o),
+      setDisplayState(state, docId) { const c = ctlOf(docId); if (c) c.setDisplayState(state); },
       setTool: (id) => setTool(id, false), getTool: () => tool,
-      setActiveRoi(roi) { activeRoi = roi || null; cancelPolygon(); pushRois(); setStatus(roi ? P.describeRoi(roi, info && info.calibration) : ''); },
-      getActiveRoi: () => activeRoi,
-      setRois(r) { rois = { all: (r && r.all) || [], showAll: !!(r && r.showAll) }; pushRois(); },
+      setActiveRoi(roi, docId) { const c = ctlOf(docId); if (c) c.setActiveRoi(roi); },
+      getActiveRoi: (docId) => { const c = ctlOf(docId); return c ? c.activeRoi : null; },
+      setRois(r, docId) { const c = ctlOf(docId); if (c) c.setRois(r); },
       setLineWidth(w) { lineWidth = Math.max(1, Number(w) || 1); },
       setStatus, setProgress, setWarning,
       refreshMenus: () => { indexShortcuts(); refreshMenus(); },

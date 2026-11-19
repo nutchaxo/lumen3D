@@ -119,7 +119,12 @@
         const pick = (c, id) => (Number.isInteger(c) && c >= 0 && c < count(id) ? c : 0);
         const params = { op: v.op, float32: !!v.float32, all };
         if (!all) { params.channel1 = pick(v.channel1, id1); params.channel2 = pick(v.channel2, id2); }
-        await api.run('imageCalculator', params, { docId: id1, docIds: id1 === id2 ? [id1] : [id1, id2], noRoi: true, labelKey: 'op.imageCalculator' });
+        // Edit > Options > Misc. "Divide by zero value:" (FloatBlitter.divideByZeroValue): carried only when it is not the default, so
+        // a journal written without it replays as before
+        const dz = api.settings.get('misc.divZero');
+        if (v.op === 'divide' && typeof dz === 'string' && dz.trim().toLowerCase() !== 'infinity') params.divZero = dz;
+        // the result opens beside the images it was made from (PLAN-wave3 §2.3)
+        await api.run('imageCalculator', params, { docId: id1, docIds: id1 === id2 ? [id1] : [id1, id2], noRoi: true, labelKey: 'op.imageCalculator', placement: 'splitRight' });
       }
     },
     {
@@ -128,7 +133,8 @@
       async run(api) {
         const st = api.state();
         if (!st.doc) return;
-        await api.run('splitChannels', {}, { docId: st.doc.docId, noRoi: true, labelKey: 'op.splitChannels' });
+        // the source stays open: it and its channels share one grid of views (PLAN-wave3 §2.3)
+        await api.run('splitChannels', {}, { docId: st.doc.docId, noRoi: true, labelKey: 'op.splitChannels', placement: 'gridWithSource' });
       }
     },
     {
@@ -164,7 +170,7 @@
         const sources = chosen(v);
         const ids = [];
         for (const s of sources) if (ids.indexOf(s.docId) < 0) ids.push(s.docId);
-        await api.run('mergeChannels', { sources, ignoreLuts: !!v.ignoreLuts }, { docId: sources[0].docId, docIds: ids, noRoi: true, labelKey: 'op.mergeChannels' });
+        await api.run('mergeChannels', { sources, ignoreLuts: !!v.ignoreLuts }, { docId: sources[0].docId, docIds: ids, noRoi: true, labelKey: 'op.mergeChannels', placement: 'splitRight' });
       }
     },
     {
@@ -205,7 +211,7 @@
       }
     },
     {
-      id: 'imageRename', menu: ['Image'], order: 50,
+      id: 'imageRename', menu: ['Image'], order: 95,
       enabled: (st) => idle(st),
       async run(api) {
         const st = api.state();

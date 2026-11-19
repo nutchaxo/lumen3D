@@ -284,7 +284,7 @@ function rel_of(string $path): string {
 
 /** The operator-managed data trees: the only place the escalated modes apply. */
 function is_data_rel(string $rel): bool {
-    foreach (['DATA_WEB', 'uploads', 'config', 'api/page-drafts'] as $prefix) {
+    foreach (['DATA_WEB', 'uploads', 'config', 'api/page-drafts', 'api/page-versions'] as $prefix) {
         if ($rel === $prefix || strncmp($rel, $prefix . '/', strlen($prefix) + 1) === 0) return true;
     }
     return false;

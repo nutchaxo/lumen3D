@@ -1,7 +1,7 @@
 {
   "id": "graphs",
   "name": "Graphs",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "platformCompat": ">=1.80.0",
   "dataTypes": [
     "3d",

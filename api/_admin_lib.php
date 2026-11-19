@@ -158,7 +158,7 @@ function admin_is_code_file(string $path): bool {
 
 /** The operator-managed data trees, the only place the escalated modes apply. */
 function admin_is_data_rel(string $rel): bool {
-    foreach (['DATA_WEB', 'uploads', 'config', 'api/page-drafts'] as $prefix) {
+    foreach (['DATA_WEB', 'uploads', 'config', 'api/page-drafts', 'api/page-versions'] as $prefix) {
         if ($rel === $prefix || strncmp($rel, $prefix . '/', strlen($prefix) + 1) === 0) return true;
     }
     return false;
@@ -3326,7 +3326,7 @@ function admin_update_protected(string $rel): bool {
                           'api/disabled-plugins.json', 'api/quarantined-plugins.json', 'api/plugin-trust.json',
                           'api/.update-pending.json', 'api/.stale-recovery.json', 'api/trusted-proxies.json', 'api/marketplace-state.json'];
     if (in_array($rel, $stateFiles, true)) return true;
-    foreach (['config/pages/', 'api/page-drafts/', 'secrets/',
+    foreach (['config/pages/', 'api/page-drafts/', 'api/page-versions/', 'secrets/',
               'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {
         if (strpos($rel, $prefix) === 0) return true;
     }

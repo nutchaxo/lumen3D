@@ -501,7 +501,7 @@ await test('enabled(): Split / Arrange need several channels, Merge two single-c
 
 await test('Menu positions and ids of the package (PLAN-wave2 §1)', async () => {
   const t = await fresh();
-  const spec = { procImageCalculator: [['Process'], 100], colorSplitChannels: [['Image', 'Color'], 10], colorMergeChannels: [['Image', 'Color'], 20], colorArrangeChannels: [['Image', 'Color'], 30], imageRename: [['Image'], 50] };
+  const spec = { procImageCalculator: [['Process'], 100], colorSplitChannels: [['Image', 'Color'], 10], colorMergeChannels: [['Image', 'Color'], 20], colorArrangeChannels: [['Image', 'Color'], 30], imageRename: [['Image'], 95] };
   for (const [id, [menu, order]] of Object.entries(spec)) {
     const c = t.cmd(id);
     assert.ok(c, id);

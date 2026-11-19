@@ -38,7 +38,8 @@ function spikes(a, b, n) {
 
 // ---------------------------------------------------------------- thresholds
 {
-  assert.deepEqual(IJThreshold.methods(), ['Default', 'Huang', 'IsoData', 'Li', 'MaxEntropy', 'Mean', 'Otsu', 'Triangle']);
+  // AutoThresholder.Method, in the enum's order (AutoThresholder.java:11-30)
+  assert.deepEqual(IJThreshold.methods(), ['Default', 'Huang', 'Intermodes', 'IsoData', 'IJ_IsoData', 'Li', 'MaxEntropy', 'Mean', 'MinError', 'Minimum', 'Moments', 'Otsu', 'Percentile', 'RenyiEntropy', 'Shanbhag', 'Triangle', 'Yen']);
 
   // AutoThresholder.bilevel: one or two non-empty bins answer (index of the only /
   // second bin) − 1 for EVERY method, whatever it would compute otherwise.
@@ -49,7 +50,10 @@ function spikes(a, b, n) {
   const mask01 = spikes(0, 255, 10);
   for (const m of IJThreshold.methods()) assert.equal(IJThreshold.level(mask01, m), 254, `0/255 mask ${m}`);
   const onlyZero = new Float64Array(256); onlyZero[0] = 9; // index − 1 < 0: falls through to the method
-  assert.equal(IJThreshold.level(onlyZero, 'Otsu') >= 0, true);
+  // ImageJ's own answer (AutoThresholder.Otsu starts at Integer.MIN_VALUE and no between-class variance is positive here);
+  // levels() — what the Threshold window and the commands use — clamps it to the first bin.
+  assert.equal(IJThreshold.level(onlyZero, 'Otsu'), -2147483648);
+  assert.equal(IJThreshold.levels({ width: 3, height: 1, bitDepth: 8, data: new Uint8Array(3) }, 'Otsu', { dark: true }).level, 0);
 
   // Two equal spikes at 50 and 200 plus one stray pixel at 125 (three bins, so
   // the bilevel shortcut is off): the closed forms are known.

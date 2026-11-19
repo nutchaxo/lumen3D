@@ -470,3 +470,186 @@
   .ij-progress-fill { transition: none; }
   .ij-progress.is-indeterminate .ij-progress-fill { animation: none; }
 }
+
+/* ── Workspace: panes, tabs, dividers, floating image windows, dock (ij-layout.js) ─────────── */
+.ij-workspace-host { background: var(--ij-panel); min-width: 0; }
+.ij-workspace { background: var(--ij-bg); min-width: 0; overflow: hidden; }
+.ij-layout-root { min-width: 0; }
+.ij-split { gap: 0; min-width: 0; min-height: 0; }
+.ij-divider {
+  flex: 0 0 5px;
+  background: var(--ij-border);
+  touch-action: none;
+  z-index: 1;
+}
+.ij-divider.is-row { width: 5px; }
+.ij-divider.is-col { height: 5px; }
+.ij-divider:hover,
+.ij-divider:active { background: var(--ij-accent); }
+.ij-group { background: var(--ij-panel); border: 1px solid var(--ij-border); min-width: 0; min-height: 0; overflow: hidden; }
+.ij-group-body { background: var(--ij-panel); }
+.ij-pane { min-width: 0; min-height: 0; background: var(--ij-panel); }
+.ij-pane-head { display: flex; align-items: baseline; gap: 6px; flex: 0 0 auto; min-width: 0; }
+.ij-pane-head .ij-subtitle { flex: 1 1 auto; min-width: 0; }
+.ij-view.is-active .ij-stage { box-shadow: inset 0 0 0 1px var(--ij-accent); }
+.ij-view-canvas { image-rendering: auto; }
+
+.ij-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--ij-chrome);
+  border-bottom: 1px solid var(--ij-border);
+}
+.ij-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  padding: 2px 4px 2px 10px;
+  color: var(--ij-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 2px solid transparent;
+  touch-action: none;
+}
+.ij-tab-name { overflow: hidden; text-overflow: ellipsis; }
+.ij-tab-zoom { color: var(--ij-muted); font-weight: 400; font-size: 11px; }
+.ij-tab-dirty { color: var(--ij-warn-text); }
+.ij-tab:hover { background: var(--bg-hover); color: var(--ij-text); }
+.ij-tab.is-active { color: var(--ij-text); font-weight: 600; border-bottom-color: var(--ij-accent); background: var(--ij-panel); }
+.ij-tab.is-dragging { opacity: 0.5; }
+.ij-tab:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
+.ij-tab-ghost { background: var(--bg-elevated, var(--ij-panel)); color: var(--ij-text); border: 1px solid var(--border-strong); border-radius: 4px; box-shadow: var(--shadow-lg, 0 6px 18px rgba(0, 0, 0, 0.35)); padding: 3px 10px; }
+.ij-tab-btn {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--ij-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ij-tab-btn:hover { background: var(--bg-active); color: var(--ij-text); }
+
+.ij-view-window {
+  background: var(--bg-elevated, var(--ij-panel));
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.35));
+  overflow: hidden;
+}
+.ij-view-window .ij-tabs { cursor: move; }
+.ij-resize-grip {
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, transparent 0 50%, var(--ij-muted) 50% 58%, transparent 58% 72%, var(--ij-muted) 72% 80%, transparent 80%);
+  opacity: 0.7;
+  touch-action: none;
+}
+.ij-window .ij-resize-grip { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; }
+.ij-window { position: absolute; overflow: hidden; }
+.ij-window .ij-window-content { flex: 1 1 auto; }
+
+.ij-dropzone { background: var(--color-accent-subtle, rgba(0, 210, 255, 0.18)); border: 2px solid var(--ij-accent); border-radius: 4px; }
+.ij-dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 6px;
+  background: var(--ij-chrome);
+  border-top: 1px solid var(--ij-border);
+}
+.ij-dock-chip {
+  max-width: 180px;
+  padding: 2px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--ij-panel);
+  border: 1px solid var(--ij-border);
+  border-radius: 10px;
+  color: var(--ij-text);
+  font: var(--ij-font);
+  cursor: pointer;
+}
+.ij-dock-chip:hover { border-color: var(--ij-accent); }
+.ij-panel-ext { display: grid; gap: 8px; padding: 10px; min-width: 260px; }
+
+/* ── Class kit for the panels of the packages (the strict CSP forbids injected styles) ──────── */
+/* cards: a grid of selectable cards with a thumbnail, a title, badges */
+.ij-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.ij-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px;
+  background: var(--ij-panel);
+  border: 1px solid var(--ij-border);
+  border-radius: 6px;
+  color: var(--ij-text);
+  text-align: left;
+  cursor: pointer;
+}
+.ij-card:hover { border-color: var(--ij-accent); }
+.ij-card.is-selected { border-color: var(--ij-accent); background: var(--color-accent-subtle, var(--bg-active)); }
+.ij-card:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-thumb { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #000; border-radius: 4px; }
+.ij-badge {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--color-accent-subtle, var(--bg-active));
+  color: var(--ij-accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.ij-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ij-chip {
+  padding: 2px 10px;
+  background: var(--ij-panel);
+  border: 1px solid var(--ij-border);
+  border-radius: 12px;
+  color: var(--ij-muted);
+  font: var(--ij-font);
+  cursor: pointer;
+}
+.ij-chip:hover { border-color: var(--ij-accent); color: var(--ij-text); }
+.ij-chip.is-on { background: var(--color-accent-subtle, var(--bg-active)); border-color: var(--ij-accent); color: var(--ij-text); }
+.ij-search { width: 100%; padding: 4px 8px; background: var(--bg-input); border: 1px solid var(--border-default); border-radius: 4px; color: var(--ij-text); font: var(--ij-font); }
+.ij-search:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 0; }
+/* a small menu bar inside a panel (the Results window: File, Edit, Font, Results) */
+.ij-menubar-mini { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px 4px; background: var(--ij-chrome); border-bottom: 1px solid var(--ij-border); }
+.ij-menubar-mini > button { padding: 2px 8px; background: transparent; border: 0; border-radius: 3px; color: var(--ij-text); font: var(--ij-font); cursor: pointer; }
+.ij-menubar-mini > button:hover { background: var(--bg-hover); }
+/* a column of buttons (the ROI Manager) and its "More »" button */
+.ij-btn-col { display: flex; flex-direction: column; gap: 4px; }
+.ij-btn-col > .ij-btn { width: 100%; }
+.ij-btn-more::after { content: ' \00bb'; }
+/* a list of rows; .is-multi allows several selected */
+.ij-list-row { display: flex; align-items: center; gap: 6px; padding: 2px 8px; font-family: var(--ij-mono); font-size: 11px; cursor: default; }
+.ij-list-row:hover { background: var(--bg-hover); }
+.ij-list-row.is-selected { background: var(--color-accent-subtle, var(--bg-active)); }
+.ij-list-row.is-disabled { color: var(--ij-muted); opacity: 0.6; pointer-events: none; }
+.ij-list.is-multi .ij-list-row.is-selected { box-shadow: inset 2px 0 0 var(--ij-accent); }
+.ij-form-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px 10px; }
+.ij-form-grid > label { color: var(--ij-muted); }
+.ij-note { margin: 0; color: var(--ij-muted); font-size: 11px; line-height: 1.4; }
+.ij-swatch { display: inline-block; width: 14px; height: 14px; border: 1px solid var(--border-strong); border-radius: 3px; vertical-align: middle; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ij-card, .ij-chip, .ij-divider { transition: none; }
+}

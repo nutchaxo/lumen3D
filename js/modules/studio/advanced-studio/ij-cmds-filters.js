@@ -96,7 +96,7 @@
     { id: 'procFindEdges', menu: ['Process'], order: 30, run: (api) => plain(api, 'filter3x3', { type: 'edges' }, 'cmd.procFindEdges') },
 
     // ── Process > Noise
-    { id: 'noiseDespeckle', menu: ['Process', 'Noise'], order: 10, run: (api) => plain(api, 'rank', { type: 'median', radius: 1 }, 'cmd.noiseDespeckle') },
+    { id: 'noiseDespeckle', menu: ['Process', 'Noise'], order: 10, separatorBefore: true, run: (api) => plain(api, 'rank', { type: 'median', radius: 1 }, 'cmd.noiseDespeckle') },
     {
       id: 'noiseRemoveOutliers', menu: ['Process', 'Noise'], order: 20, long: true,
       run: (api) => withDialog(api, {

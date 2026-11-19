@@ -5,7 +5,9 @@
  * globals; the operation is registered with IJOpRegistry.define (ij-core.js, PLAN-wave2 §2.1).
  *
  *   IJColoc.analyze({ a, b, width, height, bitDepth, mask, params, hooks }) → result
- *   op 'coloc' (compute, version 1)  params = { ch1, ch2, doc2, mode, t1, t2, excludeZero, denominator }
+ *   op 'coloc' (compute, version 1)  params = { ch1, ch2, doc2, mode, t1, t2, excludeZero, denominator,
+ *                                                 spearman?, kendall?, search? ('scan' | 'bisection'), roundT2?, costes? { psf, n, seed } }
+ *   (the last four are additive: absent = the behaviour of the first release; see "Coloc 2 additions" below)
  *
  * ── What is computed (every formula is from the papers: this is NOT a port of Fiji's Coloc 2, which is GPL) ──
  *
@@ -268,13 +270,18 @@
   function regionChunk1(a, b, s, e, T1, T2, incl, ma, mb, r) {
     let nA = r.nA, sxA = r.sxA, syA = r.syA, sxxA = r.sxxA, syyA = r.syyA, sxyA = r.sxyA;
     let nB = r.nB, sxB = r.sxB, syB = r.syB, sxxB = r.sxxB, syyB = r.syyB, sxyB = r.sxyB;
-    let aboveA = r.aboveA, aboveB = r.aboveB, gtA = r.gtA, gtB = r.gtB;
+    let aboveA = r.aboveA, aboveB = r.aboveB, gtA = r.gtA, gtB = r.gtB, mA = r.mA, mB = r.mB;
+    let nO = r.nO, sxO = r.sxO, syO = r.syO, sxxO = r.sxxO, syyO = r.syyO, sxyO = r.sxyO;
+    let nS = r.nS, sxS = r.sxS, syS = r.syS, sxxS = r.sxxS, syyS = r.syyS, sxyS = r.sxyS;
     for (let i = s; i < e; i++) {
       const va = a[i], vb = b[i];
       const gx = incl ? va >= T1 : va > T1, gy = incl ? vb >= T2 : vb > T2;
-      if (gx) gtA += va;
-      if (gy) gtB += vb;
+      if (gx) { gtA += va; mB += vb; }
+      if (gy) { gtB += vb; mA += va; }
       const dx = va - ma, dy = vb - mb;
+      if (gx || gy) { nO++; sxO += dx; syO += dy; sxxO += dx * dx; syyO += dy * dy; sxyO += dx * dy; }
+      // Coloc 2's "above" set is STRICT (v > T) whatever the inclusive flag says: a pixel exactly on a threshold is below it there
+      if (incl ? (va > T1 || vb > T2) : (gx || gy)) { nS++; sxS += dx; syS += dy; sxxS += dx * dx; syyS += dy * dy; sxyS += dx * dy; }
       if (gx && gy) {
         nA++; sxA += dx; syA += dy; sxxA += dx * dx; syyA += dy * dy; sxyA += dx * dy;
         aboveA += va; aboveB += vb;
@@ -284,35 +291,39 @@
     }
     r.nA = nA; r.sxA = sxA; r.syA = syA; r.sxxA = sxxA; r.syyA = syyA; r.sxyA = sxyA;
     r.nB = nB; r.sxB = sxB; r.syB = syB; r.sxxB = sxxB; r.syyB = syyB; r.sxyB = sxyB;
-    r.aboveA = aboveA; r.aboveB = aboveB; r.gtA = gtA; r.gtB = gtB;
+    r.aboveA = aboveA; r.aboveB = aboveB; r.gtA = gtA; r.gtB = gtB; r.mA = mA; r.mB = mB;
+    r.nO = nO; r.sxO = sxO; r.syO = syO; r.sxxO = sxxO; r.syyO = syyO; r.sxyO = sxyO;
+    r.nS = nS; r.sxS = sxS; r.syS = syS; r.sxxS = sxxS; r.syyS = syyS; r.sxyS = sxyS;
   }
 
   function region(T, T1, T2, incl, ma, mb, hooks, ph) {
     const a = T.a, b = T.b, w = T.w, hw = w !== null, len = T.len;
     if (!hw) {
-      const r = { nA: 0, sxA: 0, syA: 0, sxxA: 0, syyA: 0, sxyA: 0, nB: 0, sxB: 0, syB: 0, sxxB: 0, syyB: 0, sxyB: 0, aboveA: 0, aboveB: 0, gtA: 0, gtB: 0 };
+      const r = { nA: 0, sxA: 0, syA: 0, sxxA: 0, syyA: 0, sxyA: 0, nB: 0, sxB: 0, syB: 0, sxxB: 0, syyB: 0, sxyB: 0, aboveA: 0, aboveB: 0, gtA: 0, gtB: 0, mA: 0, mB: 0, nO: 0, sxO: 0, syO: 0, sxxO: 0, syyO: 0, sxyO: 0, nS: 0, sxS: 0, syS: 0, sxxS: 0, syyS: 0, sxyS: 0 };
       for (let s = 0; s < len; s += CHUNK) {
         const e = Math.min(len, s + CHUNK);
         regionChunk1(a, b, s, e, T1, T2, incl, ma, mb, r);
         hooks.check(); ph(e / len);
       }
       return {
-        nA: r.nA, nB: r.nB, aboveA: r.aboveA, aboveB: r.aboveB, gtA: r.gtA, gtB: r.gtB,
-        rAbove: pearson(r.nA, r.sxA, r.syA, r.sxxA, r.syyA, r.sxyA),
+        nA: r.nA, nB: r.nB, aboveA: r.aboveA, aboveB: r.aboveB, gtA: r.gtA, gtB: r.gtB, mA: r.mA, mB: r.mB,
+        rAbove: pearson(r.nA, r.sxA, r.syA, r.sxxA, r.syyA, r.sxyA), rOr: pearson(r.nS, r.sxS, r.syS, r.sxxS, r.syyS, r.sxyS),
         rBelow: pearson(r.nB, r.sxB, r.syB, r.sxxB, r.syyB, r.sxyB)
       };
     }
     let nA = 0, sxA = 0, syA = 0, sxxA = 0, syyA = 0, sxyA = 0;
     let nB = 0, sxB = 0, syB = 0, sxxB = 0, syyB = 0, sxyB = 0;
-    let aboveA = 0, aboveB = 0, gtA = 0, gtB = 0;
+    let aboveA = 0, aboveB = 0, gtA = 0, gtB = 0, mA = 0, mB = 0;
+    let nO = 0, sxO = 0, syO = 0, sxxO = 0, syyO = 0, sxyO = 0;
     for (let s = 0; s < len; s += CHUNK) {
       const e = Math.min(len, s + CHUNK);
       for (let i = s; i < e; i++) {
         const wi = hw ? w[i] : 1, va = a[i], vb = b[i];
         const gx = incl ? va >= T1 : va > T1, gy = incl ? vb >= T2 : vb > T2;
-        if (gx) gtA += wi * va;
-        if (gy) gtB += wi * vb;
+        if (gx) { gtA += wi * va; mB += wi * vb; }
+        if (gy) { gtB += wi * vb; mA += wi * va; }
         const dx = va - ma, dy = vb - mb;
+        if (incl ? (va > T1 || vb > T2) : (gx || gy)) { nO += wi; sxO += wi * dx; syO += wi * dy; sxxO += wi * dx * dx; syyO += wi * dy * dy; sxyO += wi * dx * dy; }   // strict, see regionChunk1
         if (gx && gy) {
           nA += wi; sxA += wi * dx; syA += wi * dy; sxxA += wi * dx * dx; syyA += wi * dy * dy; sxyA += wi * dx * dy;
           aboveA += wi * va; aboveB += wi * vb;
@@ -323,8 +334,8 @@
       hooks.check(); ph(e / len);
     }
     return {
-      nA, nB, aboveA, aboveB, gtA, gtB,
-      rAbove: pearson(nA, sxA, syA, sxxA, syyA, sxyA),
+      nA, nB, aboveA, aboveB, gtA, gtB, mA, mB,
+      rAbove: pearson(nA, sxA, syA, sxxA, syyA, sxyA), rOr: pearson(nO, sxO, syO, sxxO, syyO, sxyO),
       rBelow: pearson(nB, sxB, syB, sxxB, syyB, sxyB)
     };
   }
@@ -496,6 +507,229 @@
     return hs;
   }
 
+  // ───────────────────────────── Coloc 2 additions: bisection, Spearman, Kendall, Costes' significance test ─────────────────────────────
+  /* All of this is additive to op 'coloc' version 1 (params spearman, kendall, search, costes: absent = the previous behaviour).
+   *
+   * Bisection (the "Threshold regression" choice of Coloc 2): the same search target as the Costes scan (the largest T1 whose pixels below
+   * the thresholds are not positively correlated, r(B) <= 0, T2 = m·T1 + c) found by halving [0, max] instead of walking down from the
+   * maximum: T1 = the upper end of the last interval, which is the value a real Fiji returned on three test pairs (36 / 48, 4 / 4) where the scan gives (38 / 50, 3 / 3).
+   *
+   * Spearman's rank correlation (Spearman 1904): Pearson's r of the RANKS, ties given their average rank — exact, from the marginal
+   * histograms of 8 / 16-bit data (a rank is a table lookup), from sorted copies of the channels for 32-bit. Its t statistic is
+   * r·sqrt((n-2)/(1-r²)) with n-2 degrees of freedom.
+   *
+   * Kendall's tau-b (Kendall 1945): (C - D) / sqrt((n0 - n1)(n0 - n2)), n0 = n(n-1)/2, n1 / n2 the tied pairs of each channel. 8-bit data: from the
+   * 256 x 256 joint histogram and its 2D cumulative sums, O(bins²). 16 / 32-bit data: Knight's O(n log n) algorithm (sort by channel 1 then
+   * channel 2, count the inversions of channel 2 by merge sort; Knight 1966) — refused above 20 million measured pixels (IJ_FIJI_KENDALL_TOO_LARGE).
+   *
+   * Costes' significance test (Costes et al. 2004, Biophys J 86:3993): channel 2 is scrambled in blocks of the PSF width (round(psf) pixels,
+   * the whole blocks of the image shuffled among themselves, the pixels inside a block kept together), Pearson's r of the measured pixels is
+   * computed again, `n` times with ONE java.util.Random seeded by `seed`; P = the fraction of the randomised r below the observed r. */
+  const KENDALL_MAX = 20e6;
+
+  function averageRankTable(counts) {   // counts[v] -> the average (1-based) rank of value v
+    const rk = new Float64Array(counts.length);
+    let below = 0;
+    for (let v = 0; v < counts.length; v++) { const c = counts[v]; if (c) { rk[v] = below + (c + 1) / 2; below += c; } }
+    return rk;
+  }
+  function lowerBound(arr, x) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >>> 1; if (arr[m] < x) lo = m + 1; else hi = m; } return lo; }
+  function upperBound(arr, x) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >>> 1; if (arr[m] <= x) lo = m + 1; else hi = m; } return lo; }
+
+  function spearmanOf(T, bitDepth, hooks, reserve) {
+    const len = T.len, a = T.a, b = T.b, w = T.w, n = T.total;
+    let rankA, rankB;
+    if (bitDepth === 32) {
+      reserve(len * 8);
+      const sa = Float32Array.from(a.subarray ? a.subarray(0, len) : a).sort(), sb = Float32Array.from(b.subarray ? b.subarray(0, len) : b).sort();
+      rankA = (v) => { const lo = lowerBound(sa, v), hi = upperBound(sa, v); return lo + (hi - lo + 1) / 2; };
+      rankB = (v) => { const lo = lowerBound(sb, v), hi = upperBound(sb, v); return lo + (hi - lo + 1) / 2; };
+    } else {
+      const size = bitDepth === 8 ? 256 : 65536;
+      const ca = new Float64Array(size), cb = new Float64Array(size);
+      for (let i = 0; i < len; i++) { const wi = w === null ? 1 : w[i]; ca[a[i]] += wi; cb[b[i]] += wi; }
+      const ta = averageRankTable(ca), tb = averageRankTable(cb);
+      rankA = (v) => ta[v]; rankB = (v) => tb[v];
+    }
+    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    const mean = (n + 1) / 2;   // both rank vectors have mean (n+1)/2: shift by it
+    for (let i = 0; i < len; i++) {
+      const wi = w === null ? 1 : w[i], x = rankA(a[i]) - mean, y = rankB(b[i]) - mean;
+      sx += wi * x; sy += wi * y; sxx += wi * x * x; syy += wi * y * y; sxy += wi * x * y;
+      if ((i & 0xFFFF) === 0xFFFF) hooks.check();
+    }
+    const vx = sxx - sx * sx / n, vy = syy - sy * sy / n, c = sxy - sx * sy / n;
+    if (!(vx > 0 && vy > 0)) return NaN;
+    return Math.max(-1, Math.min(1, c / Math.sqrt(vx * vy)));
+  }
+
+  function kendallOf(T, bitDepth, hooks, reserve) {
+    const len = T.len, n = T.total, a = T.a, b = T.b, w = T.w;
+    const n0 = n * (n - 1) / 2;
+    if (bitDepth === 8) {
+      // cell[x][y] = pixels with channel 1 = x and channel 2 = y; P[i][j] = pixels with x' < i and y' < j (i, j = 0..256)
+      const cell = new Float64Array(256 * 256), P = new Float64Array(257 * 257), ra = new Float64Array(256), rb = new Float64Array(256);
+      for (let i = 0; i < len; i++) { const wi = w === null ? 1 : w[i]; cell[a[i] * 256 + b[i]] += wi; ra[a[i]] += wi; rb[b[i]] += wi; }
+      for (let x = 0; x < 256; x++) for (let y = 0; y < 256; y++) P[(x + 1) * 257 + y + 1] = cell[x * 256 + y] + P[x * 257 + y + 1] + P[(x + 1) * 257 + y] - P[x * 257 + y];
+      // pixels with x1 <= x' <= x2 and y1 <= y' <= y2
+      const rect = (x1, x2, y1, y2) => (x1 > x2 || y1 > y2 ? 0 : P[(x2 + 1) * 257 + y2 + 1] - P[x1 * 257 + y2 + 1] - P[(x2 + 1) * 257 + y1] + P[x1 * 257 + y1]);
+      let con2 = 0, dis2 = 0;   // twice the concordant / discordant pair counts
+      for (let x = 0; x < 256; x++) {
+        for (let y = 0; y < 256; y++) {
+          const c = cell[x * 256 + y];
+          if (!c) continue;
+          con2 += c * (rect(0, x - 1, 0, y - 1) + rect(x + 1, 255, y + 1, 255));
+          dis2 += c * (rect(0, x - 1, y + 1, 255) + rect(x + 1, 255, 0, y - 1));
+        }
+      }
+      return finishKendall(con2 / 2, dis2 / 2, n0, ra, rb);
+    }
+    if (n > KENDALL_MAX) throw fail('IJ_FIJI_KENDALL_TOO_LARGE', 'too many pixels for the exact Kendall computation');
+    reserve(n * 36);
+    // dense ranks of both channels (sorted unique values, binary search), no Float64 array of image size anywhere
+    const dense = (v) => {
+      const sorted = Float32Array.from(v.subarray ? v.subarray(0, len) : v).sort();
+      let k = 0;
+      for (let i = 0; i < sorted.length; i++) if (i === 0 || sorted[i] !== sorted[i - 1]) sorted[k++] = sorted[i];
+      const u = sorted.subarray(0, k), r = new Uint32Array(len);
+      for (let i = 0; i < len; i++) { r[i] = lowerBound(u, v[i]); if ((i & 0xFFFF) === 0xFFFF) hooks.check(); }
+      return { r, k };
+    };
+    const A = dense(a), B = dense(b), ra = A.r, rb = B.r, na = A.k, nb = B.k;
+    const tiesA = new Float64Array(na), tiesB = new Float64Array(nb);
+    for (let i = 0; i < len; i++) { tiesA[ra[i]]++; tiesB[rb[i]]++; }
+    // the order sorted by (channel 1, channel 2): a stable counting sort by channel 2, then by channel 1
+    const sortBy = (key, kn, src) => {
+      const start = new Uint32Array(kn + 1);
+      for (let i = 0; i < len; i++) start[key[src ? src[i] : i] + 1]++;
+      for (let i = 0; i < kn; i++) start[i + 1] += start[i];
+      const dst = new Uint32Array(len);
+      for (let i = 0; i < len; i++) { const j = src ? src[i] : i; dst[start[key[j]]++] = j; }
+      return dst;
+    };
+    const order = sortBy(ra, na, sortBy(rb, nb, null));
+    const seq = new Int32Array(len);
+    let nJoint = 0;
+    for (let i = 0; i < len; i++) seq[i] = rb[order[i]];
+    // joint ties: runs of equal (ra, rb)
+    for (let i = 0, j = 0; i < len; i = j) {
+      j = i + 1;
+      while (j < len && ra[order[j]] === ra[order[i]] && rb[order[j]] === rb[order[i]]) j++;
+      const t = j - i;
+      nJoint += t * (t - 1) / 2;
+    }
+    // inversions of seq (strict): bottom-up merge sort
+    let src = seq, dst = new Int32Array(len), inv = 0, work = 0;
+    for (let width = 1; width < len; width *= 2) {
+      for (let lo = 0; lo < len; lo += 2 * width) {
+        const mid = Math.min(lo + width, len), hi = Math.min(lo + 2 * width, len);
+        if ((work += hi - lo) >= CHUNK) { work = 0; hooks.check(); }   // a pass over 16 M pixels is far longer than the cancellation budget
+        let i = lo, j = mid, k = lo;
+        while (i < mid && j < hi) { if (src[j] < src[i]) { inv += mid - i; dst[k++] = src[j++]; } else dst[k++] = src[i++]; }
+        while (i < mid) dst[k++] = src[i++];
+        while (j < hi) dst[k++] = src[j++];
+      }
+      const t = src; src = dst; dst = t;
+      hooks.check();
+    }
+    let n1 = 0, n2 = 0;
+    for (let i = 0; i < na; i++) n1 += tiesA[i] * (tiesA[i] - 1) / 2;
+    for (let i = 0; i < nb; i++) n2 += tiesB[i] * (tiesB[i] - 1) / 2;
+    // C - D = n0 - n1 - n2 + n3 - 2·inversions   (n3 = pairs tied in both channels; scipy.stats.kendalltau, variant 'b')
+    const cMinusD = n0 - n1 - n2 + nJoint - 2 * inv;
+    const den = Math.sqrt((n0 - n1) * (n0 - n2));
+    return den > 0 ? Math.max(-1, Math.min(1, cMinusD / den)) : NaN;
+  }
+  function finishKendall(C, D, n0, ra, rb) {
+    let n1 = 0, n2 = 0;
+    for (let i = 0; i < ra.length; i++) { n1 += ra[i] * (ra[i] - 1) / 2; n2 += rb[i] * (rb[i] - 1) / 2; }
+    const den = Math.sqrt((n0 - n1) * (n0 - n2));
+    return den > 0 ? Math.max(-1, Math.min(1, (C - D) / den)) : NaN;
+  }
+
+  /* Costes' block randomisation: returns { p, mean, sd, ratioGE, n }. o = { a, b, width, height, bitDepth, mask }, observed = Pearson r of the measured pixels. */
+  function costesRandomisation(o, observed, ma, mb, excludeZero, ct, hooks, reserve) {
+    const { a, b, width, height, bitDepth } = o;
+    const block = Math.max(1, Math.round(ct.psf));
+    const bx = Math.floor(width / block), by = Math.floor(height / block), nBlocks = bx * by;
+    const rng = new root.IJShared.JavaRandom(ct.seed);
+    const Ta = bitDepth === 8 ? Uint8Array : (bitDepth === 16 ? Uint16Array : Float32Array);
+    reserve(a.length * Ta.BYTES_PER_ELEMENT);
+    const shuffled = new Ta(b.length);
+    const box = scanBox(o.mask || null, width, height);
+    const rs = [];
+    const perm = new Int32Array(nBlocks);
+    for (let it = 0; it < ct.n; it++) {
+      for (let i = 0; i < nBlocks; i++) perm[i] = i;
+      for (let i = nBlocks - 1; i > 0; i--) { const j = rng.nextInt(i + 1); const t = perm[i]; perm[i] = perm[j]; perm[j] = t; }
+      shuffled.set(b);   // pixels outside the whole blocks stay where they are
+      for (let k = 0; k < nBlocks; k++) {
+        const dx = (k % bx) * block, dy = Math.floor(k / bx) * block, sx = (perm[k] % bx) * block, sy = Math.floor(perm[k] / bx) * block;
+        for (let y = 0; y < block; y++) {
+          const d = (dy + y) * width + dx, s = (sy + y) * width + sx;
+          for (let x = 0; x < block; x++) shuffled[d + x] = b[s + x];
+        }
+        if ((k & 255) === 255) hooks.check();
+      }
+      // Pearson r of the measured pixels (same positions as the observed value; the zero-zero test uses the original pair)
+      let n = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+      for (let y = box.y0; y < box.y1; y++) {
+        const row = y * width, mrow = box.data ? (y - box.my) * box.mw - box.mx : 0;
+        if (((y - box.y0) & 31) === 31) hooks.check();
+        for (let x = box.x0; x < box.x1; x++) {
+          if (box.data && box.data[mrow + x] === 0) continue;
+          const va = a[row + x], vo = b[row + x];
+          if (bitDepth === 32 && !(isFinite(va) && isFinite(vo))) continue;
+          if (excludeZero && va === 0 && vo === 0) continue;
+          const dx = va - ma, dy = shuffled[row + x] - mb;
+          n++; sa += dx; sb += dy; saa += dx * dx; sbb += dy * dy; sab += dx * dy;
+        }
+      }
+      const vx = saa - sa * sa / n, vy = sbb - sb * sb / n;
+      rs.push(vx > 0 && vy > 0 ? Math.max(-1, Math.min(1, (sab - sa * sb / n) / Math.sqrt(vx * vy))) : NaN);
+      hooks.check();
+    }
+    let less = 0, ge = 0, sum = 0, cnt = 0;
+    for (const r of rs) { if (!(r === r)) continue; cnt++; sum += r; if (r < observed) less++; else ge++; }
+    const mean = cnt ? sum / cnt : NaN;
+    let ss = 0;
+    for (const r of rs) if (r === r) ss += (r - mean) * (r - mean);
+    return { p: cnt ? less / cnt : NaN, mean, sd: cnt > 1 ? Math.sqrt(ss / (cnt - 1)) : NaN, ratioGE: cnt ? ge / cnt : NaN, n: cnt };
+  }
+
+  // Bisection search of the thresholds (see the note above); same return shape as costesSearch.
+  function bisectionSearch(T, mo, ma, mb, Sab, Saa, Sbb, isInt, hooks, ph) {
+    const failed = { status: 'failed', t1: 0, t2: 0, slope: null, intercept: null };
+    if (!(Sab > 0) || !(Saa > 0) || !(Sbb > 0)) return failed;
+    const slope = (Sbb - Saa + Math.sqrt((Sbb - Saa) * (Sbb - Saa) + 4 * Sab * Sab)) / (2 * Sab);
+    const intercept = mb - slope * ma;
+    if (!isFinite(slope) || !isFinite(intercept) || !(slope > 0)) return failed;
+    const lo0 = isInt ? 0 : mo.amin, hi0 = mo.amax;
+    const unfound = Object.assign({}, failed, { slope, intercept });
+    if (!(hi0 > lo0)) return unfound;
+    const rBelow = (t1) => region(T, t1, slope * t1 + intercept, true, ma, mb, hooks, () => {}).rBelow;
+    const bisect = (from, to, steps, edge) => {
+      let lo = 0, hi = steps;
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2), r = rBelow(edge(mid));
+        if (r > 0) hi = mid; else lo = mid;
+        hooks.check();
+      }
+      return hi;
+    };
+    let t1;
+    if (isInt) t1 = bisect(0, hi0, hi0, (k) => k);
+    else {
+      const step = (hi0 - lo0) / LADDER_32, edge1 = (k) => (k >= LADDER_32 ? hi0 : lo0 + k * step);
+      const k1 = bisect(lo0, hi0, LADDER_32, edge1);
+      const a2 = edge1(Math.max(0, k1 - 1)), b2 = edge1(k1), step2 = (b2 - a2) / LADDER_32;
+      const k2 = bisect(a2, b2, LADDER_32, (k) => (k >= LADDER_32 ? b2 : a2 + k * step2));
+      t1 = k2 >= LADDER_32 ? b2 : a2 + k2 * step2;
+    }
+    ph(1);
+    return { status: 'ok', t1, t2: slope * t1 + intercept, slope, intercept };
+  }
+
   // ───────────────────────────── analyze ─────────────────────────────
 
   function checkParams(p) {
@@ -506,6 +740,15 @@
     if (DENOMINATORS.indexOf(p.denominator) < 0) throw bad('denominator');
     if (p.excludeZero !== undefined && typeof p.excludeZero !== 'boolean') throw bad('excludeZero');
     if (p.doc2 !== undefined && p.doc2 !== null && !(Number.isInteger(p.doc2) || (typeof p.doc2 === 'string' && p.doc2))) throw bad('doc2'); // a document id
+    if (p.maskDoc !== undefined && p.maskDoc !== null && !(Number.isInteger(p.maskDoc) || (typeof p.maskDoc === 'string' && p.maskDoc))) throw bad('maskDoc');   // an open 8-bit image: its non-zero pixels are measured
+    if (p.spearman !== undefined && typeof p.spearman !== 'boolean') throw bad('spearman');
+    if (p.kendall !== undefined && typeof p.kendall !== 'boolean') throw bad('kendall');
+    if (p.search !== undefined && p.search !== 'scan' && p.search !== 'bisection') throw bad('search');
+    if (p.roundT2 !== undefined && typeof p.roundT2 !== 'boolean') throw bad('roundT2');
+    if (p.costes !== undefined && p.costes !== null) {
+      const c = p.costes;
+      if (typeof c !== 'object' || !(c.psf > 0 && c.psf <= 1000) || !(Number.isInteger(c.n) && c.n >= 1 && c.n <= 1000) || !Number.isInteger(c.seed)) throw bad('costes');
+    }
   }
 
   /* a, b: the two channels (same type, width·height values). mask: { x, y, w, h, data } | null.
@@ -535,8 +778,18 @@
     let t1 = 0, t2 = 0, status = null, slope = null, intercept = null;
     if (p.mode === 'manual') { t1 = p.t1; t2 = p.t2; }
     else if (p.mode === 'costes') {
-      const c = costesSearch(T, mo, ma, mb, ce.Sab, ce.Saa, ce.Sbb, isInt, hooks, prog(0.28, 0.8));
+      let c;
+      if (p.search !== undefined && ce.Sab < 0 && ce.Saa > 0 && ce.Sbb > 0) {
+        // Coloc 2 on an anti-correlated pair (measured on a real Fiji, fixture pair "independent", slope -0.45): the regression line has a negative
+        // slope, every pixel below the thresholds is anti-correlated already, so the scan ends at once: channel 1's threshold is its maximum and
+        // channel 2's the regression line there (Fiji printed 255 / 13; its Bisection printed 253 / 14, which this port does not reproduce).
+        // Without `search` (the wave-2 call) such a pair keeps its documented `failed` status.
+        const sl = (ce.Sbb - ce.Saa + Math.sqrt((ce.Sbb - ce.Saa) * (ce.Sbb - ce.Saa) + 4 * ce.Sab * ce.Sab)) / (2 * ce.Sab), ic = mb - sl * ma;
+        c = isFinite(sl) && isFinite(ic) ? { status: 'ok', t1: mo.amax, t2: sl * mo.amax + ic, slope: sl, intercept: ic } : { status: 'failed', t1: 0, t2: 0, slope: null, intercept: null };
+      } else c = (p.search === 'bisection' ? bisectionSearch : costesSearch)(T, mo, ma, mb, ce.Sab, ce.Saa, ce.Sbb, isInt, hooks, prog(0.28, 0.8));
       status = c.status; t1 = c.t1; t2 = c.t2; slope = c.slope; intercept = c.intercept;
+      // Coloc 2 reports the channel 2 threshold of an integer image as a whole number: m·T1 + c rounded to the nearest level
+      if (p.roundT2 && isInt && status === 'ok') t2 = Math.round(t2);
     }
     if (slope === null && ce.Sab > 0 && ce.Saa > 0 && ce.Sbb > 0) {
       slope = (ce.Sbb - ce.Saa + Math.sqrt((ce.Sbb - ce.Saa) * (ce.Sbb - ce.Saa) + 4 * ce.Sab * ce.Sab)) / (2 * ce.Sab);
@@ -547,7 +800,7 @@
     const d1 = rg ? (p.denominator === 'above' ? rg.gtA : mo.sa) : 0;
     const d2 = rg ? (p.denominator === 'above' ? rg.gtB : mo.sb) : 0;
     const h = fused || !(hs.wa > 0 && hs.wb > 0) ? hs : histogram2d(T, hs, hooks, prog(0.9, 1));
-    return {
+    const result = {
       version: 1, bitDepth: bd, n, nAbove: rg ? rg.nA : null, nBelow: rg ? rg.nB : null, mode: p.mode, costes: status, denominator: p.denominator, excludeZero: !!p.excludeZero,
       negative,
       mean1: fin(ma), mean2: fin(mb), min1: fin(mo.amin), max1: fin(mo.amax), min2: fin(mo.bmin), max2: fin(mo.bmax),
@@ -555,9 +808,24 @@
       pearsonAll: fin(pearsonAll), pearsonAbove: rg ? fin(rg.rAbove) : null, pearsonBelow: rg ? fin(rg.rBelow) : null,
       m1: fin(!negative && mo.sa > 0 ? mo.num1 / mo.sa : NaN), m2: fin(!negative && mo.sb > 0 ? mo.num2 / mo.sb : NaN),
       tm1: fin(rg && !negative && d1 > 0 ? rg.aboveA / d1 : NaN), tm2: fin(rg && !negative && d2 > 0 ? rg.aboveB / d2 : NaN),
+      // Coloc 2's own thresholded Manders coefficients (Costes 2004): tM1 = Σ ch1 where ch2 >= T2 / Σ ch1, tM2 = Σ ch2 where ch1 >= T1 / Σ ch2
+      pearsonAboveOr: rg ? fin(rg.rOr) : null,   // Coloc 2's "Pearson's R value (above threshold)": the pixels above T1 OR above T2
+      tm1Coloc2: fin(rg && !negative && mo.sa > 0 ? rg.mA / mo.sa : NaN), tm2Coloc2: fin(rg && !negative && mo.sb > 0 ? rg.mB / mo.sb : NaN),
       overlap: fin(overlap), icq: fin(icq), icqPositive: ce.pos,
       hist: h.hist, histBins: BINS, xRange: h.ax, yRange: h.bx
     };
+    if (p.spearman) {
+      const r = spearmanOf(T, bd, hooks, hooks.reserve);
+      result.spearman = fin(r);
+      result.spearmanDf = n - 2;
+      result.spearmanT = fin(n > 2 && Math.abs(r) < 1 ? r * Math.sqrt((n - 2) / (1 - r * r)) : NaN);
+    }
+    if (p.kendall) result.kendall = fin(kendallOf(T, bd, hooks, hooks.reserve));
+    if (p.costes) {
+      const ct = costesRandomisation(o, pearsonAll, ma, mb, !!p.excludeZero, p.costes, hooks, hooks.reserve);
+      result.costesP = fin(ct.p); result.costesMean = fin(ct.mean); result.costesSd = fin(ct.sd); result.costesRatioGE = fin(ct.ratioGE); result.costesN = ct.n;
+    }
+    return result;
   }
 
   const IJColoc = { analyze, BINS, MODES, DENOMINATORS, LADDER_32 };
@@ -574,14 +842,17 @@
       validate(p, info) {
         checkParams(p);
         const other = info && info.docs ? info.docs : [];
-        if ((p.doc2 === undefined || p.doc2 === null) && p.ch1 === p.ch2) throw bad('the same channel twice');
-        if (p.doc2 !== undefined && p.doc2 !== null) {
-          if (other.length !== 1) throw bad('the second image is not named in docIds');
+        const hasDoc2 = p.doc2 !== undefined && p.doc2 !== null, hasMask = p.maskDoc !== undefined && p.maskDoc !== null;
+        if (!hasDoc2 && p.ch1 === p.ch2) throw bad('the same channel twice');
+        if (other.length !== (hasDoc2 ? 1 : 0) + (hasMask ? 1 : 0)) throw bad('the other images are not named in docIds');
+        for (const d of other) if (d.width !== info.width || d.height !== info.height) throw fail('IJ_SIZE_MISMATCH', 'the images differ in size');
+        // docIds lists the second image first, then the mask: each is checked by its own place, whatever else is given
+        if (hasDoc2) {
           const d = other[0];
-          if (d.width !== info.width || d.height !== info.height) throw fail('IJ_SIZE_MISMATCH', 'the two images differ in size');
           if (d.bitDepth !== info.bitDepth) throw fail('IJ_COLOC_MIXED_DEPTH', 'the two images differ in bit depth');
           if (p.ch2 >= d.channels) throw bad('channel 2');
         }
+        if (hasMask && other[hasDoc2 ? 1 : 0].bitDepth !== 8) throw fail('IJ_BAD_TYPE', 'the mask is not 8-bit');
       },
 
       // What exists whatever the data: the Costes ladder's accumulators (6 x 65538 doubles), the plot's histogram, the
@@ -602,7 +873,24 @@
         if (v2.bitDepth !== v1.bitDepth) throw fail('IJ_COLOC_MIXED_DEPTH', 'the two images differ in bit depth');
         if (p.ch1 >= v1.channels.length || p.ch2 >= v2.channels.length) throw bad('channel');
         const a = v1.channels[p.ch1].data, b = v2.channels[p.ch2].data;
-        const mask = roi ? io.roiMask(roi) : null;
+        let mask = roi ? io.roiMask(roi) : null;
+        if (p.maskDoc !== undefined && p.maskDoc !== null) {
+          // an open 8-bit image as the mask: the pixels where it is not zero (and, with a selection, inside it)
+          const mv = io.readDoc(p.maskDoc);
+          if (mv.width !== v1.width || mv.height !== v1.height) throw fail('IJ_SIZE_MISMATCH', 'the mask differs in size');
+          if (mv.bitDepth !== 8) throw fail('IJ_BAD_TYPE', 'the mask is not 8-bit');
+          const W = v1.width, H = v1.height, md = mv.channels[0].data;
+          if (io.reserve) io.reserve(W * H);
+          const full = new Uint8Array(W * H);
+          for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+              let inside = md[y * W + x] !== 0;
+              if (inside && mask) inside = x >= mask.x && y >= mask.y && x < mask.x + mask.w && y < mask.y + mask.h && (!mask.data || mask.data[(y - mask.y) * mask.w + (x - mask.x)] !== 0);
+              full[y * W + x] = inside ? 1 : 0;
+            }
+          }
+          mask = { x: 0, y: 0, w: W, h: H, data: full };
+        }
         io.tick(0, 'op.coloc');
         const res = analyze({
           a, b, width: v1.width, height: v1.height, bitDepth: v1.bitDepth, mask, params: p,

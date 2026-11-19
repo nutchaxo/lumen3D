@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "serial": 22,
-  "issuedAt": "2026-11-18T08:45:33Z",
+  "serial": 23,
+  "issuedAt": "2026-11-19T08:55:35Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -217,11 +217,11 @@
       "icon": "line-chart",
       "platformCompat": ">=1.80.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.3",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/plugin-graphs-1.0.3.zip",
+      "latestVersion": "1.1.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/plugin-graphs-1.1.0.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/graphs/SHA256SUMS.sig",
-      "sha256": "ebcdc5cfd802ee9e61a684f0b5b2a7f01857186b085ffa3f105f8b93ca1dfd71",
+      "sha256": "e73d079b75a70509854c6946da0eae140bba02cd3beb0cda6d59a8cc3dc20245",
       "recommended": true
     },
     {

@@ -10,6 +10,7 @@
  *   IJShared.thresholdMask(ch, lower, upper) → Uint8Array     255 inside [lower, upper], else 0
  *   IJShared.lightBackgroundInvert(light, invertedLut) → bool the "light background" convention
  *   IJShared.hasInvertedLut(display) → bool
+ *   IJShared.JavaRandom(seed) → exact java.util.Random (next/nextInt/nextLong/nextDouble/nextFloat/nextBoolean/nextGaussian/setSeed)
  *
  * Reference: ImageJ 1.54f (public domain).
  */
@@ -208,5 +209,73 @@
   /* A channel shows with an inverting LUT when its display says `invert`. */
   function hasInvertedLut(display) { return !!(display && display.invert); }
 
-  root.IJShared = { makeFloatEDM, makeFloatEDMAsync, thresholdMask, maskToRoi, lightBackgroundInvert, hasInvertedLut };
+  /* java.util.Random, exact (JDK 8-21 algorithm; Random.nextGaussian keeps the legacy polar method).
+   * The 48-bit state is two 24-bit halves held in doubles: every partial product stays below 2^53,
+   * so no BigInt in the generator loop.
+   *   state' = (state * 0x5DEECE66D + 0xB) mod 2^48       multiplier = M_HI * 2^24 + M_LO
+   *   next(bits) = (int)(state' >>> (48 - bits))
+   * `seed` of the constructor / setSeed: a safe-integer Number or a BigInt (a Java long); the
+   * scrambling (seed ^ 0x5DEECE66D) & (2^48 - 1) is done once in BigInt. A Java `(int)` cast of a
+   * seed is the caller's business. nextLong returns a BigInt (a Java long does not fit a double). */
+  const JR_M_HI = 0x5DE, JR_M_LO = 0xECE66D, JR_ADD = 0xB, JR_2P24 = 16777216, JR_2P27 = 134217728;
+  const JR_MASK48 = (1n << 48n) - 1n, JR_MULT = 0x5DEECE66Dn;
+  let jrUniq = 8682522807148012n;
+
+  class JavaRandom {
+    constructor(seed) {
+      if (seed === undefined) { jrUniq = BigInt.asUintN(64, jrUniq * 1181783497276652981n); seed = jrUniq ^ BigInt(Date.now()); }
+      this.setSeed(seed);
+    }
+    setSeed(seed) {
+      let b;
+      if (typeof seed === 'bigint') b = seed;
+      else if (typeof seed === 'number' && Number.isSafeInteger(Math.trunc(seed))) b = BigInt(Math.trunc(seed));
+      else throw fail('IJ_BAD_SEED', 'JavaRandom seed must be a safe-integer number or a BigInt');
+      const st = (BigInt.asUintN(64, b) ^ JR_MULT) & JR_MASK48;
+      this._hi = Number(st >> 24n);
+      this._lo = Number(st & 0xFFFFFFn);
+      this._haveNext = false;
+      this._nextNext = 0;
+    }
+    next(bits) {
+      const lo = this._lo, hi = this._hi;
+      const p = lo * JR_M_LO + JR_ADD;                      // < 2^48 + 11
+      const carry = Math.floor(p / JR_2P24);
+      const nlo = p - carry * JR_2P24;
+      const q = hi * JR_M_LO + lo * JR_M_HI + carry;        // < 2^49
+      const nhi = q - Math.floor(q / JR_2P24) * JR_2P24;
+      this._lo = nlo; this._hi = nhi;
+      return Math.floor((nhi * JR_2P24 + nlo) / Math.pow(2, 48 - bits)) | 0;
+    }
+    nextInt(bound) {
+      if (bound === undefined) return this.next(32);
+      if (!(bound > 0) || bound > 2147483647 || bound !== Math.floor(bound)) throw new RangeError('bound must be positive');
+      let r = this.next(31);
+      const m = bound - 1;
+      if ((bound & m) === 0) return Math.floor(r * bound / 2147483648); // (int)((bound * (long)r) >> 31), exact: bound is 2^k
+      for (let u = r; ((u - (r = u % bound) + m) | 0) < 0; u = this.next(31));
+      return r;
+    }
+    nextLong() { // ((long)next(32) << 32) + next(32)
+      const a = this.next(32), b = this.next(32);
+      return BigInt.asIntN(64, (BigInt(a) << 32n) + BigInt(b));
+    }
+    nextBoolean() { return this.next(1) !== 0; }
+    nextFloat() { return this.next(24) / 16777216; }
+    nextDouble() { const a = this.next(26); return (a * JR_2P27 + this.next(27)) / 9007199254740992; }
+    nextGaussian() {
+      if (this._haveNext) { this._haveNext = false; return this._nextNext; }
+      let v1, v2, s;
+      do {
+        v1 = 2 * this.nextDouble() - 1;
+        v2 = 2 * this.nextDouble() - 1;
+        s = v1 * v1 + v2 * v2;
+      } while (s >= 1 || s === 0);
+      const mul = Math.sqrt(-2 * Math.log(s) / s); // StrictMath.log = fdlibm; V8's Math.log is the same port (asserted on the golden vectors)
+      this._nextNext = v2 * mul; this._haveNext = true;
+      return v1 * mul;
+    }
+  }
+
+  root.IJShared = { JavaRandom, makeFloatEDM, makeFloatEDMAsync, thresholdMask, maskToRoi, lightBackgroundInvert, hasInvertedLut };
 })(typeof self !== 'undefined' ? self : globalThis);

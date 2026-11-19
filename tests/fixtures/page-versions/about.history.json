@@ -1,0 +1,137 @@
+{
+  "schema": "lumen-page-versions/1",
+  "slug": "about",
+  "active": "v000000000002",
+  "versions": [
+    {
+      "id": "v000000000001",
+      "label": "Spring redesign",
+      "note": "From the lab site",
+      "origin": "import",
+      "createdAt": "2026-11-19T13:45:01Z",
+      "updatedAt": "2026-11-19T13:45:01Z",
+      "exportedAt": "2026-11-18T09:00:00.000Z",
+      "source": "bemine.be",
+      "platform": "1.86.0",
+      "content": {
+        "title": {
+          "en": "About",
+          "fr": "A propos"
+        },
+        "nav": {
+          "label": {
+            "en": "About",
+            "fr": "A propos"
+          },
+          "show": true
+        },
+        "published": {
+          "sections": [
+            {
+              "id": "s1",
+              "props": {},
+              "columns": [
+                {
+                  "id": "c1",
+                  "width": 12,
+                  "props": {},
+                  "widgets": [
+                    {
+                      "type": "heading",
+                      "props": {
+                        "text": {
+                          "en": "Spring",
+                          "fr": "Spring fr"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "background": {
+            "preset": "aurora",
+            "params": {
+              "speed": 2
+            }
+          }
+        },
+        "draft": {
+          "blocks": [
+            {
+              "type": "heading",
+              "props": {
+                "text": {
+                  "nl": "Hoi é世"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "v000000000002",
+      "label": "Plain",
+      "note": "",
+      "origin": "capture",
+      "createdAt": "2026-11-19T13:45:02Z",
+      "updatedAt": "2026-11-19T13:45:02Z",
+      "exportedAt": "",
+      "source": "",
+      "platform": "",
+      "content": {
+        "published": {
+          "sections": []
+        }
+      }
+    },
+    {
+      "id": "v000000000003",
+      "label": "Before activation",
+      "note": "",
+      "origin": "auto",
+      "createdAt": "2026-11-19T13:45:03Z",
+      "updatedAt": "2026-11-19T13:45:03Z",
+      "exportedAt": "",
+      "source": "",
+      "platform": "",
+      "content": {
+        "title": {
+          "en": "About"
+        },
+        "published": {
+          "sections": [
+            {
+              "id": "s1",
+              "props": {},
+              "columns": [
+                {
+                  "id": "c1",
+                  "width": 12,
+                  "props": {},
+                  "widgets": [
+                    {
+                      "type": "heading",
+                      "props": {
+                        "text": {
+                          "en": "Live",
+                          "fr": "Live fr"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "background": {
+            "preset": "none",
+            "params": {}
+          }
+        }
+      }
+    }
+  ]
+}

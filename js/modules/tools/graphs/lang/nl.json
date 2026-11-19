@@ -142,6 +142,17 @@
   "preset_msdLog": "Gem. kwadratische verplaatsing (log–log)",
   "note_subsampled": "Spreiding getekend met één rij op {n}.",
   "note_series-capped": "Alleen de eerste 24 curves worden getekend.",
-  "note_missing": "Geen antwoord voor deze grafiek van: {names}.",
-  "note_rangesDiffer": "Posities in µm beslaan de eigen omvang van elke dataset; gebruik de %-variabelen om ze uit te lijnen."
+  "note_missing": "Niet getekend voor: {names} (mist een variabele van deze grafiek, of gaf geen antwoord).",
+  "note_rangesDiffer": "Posities in µm beslaan de eigen omvang van elke dataset; gebruik de %-variabelen om ze uit te lijnen.",
+  "table_line": "Intensiteit langs een meetlijn",
+  "var_d": "Afstand langs de lijn",
+  "var_dr": "Positie langs de lijn (% van de lengte)",
+  "var_line": "Meting",
+  "var_tr": "Tijd (% van de acquisitie)",
+  "var_divTr": "Deelmoment (% van de acquisitie)",
+  "preset_lineProfile": "Intensiteit langs de meetlijnen",
+  "preset_lineProfileRel": "Intensiteit langs de lijnen, in % van hun lengte",
+  "lineInfo": "{n} meetlijn(en) elke {size} µm bemonsterd op de voxels van het getoonde frame, verliesvrij gelezen.",
+  "err_export": "De afbeelding kon niet worden opgeslagen.",
+  "note_msd-sampled": "De gemiddelde kwadratische verplaatsing gebruikt een regelmatige steekproef van de cellen (de trackset is groot); alle tijdverschillen blijven behouden."
 }

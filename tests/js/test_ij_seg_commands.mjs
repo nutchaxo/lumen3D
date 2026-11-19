@@ -69,6 +69,8 @@ await test('commands: menu, order, separator, no shortcut, enabled rules', async
     assert.equal(c.labelKey, 'cmd.' + id);
   }
   assert.equal(by('binDistanceMap').separatorBefore, true, 'the Distance Map group is set apart');
+  assert.equal(by('binOutline').separatorBefore, true, 'Outline starts its group (Process > Binary, IJ_Props.txt binary09)');
+  for (const id of ['binDistanceMap', 'binUltimatePoints', 'binVoronoi']) assert.ok(!/…/.test(EN.cmd[id]), id + ' has no ellipsis: the EDM has no dialog');
   // the neighbours of PLAN §1: Outline between Close and Fill Holes, Skeletonize after Fill Holes
   assert.ok(by('binClose').order < by('binOutline').order && by('binOutline').order < by('binFillHoles').order && by('binFillHoles').order < by('binSkeletonize').order);
   const st = (doc, o) => Object.assign({ doc, roi: null, prevRoi: null, busy: false, nDocs: 1, canUndo: false, canRedo: false, dirty: false, hasResults: false, canProject: true, threshold: null, activeChannel: 0 }, o);
@@ -114,7 +116,7 @@ for (const id of Object.keys(REFS)) {
     const expected = A(await REFS[id](bin, m.w, m.h));
     assert.ok(before.some((v) => v === 255) && before.some((v) => v === 0), 'a mask with objects and background');
     // the commands with a dialog answer its defaults (Overwrite); the others have none
-    await t.runCommand(id, id === 'binDistanceMap' || id === 'binUltimatePoints' || id === 'binVoronoi' ? {} : undefined);
+    await t.runCommand(id);
     same(A(await t.pixels(m.id, 0)), expected, id + ' result');
     if (id !== 'binWatershed') assert.notDeepEqual(A(await t.pixels(m.id, 0)), before, id + ' changed the image');
     const info = (await t.docs()).find((d) => d.docId === m.id);
@@ -153,7 +155,9 @@ await test('Distance Map / Ultimate Points / Voronoi: the EDM output is a new im
     const f = await fn(bin, m.w, m.h, false, null);
     for (const [out, bd] of [['float', 32], ['short', 16], ['byte', 8]]) {
       const n0 = (await t.docs()).length;
-      await t.runCommand(id, { output: out });
+      // the output type is the "EDM output" of Process > Binary > Options (setting thr.edmOutput), no dialog of its own
+      t.api('thr').settings.set('thr.edmOutput', out);
+      await t.runCommand(id);
       const docs = await t.docs();
       assert.equal(docs.length, n0 + 1, id + ' ' + out + ': a new image');
       const nd = docs[docs.length - 1];
@@ -178,20 +182,17 @@ await test('Distance Map / Ultimate Points / Voronoi: the EDM output is a new im
   t.close();
 });
 
-await test('the EDM output choice is remembered like ImageJ\'s static option, and offered for every channel only when it overwrites', async () => {
+await test('Distance Map has no dialog: its output type is the EDM output of Binary Options, which Overwrite leaves out of the way', async () => {
   const t = await boot({ volume: Object.assign({}, VOL, { channels: 2 }), channels: 2 });
   await t.open();
-  // the projected image has two non-binary channels: the dialog is shown first, then ImageJ's refusal
-  await t.runCommand('binDistanceMap', { output: 'float' }, { expectError: true });
-  let spec = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
-  assert.deepEqual(A(spec.fields.map((f) => f.id)), ['output', 'all']);
-  assert.equal(spec.fields[0].value, 'overwrite');
-  assert.deepEqual(A(spec.fields[0].options.map((o) => o.value)), ['overwrite', 'byte', 'short', 'float']);
-  assert.equal(spec.fields[1].visibleIf({ output: 'overwrite' }), true);
-  assert.equal(spec.fields[1].visibleIf({ output: 'float' }), false);
-  await t.runCommand('binUltimatePoints', {}, { expectError: true });
-  spec = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
-  assert.equal(spec.fields[0].value, 'float', 'the last choice comes back');
+  assert.equal(t.api('thr').settings.get('thr.edmOutput'), undefined, 'Overwrite is the default');
+  const n = t.log.dialogSpecs.length;
+  // the projected image has two non-binary channels: ImageJ's refusal, and no dialog was shown
+  await t.runCommand('binDistanceMap', undefined, { expectError: true });
+  assert.equal(t.log.dialogSpecs.length, n, 'no dialog');
+  t.api('thr').settings.set('thr.edmOutput', 'float');
+  await t.runCommand('binUltimatePoints', undefined, { expectError: true });
+  assert.equal(t.log.dialogSpecs.length, n, 'still no dialog');
   t.close();
 });
 
@@ -206,7 +207,7 @@ await test('a non-binary image is refused with ImageJ\'s sentence and stays as i
     assert.match(EN.err.segNotBinary, /binary/);
   }
   for (const cmd of ['binDistanceMap', 'binUltimatePoints', 'binVoronoi']) {
-    const errs = await t.runCommand(cmd, {}, { expectError: true });
+    const errs = await t.runCommand(cmd, undefined, { expectError: true });
     assert.equal(errs[0].message, EN.err.segNotBinary, cmd);
   }
   same(A(await t.pixels(id, 0)), before, 'nothing changed');

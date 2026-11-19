@@ -119,6 +119,9 @@ CONFIG_DIR = ROOT / "config"
 # Unpublished page drafts — deliberately under api/ (never web-served) rather than
 # in the public config/ tree. Module-level so tests can redirect it like CONFIG_DIR.
 PAGE_DRAFTS_DIR = ROOT / "api" / "page-drafts"
+# Version history of each page (the admin "Page import / export" tab): one file per
+# slug, private like the drafts. Module-level so tests can redirect it.
+PAGE_VERSIONS_DIR = ROOT / "api" / "page-versions"
 CONFIG_DEFAULTS_DIR = CONFIG_DIR / "defaults" / "neutral"
 INSTANCE_FILE = CONFIG_DIR / "instance.json"
 # Theme editor: config/theme.json (operator tokens) is compiled to a served
@@ -230,6 +233,9 @@ _API_BODY_LIMITS = {
     "/api/telemetry.php": 16 * 1024,
     "/api/admin.php": 1024 * 1024,
     "/api/site.php": 4 * 1024 * 1024,
+    # A version's content may reach 4 MiB (two 2 MiB blocks) + its labels, and a
+    # client may send non-ASCII text \u-escaped: 8 MiB leaves room for both.
+    "/api/page-versions.php": 8 * 1024 * 1024,
     "/api/media.php": 16 * 1024 * 1024,
     "/api/datasets.php": 16 * 1024 * 1024,
 }
@@ -1224,6 +1230,753 @@ def _publish_site_doc(doc: str) -> bool:
         data["published"] = data.get("draft")
         return _save_site_doc(doc, data)
     return True
+
+
+# ── Page version history (api/page-versions/<slug>.json) ───────────────────────
+# Contract: DOCS/pages-library/SPEC.md §2–§3. Twin: api/_page_versions_lib.php — the
+# file format is shared, so a host may switch backend and keep its history.
+#
+# Lock order, everywhere: _SITE_LOCK first, then the slug's history lock.
+
+_PV_SCHEMA = "lumen-page-versions/1"
+_PV_ID_RE = re.compile(r"v[0-9a-f]{12}")
+_PV_ORIGINS = ("import", "capture", "auto", "manual")
+_PV_MAX_VERSIONS = 50
+_PV_MAX_FILE_BYTES = 32 * 1024 * 1024
+_PV_MAX_CONTENT_BYTES = 4 * 1024 * 1024
+_PV_MAX_BLOCK_BYTES = 2 * 1024 * 1024
+_PV_MAX_LABEL = 120
+_PV_MAX_NOTE = 2000
+_PV_MAX_INFO = 64
+_PV_MAX_LOC_VALUE = 4000
+_PV_MAX_LOC_KEYS = 64
+_PV_MAX_DEPTH = 64   # nesting of one block: far above what the editor writes, far below any parser's stack
+_PV_LOCALE_CODE_RE = re.compile(r"[A-Za-z0-9_-]{1,16}")
+_PV_WRITE_ACTIONS = frozenset({"add", "update", "activate", "delete", "purge"})
+_PV_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_PV_BREAK_RE = re.compile(r"[\t\r\n]+")
+_PV_NOTE_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")   # keeps \t and \n
+_PV_LOCKS: dict = {}
+_PV_LOCKS_MUTEX = threading.Lock()
+
+
+class _PvError(Exception):
+    """A refusal with its HTTP status and the {"error": code, …} answer."""
+
+    def __init__(self, status: int, code: str, **extra):
+        super().__init__(code)
+        self.status = status
+        self.payload = {"error": code, **extra}
+
+
+def _pv_lock(slug: str):
+    with _PV_LOCKS_MUTEX:
+        lock = _PV_LOCKS.get(slug)
+        if lock is None:
+            lock = _PV_LOCKS[slug] = threading.RLock()
+        return lock
+
+
+def _pv_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _pv_new_id(taken) -> str:
+    while True:
+        vid = "v" + secrets.token_hex(6)
+        if vid not in taken:
+            return vid
+
+
+def _pv_path(slug: str) -> Path:
+    # fullmatch: `$` would accept a trailing newline, which a query string can carry.
+    if not isinstance(slug, str) or not re.fullmatch(_SITE_SLUG_RE.pattern, slug):
+        raise _PvError(400, "invalid_slug")
+    return PAGE_VERSIONS_DIR / f"{slug}.json"
+
+
+def _pv_canon(v) -> str:
+    return json.dumps(v, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _pv_json_bytes(v) -> int:
+    """UTF-8 length of the compact JSON of ``v`` — what the browser measures with
+    JSON.stringify, so both backends and the admin agree on `bytes`."""
+    return len(json.dumps(v, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+
+def _pv_clean_localized(v, what: str):
+    if not isinstance(v, dict) or len(v) > _PV_MAX_LOC_KEYS:
+        raise _PvError(400, "invalid_content", detail=f"invalid {what}")
+    out = {}
+    for k, s in v.items():
+        if (not isinstance(k, str) or not _PV_LOCALE_CODE_RE.fullmatch(k) or not isinstance(s, str)
+                or len(s) > _PV_MAX_LOC_VALUE):
+            raise _PvError(400, "invalid_content", detail=f"invalid {what}")
+        out[k] = s
+    return out
+
+
+def _pv_depth(v, cap: int) -> int:
+    """Nesting depth of ``v`` (a scalar is 0, a container 1 + its deepest child), walked
+    without recursion and stopped once it passes ``cap``: a hostile file nests as deep as a
+    JSON parser allows, which a recursive walk cannot survive."""
+    stack = [(v, 1)]
+    deepest = 0
+    while stack:
+        node, d = stack.pop()
+        if not isinstance(node, (dict, list)):
+            continue
+        deepest = max(deepest, d)
+        if d > cap:
+            return d
+        for child in (node.values() if isinstance(node, dict) else node):
+            if isinstance(child, (dict, list)):
+                stack.append((child, d + 1))
+    return deepest
+
+
+def _pv_clean_block(b, key: str):
+    """One content block, deep-copied and passed through the page-doc structural
+    gate (_validate_page_doc clamps column widths in place, like the editor's save)."""
+    if not isinstance(b, dict) or not (isinstance(b.get("sections"), list) or isinstance(b.get("blocks"), list)):
+        raise _PvError(400, "invalid_content", detail=f"invalid {key}")
+    if not isinstance(b.get("sections"), list):
+        # The legacy shape: the renderer's normalizer reads it, so what it holds is checked here.
+        legacy = b["blocks"]
+        if len(legacy) > 500 or not all(isinstance(w, dict) and isinstance(w.get("type"), str) for w in legacy):
+            raise _PvError(400, "invalid_content", detail=f"invalid {key}")
+    if _pv_depth(b, _PV_MAX_DEPTH) > _PV_MAX_DEPTH:
+        raise _PvError(400, "invalid_content", detail=f"{key} is nested too deeply")
+    try:
+        b = json.loads(json.dumps(b, allow_nan=False))
+        size = _pv_json_bytes(b)
+    except (TypeError, ValueError, RecursionError, UnicodeEncodeError):
+        raise _PvError(400, "invalid_content", detail=f"invalid {key}")
+    if size > _PV_MAX_BLOCK_BYTES:
+        raise _PvError(413, "version_too_large")
+    probe = {key: b}
+    ok, err = _validate_page_doc(probe)
+    if not ok:
+        if err == "Page document too large":
+            raise _PvError(413, "version_too_large")
+        raise _PvError(400, "invalid_content", detail=err or f"invalid {key}")
+    return probe[key]
+
+
+def _pv_clean_content(content) -> dict:
+    """The stored shape of a version's content: {title?, nav?, published?, draft?}
+    in that key order, at least one block, every limit enforced. Unknown keys are
+    dropped; an empty title / nav is kept as `{}` (the twin does the same)."""
+    if not isinstance(content, dict):
+        raise _PvError(400, "invalid_content", detail="content is not an object")
+    out = {}
+    if content.get("title") is not None:
+        out["title"] = _pv_clean_localized(content["title"], "title")
+    nav = content.get("nav")
+    if nav is not None:
+        if not isinstance(nav, dict):
+            raise _PvError(400, "invalid_content", detail="invalid nav")
+        clean_nav = {}
+        if nav.get("label") is not None:
+            clean_nav["label"] = _pv_clean_localized(nav["label"], "nav")
+        if nav.get("show") is not None:
+            if not isinstance(nav["show"], bool):
+                raise _PvError(400, "invalid_content", detail="invalid nav")
+            clean_nav["show"] = nav["show"]
+        out["nav"] = clean_nav
+    for key in ("published", "draft"):
+        if content.get(key) is not None:
+            out[key] = _pv_clean_block(content[key], key)
+    if "published" not in out and "draft" not in out:
+        raise _PvError(400, "invalid_content", detail="no published or draft block")
+    try:
+        if _pv_json_bytes(out) > _PV_MAX_CONTENT_BYTES:
+            raise _PvError(413, "version_too_large")
+    except (UnicodeEncodeError, ValueError):
+        raise _PvError(400, "invalid_content", detail="malformed text")
+    return out
+
+
+def _pv_text(v, limit: int, *, controls=_PV_CONTROL_RE, trim: str = " ", spaced: bool = False) -> str:
+    """A client text: control characters out, trimmed, cut to ``limit`` characters, trimmed
+    again (a cut may leave a space at its end). Only ASCII white space is trimmed, as the
+    PHP twin's trim() does. ``spaced``: a tab / line break inside a one-line text becomes a
+    space instead of vanishing. Not a string: 400 invalid_body."""
+    if not isinstance(v, str):
+        raise _PvError(400, "invalid_body")
+    if spaced:
+        v = _PV_BREAK_RE.sub(" ", v)
+    return controls.sub("", v).strip(trim)[:limit].strip(trim)
+
+
+def _pv_label(v, default: str = "Version") -> str:
+    return default if v is None else (_pv_text(v, _PV_MAX_LABEL, spaced=True) or default)
+
+
+def _pv_note(v) -> str:
+    return "" if v is None else _pv_text(v, _PV_MAX_NOTE, controls=_PV_NOTE_CONTROL_RE, trim=" \t\n")
+
+
+def _pv_info(v) -> str:
+    """exportedAt / source / platform: informational strings from the client."""
+    return "" if v is None else _pv_text(v, _PV_MAX_INFO)
+
+
+def _pv_widget_count(b) -> int:
+    if not isinstance(b, dict):
+        return 0
+    if isinstance(b.get("blocks"), list):
+        return len(b["blocks"])
+    n = 0
+    secs = b.get("sections")
+    for s in (secs if isinstance(secs, list) else []):
+        cols = s.get("columns") if isinstance(s, dict) else None
+        for c in (cols if isinstance(cols, list) else []):
+            w = c.get("widgets") if isinstance(c, dict) else None
+            n += len(w) if isinstance(w, list) else 0
+    return n
+
+
+_PV_LOCALE_KEY_RE = re.compile(r"[a-z]{2}")
+
+
+def _pv_locales(content: dict) -> list:
+    """Sorted 2-letter locales of the localized strings of the page blocks — the
+    rule of pages-transfer.js pageLocales: a non-empty object whose keys are all two
+    lowercase letters and whose values are all strings. Iterative: a stored block may be
+    as deep as a parser allowed when it was written."""
+    found = set()
+    stack = [content.get("published"), content.get("draft")]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, list):
+            stack.extend(v)
+        elif isinstance(v, dict):
+            if v and all(_PV_LOCALE_KEY_RE.fullmatch(k) and isinstance(s, str) for k, s in v.items()):
+                found.update(v.keys())
+            else:
+                stack.extend(v.values())
+    return sorted(found)
+
+
+def _pv_meta(v: dict, active) -> dict:
+    c = v["content"]
+    primary = c.get("published") if c.get("published") is not None else c.get("draft")
+    return {
+        "id": v["id"], "label": v["label"], "note": v["note"], "origin": v["origin"],
+        "createdAt": v["createdAt"], "updatedAt": v["updatedAt"],
+        "exportedAt": v["exportedAt"], "source": v["source"], "platform": v["platform"],
+        "widgets": _pv_widget_count(primary), "bytes": _pv_json_bytes(c),
+        "locales": _pv_locales(c),
+        "hasPublished": c.get("published") is not None, "hasDraft": c.get("draft") is not None,
+        "title": c.get("title") or {}, "isActive": v["id"] == active,
+    }
+
+
+def _pv_make_version(taken, *, label, note, origin, content, exported_at="", source="", platform="") -> dict:
+    now = _pv_now()
+    return {"id": _pv_new_id(taken), "label": label, "note": note, "origin": origin,
+            "createdAt": now, "updatedAt": now, "exportedAt": exported_at,
+            "source": source, "platform": platform, "content": content}
+
+
+def _pv_new_history(slug: str) -> dict:
+    return {"schema": _PV_SCHEMA, "slug": slug, "active": None, "versions": []}
+
+
+def _pv_validate_history(slug: str, d):
+    """(history, state). state: 'ok'; 'foreign' = a JSON object of another schema (a newer
+    platform wrote it: never touched); 'corrupt' = anything else that is not a readable
+    history of this slug (not an object, a foreign slug, a damaged or repeated version)."""
+    if not isinstance(d, dict):
+        return None, "corrupt"
+    if d.get("schema") != _PV_SCHEMA:
+        return None, "foreign"
+    if d.get("slug") != slug:
+        return None, "corrupt"
+    versions = d.get("versions")
+    if not isinstance(versions, list) or len(versions) > _PV_MAX_VERSIONS:
+        return None, "corrupt"
+    out, ids = [], set()
+    for v in versions:
+        if (not isinstance(v, dict) or not isinstance(v.get("id"), str)
+                or not _PV_ID_RE.fullmatch(v["id"]) or v["id"] in ids
+                or not isinstance(v.get("content"), dict) or v.get("origin") not in _PV_ORIGINS):
+            return None, "corrupt"
+        ids.add(v["id"])
+        text = {k: v[k] if isinstance(v.get(k), str) else ""
+                for k in ("label", "note", "createdAt", "updatedAt", "exportedAt", "source", "platform")}
+        rec = {"id": v["id"], "label": text["label"] or "Version", "note": text["note"],
+               "origin": v["origin"], "createdAt": text["createdAt"],
+               "updatedAt": text["updatedAt"] or text["createdAt"], "exportedAt": text["exportedAt"],
+               "source": text["source"], "platform": text["platform"], "content": v["content"]}
+        out.append(rec)
+    active = d.get("active")
+    return {"schema": _PV_SCHEMA, "slug": slug,
+            "active": active if isinstance(active, str) and active in ids else None,
+            "versions": out}, "ok"
+
+
+def _pv_read(slug: str):
+    """(history | None, state) with state 'ok' | 'missing' | 'corrupt' | 'foreign'."""
+    p = _pv_path(slug)
+    try:
+        raw = p.read_bytes()
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError:
+        return None, "corrupt"
+    try:
+        return _pv_validate_history(slug, json.loads(raw.decode("utf-8")))
+    except (ValueError, RecursionError):
+        return None, "corrupt"
+
+
+def _pv_load_for_write(slug: str) -> dict:
+    """The history to modify, a fresh one when there is none. A file of another schema is
+    never touched (500). An unreadable one is parked beside it as
+    <slug>.corrupt-<stamp>.json — kept, never silently lost, still denied as *.json — and a
+    fresh history starts (the PHP twin does the same)."""
+    hist, state = _pv_read(slug)
+    if state == "foreign":
+        print(f"  [page-versions] history of {slug!r} has another schema: refusing to overwrite it", file=sys.stderr)
+        raise _PvError(500, "write_failed")
+    if state == "corrupt":
+        src = _pv_path(slug)
+        parked = src.with_name(f"{slug}.corrupt-{time.strftime('%Y%m%d%H%M%S', time.gmtime())}-{secrets.token_hex(2)}.json")
+        try:
+            os.replace(src, parked)
+        except OSError:
+            raise _PvError(500, "write_failed")
+        print(f"  [page-versions] unreadable history for {slug!r} parked as {parked.name}", file=sys.stderr)
+    return hist if hist is not None else _pv_new_history(slug)
+
+
+def _pv_serialize(hist: dict) -> bytes:
+    try:
+        data = json.dumps(hist, indent=2, ensure_ascii=False).encode("utf-8")
+    except (UnicodeEncodeError, TypeError, ValueError, RecursionError):
+        raise _PvError(400, "invalid_body")
+    if len(data) > _PV_MAX_FILE_BYTES:
+        raise _PvError(413, "version_too_large")
+    return data
+
+
+def _pv_write(slug: str, hist: dict) -> None:
+    data = _pv_serialize(hist)
+    try:
+        # Bytes, not text: a text-mode write turns \n into \r\n on Windows and the two
+        # backends would no longer produce the same file.
+        _atomic_write(_pv_path(slug), data, binary=True, mode=0o600)
+    except OSError:
+        raise _PvError(500, "write_failed")
+
+
+def _pv_remove(slug: str) -> None:
+    try:
+        _pv_path(slug).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        raise _PvError(500, "write_failed")
+
+
+def _pv_find(hist: dict, vid: str):
+    for v in hist["versions"]:
+        if v["id"] == vid:
+            return v
+    raise _PvError(404, "not_found")
+
+
+def _pv_live_title(title):
+    """A live title worth keeping in a snapshot: a non-empty localized object that a stored
+    title could be. A legacy plain-string title is dropped (the twin does the same)."""
+    if not isinstance(title, dict) or not title:
+        return None
+    try:
+        return _pv_clean_localized(title, "title")
+    except _PvError:
+        return None
+
+
+def _pv_live_content(slug: str):
+    """The live page as a version content (what the admin sees: the published block
+    and the private draft), or None when the page has neither. A block without
+    sections / blocks (an empty `{}` draft) counts as absent. The blocks are taken as
+    they are — a snapshot is never refused because of legacy data, it is what lets the
+    operator restore a good version over a damaged page."""
+    doc = _load_site_admin(f"pages/{slug}")
+    if not isinstance(doc, dict):
+        # A damaged public file (a JSON list): the private draft beside it is still the
+        # operator's work, and an activation would overwrite it.
+        doc = {}
+        try:
+            d = json.loads(_site_draft_path(f"pages/{slug}").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            d = None
+        if isinstance(d, dict):
+            doc["draft"] = d
+    out = {}
+    title = _pv_live_title(doc.get("title"))
+    if title is not None:
+        out["title"] = title
+    for key in ("published", "draft"):
+        b = doc.get(key)
+        if isinstance(b, dict) and (isinstance(b.get("sections"), list) or isinstance(b.get("blocks"), list)):
+            out[key] = b
+    return out if ("published" in out or "draft" in out) else None
+
+
+def _pv_signature(content: dict, with_title: bool = True) -> str:
+    """What a content shows to a reader (published, else draft), what the editor holds
+    (draft, else published) and, when ``with_title``, its title (absent = `{}`): two
+    contents sharing it are the same page."""
+    pub, dr = content.get("published"), content.get("draft")
+    return _pv_canon({"title": (content.get("title") or {}) if with_title else {},
+                      "published": pub if pub is not None else dr,
+                      "draft": dr if dr is not None else pub})
+
+
+def _pv_title_at_stake(live: dict, version_content: dict) -> bool:
+    """Activating a version that carries a title replaces a different live title: the live
+    one survives only in a stored version that holds it, so the snapshot test must compare
+    titles too. A title-less version leaves the live title alone, whatever it is."""
+    lt, vt = live.get("title"), version_content.get("title")
+    return bool(lt) and bool(vt) and _pv_canon(lt) != _pv_canon(vt)
+
+
+def _pv_publish_is_noop(slug: str, content: dict) -> bool:
+    """Would a publish-mode activation of ``content`` leave every file as it is? Compared
+    physically, as the PHP twin does (published / draft / title keys and schemaVersion of
+    the live admin document): a page still in a legacy layout (inline draft, no private
+    draft file, no schemaVersion) is NOT left alone — the write normalizes it."""
+    live = _load_site_admin(f"pages/{slug}")
+    if not isinstance(live, dict) or live.get("schemaVersion") != _PAGE_SCHEMA_VERSION:
+        return False
+    pub, dr = content.get("published"), content.get("draft")
+    data = dict(live)
+    data["published"] = pub if pub is not None else dr
+    data["draft"] = dr if dr is not None else pub
+    if content.get("title"):
+        data["title"] = content["title"]
+    for k in ("title", "published", "draft"):
+        if (k in data) != (k in live) or (k in data and _pv_canon(data[k]) != _pv_canon(live[k])):
+            return False
+    return True
+
+
+def _pv_apply_live(slug: str, content: dict, mode: str) -> None:
+    """Put ``content`` on the live page — the end state of the editor's own publish
+    (SPEC §3.2; pages-transfer.js pageWrites). Caller holds _SITE_LOCK."""
+    doc_name = f"pages/{slug}"
+    pub, dr = content.get("published"), content.get("draft")
+    title = content.get("title")
+    if mode == "draft":
+        body = {"draft": dr if dr is not None else pub}
+        if title:
+            body["title"] = title
+        status, _payload = _site_save_draft(doc_name, body)
+        if status != 200:
+            raise _PvError(500, "write_failed")
+        public = _load_site_public(doc_name)
+        public = public if isinstance(public, dict) else {}
+        if not isinstance(public.get("published"), dict):
+            # The page exists publicly only once it has a published block; the draft
+            # alone must not make it visible, so that block is an empty page.
+            public["published"] = {"sections": []}
+            public["schemaVersion"] = _PAGE_SCHEMA_VERSION
+            try:
+                _atomic_write(_site_doc_path(doc_name)[0],
+                              json.dumps(public, indent=2, ensure_ascii=False), mode=_file_mode())
+            except OSError:
+                raise _PvError(500, "write_failed")
+        return
+    base = _load_site_admin(doc_name)
+    base = dict(base) if isinstance(base, dict) else {}
+    if title:
+        base["title"] = title
+    base["published"] = pub if pub is not None else dr
+    base["draft"] = dr if dr is not None else pub
+    base["schemaVersion"] = _PAGE_SCHEMA_VERSION
+    try:
+        ok = _save_site_doc(doc_name, base)
+    except OSError:
+        ok = False
+    if not ok:
+        raise _PvError(500, "write_failed")
+
+
+def _pv_gated_for_activation(content: dict, mode: str) -> dict:
+    """``content`` with the blocks an activation writes passed through the page-doc gate
+    (each alone, widths clamped) — the PHP twin's check, made before anything is stored. A
+    version captured from a damaged live page holds blocks the gate refuses: it is kept, never
+    shown."""
+    pub, dr = content.get("published"), content.get("draft")
+    out = dict(content)
+    if mode == "publish":
+        out["published"] = _pv_clean_block(pub if pub is not None else dr, "published")
+        out["draft"] = _pv_clean_block(dr if dr is not None else pub, "draft")
+    else:
+        out["draft"] = _pv_clean_block(dr if dr is not None else pub, "draft")
+    return out
+
+
+def _pv_activate_core(slug: str, hist: dict, vid: str, mode: str, snapshot_label: str,
+                      dirty: bool = False, added: bool = False):
+    """Activate version ``vid`` of the in-memory ``hist`` (SPEC §3.2). The history is
+    written BEFORE the live page changes, so a safety snapshot is never lost; every
+    limit is checked before the first write. ``dirty``: ``hist`` carries a change to
+    store anyway (a version just added). Returns the snapshot id or None."""
+    version = _pv_find(hist, vid)
+    live = _pv_live_content(slug)
+    snapshot_id = None
+    if live is not None:
+        strict = _pv_title_at_stake(live, version["content"])
+        sig = _pv_signature(live, strict)
+        if not any(_pv_signature(v["content"], strict) == sig for v in hist["versions"]):
+            if len(hist["versions"]) >= _PV_MAX_VERSIONS:
+                raise _PvError(409, "too_many_versions")
+            snap = _pv_make_version({v["id"] for v in hist["versions"]}, label=snapshot_label,
+                                    note="", origin="auto", content=live)
+            hist["versions"].append(snap)
+            snapshot_id = snap["id"]
+            dirty = True
+    content = _pv_gated_for_activation(version["content"], mode)
+    stored = False
+    try:
+        if dirty:
+            _pv_write(slug, hist)
+            stored = True
+        if not (mode == "publish" and _pv_publish_is_noop(slug, content)):
+            _pv_apply_live(slug, content, mode)
+        if mode == "publish" and hist["active"] != vid:
+            hist["active"] = vid
+            _pv_write(slug, hist)
+            stored = True
+    except _PvError as e:
+        if added and stored:
+            e.payload.update(added=True, id=vid)
+        raise
+    return snapshot_id
+
+
+def _pv_slug_param(params) -> str:
+    slug = params.get("slug")
+    _pv_path(slug if slug is not None else "")
+    return slug
+
+
+def _pv_id_param(params) -> str:
+    vid = params.get("id")
+    if not isinstance(vid, str) or not _PV_ID_RE.fullmatch(vid):
+        raise _PvError(400, "invalid_id")
+    return vid
+
+
+def _pv_mode(v, default):
+    if v is None:
+        return default
+    if v not in ("publish", "draft"):
+        raise _PvError(400, "invalid_mode")
+    return v
+
+
+def _pv_do_list(params, body):
+    if params.get("slug") is not None:
+        slugs = [_pv_slug_param(params)]
+    else:
+        try:
+            names = sorted(p.stem for p in PAGE_VERSIONS_DIR.glob("*.json"))
+        except OSError:
+            names = []
+        slugs = [n for n in names if re.fullmatch(_SITE_SLUG_RE.pattern, n)]
+    pages = {}
+    for slug in slugs:
+        hist, _state = _pv_read(slug)
+        if not hist or not hist["versions"]:
+            continue
+        try:
+            metas = [_pv_meta(v, hist["active"]) for v in reversed(hist["versions"])]
+        except (RecursionError, ValueError):
+            # One unreadable history must not blank the list of every page.
+            print(f"  [page-versions] history of {slug!r} cannot be summarized", file=sys.stderr)
+            continue
+        pages[slug] = {"active": hist["active"], "count": len(hist["versions"]), "versions": metas}
+    return 200, {"schema": _PV_SCHEMA,
+                 "limits": {"maxVersions": _PV_MAX_VERSIONS, "maxBytes": _PV_MAX_FILE_BYTES},
+                 "pages": pages}
+
+
+def _pv_do_get(params, body):
+    slug = _pv_slug_param(params)
+    vid = _pv_id_param(params)
+    hist, _state = _pv_read(slug)
+    if not hist:
+        raise _PvError(404, "not_found")
+    v = _pv_find(hist, vid)
+    return 200, {"ok": True, "version": {**_pv_meta(v, hist["active"]), "content": v["content"]}}
+
+
+def _pv_do_add(params, body):
+    slug = _pv_slug_param(params)
+    if not isinstance(body, dict):
+        raise _PvError(400, "invalid_body")
+    # Same order as the PHP twin, and everything is checked before the history is touched
+    # (loading it may park a damaged file): a refused request leaves no trace.
+    origin = body.get("origin")
+    if not isinstance(origin, str) or origin not in _PV_ORIGINS:
+        raise _PvError(400, "invalid_origin")
+    label = _pv_label(body.get("label"))
+    note = _pv_note(body.get("note"))
+    snapshot_label = _pv_label(body.get("snapshotLabel"), "Before activation")
+    exported_at = _pv_info(body.get("exportedAt"))
+    source = _pv_info(body.get("source"))
+    platform = _pv_info(body.get("platform"))
+    activate = _pv_mode(body.get("activate"), None)
+    content = _pv_clean_content(body.get("content"))
+    with _SITE_LOCK, _pv_lock(slug):
+        hist = _pv_load_for_write(slug)
+        if len(hist["versions"]) >= _PV_MAX_VERSIONS:
+            raise _PvError(409, "too_many_versions")
+        v = _pv_make_version({x["id"] for x in hist["versions"]}, label=label, note=note,
+                             origin=origin, content=content, exported_at=exported_at,
+                             source=source, platform=platform)
+        hist["versions"].append(v)
+        meta = _pv_meta(v, None)       # summarized before the first write: a version that cannot be listed is never stored
+        answer = {"ok": True, "id": v["id"]}
+        if activate is None:
+            _pv_write(slug, hist)
+        else:
+            snapshot_id = _pv_activate_core(slug, hist, v["id"], activate, snapshot_label,
+                                            dirty=True, added=True)
+            if snapshot_id:
+                answer["snapshotId"] = snapshot_id
+        meta["isActive"] = hist["active"] == v["id"]
+        answer["version"] = meta
+        return 200, answer
+
+
+def _pv_do_update(params, body):
+    slug = _pv_slug_param(params)
+    vid = _pv_id_param(params)
+    if not isinstance(body, dict):
+        raise _PvError(400, "invalid_body")
+    from_live = body.get("fromLive")
+    if from_live is not None and not isinstance(from_live, bool):
+        raise _PvError(400, "invalid_body")
+    has_content = body.get("content") is not None
+    if from_live and has_content:
+        raise _PvError(400, "invalid_body")
+    label = None if body.get("label") is None else _pv_label(body["label"])
+    note = None if body.get("note") is None else _pv_note(body["note"])
+    if label is None and note is None and not has_content and not from_live:
+        raise _PvError(400, "nothing_to_update")
+    content = _pv_clean_content(body["content"]) if has_content else None
+    with _SITE_LOCK, _pv_lock(slug):
+        hist = _pv_load_for_write(slug)
+        v = _pv_find(hist, vid)
+        if from_live:
+            live = _pv_live_content(slug)
+            if live is None:
+                raise _PvError(400, "invalid_content", detail="the page has no live content")
+            content = {k: live[k] for k in ("title", "published", "draft") if k in live}
+            if "nav" in v["content"]:
+                content["nav"] = v["content"]["nav"]
+            if _pv_json_bytes(content) > _PV_MAX_CONTENT_BYTES:
+                raise _PvError(413, "version_too_large")
+        if label is not None:
+            v["label"] = label
+        if note is not None:
+            v["note"] = note
+        if content is not None:
+            v["content"] = content
+        v["updatedAt"] = _pv_now()
+        _pv_write(slug, hist)
+        return 200, {"ok": True, "version": _pv_meta(v, hist["active"])}
+
+
+def _pv_do_activate(params, body):
+    slug = _pv_slug_param(params)
+    vid = _pv_id_param(params)
+    if body is not None and not isinstance(body, dict):
+        raise _PvError(400, "invalid_body")
+    body = body or {}
+    mode = _pv_mode(body.get("mode"), "publish")
+    snapshot_label = _pv_label(body.get("snapshotLabel"), "Before activation")
+    with _SITE_LOCK, _pv_lock(slug):
+        hist = _pv_load_for_write(slug)
+        _pv_find(hist, vid)
+        snapshot_id = _pv_activate_core(slug, hist, vid, mode, snapshot_label)
+        answer = {"ok": True, "rev": _site_rev(f"pages/{slug}"), "active": hist["active"]}
+        if snapshot_id:
+            answer["snapshotId"] = snapshot_id
+        return 200, answer
+
+
+def _pv_do_delete(params, body):
+    slug = _pv_slug_param(params)
+    vid = _pv_id_param(params)
+    with _pv_lock(slug):
+        hist = _pv_load_for_write(slug)
+        _pv_find(hist, vid)
+        if hist["active"] == vid:
+            raise _PvError(409, "active_version")
+        hist["versions"] = [v for v in hist["versions"] if v["id"] != vid]
+        if hist["versions"]:
+            _pv_write(slug, hist)
+        else:
+            hist["active"] = None
+            _pv_remove(slug)
+        return 200, {"ok": True, "active": hist["active"]}
+
+
+def _pv_do_purge(params, body):
+    slug = _pv_slug_param(params)
+    with _pv_lock(slug):
+        _pv_remove(slug)
+    return 200, {"ok": True}
+
+
+_PV_BAD_BODY = object()   # a request body that is not JSON at all
+
+
+def _pv_decode_body(raw):
+    """The body of a page-versions request, as api/page-versions.php reads it: None when there
+    is none (empty, `null`, `[]`), _PV_BAD_BODY when it is not JSON (the PHP entry point answers
+    400 invalid_body instead of reading it as "no body", which would make `activate` publish with
+    its defaults), else the decoded value — the actions that take an object refuse any other."""
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", "surrogatepass")
+    if not raw or not raw.strip():
+        return None
+    try:
+        v = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return _PV_BAD_BODY
+    return None if v is None or (isinstance(v, list) and not v) else v
+
+
+_PV_ACTIONS = {"list": _pv_do_list, "get": _pv_do_get, "add": _pv_do_add, "update": _pv_do_update,
+               "activate": _pv_do_activate, "delete": _pv_do_delete, "purge": _pv_do_purge}
+
+
+def _pv_handle(action: str, params: dict, body):
+    """(status, payload) of one api/page-versions.php request, authentication and CSRF
+    already settled by the caller. Never raises."""
+    fn = _PV_ACTIONS.get(action)
+    if fn is None:
+        return 400, {"error": "Unknown action"}
+    if body is _PV_BAD_BODY and action in _PV_WRITE_ACTIONS:
+        # A malformed body is never read as "no body": `activate` would publish with its defaults.
+        return 400, {"error": "invalid_body"}
+    try:
+        return fn(params, None if body is _PV_BAD_BODY else body)
+    except _PvError as e:
+        return e.status, e.payload
+    except (OSError, RecursionError) as exc:
+        print(f"  [page-versions] {action}: {exc!r}", file=sys.stderr)
+        return 500, {"error": "write_failed"}
 
 
 # ── Media library (operator image uploads → config/uploads/) ──────────────────
@@ -3321,7 +4074,8 @@ _UPDATE_PROTECT = (
     "api/disabled-plugins.json", "api/quarantined-plugins.json", "api/plugin-trust.json",
     "api/marketplace-state.json",   # highest marketplace catalog serial seen (anti-rollback)
     "api/page-drafts",   # unpublished page drafts (private half of config/pages/*)
-    "secrets",           # Ed25519 signing seeds — never shipped, never overwritten
+    "api/page-versions", # version history of the pages (restores a deleted page)
+    "secrets",          # Ed25519 signing seeds — never shipped, never overwritten
     # White-label operator config (public, editable from admin). NOT the whole
     # config/ dir — config/defaults/ ships in releases and MUST stay updatable.
     "config/instance.json", "config/theme.json", "config/theme.css",
@@ -4706,6 +5460,385 @@ def _list_download_entries(download_root: Path, target: Path, dataset_id: str, r
             })
     entries.sort(key=lambda e: (e["kind"] != "dir", e["name"].lower()))
     return entries
+
+
+# ── TIFF index (api/tiff-index) ──────────────────────────────────────────────
+# The structural index of a download-bundle TIFF: what the browser needs to range-read
+# its pages itself (page geometry, codec, the byte run of every strip) plus ImageJ's own
+# metadata (description, tags 50838 / 50839). Twin of api/tiff-index.php: both write the
+# same JSON byte for byte (tests/test_tiff_index_php.php runs both on the same files).
+
+_TIFF_VERSION = 1
+_TIFF_MAX_PAGES = 100000
+_TIFF_MAX_STRIPS = 1000000
+_TIFF_INFO_CAP = 65536
+_TIFF_META_CAP = 16 * 1024 * 1024
+_TIFF_TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 16: 8, 17: 8, 18: 8}
+_TIFF_INT_FMT = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 16: "Q", 17: "q", 18: "Q"}
+_TIFF_FILE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._ -]*\.(?:tif|tiff)", re.IGNORECASE)
+_TIFF_CACHE = OrderedDict()
+_TIFF_CACHE_LOCK = threading.Lock()
+_TIFF_CACHE_MAX = 32
+_IJ_MAGIC = 0x494A494A
+_IJ_INFO, _IJ_LABL, _IJ_RANG, _IJ_LUTS = 0x696E666F, 0x6C61626C, 0x72616E67, 0x6C757473
+
+
+class _TiffError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _tiff_num(v):
+    """An integral float is written as an integer (both twins agree on it), a non-finite one as null."""
+    if isinstance(v, float):
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        if v == int(v) and abs(v) < 2 ** 53:
+            return int(v)
+    return v
+
+
+def _tiff_int_text(text):
+    return int(text) if text is not None and re.fullmatch(r"-?[0-9]{1,15}", text) else None
+
+
+def _tiff_float_text(text):
+    if text is not None and re.fullmatch(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", text):
+        return _tiff_num(float(text))
+    return None
+
+
+def _tiff_utf16(raw, bo):
+    raw = raw[:_TIFF_INFO_CAP]
+    raw = raw[:len(raw) - (len(raw) % 2)]
+    return raw.decode("utf-16-le" if bo == "<" else "utf-16-be", "replace")
+
+
+def _tiff_ij_meta(meta, counts, bo, channels):
+    """ImageJ's IJMetaData (tag 50839) cut by its byte counts (tag 50838): info, labels, ranges, LUT colours."""
+    out = {"ranges": [], "colors": [], "labels": [], "info": None}
+    if not counts or not meta:
+        return out
+    hdr = counts[0]
+    if hdr < 12 or (hdr - 4) % 8 != 0 or hdr > len(meta):
+        return out
+    if struct.unpack(bo + "I", meta[0:4])[0] != _IJ_MAGIC:
+        return out
+    blocks = {_IJ_INFO: [], _IJ_LABL: [], _IJ_RANG: [], _IJ_LUTS: []}
+    pos, bi = hdr, 1
+    done = False
+    for i in range((hdr - 4) // 8):
+        typ, cnt = struct.unpack(bo + "II", meta[4 + 8 * i:12 + 8 * i])
+        for _ in range(cnt):
+            if bi >= len(counts) or pos + counts[bi] > len(meta):
+                done = True
+                break
+            if typ in blocks:
+                blocks[typ].append(meta[pos:pos + counts[bi]])
+            pos += counts[bi]
+            bi += 1
+        if done:
+            break
+    if blocks[_IJ_INFO]:
+        out["info"] = _tiff_utf16(blocks[_IJ_INFO][0], bo)
+    out["labels"] = [_tiff_utf16(b, bo) for b in blocks[_IJ_LABL][:channels]]
+    if blocks[_IJ_RANG]:
+        b = blocks[_IJ_RANG][0]
+        n = len(b) // 8
+        out["ranges"] = [_tiff_num(v) for v in struct.unpack(bo + "%dd" % n, b[:n * 8])]
+    for b in blocks[_IJ_LUTS][:channels]:
+        if len(b) >= 768:
+            out["colors"].append("#%02x%02x%02x" % (b[255], b[511], b[767]))
+    return out
+
+
+_TIFF_TRIM = " \t\n\r\x00\x0b"      # PHP trim()'s default set, never Unicode whitespace (parity with api/tiff-index.php)
+
+
+def _tiff_imagej(text, meta_bytes, counts, bo):
+    """The ImageJ block of the first page's description, or None for another writer."""
+    if not text.startswith("ImageJ="):
+        return None
+    kv = {}
+    for line in text.split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            kv[k.strip(_TIFF_TRIM)] = v.strip(_TIFF_TRIM)
+    channels = _tiff_int_text(kv.get("channels")) or 1
+    meta = _tiff_ij_meta(meta_bytes, counts, bo, channels)
+    return {
+        "version": kv.get("ImageJ"),
+        "images": _tiff_int_text(kv.get("images")),
+        "channels": channels,
+        "slices": _tiff_int_text(kv.get("slices")) or 1,
+        "frames": _tiff_int_text(kv.get("frames")) or 1,
+        "hyperstack": kv.get("hyperstack") == "true",
+        "mode": kv.get("mode"),
+        "unit": kv.get("unit"),
+        "spacing": _tiff_float_text(kv.get("spacing")),
+        "min": _tiff_float_text(kv.get("min")),
+        "max": _tiff_float_text(kv.get("max")),
+        "ranges": meta["ranges"],
+        "colors": meta["colors"],
+        "labels": meta["labels"],
+        "info": meta["info"],
+    }
+
+
+def _tiff_parse(path):
+    """Walk the IFD chain of a TIFF / BigTIFF (seeks only: IFDs may sit between the pages' data)."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        head = f.read(16)
+        if len(head) < 8 or head[:2] not in (b"II", b"MM"):
+            raise _TiffError("not_tiff")
+        bo = "<" if head[:2] == b"II" else ">"
+        magic = struct.unpack(bo + "H", head[2:4])[0]
+        if magic == 42:
+            big = False
+            first = struct.unpack(bo + "I", head[4:8])[0]
+        elif magic == 43:
+            if len(head) < 16 or struct.unpack(bo + "HH", head[4:8]) != (8, 0):
+                raise _TiffError("malformed")
+            big = True
+            first = struct.unpack(bo + "Q", head[8:16])[0]
+            if struct.calcsize("P") < 8:
+                raise _TiffError("bigtiff_unsupported")
+        else:
+            raise _TiffError("not_tiff")
+        inline_cap = 8 if big else 4
+        entry_size = 20 if big else 12
+        off_fmt = bo + ("Q" if big else "I")
+
+        def read_at(off, n):
+            if off < 8 or n < 0 or off + n > size:
+                raise _TiffError("malformed")
+            f.seek(off)
+            data = f.read(n)
+            if len(data) != n:
+                raise _TiffError("malformed")
+            return data
+
+        def value_bytes(typ, cnt, raw):
+            total = _TIFF_TYPE_SIZE[typ] * cnt
+            if total <= inline_cap:
+                return raw[:total]
+            return read_at(struct.unpack(off_fmt, raw[:inline_cap])[0], total)
+
+        def ints(tags, tag, limit=64):
+            t = tags.get(tag)
+            if t is None:
+                return None
+            typ, cnt, raw = t
+            if typ not in _TIFF_INT_FMT or cnt < 1 or cnt > limit:
+                raise _TiffError("malformed")
+            data = value_bytes(typ, cnt, raw)
+            return list(struct.unpack(bo + "%d%s" % (cnt, _TIFF_INT_FMT[typ]), data))
+
+        def first_int(tags, tag, default=None):
+            v = ints(tags, tag)
+            return default if not v else v[0]
+
+        pages, offsets, counts, seen = [], [], [], set()
+        first_page = {}
+        off = first
+        while off:
+            if off in seen or off < 8 or off >= size:
+                raise _TiffError("malformed")
+            seen.add(off)
+            if len(pages) >= _TIFF_MAX_PAGES:
+                raise _TiffError("too_many_pages")
+            if big:
+                n = struct.unpack(bo + "Q", read_at(off, 8))[0]
+                if n > 65535:
+                    raise _TiffError("malformed")
+                body = read_at(off + 8, n * entry_size + 8)
+            else:
+                n = struct.unpack(bo + "H", read_at(off, 2))[0]
+                body = read_at(off + 2, n * entry_size + 4)
+            tags = {}
+            for i in range(n):
+                e = body[i * entry_size:(i + 1) * entry_size]
+                if big:
+                    tag, typ, cnt = struct.unpack(bo + "HHQ", e[:12])
+                    raw = e[12:20]
+                else:
+                    tag, typ, cnt = struct.unpack(bo + "HHI", e[:8])
+                    raw = e[8:12]
+                if typ in _TIFF_TYPE_SIZE:
+                    tags[tag] = (typ, cnt, raw)
+            nxt = struct.unpack(off_fmt, body[n * entry_size:n * entry_size + inline_cap])[0]
+
+            tiled = 322 in tags
+            width, height = first_int(tags, 256), first_int(tags, 257)
+            if not width or not height:
+                raise _TiffError("malformed")
+            tag_o, tag_c = (324, 325) if tiled else (273, 279)
+            if tag_o not in tags or tag_c not in tags or tags[tag_o][1] != tags[tag_c][1]:
+                raise _TiffError("malformed")
+            if len(offsets) + tags[tag_o][1] > _TIFF_MAX_STRIPS:
+                raise _TiffError("too_many_pages")
+            po = ints(tags, tag_o, _TIFF_MAX_STRIPS)
+            pc = ints(tags, tag_c, _TIFF_MAX_STRIPS)
+            offsets.extend(po)
+            counts.extend(pc)
+            pages.append({
+                "width": width, "height": height, "bitsPerSample": first_int(tags, 258, 1),
+                "compression": first_int(tags, 259, 1), "predictor": first_int(tags, 317, 1),
+                "strips": len(po), "samplesPerPixel": first_int(tags, 277, 1),
+                "sampleFormat": first_int(tags, 339, 1), "planarConfig": first_int(tags, 284, 1),
+                "photometric": first_int(tags, 262, None), "rowsPerStrip": first_int(tags, 278, height),
+                "tiled": tiled,
+            })
+            if not first_page:
+                desc = tags.get(270)
+                text = ""
+                if desc and desc[0] == 2 and 0 < desc[1] <= 65536:
+                    text = value_bytes(2, desc[1], desc[2]).split(b"\x00")[0].decode("utf-8", "replace")
+
+                def rational(tag):
+                    t = tags.get(tag)
+                    if not t or t[0] != 5 or t[1] != 1:
+                        return None
+                    num, den = struct.unpack(bo + "II", value_bytes(5, 1, t[2]))
+                    return None if den == 0 else num / den
+
+                rx, ry = rational(282), rational(283)
+                first_page["resolution"] = None if rx is None or ry is None else {
+                    "x": _tiff_num(float("%.6g" % rx)), "y": _tiff_num(float("%.6g" % ry)),
+                    "unit": first_int(tags, 296, 2)}
+                first_page["desc"] = text
+                t_cnt, t_meta = tags.get(50838), tags.get(50839)
+                first_page["metaCounts"] = None
+                first_page["meta"] = None
+                if t_cnt and t_meta and t_meta[0] in (1, 7) and t_meta[1] <= _TIFF_META_CAP and t_cnt[1] <= 100000:
+                    first_page["metaCounts"] = ints(tags, 50838, 100000)
+                    first_page["meta"] = value_bytes(t_meta[0], t_meta[1], t_meta[2])
+            off = nxt
+    if not pages:
+        raise _TiffError("malformed")
+    return {"big": big, "bo": bo, "pages": pages, "offsets": offsets, "counts": counts, "first": first_page}
+
+
+def _tiff_b64(fmt, values):
+    import base64
+    return base64.b64encode(struct.pack("<%d%s" % (len(values), fmt), *values)).decode("ascii")
+
+
+def _tiff_index_core(path):
+    p = _tiff_parse(path)
+    pages, first = p["pages"], p["pages"][0]
+    keys = ("width", "height", "bitsPerSample", "compression", "predictor", "strips",
+            "samplesPerPixel", "sampleFormat", "planarConfig", "tiled")
+    uniform = all(all(pg[k] == first[k] for k in keys) for pg in pages)
+    fp = p["first"]
+    out = {
+        "bigtiff": p["big"], "littleEndian": p["bo"] == "<",
+        "width": first["width"], "height": first["height"], "bitsPerSample": first["bitsPerSample"],
+        "sampleFormat": first["sampleFormat"], "samplesPerPixel": first["samplesPerPixel"],
+        "planarConfig": first["planarConfig"], "photometric": first["photometric"],
+        "compression": first["compression"], "predictor": first["predictor"], "tiled": first["tiled"],
+        "rowsPerStrip": first["rowsPerStrip"], "pages": len(pages), "uniform": uniform,
+        "resolution": fp["resolution"],
+        "imagej": _tiff_imagej(fp["desc"], fp["meta"], fp["metaCounts"], p["bo"]),
+    }
+    if uniform:
+        out["strips"] = {"perPage": first["strips"], "offsets": _tiff_b64("d", p["offsets"]),
+                         "byteCounts": _tiff_b64("I", p["counts"])}
+    else:
+        out["pageInfo"] = [{k: pg[k] for k in ("width", "height", "bitsPerSample", "compression", "predictor", "strips")}
+                           for pg in pages]
+        starts, acc = [], 0
+        for pg in pages:
+            starts.append(acc)
+            acc += pg["strips"]
+        out["strips"] = {"perPage": None, "index": _tiff_b64("I", starts),
+                         "offsets": _tiff_b64("d", p["offsets"]), "byteCounts": _tiff_b64("I", p["counts"])}
+    return out
+
+
+def _tiff_index(path, dataset="", file=""):
+    """The index of one TIFF as api/tiff-index answers it (the dict's key order is the JSON's)."""
+    st = os.stat(path)
+    key = (os.path.realpath(path), st.st_size, st.st_mtime_ns)
+    with _TIFF_CACHE_LOCK:
+        core = _TIFF_CACHE.get(key)
+        if core is not None:
+            _TIFF_CACHE.move_to_end(key)
+    if core is None:
+        core = _tiff_index_core(path)
+        with _TIFF_CACHE_LOCK:
+            _TIFF_CACHE[key] = core
+            while len(_TIFF_CACHE) > _TIFF_CACHE_MAX:
+                _TIFF_CACHE.popitem(last=False)
+    doc = {"v": _TIFF_VERSION, "dataset": dataset, "file": file,
+           "url": f"DATA_WEB/{dataset}/download/{file}", "size": st.st_size, "mtime": int(st.st_mtime)}
+    doc.update(core)
+    return doc
+
+
+def _tiff_float_json(v):
+    """A float the way PHP's json_encode writes it (serialize_precision -1): the shortest round-trip digits,
+    `1.0e-5` / `1.0e+22` once the decimal point is more than 3 places left of or 17 right of the digits,
+    else positional, a whole number without a fraction (no JSON_PRESERVE_ZERO_FRACTION). Python's own repr differs (`1e-05`, `1e+22`)."""
+    if v != v or v in (float("inf"), float("-inf")):
+        return "0"                       # json_encode refuses these; the PHP twin answers internal_error, never reached
+    if v == 0:
+        return "-0" if math.copysign(1.0, v) < 0 else "0"
+    r = repr(abs(v))
+    mant, _, exp = r.partition("e")
+    ip, _, fp = mant.partition(".")
+    alld = ip + fp
+    lead = len(alld) - len(alld.lstrip("0"))
+    digits = alld.lstrip("0").rstrip("0") or "0"
+    decpt = len(ip) + int(exp or 0) - lead
+    sign = "-" if v < 0 else ""
+    if (decpt < -3) if decpt < 0 else (decpt > 17):
+        e = decpt - 1
+        body = digits[0] + "." + (digits[1:] or "0") + "e" + ("-" if e < 0 else "+") + str(abs(e))
+    elif decpt <= 0:
+        body = "0." + "0" * (-decpt) + digits
+    elif len(digits) <= decpt:
+        body = digits + "0" * (decpt - len(digits))
+    else:
+        body = digits[:decpt] + "." + digits[decpt:]
+    return sign + body
+
+
+def _tiff_json_value(v, out):
+    if isinstance(v, bool):
+        out.append("true" if v else "false")
+    elif v is None:
+        out.append("null")
+    elif isinstance(v, int):
+        out.append(str(v))
+    elif isinstance(v, float):
+        out.append(_tiff_float_json(v))
+    elif isinstance(v, str):
+        out.append(json.dumps(v, ensure_ascii=False))
+    elif isinstance(v, dict):
+        out.append("{")
+        for i, (k, x) in enumerate(v.items()):
+            if i:
+                out.append(",")
+            out.append(json.dumps(str(k), ensure_ascii=False))
+            out.append(":")
+            _tiff_json_value(x, out)
+        out.append("}")
+    else:
+        out.append("[")
+        for i, x in enumerate(v):
+            if i:
+                out.append(",")
+            _tiff_json_value(x, out)
+        out.append("]")
+
+
+def _tiff_json(doc):
+    out = []
+    _tiff_json_value(doc, out)
+    return "".join(out)
 
 
 def _list_datasets() -> list[dict]:
@@ -6480,13 +7613,16 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._guarded(self._serve_languages)
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
             self._guarded(self._serve_downloads, parsed)
+        elif parsed.path in ("/api/tiff-index", "/api/tiff-index.php"):
+            self._guarded(self._serve_tiff_index, parsed)
         elif parsed.path == "/api/upload.php":
             self._guarded(self._handle_upload, parsed, body=None, raw=None)
         elif parsed.path == "/api/migrations.php":
             self._guarded(self._handle_migrations, parsed, body=None, raw=None)
         elif parsed.path == "/api/integrity.php":
             self._guarded(self._handle_integrity, parsed)
-        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
+        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php",
+                             "/api/page-versions.php"):
             self._guarded(self._handle_api, parsed, body=None)
         elif _is_forbidden_static(clean_path) or _has_dot_segment(clean_path) or "\x00" in clean_path:
             self._json(404, {"error": "Not found"})
@@ -6844,6 +7980,54 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         entries = _list_download_entries(download_root, target, dataset_id, rel)
         self._json_nostore(200, {"dataset": dataset_id, "path": rel, "available": True, "entries": entries})
 
+    def _serve_tiff_index(self, parsed):
+        """GET /api/tiff-index?dataset=<type>/<folder>&file=<name>.tif — the structural index of
+        a TIFF in the dataset's download/ ROOT (see _tiff_index). Same-origin only. A hidden
+        dataset answers like an unknown one. ETag + 304; strips are read by the page with
+        Range requests (never counted as downloads)."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        info = _safe_dataset_dir(params.get("dataset", ""))
+        if not info:
+            self._json_nostore(400, {"error": "invalid_dataset"})
+            return
+        type_dir, folder, ds_dir = info
+        name = params.get("file", "")
+        if not isinstance(name, str) or "\x00" in name or not _TIFF_FILE_RE.fullmatch(name):
+            self._json_nostore(400, {"error": "invalid_file"})
+            return
+        if _dataset_is_hidden(ds_dir):
+            self._json_nostore(404, {"error": "not_found"})
+            return
+        download_root = (ds_dir / "download").resolve()
+        target = (download_root / name).resolve()
+        if target.parent != download_root or not target.is_file():
+            self._json_nostore(404, {"error": "not_found"})
+            return
+        try:
+            st = target.stat()
+            etag = f'"{st.st_size}-{int(st.st_mtime)}-v{_TIFF_VERSION}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
+            doc = _tiff_index(str(target), f"{type_dir}/{folder}", name)
+        except _TiffError as exc:
+            self._json_nostore(422, {"error": exc.code})
+            return
+        except OSError:
+            self._json_nostore(404, {"error": "not_found"})
+            return
+        body = _tiff_json(doc).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("ETag", etag)
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_bytes(self, data: bytes, content_type: str, filename: str, inline: bool):
         """Send an already-fetched body.
 
@@ -7024,6 +8208,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
     # uses _is_write_action). Read by the router and by _pre_body_refusal.
     _WRITE_ACTIONS = {
         "/api/site.php": frozenset({"save", "save_draft", "reset", "publish", "delete"}),
+        "/api/page-versions.php": frozenset({"add", "update", "activate", "delete", "purge"}),
         "/api/media.php": frozenset({"upload", "delete"}),
         "/api/admin.php": frozenset({"set_plugin", "update_apply", "update_ack",
                                      "approve_plugin", "revoke_plugin",
@@ -7113,6 +8298,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # body is None unless the request carried a JSON OBJECT (twin of PHP's
         # lumen_request_json): handlers that read fields use `(body or {})`, the ones
         # that store the body refuse None instead of writing an empty document.
+        if parsed.path == "/api/page-versions.php":
+            body = _pv_decode_body(raw)
+            self._guarded(self._handle_api, parsed, body=body)
+            return
         try:
             body = json.loads(raw.decode("utf-8")) if raw else None
         except Exception:
@@ -7560,6 +8749,24 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                                {"ok": True, "rev": _site_rev(doc_name)} if ok else {"error": "Invalid doc"})
             else:
                 self._json(400, {"error": "Unknown action"})
+            return
+
+        # ── Page version history (admin only, reads included) ─────────────────
+        # Twin: api/page-versions.php. Even a read is the operator's: a history holds
+        # unpublished drafts.
+        if path == "/api/page-versions.php":
+            session = _get_session(self._token())
+            if not session:
+                self._json(401, {"error": "Not authenticated"}, headers={"Cache-Control": "no-store"})
+                return
+            if self._is_endpoint_write(path, action):
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token"))
+                if not ok:
+                    self._json(status, payload, headers={"Cache-Control": "no-store"})
+                    return
+            st, pl = _pv_handle(action, params, body)
+            self._json(st, pl, headers={"Cache-Control": "no-store"})
             return
 
         # ── Media library (operator image uploads) ────────────────────────────

@@ -77,7 +77,8 @@ await test('Find Maxima on a 32-bit "EDM of …" image works on the EDM (isEDM),
   const t = await boot({ volume: VOL });
   await t.open();
   const m = await maskDoc(t);
-  await t.runCommand('binDistanceMap', { output: 'float' });
+  t.api('thr').settings.set('thr.edmOutput', 'float'); // Process > Binary > Options > EDM output: 32-bit
+  await t.runCommand('binDistanceMap');
   const edmDoc = (await t.docs()).find((d) => d.bitDepth === 32 && d.name.startsWith('EDM of '));
   assert.ok(edmDoc, 'the Distance Map is a 32-bit image titled "EDM of …"');
   for (let i = 0; i < 12 && t.activeId() !== edmDoc.docId; i++) await t.runCommand('windowNext');

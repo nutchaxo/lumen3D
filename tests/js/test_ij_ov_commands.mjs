@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, until, sleep, EN, DIR } from './ij_harness.mjs';
+import { boot, until, sleep, EN, DIR, langPart } from './ij_harness.mjs';
 
 let passed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log('  ok  ' + name); } catch (e) { console.error('FAIL ' + name); throw e; } }
@@ -554,8 +554,8 @@ await test('Scale Bar: an annotation bar survives a reload', async () => {
 });
 
 // ───────────────────────── language and API surface ─────────────────────────
-await test('lang-parts/ov.json: the four languages hold the same keys and {tokens}; every key the command file reads, and every option label, exists', async () => {
-  const parts = JSON.parse(fs.readFileSync(path.join(DIR, 'lang-parts', 'ov.json'), 'utf8'));
+await test('the ov strings: the four languages hold the same keys and {tokens}; every key the command file reads, and every option label, exists', async () => {
+  const parts = langPart('ov');
   const leaves = (o, p = '', out = {}) => { for (const k of Object.keys(o)) { const kp = p ? p + '.' + k : k; if (o[k] && typeof o[k] === 'object') leaves(o[k], kp, out); else out[kp] = o[k]; } return out; };
   const en = leaves(parts.en);
   const tokens = (x) => [...String(x).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');

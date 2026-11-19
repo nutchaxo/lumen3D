@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, until, sleep, J, DIR } from './ij_harness.mjs';
+import { boot, until, sleep, J, DIR, langPart } from './ij_harness.mjs';
 
 const arr = (x) => Array.from(x);
 const eq = (a, b, m) => assert.deepEqual(J(a), J(b), m || 'values differ');
@@ -36,7 +36,7 @@ async function reloaded(t) {
   const docs = (await t2.engine('doc.list', {}, w2)).docs;
   return { docs, warnings, pixels: async (docId, c) => (await t2.engine('doc.tile', { docId, channel: c, level: 0, tx: 0, ty: 0 }, w2)).data.slice(), close: () => t2.close() };
 }
-const part = JSON.parse(fs.readFileSync(path.join(DIR, 'lang-parts', 'edit.json'), 'utf8'));
+const part = langPart('edit');
 
 await test('menu rows, shortcuts and labels: ImageJ\'s order, the Fiji / ImageJ text verbatim', async () => {
   const t = await fresh();

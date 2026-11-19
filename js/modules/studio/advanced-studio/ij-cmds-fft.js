@@ -4,7 +4,7 @@
  * Page only, runs before IJApp.mount; talks to the app through the documented extension API and to the worker through
  * the operations ij-proc-fft.js registers (fft, inverseFft, bandpass, bandpassFilter, swapQuadrants, directionality).
  *
- * Dialogs mirror ImageJ's / Fiji's (labels are theirs, see lang-parts/fft.json):
+ * Dialogs mirror ImageJ's / Fiji's (labels are theirs, see lang/en.json):
  *   FFT Options        ij.plugin.FFT.showDialog: "Display:", 'FFT ("FFT of...") window', "Raw power spectrum" (the Fast Hartley,
  *                      Complex, "Reuse window" and "Do forward transform" boxes are not offered). Kept in the settings
  *                      fft.fftWindow / fft.rawPs. FFT.doForwardTransform: "if (!(iDisplayFHT || iDisplayComplex || iDisplayRawPS))

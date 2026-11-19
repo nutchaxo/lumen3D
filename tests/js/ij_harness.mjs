@@ -41,11 +41,28 @@ import { ROOT } from './harness.mjs';
 
 export const DIR = path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio');
 export const EN = JSON.parse(fs.readFileSync(path.join(DIR, 'lang', 'en.json'), 'utf8'));
-// The English of the packages while their lang-parts/<pkg>.json exist (merged into the dictionary at W3).
-{
-  const parts = path.join(DIR, 'lang-parts');
-  const merge = (dst, src) => { for (const k of Object.keys(src)) { if (src[k] && typeof src[k] === 'object') { if (!dst[k] || typeof dst[k] !== 'object') dst[k] = {}; merge(dst[k], src[k]); } else if (dst[k] === undefined) dst[k] = src[k]; } };
-  if (fs.existsSync(parts)) for (const f of fs.readdirSync(parts).filter((x) => x.endsWith('.json')).sort()) { const j = JSON.parse(fs.readFileSync(path.join(parts, f), 'utf8')); if (j.en) merge(EN, j.en); }
+// A wave-3 package's own strings, { en, fr, es, nl }, as its lang-parts/<pkg>.json held them before they were merged into lang/*.json:
+// the key inventory of each package (tests/fixtures/ij-wave3/lang-keys.json) read out of the merged dictionaries, so the package tests keep
+// checking exactly their own keys (parity, tokens, translations).
+const LANG_KEYS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'ij-wave3', 'lang-keys.json'), 'utf8'));
+export function langPart(pkg) {
+  const keys = LANG_KEYS[pkg];
+  if (!keys) throw new Error('no lang key inventory for package ' + pkg);
+  const out = {};
+  for (const code of ['en', 'fr', 'es', 'nl']) {
+    const dict = JSON.parse(fs.readFileSync(path.join(DIR, 'lang', code + '.json'), 'utf8'));
+    const part = {};
+    for (const key of keys) {
+      const segs = key.split('.');
+      const v = segs.reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), dict);
+      if (v === undefined) continue;   // a missing translation shows up as a parity failure in the caller
+      let node = part;
+      for (let i = 0; i < segs.length - 1; i++) node = node[segs[i]] || (node[segs[i]] = {});
+      node[segs[segs.length - 1]] = v;
+    }
+    out[code] = part;
+  }
+  return out;
 }
 export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'];
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

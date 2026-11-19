@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, until, EN, sleep } from './ij_harness.mjs';
+import { boot, until, EN, sleep, langPart } from './ij_harness.mjs';
 import { ROOT } from './harness.mjs';
 
 let passed = 0;
@@ -843,7 +843,7 @@ await test('Find Commands: a search field over the commands, every word in the n
 });
 
 await test('every key the package reads exists in the four languages; plugin version untouched', async () => {
-  const parts = JSON.parse(fs.readFileSync(path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio', 'lang-parts', 'ana.json'), 'utf8'));
+  const parts = langPart('ana');
   const flat = (o, p = '', out = {}) => { for (const k of Object.keys(o)) { if (o[k] && typeof o[k] === 'object') flat(o[k], p + k + '.', out); else out[p + k] = o[k]; } return out; };
   const en = flat(parts.en);
   for (const lang of ['fr', 'es', 'nl']) {

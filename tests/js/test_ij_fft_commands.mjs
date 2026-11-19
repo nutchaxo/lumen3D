@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, until, DIR, EN } from './ij_harness.mjs';
+import { boot, until, DIR, EN, langPart } from './ij_harness.mjs';
 import { ROOT } from './harness.mjs';
 
 const FIX = path.join(ROOT, 'tests', 'fixtures', 'ij-wave3', 'fft');
@@ -78,7 +78,7 @@ await test('commands: the menu rows of PLAN-wave3 §1.2, labels = ImageJ / Fiji 
   assert.deepEqual(J(d.menu), ['Analyze']); assert.equal(d.order, 130); assert.equal(EN.cmd.analyzeDirectionality, 'Directionality');
   for (const id of ['fftForward', 'fftInverse', 'fftOptions', 'fftBandpass', 'fftSwapQuadrants', 'analyzeDirectionality']) assert.equal(t.isEnabled(id), true, id + ' is enabled with an image');
   // the lang part exists in all four languages with the same key set
-  const part = JSON.parse(fs.readFileSync(path.join(DIR, 'lang-parts', 'fft.json'), 'utf8'));
+  const part = langPart('fft');
   const keys = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keys(v, p + k + '.') : [p + k]));
   for (const c of ['fr', 'es', 'nl']) assert.deepEqual(keys(part[c]).sort(), keys(part.en).sort(), c + ' has the keys of en');
   t.close();

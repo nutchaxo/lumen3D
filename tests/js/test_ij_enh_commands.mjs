@@ -8,7 +8,7 @@
 //
 // Run: node tests/js/test_ij_enh_commands.mjs
 import assert from 'node:assert/strict';
-import { boot, until, J } from './ij_harness.mjs';
+import { boot, until, J, langPart } from './ij_harness.mjs';
 
 const cases = [];
 const test = (name, fn) => cases.push([name, fn]);
@@ -496,7 +496,7 @@ test('the Tubeness dialog carries Fiji\'s own title: "Tubeness" Filter (version 
   await t.open();
   await t.runCommand('pluginsTubeness', {});
   assert.equal(lastDialog(t).titleKey, 'dlg.enh.tubenessTitle');
-  const parts = JSON.parse((await import('node:fs')).readFileSync(new URL('../../js/modules/studio/advanced-studio/lang-parts/enh.json', import.meta.url), 'utf8'));
+  const parts = langPart('enh');
   assert.equal(parts.en.dlg.enh.tubenessTitle, '"Tubeness" Filter (version 1.2)');
   t.close();
 });

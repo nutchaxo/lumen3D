@@ -4388,7 +4388,7 @@ const IJApp = (() => {
     const para = (k) => h('p', { text: tr(k) });
     const families = ['about.famDisplay', 'about.famSelect', 'about.famBackground', 'about.famFilters', 'about.famBinary', 'about.famMulti', 'about.famGeometry', 'about.famMeasure', 'about.famColoc']
       .map((k) => h('li', { text: tr(k) }));
-    // every deviation that stays (ORCHESTRATOR-DECISIONS), then the Fiji tools' own list (package fiji, lang-parts until integration)
+    // every deviation that stays (ORCHESTRATOR-DECISIONS), then the Fiji tools' own list (about.fijiDeviations)
     const limits = ABOUT_DEVIATIONS.map((k) => h('li', { text: tr(k) }));
     limits.push(h('li', { text: tr('about.fijiDeviations') }));
     openStaticWindow('about', tr('cmd.helpAbout'), h('div', { class: 'ij-panel ij-about' }, [

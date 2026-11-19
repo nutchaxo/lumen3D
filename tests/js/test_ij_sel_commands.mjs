@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, until, J, DIR, EN } from './ij_harness.mjs';
+import { boot, until, J, DIR, EN, langPart } from './ij_harness.mjs';
 
 const arr = (x) => Array.from(x);
 // values built inside the page's vm context have another Array prototype: compare their JSON
@@ -43,7 +43,7 @@ await test('menu rows: ImageJ order inside Edit > Selection, one separator (befo
   eq(J([].concat(t.cmd('selProperties').shortcut)), ['y']);
   assert.ok(t.cmd('selProperties').repeatable !== false);
   // the labels are ImageJ's
-  const en = JSON.parse(fs.readFileSync(path.join(DIR, 'lang-parts', 'sel.json'), 'utf8')).en.cmd;
+  const en = langPart('sel').en.cmd;
   eq(en, { selFitSpline: 'Fit Spline', selFitCircle: 'Fit Circle', selFitRectangle: 'Fit Rectangle', selInterpolate: 'Interpolate', selProperties: 'Properties…', selScale: 'Scale…', selRotate: 'Rotate…',
     selTranslate: 'Translate…', selMakeBand: 'Make Band…', selStraighten: 'Straighten…', selLineToArea: 'Line to Area', selAreaToLine: 'Area to Line' });
   t.close();
@@ -452,7 +452,7 @@ await test('cooperative cancellation: the long loops poll check(), a cancelled r
 });
 
 await test('lang parts: every key the package reads exists in en, fr, es and nl (and is translated)', async () => {
-  const parts = JSON.parse(fs.readFileSync(path.join(DIR, 'lang-parts', 'sel.json'), 'utf8'));
+  const parts = langPart('sel');
   const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? flat(v, p + k + '.') : [[p + k, v]]));
   const en = new Map(flat(parts.en));
   for (const code of ['fr', 'es', 'nl']) {

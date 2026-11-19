@@ -78,7 +78,9 @@ const IJEngine = (() => {
   const META_TOTAL_BYTES = 4 * MiB;     // session.putMeta: the whole ui record
   const META_ANNOT_ITEMS = 10000;       // annotations of one document
   const META_EXT_BYTES = 256 * 1024;    // one package's sessionData
-  const META_KEYS = ['results', 'rois', 'measurements', 'windows', 'layout', 'annotations', 'sync', 'luts', 'ext'];
+  const META_KEYS = ['results', 'rois', 'measurements', 'windows', 'layout', 'annotations', 'sync', 'luts', 'ext', 'workspace'];
+  // the keys of the sessions open together in one workspace (a figure's images and the ones opened from the library beside them)
+  const META_WORKSPACE_MAX = 64, META_WORKSPACE_KEY_CHARS = 1024;
   // Replay stops that a later start could cure: the stored journal is kept as it is (doc.held).
   const REPLAY_HOLD_CODES = new Set(['IJ_UNKNOWN_OP', 'IJ_VERSION_MISMATCH', 'IJ_MODULE_MISSING', 'IJ_OVER_BUDGET', 'IJ_NOTHING_TO_UNDO']);
   const ROOT = (typeof globalThis !== 'undefined') ? globalThis : self;
@@ -3011,6 +3013,10 @@ const IJEngine = (() => {
             break;
           case 'layout': case 'sync':
             if (v === null) ui[key] = null; else if (isPlain(v)) ui[key] = v; else bad(key, 'IJ_BAD_ARGS');
+            break;
+          case 'workspace':
+            if (Array.isArray(v) && v.length <= META_WORKSPACE_MAX && v.every((k) => typeof k === 'string' && k.length > 0 && k.length <= META_WORKSPACE_KEY_CHARS)) ui[key] = v.slice();
+            else bad(key, 'IJ_BAD_ARGS');
             break;
           case 'annotations': {
             if (!isPlain(v)) { bad(key, 'IJ_BAD_ARGS'); break; }

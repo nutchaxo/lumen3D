@@ -1296,7 +1296,8 @@ const IJApp = (() => {
     for (const key of keys) {
       const annotations = {};
       for (const id of S.order) if (S.sessionKeys.get(id) === key && S.annot.has(id) && S.annot.get(id).items.length) annotations[id] = { visible: S.annot.get(id).visible, items: S.annot.get(id).items };
-      const msg = { key, layout, annotations, sync: syncState(), luts, ext: S.extData };
+      // `workspace`: every session open here, so resuming any one of them brings the others back with it (restoreSession)
+      const msg = { key, layout, annotations, sync: syncState(), luts, ext: S.extData, workspace: keys };
       if (key === primary) {
         msg.results = S.results;
         msg.rois = S.roiList.map((r) => { const o = { name: r.name, docId: r.docId, roi: r.roi }; for (const k of ['stroke', 'width', 'fill']) if (r[k] !== undefined) o[k] = r[k]; return o; });
@@ -2047,31 +2048,59 @@ const IJApp = (() => {
     let count = 0;
     let warned = [];
     await busy(tr('op.restore'), async () => {
-      let res;
-      try { res = await call('session.restore', { key }); }
-      catch (err) { if (err && err.code === 'IJ_NO_SESSION') return; throw err; }
-      // the tables an extension registered must exist before a view names one
-      if (res.meta) await restoreLuts(res.meta);
-      let last = null;
       const wasEmpty = !winOrder().length;
       const restored = [];
-      for (const id of res.docIds || []) {
-        const info = await call('doc.info', { docId: id });
-        registerDoc(info, { clean: false, sessionKey: key });
-        restored.push(id);
-        if (!info.hidden) last = id;
-        count++;
+      const parts = [];          // [{ key, meta, ids }] in restore order
+      let last = null;
+      /** One stored session: its documents registered under its own key (each session keeps its own baselines). */
+      const restoreOne = async (k) => {
+        let res;
+        try { res = await call('session.restore', { key: k }); }
+        catch (err) { if (err && err.code === 'IJ_NO_SESSION') return false; throw err; }
+        // the tables an extension registered must exist before a view names one
+        if (res.meta) await restoreLuts(res.meta);
+        const ids = [];
+        for (const id of res.docIds || []) {
+          if (S.docs.has(id)) continue;
+          const info = await call('doc.info', { docId: id });
+          registerDoc(info, { clean: false, sessionKey: k });
+          ids.push(id); restored.push(id);
+          if (!info.hidden) last = id;
+          count++;
+        }
+        if (ids.length) holdSessionLock(k);
+        parts.push({ key: k, meta: res.meta || null, ids });
+        warned = warned.concat(res.warnings || []);
+        return true;
+      };
+      if (!(await restoreOne(key))) return;
+      // The images opened from the library beside it come back with it: each lives in a session of its own (lib|… keys, so File ›
+      // Recover still lists it alone), and every session of a workspace lists the others (persistMeta's `workspace`). Only library
+      // sessions follow: another figure session (the other source of the same figure, a recovered figure) stays the operator's choice
+      // in the resume question. Only the ones still stored, not open here and not held by another tab.
+      const first = parts[0].meta;
+      const linked = first && Array.isArray(first.workspace) ? first.workspace.filter((k) => typeof k === 'string' && k !== key && k.startsWith('lib|')) : [];
+      if (linked.length) {
+        let stored = [];
+        try { stored = ((await call('session.list', {})).sessions || []).map((s) => s.key); } catch (err) { console.error('[advanced-studio] session.list', err); }
+        const open = new Set(S.sessionKeys.values());
+        const elsewhere = await sessionsHeldElsewhere();
+        for (const k of linked) {
+          if (!stored.includes(k) || open.has(k) || elsewhere.has(k)) continue;
+          try { await restoreOne(k); } catch (err) { console.error('[advanced-studio] restore linked session', err); }
+        }
       }
-      if (count) holdSessionLock(key);
-      // every restored image gets a view; the stored layout is applied only on an empty workspace, otherwise they join as tabs
+      // every restored image gets a view, then ONE layout over all of them (only on an empty workspace, otherwise they join as
+      // tabs). Results, the ROI list and the open windows were written into the session of the image that was active, so they
+      // come from whichever session carries them; the layout and sync state are the same in every session of the workspace.
       for (const id of restored) refreshView(id);
-      if (res.meta) restoreMeta(res.meta, { ids: restored, applyLayout: wasEmpty });
+      const withLayout = parts.find((p) => p.meta && p.meta.layout) || null;
+      for (const p of parts) if (p.meta) restoreMeta(p.meta, { ids: restored, applyLayout: wasEmpty && p === withLayout });
       if (last !== null) {
         const act = S.shell && S.shell.layout.active() !== null && restored.includes(S.shell.layout.active()) ? S.shell.layout.active() : last;
         await showDoc(act);
         for (const id of restored) { const rv = viewOf(id); if (rv) rv.fit(); }
       }
-      warned = res.warnings || [];
     });
     if (warned.length) {
       const stopped = warned.filter((w) => w.code === 'IJ_REPLAY_STOPPED' && !w.held).length;

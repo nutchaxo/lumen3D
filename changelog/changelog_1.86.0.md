@@ -24,6 +24,7 @@
 - **About box**: says what Window › Results is for, where an image's pixels come from (original TIFF or processed volume), and lists every place where the Advanced view still differs from Fiji.
 
 ## [CHANGED]
+- **Library images come back with the workspace**: after a reload, resuming a figure's saved work also brings back the images opened from the library beside it, in their panels. Each one keeps a saved session of its own, so File › Recover can still list it alone. Every session of a workspace records the others (`workspace` in the session meta), and resuming one restores the library sessions it lists. The other source of the same figure (original TIFF or processed volume) is still offered as a separate choice.
 - **Edit › Options › Conversions takes effect**: "Scale when converting" now reaches Image › Type, and "Full range 16-bit inversions" reaches Edit › Invert. A 32-bit Invert now follows ImageJ's float order, about the display range.
 - **Menus follow ImageJ**:
   - Window rows show the image's memory size ("blobs.gif 63K").

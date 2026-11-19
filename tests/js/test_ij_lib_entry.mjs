@@ -247,6 +247,39 @@ await test('resume with one source only keeps the wave-2 question and button', a
   t2.close();
 });
 
+await test('resume brings the images opened from the library back into the workspace with the figure (their own sessions, one layout)', async () => {
+  const { t } = await start({ noLibrary: true });
+  await t.open({ method: 'max', start: 1, stop: D, level: 0 });
+  const figureId = t.activeId();
+  // an image opened from the library beside it: a session of its own (lib|… key), as ij-cmds-lib.js adopts it
+  const libKey = 'lib|3d/OTHER|tree9||z:0-3|0|max|processed|abc';
+  const px = new Uint8Array(16 * 12).map((_, i) => i % 251);
+  const libId = await t.api('lib').addDoc({ name: 'MAX_OTHER z 0-3', width: 16, height: 12, bitDepth: 8, channels: [{ data: px, name: 'C1', color: '#ffffff' }] },
+    { placement: 'tab', sessionKey: libKey, provenance: { source: 'library', input: 'processed', datasetId: '3d/OTHER', sessionKey: libKey } });
+  const docs0 = await t.docs();
+  assert.equal(docs0.length, 2);
+  // every session of the workspace lists the others in its stored meta
+  await until(async () => {
+    await t.flush();
+    const rows = await t.store.shared.list();
+    const metas = await Promise.all(rows.map(async (r) => ({ key: r.key, meta: (await t.store.shared.load(r.key)).meta })));
+    const fig = metas.find((m) => !m.key.startsWith('lib|'));
+    return fig && fig.meta && fig.meta.ui && Array.isArray(fig.meta.ui.workspace) && fig.meta.ui.workspace.includes(libKey);
+  }, 'the figure session lists the library session', 8000);
+  const t2 = await t.reload({ noLibrary: true });
+  t2.script.nextAsk = 'resume';
+  mountApp(t2);
+  await until(() => t2.script.asks.some((a) => a.title === 'Resume your work?'), 'the resume question');
+  await until(async () => (await t2.docs()).length === 2, 'both images back', 8000);
+  const back = await t2.docs();
+  deepEq(back.map((d) => d.docId).sort(), [figureId, libId].sort(), 'the figure and the library image');
+  assert.equal(back.find((d) => d.docId === libId).name, 'MAX_OTHER z 0-3');
+  deepEq(Array.from(await t2.pixels(libId, 0)), Array.from(px), 'the library image keeps its pixels');
+  // still its own session (File › Recover can list it alone)
+  assert.equal(back.find((d) => d.docId === libId).provenance.sessionKey, libKey);
+  t2.close();
+});
+
 await test('the figure the view cannot read offers File › Open from Library… (and the Simple view)', async () => {
   const { t } = await start();
   t.vol.source.describe = () => ({ available: false, reasonKey: 'studioAdvanced.notSupported' });

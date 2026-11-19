@@ -7,6 +7,7 @@
 // Run: node tests/js/test_ij_view_pure.mjs
 import assert from 'node:assert/strict';
 import { loadModule } from './harness.mjs';
+import { loadViewModules } from './ij_harness.mjs';
 
 const FILE = 'js/modules/studio/advanced-studio/ij-view.js';
 const P = loadModule(FILE, 'IJViewPure');
@@ -396,8 +397,16 @@ function makeGl() {
 // ── IJDisplay against a fake DOM / WebGL2 ─────────────────────────────────────────────────────
 {
   const MiB = 1024 * 1024;
-  const sandbox = {};
-  const D = loadModule(FILE, 'IJDisplay', sandbox);
+  // The renderer is shared and the view per document: this adapter gives the pair the surface the old display had.
+  const MODS = loadViewModules({});
+  const D = {
+    create(host, o = {}) {
+      const r = MODS.IJRenderer.create({ document: host.ownerDocument, onTileError: o.onTileError, SVRManager: o.SVRManager, getLut: o.getLut });
+      const v = MODS.IJView.create(r, host, { docId: 1, onViewChange: o.onViewChange });
+      const baseDestroy = v.destroy, baseStats = v.getStats;
+      return Object.assign(v, { glCanvas: r.canvas, renderer: r, getStats: () => Object.assign({}, r.getStats(), baseStats()), destroy() { baseDestroy(); r.destroy(); } });
+    }
+  };
 
   function makeEl(tag, doc) {
     const el = {
@@ -528,7 +537,7 @@ function makeGl() {
     const ac = { aborted: true };
     await assert.rejects(disp.renderToCanvas({ scale: 0.25, signal: ac }), (e) => e.code === 'IJ_CANCELLED');
     // context loss: tiles re-requested after the restore
-    const canvas = host.children[0];
+    const canvas = disp.glCanvas;
     const nBefore = prov.calls.length;
     canvas.fire('webglcontextlost');
     live.clear();                                                          // the browser freed everything with the context
@@ -701,7 +710,7 @@ function makeGl() {
   doc.body = new FEl('body', doc);
   class FEvent { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } }
 
-  const Sh = loadModule(FILE, 'IJShell', { Event: FEvent });
+  const Sh = loadViewModules({ Event: FEvent }).IJShell;
   const flush2 = async (n = 6) => {
     for (let i = 0; i < n; i++) { const q = rafQueue.splice(0); for (const fn of q) fn(); await new Promise((r) => setTimeout(r, 0)); }
   };
@@ -734,8 +743,10 @@ function makeGl() {
     display: {}
   });
   shell.el.clientWidth = 1000; shell.el.clientHeight = 700;
-  shell.stage.clientWidth = 800; shell.stage.clientHeight = 600;
-  shell.display.resize();
+  shell.layout.add(1, {});                                             // the pane + view of the image (the layout is the owner)
+  const stageEl = () => shell.view(1).element;
+  stageEl().clientWidth = 800; stageEl().clientHeight = 600;
+  shell.view(1).resize();
 
   // menu bar: ImageJ order and hover / keyboard behaviour
   const titles = byClass(shell.menubar, 'ij-menu-title');
@@ -787,11 +798,11 @@ function makeGl() {
   // image + title bar
   const channels = [0, 1, 2].map((i) => ({ name: 'c' + i, color: '#fff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }));
   shell.setImage({ docId: 1, name: 'embryo.tif', width: 100, height: 100, bitDepth: 8, channels, calibration: { pixelWidth: 0.5, pixelHeight: 0.5, unit: 'µm' } });
-  shell.display.setTileProvider(async (c, L, tx, ty) => { const t = P.tileTexels(L, tx, ty, 100, 100); return mkTileFake(t.w, t.h, 20); });
+  shell.view(1).setTileProvider(async (c, L, tx, ty) => { const t = P.tileTexels(L, tx, ty, 100, 100); return mkTileFake(t.w, t.h, 20); });
   function mkTileFake(w, h, v) { const data = new Uint8Array(w * h); data.fill(v); return { width: w, height: h, bitDepth: 8, data }; }
   await flush2(4);
-  assert.equal(byClass(shell.el, 'ij-title-name')[0].textContent, 'embryo.tif');
-  assert.equal(byClass(shell.el, 'ij-title-zoom')[0].textContent, ' (100%)');
+  assert.equal(byClass(shell.el, 'ij-tab-name')[0].textContent, 'embryo.tif');
+  assert.equal(byClass(shell.el, 'ij-tab-zoom')[0].textContent, ' 100%');
   assert.equal(byClass(shell.el, 'ij-subtitle')[0].textContent, '50×50 µm (100×100); 8-bit; 29.3K'.replace('29.3K', '29K'));
   const chBar = byClass(shell.el, 'ij-channel-bar')[0];
   assert.equal(chBar.hidden, false);
@@ -801,7 +812,7 @@ function makeGl() {
   assert.equal(byClass(shell.el, 'ij-channel-label')[0].textContent, 'c: 3/3');
 
   // ROI drawing / resizing / moving with the rectangle tool; image (100x100) is centred at (350, 250)
-  const st = shell.stage;
+  const st = stageEl();
   st.fire('pointerdown', stagePtr(360, 260));
   st.fire('pointermove', stagePtr(400, 300));
   let last = rois[rois.length - 1];
@@ -867,20 +878,20 @@ function makeGl() {
   assert.equal(shell.getTool(), 'oval'); deq(tools, ['oval']);
 
   // wheel zoom at the cursor (one notch = one ladder step), hand tool pans
-  const v0 = shell.display.getView().zoom;
+  const v0 = shell.view(1).getView().zoom;
   st.fire('wheel', { deltaY: -100, deltaMode: 0, clientX: 400, clientY: 300 });
-  assert.equal(shell.display.getView().zoom, P.nextZoom(v0, 1));
+  assert.equal(shell.view(1).getView().zoom, P.nextZoom(v0, 1));
   shell.setTool('hand');
-  shell.display.setZoom(16);                                          // 1600 px: larger than the viewport, so it can pan
-  const o0 = shell.display.getView();
+  shell.view(1).setZoom(16);                                          // 1600 px: larger than the viewport, so it can pan
+  const o0 = shell.view(1).getView();
   st.fire('pointerdown', stagePtr(100, 100));
   st.fire('pointermove', stagePtr(130, 110));
   st.fire('pointerup', stagePtr(130, 110));
-  const o1 = shell.display.getView();
+  const o1 = shell.view(1).getView();
   assert.ok(o1.ox !== o0.ox && o1.oy !== o0.oy, 'pan moved the view');
 
   // pixel read-out (coalesced) + status / progress / warning
-  shell.display.fit();
+  shell.view(1).fit();
   shell.setTool('rect');
   st.fire('pointermove', stagePtr(360, 260));
   await sleep(5);
@@ -1119,8 +1130,81 @@ function makeGl() {
     // closing a focused window gives the focus back to the image stage
     w2.el.focus();
     w2.close();
-    assert.equal(doc.activeElement, shell.stage, 'focus returns to the stage');
+    assert.equal(doc.activeElement, stageEl(), 'focus returns to the stage');
     shell.el.clientWidth = 1000; shell.el.clientHeight = 700;
+  }
+
+  // ── the workspace: tabs, a pane per image, splits with dividers, floating windows, the dock tray (IJLayout on the fake DOM) ──
+  {
+    const img2 = (id) => ({ docId: id, name: 'img' + id, width: 100, height: 100, bitDepth: 8, channels: [{ name: 'c', color: '#fff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }], calibration: null });
+    const lay = shell.layout;
+    const tabs = () => byClass(shell.el, 'ij-tab').filter((t) => !/ghost/.test(t.className));
+    const closed = [];
+    shell.setImage(img2(2));                                             // a tab beside image 1, active
+    assert.deepEqual(JSON.parse(JSON.stringify(lay.order())), [1, 2]);
+    assert.equal(tabs().length, 2, 'two tabs in one strip');
+    assert.equal(byClass(shell.el, 'ij-tab-name').map((n) => n.textContent).join(','), 'embryo.tif,img2');
+    assert.equal(lay.view(2).element.parentNode !== null, true, 'the active pane is in the DOM');
+    lay.add(3, { placement: 'splitRight', anchor: 2 });
+    shell.setImage(img2(3));
+    assert.equal(byClass(shell.el, 'ij-split').length, 1, 'a row split');
+    assert.equal(byClass(shell.el, 'ij-divider').length, 1, 'one divider');
+    assert.equal(byClass(shell.el, 'ij-group').length, 2);
+    lay.float(3);
+    assert.equal(byClass(shell.el, 'ij-view-window').length, 1, 'a floating image window');
+    assert.ok(byClass(shell.el, 'ij-resize-grip').length >= 1, 'with a corner grip');
+    lay.minimize(3);
+    assert.equal(byClass(shell.el, 'ij-dock-chip').length, 1, 'a chip in the dock tray');
+    assert.equal(byClass(shell.el, 'ij-dock')[0].hidden, false);
+    lay.restore(3);
+    assert.equal(byClass(shell.el, 'ij-dock-chip').length, 0);
+    assert.equal(byClass(shell.el, 'ij-dock')[0].hidden, true, 'the tray hides when empty');
+    lay.tile();
+    assert.equal(byClass(shell.el, 'ij-group').length, 3, 'Tile: one pane per image');
+    lay.cascade();
+    assert.equal(byClass(shell.el, 'ij-view-window').length, 3, 'Cascade: every image in a window');
+    assert.equal(byClass(shell.el, 'ij-group').length, 0);
+    const z = byClass(shell.el, 'ij-view-window').map((w) => Number(w.style.zIndex));
+    assert.ok(z.every((v) => v >= 10 && v <= 29), 'image windows stay in their z band: ' + z);
+    const wids = byClass(shell.el, 'ij-view-window').map((w) => w.dataset.windowId);
+    assert.equal(new Set(wids).size, wids.length, 'one window id per image: ' + wids);
+    assert.ok(wids.every((w) => /^view-/.test(w)), 'view-<docId> ids');
+    lay.tile();
+    // a close click goes to the controller (the unsaved prompt lives there)
+    shell.layout.onClose((d) => closed.push(d));
+    byClass(shell.el, 'ij-tab-close')[0].fire('click');
+    assert.equal(closed.length, 1, 'the x button asks for the close');
+    // serialisation and restore keep the arrangement
+    const saved = JSON.parse(JSON.stringify(lay.serialize()));
+    assert.equal(lay.order().length, 2, 'the tab button closed its image (no controller callback: the layout removes it)');
+    lay.restoreFrom(saved, [1, 2, 3]);                                   // the closed image comes back as a tab of the first pane
+    assert.equal(lay.order().length, 3);
+    assert.equal(byClass(shell.el, 'ij-group').length, 2);
+    lay.remove(3); lay.remove(2);
+    assert.deepEqual(JSON.parse(JSON.stringify(lay.order())), [1]);
+    assert.equal(byClass(shell.el, 'ij-divider').length, 0, 'a lone pane has no divider');
+    // an unusable layout (garbage) falls back to every image as a tab
+    lay.restoreFrom({ root: 'x' }, [1]);
+    assert.equal(lay.order().length, 1);
+  }
+
+  // ── an activation keeps the DOM (a pointer capture / focus taken by the stage in the same gesture survives) ──
+  {
+    const img2 = (id) => ({ docId: id, name: 'img' + id, width: 100, height: 100, bitDepth: 8, channels: [{ name: 'c', color: '#fff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }], calibration: null });
+    const lay = shell.layout;
+    lay.add(4, { placement: 'tab' }); shell.setImage(img2(4));
+    lay.add(5, { placement: 'splitRight', anchor: 4 }); shell.setImage(img2(5));
+    assert.equal(lay.active(), 5);
+    const el4 = lay.view(4).element, body4 = el4.parentNode, el5 = lay.view(5).element;
+    assert.ok(body4, 'the pane of 4 is in the DOM');
+    let group4 = body4; while (group4 && !/(^| )ij-group( |$)/.test(group4.className || '')) group4 = group4.parentNode;
+    assert.ok(group4, 'the group of the pane');
+    group4.fire('pointerdown');
+    assert.equal(lay.active(), 4, 'a press in an inactive pane activates it');
+    assert.equal(el4.parentNode, body4, 'the pane node stays where it was: no re-parenting during the gesture');
+    assert.ok(el5.parentNode, 'the other pane is untouched too');
+    assert.equal(lay.view(4).isActive, true); assert.equal(lay.view(5).isActive, false);
+    lay.remove(5); lay.remove(4);
   }
 
   // ── destroy: nothing left behind ──

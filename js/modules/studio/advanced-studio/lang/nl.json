@@ -21,7 +21,18 @@
     "Tools": "Hulpmiddelen",
     "Window": "Venster",
     "Help": "Help",
-    "Noise": "Ruis"
+    "Noise": "Ruis",
+    "New": "Nieuw",
+    "Import": "Importeren",
+    "Options": "Opties",
+    "Overlay": "Overlay",
+    "FFT": "FFT",
+    "Colocalization": "Colocalisatie",
+    "LocalThickness": "Lokale dikte",
+    "Skeleton": "Skelet",
+    "Plugins": "Plugins",
+    "CellCounter": "Celteller",
+    "Utilities": "Hulpprogramma's"
   },
   "cmd": {
     "fileOpen": "Openen…",
@@ -160,7 +171,12 @@
     "binDistanceMap": "Afstandskaart…",
     "binUltimatePoints": "Ultieme punten…",
     "binWatershed": "Watershed (waterscheiding)",
-    "binVoronoi": "Voronoi…"
+    "binVoronoi": "Voronoi…",
+    "windowShowAll": "Alles tonen",
+    "windowPutBehind": "Naar achteren [tab]",
+    "windowCascade": "Trapsgewijs",
+    "windowTile": "Tegelen",
+    "toolsSyncWindows": "Vensters synchroniseren"
   },
   "tool": {
     "rect": "Rechthoek",
@@ -461,7 +477,8 @@
     "findMaxima": "Maxima zoeken",
     "findMaximaImage": "Maxima zoeken",
     "segOutline": "Contour berekenen",
-    "fltDataRange": "Waardenbereik lezen"
+    "fltDataRange": "Waardenbereik lezen",
+    "working": "Bezig"
   },
   "win": {
     "results": "Resultaten"
@@ -517,7 +534,8 @@
   "status": {
     "cancelled": "Geannuleerd.",
     "copied": "Gekopieerd.",
-    "saved": "{name} opgeslagen."
+    "saved": "{name} opgeslagen.",
+    "gridMemory": "Het geheugen raakt vol: sluit het bronbeeld om het vrij te maken."
   },
   "resume": {
     "title": "Uw werk hervatten?",
@@ -616,7 +634,9 @@
     "held": "Sommige afbeeldingen zijn maar gedeeltelijk hersteld: uw wijzigingen eraan worden niet opgeslagen.",
     "lowStorage": "Er is weinig opslag over in deze browser: sla een TIFF op.",
     "budget": "Het geheugen is bijna vol ({pct} %): sluit een afbeelding of maak ongedaanmaken vrij.",
-    "packageFailed": "Sommige hulpmiddelen ({pkg}) konden niet worden geladen en zijn niet beschikbaar."
+    "packageFailed": "Sommige hulpmiddelen ({pkg}) konden niet worden geladen en zijn niet beschikbaar.",
+    "annotationsCleared": "De overlay van dit beeld is verwijderd omdat de grootte veranderde.",
+    "metaTooLarge": "Een deel van de werkruimtestatus (annotaties of gegevens van hulpmiddelen) is te groot om na herladen bewaard te blijven."
   },
   "bc": {
     "min": "Minimum",
@@ -744,7 +764,13 @@
       "integer": "Voer een geheel getal in",
       "choice": "Kies een van de opties"
     },
-    "unavailable": "Niet beschikbaar: dit hulpmiddel kon niet worden geladen"
+    "unavailable": "Niet beschikbaar: dit hulpmiddel kon niet worden geladen",
+    "dock": "Geminimaliseerde afbeeldingen",
+    "tabMinimize": "Minimaliseren",
+    "tabDock": "Vastzetten",
+    "tabPopOut": "Losmaken",
+    "tabClose": "Sluiten",
+    "dockRestore": "Herstellen"
   },
   "help": {
     "space": "Ingedrukt houden om te verschuiven",
@@ -772,5 +798,12 @@
   },
   "table": {
     "title": "Tabel"
+  },
+  "sync": {
+    "cursor": "Cursor synchroniseren",
+    "imageCoords": "Beeldcoördinaten",
+    "scaling": "Beeldschaal",
+    "all": "Alles synchroniseren",
+    "none": "Alles ontsynchroniseren"
   }
 }

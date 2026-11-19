@@ -68,11 +68,12 @@ const pj = readJson('plugin.json');
 assert.equal(pj.id, 'advanced-studio');
 assert.equal(pj.placement, 'studio');
 assert.deepEqual(pj.i18nLanguages, LANGS);
-assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-proc-bg.js', 'ij-proc-filters.js', 'ij-proc-seg.js', 'ij-proc-multi.js',
-  'ij-proc-geom.js', 'ij-proc-roi.js', 'ij-proc-coloc.js', 'ij-view.js', 'ij-app.js', 'ij-cmds-bg.js', 'ij-cmds-filters.js', 'ij-cmds-seg.js', 'ij-cmds-multi.js',
-  'ij-cmds-geom.js', 'ij-cmds-roi.js', 'ij-cmds-coloc.js'], 'plugin.json#scripts: the final order');
+// PLAN-wave3 §2.8: the final order — the 17 packages (7 of wave 2, 9 tool packages, the library), the view, the layout, the controller, the commands
+const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'];
+assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => `ij-proc-${k}.js`), 'ij-view.js', 'ij-layout.js', 'ij-app.js',
+  ...PKGS.map((k) => `ij-cmds-${k}.js`)], 'plugin.json#scripts: the final order');
 for (const f of pj.scripts) assert.ok(existsSync(path.join(DIR, f)), `${f} exists`);
-same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc'].map((k) => `ij-proc-${k}.js`)],
+same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...PKGS.map((k) => `ij-proc-${k}.js`)],
   'the worker loads the mandatory scripts, then every package file');
 assert.deepEqual(pj.styles, ['ij-style.css']);
 assert.deepEqual(pj.contexts, ['page']);
@@ -92,6 +93,8 @@ for (const k of enKeys) {
 }
 
 // ── registry shape ──
+const VP = loadModule('js/modules/studio/advanced-studio/ij-view.js', 'IJViewPure', {});
+const VP_TOP = Array.from(VP.TOP_ORDER);
 const COMMANDS = IJApp.COMMANDS;
 assert.ok(COMMANDS.length >= 80, 'the registry holds every PLAN §2.1/§2.2 entry');
 const V1 = COMMANDS.filter((c) => !c.ext);
@@ -135,7 +138,8 @@ for (const c of COMMANDS) {
 // Top-level menus appear in ImageJ's order.
 const tops = [];
 for (const c of COMMANDS) if (!tops.includes(c.menu[0])) tops.push(c.menu[0]);
-assert.deepEqual(tops, ['File', 'Edit', 'Image', 'Process', 'Analyze', 'Window', 'Help']);
+assert.deepEqual(tops.filter((n) => n !== 'Plugins'), ['File', 'Edit', 'Image', 'Process', 'Analyze', 'Window', 'Help']);
+assert.ok(VP_TOP.indexOf('Plugins') > VP_TOP.indexOf('Analyze') && VP_TOP.indexOf('Plugins') < VP_TOP.indexOf('Window'), 'Plugins sits between Analyze and Window');
 
 // Every entry of PLAN §2.1 / §2.2 is there.
 const mustHave = ['fileOpen', 'fileSaveTiff', 'fileSavePng', 'fileSaveResults', 'fileRevert', 'fileRecover', 'fileClose', 'fileSimple', 'fileCloseStudio',
@@ -156,7 +160,6 @@ assert.equal(IJApp.LUT_NAMES.length, 12);
 // The shell (ij-view.js) owns the keyboard: it indexes each command's `shortcut` through
 // IJViewPure.normalizeShortcut and matches events with IJViewPure.shortcutFromEvent. The test
 // uses those two functions, so what it checks is what the shell will do.
-const VP = loadModule('js/modules/studio/advanced-studio/ij-view.js', 'IJViewPure', {});
 assert.equal(typeof VP.normalizeShortcut, 'function');
 const RESERVED = new Set(['Ctrl+W', 'Ctrl+T', 'Ctrl+N', 'Ctrl+H', 'Ctrl+Q', 'Ctrl+R', 'Ctrl+L', 'Ctrl+P', 'Ctrl+D', 'Ctrl+F', 'Ctrl+Shift+C', 'Ctrl+Shift+I',
   'Ctrl+Shift+D', 'Ctrl+Shift+A', 'Ctrl+Shift+N', 'Ctrl+Shift+T', 'Ctrl+Shift+W', 'Ctrl+Tab', 'F5', 'F11', 'F12', 'Alt+F4', 'Escape'].map((k) => VP.normalizeShortcut(k)));
@@ -177,7 +180,7 @@ for (const c of COMMANDS) {
 for (const [spec, id] of [['m', 'analyzeMeasure'], ['t', 'editAddToManager'], ['h', 'analyzeHistogram'], ['k', 'analyzePlotProfile'], ['Shift+C', 'adjustBC'],
   ['Shift+T', 'adjustThreshold'], ['Shift+I', 'editInvert'], ['Shift+X', 'imageCrop'], ['Shift+D', 'imageDuplicate'], ['Shift+A', 'editSelectNone'],
   ['Shift+E', 'editRestoreSelection'], ['+', 'zoomIn'], ['-', 'zoomOut'], ['Ctrl+Z', 'editUndo'], ['Ctrl+Shift+Z', 'editRedo'], ['Ctrl+Y', 'editRedo'],
-  ['Ctrl+S', 'fileSaveTiff'], ['Ctrl+A', 'editSelectAll']]) {
+  ['Ctrl+S', 'fileSaveTiff'], ['Ctrl+A', 'editSelectAll'], [']', 'windowShowAll']]) {
   assert.equal(seen.get(VP.normalizeShortcut(spec)), id, `PLAN §2.3: ${spec} → ${id}`);
 }
 
@@ -215,7 +218,9 @@ for (const c of V1) {
 }
 // A package command talks to the documented extension API, nothing else.
 const EXT_MEMBERS = new Set(IJApp.EXT_API_MEMBERS);
-for (const m of ['tr', 'state', 'dialog', 'run', 'compute', 'estimate', 'preview', 'cancelPreview', 'overlay', 'clearOverlay', 'setRoi', 'addResults', 'openTable', 'openPlot', 'openTool', 'setDisplay', 'toast', 'error', 'rename']) {
+for (const m of ['tr', 'state', 'dialog', 'run', 'compute', 'estimate', 'preview', 'cancelPreview', 'overlay', 'clearOverlay', 'setRoi', 'addResults', 'openTable', 'openPlot', 'openTool', 'setDisplay', 'toast', 'error', 'rename',
+  'openPanel', 'closePanel', 'on', 'annotations', 'settings', 'sessionData', 'commands', 'runCommand', 'lastCommand', 'call', 'adopt', 'putBlob', 'setPending', 'clearPending', 'addDoc', 'closeDoc', 'view', 'setTool',
+  'setThreshold', 'colorValue', 'registerLut', 'pickFile', 'saveFile', 'copyText', 'renderPng', 'profile', 'roiManager']) {
   assert.ok(EXT_MEMBERS.has(m), `the extension API has ${m}`);
 }
 // Runs a package command against a recording api. A member that is not documented throws an AssertionError
@@ -223,8 +228,11 @@ for (const m of ['tr', 'state', 'dialog', 'run', 'compute', 'estimate', 'preview
 async function runRecorded(c) {
   const called = [];
   const state = { doc: null, docs: [], roi: null, busy: false, activeChannel: 0, threshold: null, measurements: [], lineWidth: 1, roiList: [], resultsCount: 0 };
+  const nested = (member) => new Proxy({}, { get: (_, sub) => (...args) => { called.push(String(member) + '.' + String(sub)); return Promise.resolve(null); } });
   const api = new Proxy({}, { get: (_, name) => {
     assert.ok(EXT_MEMBERS.has(String(name)), `${c.id}: api.${String(name)} is not a documented member of the extension API`);
+    // members that hold a set of functions (api.annotations.add(...), api.settings.get(...)) answer with a recording object of their own
+    if (['annotations', 'settings', 'sessionData', 'roiManager'].includes(String(name))) return nested(name);
     return (...args) => {
       called.push(String(name));
       if (name === 'state') return state;
@@ -315,7 +323,8 @@ assert.equal(en('fileRevert', withDoc(null, { dirty: true })), true);
 // a running operation disables every document command (Cancel is the only way out)
 const busy = withDoc(rect, { busy: true, canUndo: true, canRedo: true, dirty: true, hasResults: true, nDocs: 3 });
 for (const c of V1) {
-  if (['fileSimple', 'fileCloseStudio', 'analyzeSetMeasurements', 'toolsRoiManager', 'windowResults', 'windowRoiManager', 'helpAbout', 'helpShortcuts', 'windowNext', 'windowPrevious', 'analyzeClearResults'].includes(c.id)) continue;
+  if (['fileSimple', 'fileCloseStudio', 'analyzeSetMeasurements', 'toolsRoiManager', 'windowResults', 'windowRoiManager', 'helpAbout', 'helpShortcuts', 'windowNext', 'windowPrevious', 'analyzeClearResults',
+    'windowShowAll', 'windowPutBehind', 'windowCascade', 'windowTile', 'toolsSyncWindows'].includes(c.id)) continue;
   assert.equal(c.enabled(busy), false, `${c.id} is disabled while an operation runs`);
 }
 
@@ -325,8 +334,10 @@ for (const m of SRC.matchAll(/\btr\('([a-zA-Z0-9_.]+)'(?!\s*\+)/g)) used.add(m[1
 for (const m of SRC.matchAll(/labelKey: '([a-zA-Z0-9_.]+)'/g)) used.add(m[1]);
 // The package files: tr('…') / api.tr('…'), labelKey / stepKey, tick(…, 'op.x'), 'op.' + name. Their keys live in the
 // namespaces cmd. op. menu. meas. tool. res. err. dlg.<prefix>. — or are keys the base dictionaries already hold.
-const PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc' };
-const NAMESPACES = ['cmd.', 'op.', 'menu.', 'meas.', 'tool.', 'res.', 'err.'];
+const PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc', thr: 'thr', enh: 'enh', fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana',
+  edit: 'edit', fiji: 'fiji', lib: 'lib' };
+// PLAN-wave3 §1.3: the packages may also use the keys of warnings, the About box and the shell's menu names
+const NAMESPACES = ['cmd.', 'op.', 'menu.', 'meas.', 'tool.', 'res.', 'err.', 'warn.', 'about.', 'view.menu.'];
 for (const f of [...CMD_FILES, ...PROC_FILES]) {
   const pkg = /^ij-(?:cmds|proc)-([a-z0-9]+)\.js$/.exec(f)[1];
   const text = readFileSync(path.join(DIR, f), 'utf8');
@@ -337,7 +348,7 @@ for (const f of [...CMD_FILES, ...PROC_FILES]) {
   // Every other string literal that LOOKS like a key of the namespaces: the messages a dialog's validate() returns,
   // unitsKey, option labels... (comments are dropped first).
   const code = text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '')).join('\n');
-  for (const m of code.matchAll(/'((?:cmd|op|menu|meas|tool|res|err|dlg\.[a-z]+)\.[A-Za-z0-9_.]*[A-Za-z0-9_])'/g)) keys.add(m[1]);
+  for (const m of code.matchAll(/'((?:cmd|op|menu|meas|tool|res|err|warn|about|view\.menu|dlg\.[a-z]+)\.[A-Za-z0-9_.]*[A-Za-z0-9_])'/g)) keys.add(m[1]);
   for (const k of keys) {
     const ok = NAMESPACES.some((n) => k.startsWith(n)) || k.startsWith('dlg.' + PREFIX[pkg] + '.') || resolve(baseLang.en, k) !== undefined;
     assert.ok(ok, `${f}: key ${k} is outside the namespaces a package may use`);
@@ -438,18 +449,32 @@ const returnedNames = (anchor) => {
   for (const m of (VIEW.slice(i, j) + " ,").matchAll(/(?:^|[\s,{])(\w+)(?=\s*[:,(\n}])/g)) names.add(m[1]);
   return names;
 };
-const shellApi = returnedNames('return {\n      el: shell, stage');
-const displayApi = returnedNames('return {\n      element: host, glCanvas');
+const shellApi = returnedNames('return {\n      el: shell, workspace: wsHost');
 const windowsApi = returnedNames('return {\n      dialog, floating, confirm');
-for (const [re, set, label] of [[/S\.shell\.windows\.(\w+)/g, windowsApi, 'shell.windows'], [/S\.display\.(\w+)/g, displayApi, 'shell.display'], [/S\.shell\.(\w+)/g, shellApi, 'shell']]) {
+// IJView (ij-layout.js): the members of the object it returns, plus the ones of IJLayout the controller reaches through shell.layout
+const LAYOUT = readFileSync(path.join(DIR, 'ij-layout.js'), 'utf8').split('\r\n').join('\n');
+const namesOf = (anchor, endMark) => {
+  const i = LAYOUT.indexOf(anchor);
+  assert.ok(i >= 0, `ij-layout.js: ${anchor}`);
+  const j = LAYOUT.indexOf(endMark, i);
+  const names = new Set();
+  for (const m of (LAYOUT.slice(i, j) + ' ,').matchAll(/(?:^|[\s,{])(\w+)(?=\s*[:,(\n}])/g)) names.add(m[1]);
+  return names;
+};
+const viewApi = namesOf('Object.assign(self, {', '\n    });');
+const layoutApi = namesOf('    const api = {\n      el: ws,', '\n    };\n    return api;');
+for (const [re, set, label] of [[/S\.shell\.windows\.(\w+)/g, windowsApi, 'shell.windows'], [/S\.shell\.layout\.(\w+)/g, layoutApi, 'shell.layout'],
+  [/(?:viewOf\([^()]*\)|activeView\(\)|\brv|\buv|\biv|\bdv)\.(\w+)/g, viewApi, 'view'], [/S\.shell\.(\w+)/g, shellApi, 'shell']]) {
   for (const m of SRC.matchAll(re)) {
-    if (label === 'shell' && m[1] === 'windows') continue;
-    assert.ok(set.has(m[1]), `ij-app.js calls ${label}.${m[1]}, which ij-view.js does not provide`);
+    if (label === 'shell' && (m[1] === 'windows' || m[1] === 'layout')) continue;
+    assert.ok(set.has(m[1]), `ij-app.js calls ${label}.${m[1]}, which ij-view.js / ij-layout.js does not provide`);
   }
 }
+// no "the display" any more: every use goes through a document's view
+assert.ok(!/S\.display\b|S\.host\b|shell\.stage\b|shell\.display\b/.test(SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'ij-app.js no longer uses S.display / S.host / shell.stage');
 const createCall = /IJShell\.create\(S\.appEl, \{([\s\S]*?)\n      \}\);/.exec(SRC);
 assert.ok(createCall, 'IJShell.create call found');
-for (const m of createCall[1].matchAll(/(?:^|[\s,{])(commands|getState|t|tools|onCommand|onTool|onToolOptions|onRoi|onChannel|onCancel|readPixel|isActive|display)\s*[:,]/g)) {
+for (const m of createCall[1].matchAll(/(?:^|[\s,{])(commands|getState|t|tools|onCommand|onTool|onToolOptions|onRoi|onChannel|onCancel|readPixel|isActive|display|onActivate|onCloseImage|onLayoutChange)\s*[:,]/g)) {
   assert.ok(new RegExp('opts\\.' + m[1] + '\\b').test(VIEW), `the shell reads option ${m[1]}`);
 }
 assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW), 'the shell exposes its windows');
@@ -472,5 +497,38 @@ const CSS = readFileSync(path.join(DIR, 'ij-style.css'), 'utf8');
 for (const m of SRC.matchAll(/'(ij-btn--[a-z]+)'/g)) assert.ok(CSS.includes('.' + m[1]), `${m[1]} has a rule in ij-style.css`);
 // ── both themes define the text colours of warnings and errors ──
 assert.ok(/--ij-warn-text/.test(CSS) && /\[data-theme="light"\] \.ij-root\s*\{[^}]*--ij-warn-text[^}]*--ij-danger-text/.test(CSS), 'light theme text tokens for warning / error');
+
+// ── PLAN-wave3 §1.2 / §1.3: the menu rows and submenus of the controller (the rows other packages own are theirs) ──
+{
+  const orderOf = Object.fromEntries(COMMANDS.map((c) => [c.id, c]));
+  const want = { fileClose: ['File', 20], fileOpen: ['File', 10], fileRevert: ['File', 30], fileRecover: ['File', 40], fileSimple: ['File', 60], fileCloseStudio: ['File', 70],
+    editMakeInverse: ['Edit/Selection', 100], editAddToManager: ['Edit/Selection', 240], editSelectAll: ['Edit/Selection', 10], editSelectNone: ['Edit/Selection', 20], editRestoreSelection: ['Edit/Selection', 30],
+    stackProject: ['Image/Stacks', 20], lutInvert: ['Image/LookupTables', 10], lutApply: ['Image/LookupTables', 20], lutFire: ['Image/LookupTables', 30], lutGrays: ['Image/LookupTables', 40],
+    lutIce: ['Image/LookupTables', 50], lutSpectrum: ['Image/LookupTables', 60], lutRed: ['Image/LookupTables', 80], lutGreen: ['Image/LookupTables', 90], lutBlue: ['Image/LookupTables', 100],
+    lutCyan: ['Image/LookupTables', 110], lutMagenta: ['Image/LookupTables', 120], lutYellow: ['Image/LookupTables', 130], lut16Colors: ['Image/LookupTables', 150], lutHiLo: ['Image/LookupTables', 160],
+    toolsRoiManager: ['Analyze/Tools', 50], toolsSyncWindows: ['Analyze/Tools', 80],
+    windowShowAll: ['Window', 10], windowPutBehind: ['Window', 20], windowCascade: ['Window', 30], windowTile: ['Window', 40], windowNext: ['Window', 70], windowPrevious: ['Window', 80] };
+  for (const [id, [menu, order]] of Object.entries(want)) {
+    assert.ok(orderOf[id], id);
+    assert.equal(orderOf[id].menu.join('/'), menu, `${id} menu`);
+    assert.equal(orderOf[id].order, order, `${id} order`);
+  }
+  // ImageJ's separators: before Close, before the Simple view, before Lookup Tables' file LUTs, before Next Image; none before Color › Channels Tool, none before Edit › Selection › Add to Manager
+  for (const id of ['fileClose', 'fileSimple', 'lutFire', 'lut16Colors', 'windowNext']) assert.equal(orderOf[id].separatorBefore, true, `${id} has a separator above`);
+  for (const id of ['colorChannels', 'editAddToManager']) assert.ok(!orderOf[id].separatorBefore, `${id} has no separator above`);
+  const G = IJApp.GROUP_META;
+  const wantGroups = { 'File/New': 5, 'File/Import': 15, 'File/SaveAs': 25, 'Edit/Selection': 70, 'Edit/Options': 80, 'Image/Overlay': 125, 'Image/LookupTables': 130, 'Process/FFT': 85, 'Analyze/Tools': 110,
+    'Analyze/Colocalization': 120, 'Analyze/LocalThickness': 140, 'Analyze/Skeleton': 150, 'Plugins/Analyze': 10, 'Plugins/Analyze/CellCounter': 10, 'Plugins/Process': 20, 'Plugins/Utilities': 30 };
+  for (const [p, order] of Object.entries(wantGroups)) assert.equal(G[p] && G[p].order, order, `GROUP_META ${p}`);
+  assert.ok(!G['Image/Zoom'].separatorBefore, 'Zoom has no separator above (it follows Transform)');
+  assert.equal(G['Image/LookupTables'].separatorBefore, true);
+  assert.equal(G['Analyze/Colocalization'].separatorBefore, true);
+  // every menu segment of the new submenus has its name in the four languages
+  for (const seg of ['New', 'Import', 'Options', 'Overlay', 'FFT', 'Colocalization', 'LocalThickness', 'Skeleton', 'Plugins', 'CellCounter', 'Utilities']) {
+    for (const code of LANGS) assert.ok(typeof resolve(lang[code], `menu.${seg}`) === 'string' && resolve(lang[code], `menu.${seg}`).length > 0, `${code}: menu.${seg}`);
+  }
+}
+// ImageJ's Executer does not remember Undo and Close (Repeat Command would repeat the command before them): `repeatable`
+for (const c of COMMANDS) assert.equal(c.repeatable === false, ['editUndo', 'fileClose'].includes(c.id), `${c.id}: repeatable`);
 
 console.log(`ij commands: OK (${COMMANDS.length} commands, ${seen.size} key specs, ${enKeys.size} lang keys x ${LANGS.length})`);

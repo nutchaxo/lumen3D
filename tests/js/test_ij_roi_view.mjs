@@ -4,6 +4,7 @@
 // Run: node tests/js/test_ij_roi_view.mjs
 import assert from 'node:assert/strict';
 import { loadModule } from './harness.mjs';
+import { loadViewModules } from './ij_harness.mjs';
 
 const FILE = 'js/modules/studio/advanced-studio/ij-view.js';
 const deq = (a, b, m) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)), m);
@@ -73,7 +74,7 @@ const doc = {
 };
 doc.body = new FEl('body', doc);
 class FEvent { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } }
-const Sh = loadModule(FILE, 'IJShell', { Event: FEvent });
+const Sh = loadViewModules({ Event: FEvent }).IJShell;
 
 const root = new FEl('div', doc);
 root.clientWidth = 1000; root.clientHeight = 700;
@@ -85,12 +86,13 @@ const shell = Sh.create(root, {
   readPixel: async () => [0], display: {}
 });
 shell.el.clientWidth = 1000; shell.el.clientHeight = 700;
-shell.stage.clientWidth = 800; shell.stage.clientHeight = 600;
-shell.display.resize();
+shell.layout.add(1, {});
+shell.view(1).element.clientWidth = 800; shell.view(1).element.clientHeight = 600;
+shell.view(1).resize();
 shell.setImage({ docId: 1, name: 'e.tif', width: 100, height: 100, bitDepth: 8, channels: [{ name: 'c', color: '#fff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }], calibration: null });
-shell.display.setTileProvider(async () => ({ width: 100, height: 100, bitDepth: 8, data: new Uint8Array(10000) }));
+shell.view(1).setTileProvider(async () => ({ width: 100, height: 100, bitDepth: 8, data: new Uint8Array(10000) }));
 for (let i = 0; i < 4; i++) { for (const fn of rafQueue.splice(0)) fn(); await new Promise((r) => setTimeout(r, 0)); }
-const st = shell.stage;
+const st = shell.view(1).element;
 const ptr = (x, y, extra = {}) => ({ clientX: x, clientY: y, pointerId: 1, ...extra });
 // the image (100 × 100 at zoom 1) is centred in the 800 × 600 stage: pixel (0, 0) at (350, 250)
 const at = (px, py) => [350 + px, 250 + py];

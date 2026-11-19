@@ -1,0 +1,865 @@
+{
+ "imagej": "1.54p",
+ "case": "pairs_exact",
+ "call": "numpy.corrcoef / scipy.stats.spearmanr (average ranks) / scipy.stats.kendalltau(variant='b') / Manders sums, on the inputs of pairs.json at Fiji's own thresholds (tools/ij_fixtures/fiji/coloc_exact.py); numpy 2.5.1 scipy 1.18.1",
+ "note": "`vsFijiLog[...].reproducedBy` lists which pixel-set definitions round to the Fiji Log value at the Log's decimals; a definition missing there does not match Fiji. Spearman / Kendall are compared at +-1e-9 against `exact`.",
+ "cases": [
+  {
+   "pair": "correlated",
+   "regression": "Costes",
+   "thresholds": [
+    38,
+    50
+   ],
+   "exact": {
+    "pearsonAll": 0.943357671379812,
+    "pearsonAboveOr": 0.9396072614356066,
+    "pearsonAboveAnd": 0.9475504049388296,
+    "pearsonBelowOr": 0.036225387521560265,
+    "pearsonBelowAnd": 0.2937241098119171,
+    "spearman": 0.8677458591354411,
+    "kendallTauB": 0.7038871279796963,
+    "M1": 0.999839455862403,
+    "M2": 1.0,
+    "tM1_gt": 0.9399484653318314,
+    "tM2_gt": 0.953018916176507,
+    "tM1_ge": 0.945340072619465,
+    "tM2_ge": 0.9570804356852749,
+    "meanCh1": 91.242431640625,
+    "meanCh2": 88.783447265625
+   },
+   "vsFijiLog": {
+    "Pearson's R value (no threshold)": {
+     "fijiLog": 0.94,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAll"
+     ],
+     "exact": {
+      "pearsonAll": 0.943357671379812
+     }
+    },
+    "Pearson's R value (above threshold)": {
+     "fijiLog": 0.94,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAboveOr"
+     ],
+     "exact": {
+      "pearsonAboveOr": 0.9396072614356066,
+      "pearsonAboveAnd": 0.9475504049388296
+     }
+    },
+    "Pearson's R value (below threshold)": {
+     "fijiLog": 0.04,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonBelowOr"
+     ],
+     "exact": {
+      "pearsonBelowOr": 0.036225387521560265,
+      "pearsonBelowAnd": 0.2937241098119171
+     }
+    },
+    "Spearman's rank correlation value": {
+     "fijiLog": 0.86774586,
+     "logDecimals": 8,
+     "reproducedBy": [
+      "spearman"
+     ],
+     "exact": {
+      "spearman": 0.8677458591354411
+     }
+    },
+    "Kendall's Tau-b rank correlation value": {
+     "fijiLog": 0.7039,
+     "logDecimals": 4,
+     "reproducedBy": [
+      "kendallTauB"
+     ],
+     "exact": {
+      "kendallTauB": 0.7038871279796963
+     }
+    },
+    "Manders' M1 (Above zero intensity of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M1"
+     ],
+     "exact": {
+      "M1": 0.999839455862403
+     }
+    },
+    "Manders' M2 (Above zero intensity of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M2"
+     ],
+     "exact": {
+      "M2": 1.0
+     }
+    },
+    "Manders' tM1 (Above autothreshold of Ch2)": {
+     "fijiLog": 0.945,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM1_ge"
+     ],
+     "exact": {
+      "tM1_gt": 0.9399484653318314,
+      "tM1_ge": 0.945340072619465
+     }
+    },
+    "Manders' tM2 (Above autothreshold of Ch1)": {
+     "fijiLog": 0.957,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM2_ge"
+     ],
+     "exact": {
+      "tM2_gt": 0.953018916176507,
+      "tM2_ge": 0.9570804356852749
+     }
+    },
+    "Channel 1 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh1"
+     ],
+     "exact": {
+      "meanCh1": 91.242431640625
+     }
+    },
+    "Channel 2 Mean": {
+     "fijiLog": 88.783,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh2"
+     ],
+     "exact": {
+      "meanCh2": 88.783447265625
+     }
+    }
+   }
+  },
+  {
+   "pair": "correlated",
+   "regression": "Bisection",
+   "thresholds": [
+    36,
+    48
+   ],
+   "exact": {
+    "pearsonAll": 0.943357671379812,
+    "pearsonAboveOr": 0.9400337137768691,
+    "pearsonAboveAnd": 0.9470746209220084,
+    "pearsonBelowOr": -0.0035488128031812487,
+    "pearsonBelowAnd": 0.22775875060285444,
+    "spearman": 0.8677458591354411,
+    "kendallTauB": 0.7038871279796963,
+    "M1": 0.999839455862403,
+    "M2": 1.0,
+    "tM1_gt": 0.9492091863355533,
+    "tM2_gt": 0.9601492615294082,
+    "tM1_ge": 0.9537579369008025,
+    "tM2_ge": 0.9627753624981782,
+    "meanCh1": 91.242431640625,
+    "meanCh2": 88.783447265625
+   },
+   "vsFijiLog": {
+    "Pearson's R value (no threshold)": {
+     "fijiLog": 0.94,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAll"
+     ],
+     "exact": {
+      "pearsonAll": 0.943357671379812
+     }
+    },
+    "Pearson's R value (above threshold)": {
+     "fijiLog": 0.94,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAboveOr"
+     ],
+     "exact": {
+      "pearsonAboveOr": 0.9400337137768691,
+      "pearsonAboveAnd": 0.9470746209220084
+     }
+    },
+    "Pearson's R value (below threshold)": {
+     "fijiLog": 0,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonBelowOr"
+     ],
+     "exact": {
+      "pearsonBelowOr": -0.0035488128031812487,
+      "pearsonBelowAnd": 0.22775875060285444
+     }
+    },
+    "Spearman's rank correlation value": {
+     "fijiLog": 0.86774586,
+     "logDecimals": 8,
+     "reproducedBy": [
+      "spearman"
+     ],
+     "exact": {
+      "spearman": 0.8677458591354411
+     }
+    },
+    "Kendall's Tau-b rank correlation value": {
+     "fijiLog": 0.7039,
+     "logDecimals": 4,
+     "reproducedBy": [
+      "kendallTauB"
+     ],
+     "exact": {
+      "kendallTauB": 0.7038871279796963
+     }
+    },
+    "Manders' M1 (Above zero intensity of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M1"
+     ],
+     "exact": {
+      "M1": 0.999839455862403
+     }
+    },
+    "Manders' M2 (Above zero intensity of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M2"
+     ],
+     "exact": {
+      "M2": 1.0
+     }
+    },
+    "Manders' tM1 (Above autothreshold of Ch2)": {
+     "fijiLog": 0.954,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM1_ge"
+     ],
+     "exact": {
+      "tM1_gt": 0.9492091863355533,
+      "tM1_ge": 0.9537579369008025
+     }
+    },
+    "Manders' tM2 (Above autothreshold of Ch1)": {
+     "fijiLog": 0.963,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM2_ge"
+     ],
+     "exact": {
+      "tM2_gt": 0.9601492615294082,
+      "tM2_ge": 0.9627753624981782
+     }
+    },
+    "Channel 1 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh1"
+     ],
+     "exact": {
+      "meanCh1": 91.242431640625
+     }
+    },
+    "Channel 2 Mean": {
+     "fijiLog": 88.783,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh2"
+     ],
+     "exact": {
+      "meanCh2": 88.783447265625
+     }
+    }
+   }
+  },
+  {
+   "pair": "independent",
+   "regression": "Costes",
+   "thresholds": [
+    255,
+    13
+   ],
+   "exact": {
+    "pearsonAll": -0.12068957261115089,
+    "pearsonAboveOr": -0.12492274896659933,
+    "pearsonAboveAnd": null,
+    "pearsonBelowOr": -0.10590243413625171,
+    "pearsonBelowAnd": -0.2428706962875665,
+    "spearman": 0.009918429897938048,
+    "kendallTauB": 0.0046572639285362245,
+    "M1": 1.0,
+    "M2": 1.0,
+    "tM1_gt": 0.9998234014486432,
+    "tM2_gt": 0.0,
+    "tM1_ge": 0.9998474830692828,
+    "tM2_ge": 0.010323251349093013,
+    "meanCh1": 91.242431640625,
+    "meanCh2": 87.361572265625
+   },
+   "vsFijiLog": {
+    "Pearson's R value (no threshold)": {
+     "fijiLog": -0.12,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAll"
+     ],
+     "exact": {
+      "pearsonAll": -0.12068957261115089
+     }
+    },
+    "Pearson's R value (above threshold)": {
+     "fijiLog": -0.12,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAboveOr"
+     ],
+     "exact": {
+      "pearsonAboveOr": -0.12492274896659933,
+      "pearsonAboveAnd": null
+     }
+    },
+    "Pearson's R value (below threshold)": {
+     "fijiLog": -0.11,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonBelowOr"
+     ],
+     "exact": {
+      "pearsonBelowOr": -0.10590243413625171,
+      "pearsonBelowAnd": -0.2428706962875665
+     }
+    },
+    "Spearman's rank correlation value": {
+     "fijiLog": 0.00991843,
+     "logDecimals": 8,
+     "reproducedBy": [
+      "spearman"
+     ],
+     "exact": {
+      "spearman": 0.009918429897938048
+     }
+    },
+    "Kendall's Tau-b rank correlation value": {
+     "fijiLog": 0.0047,
+     "logDecimals": 4,
+     "reproducedBy": [
+      "kendallTauB"
+     ],
+     "exact": {
+      "kendallTauB": 0.0046572639285362245
+     }
+    },
+    "Manders' M1 (Above zero intensity of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M1"
+     ],
+     "exact": {
+      "M1": 1.0
+     }
+    },
+    "Manders' M2 (Above zero intensity of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M2"
+     ],
+     "exact": {
+      "M2": 1.0
+     }
+    },
+    "Manders' tM1 (Above autothreshold of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM1_gt",
+      "tM1_ge"
+     ],
+     "exact": {
+      "tM1_gt": 0.9998234014486432,
+      "tM1_ge": 0.9998474830692828
+     }
+    },
+    "Manders' tM2 (Above autothreshold of Ch1)": {
+     "fijiLog": 0.01,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM2_ge"
+     ],
+     "exact": {
+      "tM2_gt": 0.0,
+      "tM2_ge": 0.010323251349093013
+     }
+    },
+    "Channel 1 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh1"
+     ],
+     "exact": {
+      "meanCh1": 91.242431640625
+     }
+    },
+    "Channel 2 Mean": {
+     "fijiLog": 87.362,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh2"
+     ],
+     "exact": {
+      "meanCh2": 87.361572265625
+     }
+    }
+   }
+  },
+  {
+   "pair": "independent",
+   "regression": "Bisection",
+   "thresholds": [
+    253,
+    14
+   ],
+   "exact": {
+    "pearsonAll": -0.12068957261115089,
+    "pearsonAboveOr": -0.12492274896659933,
+    "pearsonAboveAnd": 0.048698498266589264,
+    "pearsonBelowOr": -0.10522110944792758,
+    "pearsonBelowAnd": -0.22604354665532939,
+    "spearman": 0.009918429897938048,
+    "kendallTauB": 0.0046572639285362245,
+    "M1": 1.0,
+    "M2": 1.0,
+    "tM1_gt": 0.9998234014486432,
+    "tM2_gt": 0.010639041116945615,
+    "tM1_ge": 0.9998234014486432,
+    "tM2_ge": 0.010639041116945615,
+    "meanCh1": 91.242431640625,
+    "meanCh2": 87.361572265625
+   },
+   "vsFijiLog": {
+    "Pearson's R value (no threshold)": {
+     "fijiLog": -0.12,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAll"
+     ],
+     "exact": {
+      "pearsonAll": -0.12068957261115089
+     }
+    },
+    "Pearson's R value (above threshold)": {
+     "fijiLog": -0.12,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAboveOr"
+     ],
+     "exact": {
+      "pearsonAboveOr": -0.12492274896659933,
+      "pearsonAboveAnd": 0.048698498266589264
+     }
+    },
+    "Pearson's R value (below threshold)": {
+     "fijiLog": -0.11,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonBelowOr"
+     ],
+     "exact": {
+      "pearsonBelowOr": -0.10522110944792758,
+      "pearsonBelowAnd": -0.22604354665532939
+     }
+    },
+    "Spearman's rank correlation value": {
+     "fijiLog": 0.00991843,
+     "logDecimals": 8,
+     "reproducedBy": [
+      "spearman"
+     ],
+     "exact": {
+      "spearman": 0.009918429897938048
+     }
+    },
+    "Kendall's Tau-b rank correlation value": {
+     "fijiLog": 0.0047,
+     "logDecimals": 4,
+     "reproducedBy": [
+      "kendallTauB"
+     ],
+     "exact": {
+      "kendallTauB": 0.0046572639285362245
+     }
+    },
+    "Manders' M1 (Above zero intensity of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M1"
+     ],
+     "exact": {
+      "M1": 1.0
+     }
+    },
+    "Manders' M2 (Above zero intensity of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M2"
+     ],
+     "exact": {
+      "M2": 1.0
+     }
+    },
+    "Manders' tM1 (Above autothreshold of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM1_gt",
+      "tM1_ge"
+     ],
+     "exact": {
+      "tM1_gt": 0.9998234014486432,
+      "tM1_ge": 0.9998234014486432
+     }
+    },
+    "Manders' tM2 (Above autothreshold of Ch1)": {
+     "fijiLog": 0.011,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM2_gt",
+      "tM2_ge"
+     ],
+     "exact": {
+      "tM2_gt": 0.010639041116945615,
+      "tM2_ge": 0.010639041116945615
+     }
+    },
+    "Channel 1 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh1"
+     ],
+     "exact": {
+      "meanCh1": 91.242431640625
+     }
+    },
+    "Channel 2 Mean": {
+     "fijiLog": 87.362,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh2"
+     ],
+     "exact": {
+      "meanCh2": 87.361572265625
+     }
+    }
+   }
+  },
+  {
+   "pair": "identical",
+   "regression": "Costes",
+   "thresholds": [
+    1,
+    1
+   ],
+   "exact": {
+    "pearsonAll": 0.9999999999999999,
+    "pearsonAboveOr": 0.9999999999999999,
+    "pearsonAboveAnd": 0.9999999999999999,
+    "pearsonBelowOr": null,
+    "pearsonBelowAnd": null,
+    "spearman": 0.9999999999999998,
+    "kendallTauB": 1.0,
+    "M1": 1.0,
+    "M2": 1.0,
+    "tM1_gt": 1.0,
+    "tM2_gt": 1.0,
+    "tM1_ge": 1.0,
+    "tM2_ge": 1.0,
+    "meanCh1": 91.242431640625,
+    "meanCh2": 91.242431640625
+   },
+   "vsFijiLog": {
+    "Pearson's R value (no threshold)": {
+     "fijiLog": 1,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAll"
+     ],
+     "exact": {
+      "pearsonAll": 0.9999999999999999
+     }
+    },
+    "Pearson's R value (above threshold)": {
+     "fijiLog": 1,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAboveOr",
+      "pearsonAboveAnd"
+     ],
+     "exact": {
+      "pearsonAboveOr": 0.9999999999999999,
+      "pearsonAboveAnd": 0.9999999999999999
+     }
+    },
+    "Pearson's R value (below threshold)": {
+     "fijiLog": null,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonBelowOr",
+      "pearsonBelowAnd"
+     ],
+     "exact": {
+      "pearsonBelowOr": null,
+      "pearsonBelowAnd": null
+     }
+    },
+    "Spearman's rank correlation value": {
+     "fijiLog": 1,
+     "logDecimals": 8,
+     "reproducedBy": [
+      "spearman"
+     ],
+     "exact": {
+      "spearman": 0.9999999999999998
+     }
+    },
+    "Kendall's Tau-b rank correlation value": {
+     "fijiLog": 1,
+     "logDecimals": 4,
+     "reproducedBy": [
+      "kendallTauB"
+     ],
+     "exact": {
+      "kendallTauB": 1.0
+     }
+    },
+    "Manders' M1 (Above zero intensity of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M1"
+     ],
+     "exact": {
+      "M1": 1.0
+     }
+    },
+    "Manders' M2 (Above zero intensity of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M2"
+     ],
+     "exact": {
+      "M2": 1.0
+     }
+    },
+    "Manders' tM1 (Above autothreshold of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM1_gt",
+      "tM1_ge"
+     ],
+     "exact": {
+      "tM1_gt": 1.0,
+      "tM1_ge": 1.0
+     }
+    },
+    "Manders' tM2 (Above autothreshold of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM2_gt",
+      "tM2_ge"
+     ],
+     "exact": {
+      "tM2_gt": 1.0,
+      "tM2_ge": 1.0
+     }
+    },
+    "Channel 1 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh1"
+     ],
+     "exact": {
+      "meanCh1": 91.242431640625
+     }
+    },
+    "Channel 2 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh2"
+     ],
+     "exact": {
+      "meanCh2": 91.242431640625
+     }
+    }
+   }
+  },
+  {
+   "pair": "identical",
+   "regression": "Bisection",
+   "thresholds": [
+    4,
+    4
+   ],
+   "exact": {
+    "pearsonAll": 0.9999999999999999,
+    "pearsonAboveOr": 1.0,
+    "pearsonAboveAnd": 1.0,
+    "pearsonBelowOr": 1.0,
+    "pearsonBelowAnd": 1.0,
+    "spearman": 0.9999999999999998,
+    "kendallTauB": 1.0,
+    "M1": 1.0,
+    "M2": 1.0,
+    "tM1_gt": 0.999978594114987,
+    "tM2_gt": 0.999978594114987,
+    "tM1_ge": 0.999978594114987,
+    "tM2_ge": 0.999978594114987,
+    "meanCh1": 91.242431640625,
+    "meanCh2": 91.242431640625
+   },
+   "vsFijiLog": {
+    "Pearson's R value (no threshold)": {
+     "fijiLog": 1,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAll"
+     ],
+     "exact": {
+      "pearsonAll": 0.9999999999999999
+     }
+    },
+    "Pearson's R value (above threshold)": {
+     "fijiLog": 1,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonAboveOr",
+      "pearsonAboveAnd"
+     ],
+     "exact": {
+      "pearsonAboveOr": 1.0,
+      "pearsonAboveAnd": 1.0
+     }
+    },
+    "Pearson's R value (below threshold)": {
+     "fijiLog": 1,
+     "logDecimals": 2,
+     "reproducedBy": [
+      "pearsonBelowOr",
+      "pearsonBelowAnd"
+     ],
+     "exact": {
+      "pearsonBelowOr": 1.0,
+      "pearsonBelowAnd": 1.0
+     }
+    },
+    "Spearman's rank correlation value": {
+     "fijiLog": 1,
+     "logDecimals": 8,
+     "reproducedBy": [
+      "spearman"
+     ],
+     "exact": {
+      "spearman": 0.9999999999999998
+     }
+    },
+    "Kendall's Tau-b rank correlation value": {
+     "fijiLog": 1,
+     "logDecimals": 4,
+     "reproducedBy": [
+      "kendallTauB"
+     ],
+     "exact": {
+      "kendallTauB": 1.0
+     }
+    },
+    "Manders' M1 (Above zero intensity of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M1"
+     ],
+     "exact": {
+      "M1": 1.0
+     }
+    },
+    "Manders' M2 (Above zero intensity of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "M2"
+     ],
+     "exact": {
+      "M2": 1.0
+     }
+    },
+    "Manders' tM1 (Above autothreshold of Ch2)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM1_gt",
+      "tM1_ge"
+     ],
+     "exact": {
+      "tM1_gt": 0.999978594114987,
+      "tM1_ge": 0.999978594114987
+     }
+    },
+    "Manders' tM2 (Above autothreshold of Ch1)": {
+     "fijiLog": 1,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "tM2_gt",
+      "tM2_ge"
+     ],
+     "exact": {
+      "tM2_gt": 0.999978594114987,
+      "tM2_ge": 0.999978594114987
+     }
+    },
+    "Channel 1 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh1"
+     ],
+     "exact": {
+      "meanCh1": 91.242431640625
+     }
+    },
+    "Channel 2 Mean": {
+     "fijiLog": 91.242,
+     "logDecimals": 3,
+     "reproducedBy": [
+      "meanCh2"
+     ],
+     "exact": {
+      "meanCh2": 91.242431640625
+     }
+    }
+   }
+  }
+ ]
+}

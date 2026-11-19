@@ -21,7 +21,18 @@
     "Tools": "Herramientas",
     "Window": "Ventana",
     "Help": "Ayuda",
-    "Noise": "Ruido"
+    "Noise": "Ruido",
+    "New": "Nuevo",
+    "Import": "Importar",
+    "Options": "Opciones",
+    "Overlay": "Superposición",
+    "FFT": "FFT",
+    "Colocalization": "Colocalización",
+    "LocalThickness": "Grosor local",
+    "Skeleton": "Esqueleto",
+    "Plugins": "Plugins",
+    "CellCounter": "Contador de células",
+    "Utilities": "Utilidades"
   },
   "cmd": {
     "fileOpen": "Abrir…",
@@ -160,7 +171,12 @@
     "binDistanceMap": "Mapa de distancias…",
     "binUltimatePoints": "Puntos últimos…",
     "binWatershed": "Línea divisoria de aguas (Watershed)",
-    "binVoronoi": "Voronoi…"
+    "binVoronoi": "Voronoi…",
+    "windowShowAll": "Mostrar todo",
+    "windowPutBehind": "Enviar al fondo [tab]",
+    "windowCascade": "Cascada",
+    "windowTile": "Mosaico",
+    "toolsSyncWindows": "Sincronizar ventanas"
   },
   "tool": {
     "rect": "Rectángulo",
@@ -461,7 +477,8 @@
     "findMaxima": "Buscando máximos",
     "findMaximaImage": "Buscando máximos",
     "segOutline": "Calculando el contorno",
-    "fltDataRange": "Leyendo el rango de valores"
+    "fltDataRange": "Leyendo el rango de valores",
+    "working": "Procesando"
   },
   "win": {
     "results": "Resultados"
@@ -517,7 +534,8 @@
   "status": {
     "cancelled": "Cancelado.",
     "copied": "Copiado.",
-    "saved": "{name} guardado."
+    "saved": "{name} guardado.",
+    "gridMemory": "La memoria se está llenando: cierre la imagen de origen para liberarla."
   },
   "resume": {
     "title": "¿Reanudar su trabajo?",
@@ -616,7 +634,9 @@
     "held": "Algunas imágenes solo se restauraron en parte: sus cambios en ellas no se guardan.",
     "lowStorage": "Queda poco espacio en este navegador: guarde un TIFF.",
     "budget": "La memoria está casi llena ({pct} %): cierre una imagen o libere pasos de deshacer.",
-    "packageFailed": "Algunas herramientas ({pkg}) no se pudieron cargar y no están disponibles."
+    "packageFailed": "Algunas herramientas ({pkg}) no se pudieron cargar y no están disponibles.",
+    "annotationsCleared": "Se quitó la superposición de esta imagen porque su tamaño cambió.",
+    "metaTooLarge": "Parte del estado del espacio de trabajo (anotaciones o datos de herramientas) es demasiado grande para conservarse tras recargar."
   },
   "bc": {
     "min": "Mínimo",
@@ -744,7 +764,13 @@
       "integer": "Introduzca un número entero",
       "choice": "Elija una de las opciones"
     },
-    "unavailable": "No disponible: esta herramienta no se pudo cargar"
+    "unavailable": "No disponible: esta herramienta no se pudo cargar",
+    "dock": "Imágenes minimizadas",
+    "tabMinimize": "Minimizar",
+    "tabDock": "Acoplar",
+    "tabPopOut": "Separar",
+    "tabClose": "Cerrar",
+    "dockRestore": "Restaurar"
   },
   "help": {
     "space": "Mantener para desplazar",
@@ -772,5 +798,12 @@
   },
   "table": {
     "title": "Tabla"
+  },
+  "sync": {
+    "cursor": "Sincronizar cursor",
+    "imageCoords": "Coordenadas de la imagen",
+    "scaling": "Escala de la imagen",
+    "all": "Sincronizar todo",
+    "none": "Desincronizar todo"
   }
 }

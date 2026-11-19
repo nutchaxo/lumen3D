@@ -16,12 +16,17 @@
  *
  * ── CONTRACT WITH ij-view.js ─────────────────────────────────────────────────────────
  *   IJShell.create(appEl, { commands, getState, tools, t, onCommand(cmd, {source}), onTool,
- *     onToolOptions, onRoi(roi, {final}), onChannel, onCancel, readPixel(x, y) → Promise<number[]>,
- *     isActive, display:{ onTileError } })
- *   shell.display (IJDisplay: setTileProvider, invalidate, setPreview, setThresholdOverlay, zoomAt,
- *   fit, view100, zoomToRect, getView, renderToCanvas), shell.stage, shell.windows (dialog,
- *   floating, confirm), setImage, clearImage, setDisplayState, setActiveRoi, setRois, setStatus,
+ *     onToolOptions, onRoi(roi, {final, docId}), onChannel(index, docId), onCancel, readPixel(x, y, docId) → Promise<number[]>,
+ *     isActive, onActivate(docId), onCloseImage(docId), onLayoutChange(kind), display:{ onTileError, onViewChange } })
+ *   shell.layout (IJLayout: add(docId, {placement:'tab'|'splitRight'|'gridWithSource'|'float', anchor, docIds}), remove,
+ *   activate, view, views, order, tile, cascade, showAll, putBehind, minimize, restore, float, dock, maximize,
+ *   serialize, restoreFrom, clear, setTabInfo, onChange, onActivate, onClose), shell.view(docId) / activeView()
+ *   (IJView, ONE per open image: setTileProvider, invalidate, setPreview, setThresholdOverlay, setOverlay,
+ *   setAnnotations, setCursorMark, zoomAt, fit, view100, zoomToRect, getView, setView, visibleRect,
+ *   renderToCanvas), shell.workspace, shell.windows (dialog, floating, confirm, list), setImage(info, {placement}),
+ *   removeImage, clearImage, setDisplayState(state, docId), setActiveRoi(roi, docId), setRois(r, docId), setStatus,
  *   setProgress({fraction, label, cancellable}), setWarning, setLineWidth, setTool, refreshMenus.
+ *   There is no "the display": every use goes through viewOf(docId) / activeView() below.
  *   The shell owns the keyboard: it matches each command's `shortcut` (a string or an array of
  *   them) and calls onCommand; this file only declares them.
  */
@@ -97,6 +102,53 @@
  *   toast(key, params)                               a line in the status bar
  *   error(err)                                       reports an error as the app does (never err.message)
  *   rename(docId, name) → Promise                    renames an image (not an undo step)
+ *
+ * ── Wave 3 additions (PLAN-wave3 §2.5 / §2.6) ─────────────────────────────────────────────────────────────────
+ * IJApp.extend also takes
+ *   panels: { <id>: { titleKey, build(el, papi) → { refresh?(kind), dispose? }, persist?, defaultSize?: { w, h } } }
+ *       a resizable tool window whose content `build` fills (`papi` = the package's api); `refresh(kind)` is called with the
+ *       kinds of the tool windows (doc pixels display selection rois results summary layout); `persist` = reopened after
+ *       a reload. Ids are global (a built-in tool window id is refused).
+ *   tools: [{ id, labelKey, icon?, cursor?, hidden?, after?, onPointer(api, { type: 'down'|'move'|'up'|'cancel', docId, x, y,
+ *       button, shift, alt, ctrl }) }]   a toolbar tool (x, y in image coordinates); `hidden` = no button until api.setTool(id);
+ *       `after` = the tool id it follows
+ *   longCommands: ['doc.tiff.project', …]   worker commands Cancel may target
+ * a command also takes `repeatable` (default true; false only for Repeat itself, Undo and Close: ImageJ's Executer does
+ * not remember those) and a menu path of up to three segments (every submenu must have its place in IJApp.GROUP_META).
+ * New api members (each package gets its OWN api object: `call`, `settings.set` and `sessionData` know their package):
+ *   openPanel(id, { focus }) → Promise<boolean>      closePanel(id)       a registered panel as a tool window
+ *   on(event, fn) → off()   events: 'activeDoc' docId · 'roi' { docId, roi, final } · 'doc' { docId, kind: 'opened' | 'pixels' |
+ *       'size' (dimensions, channel layout or calibration) | 'display' | 'renamed' | 'closed' } · 'results' · 'layout' kind ·
+ *       'tool' id · 'ext:<name>' (an event a worker command posted with E.postEvent). Listeners are dropped when the view
+ *       is torn down (the Simple view only hides it: they stay).
+ *   annotations { get(docId) → { visible, items } (a copy), set(docId, items, { tag }) (replace all, or only the items of
+ *       `tag`), add(docId, items), remove(docId, { tag } | { ids }), setVisible(docId, true | false | 'toggle') }
+ *       persistent per-document overlay items (PLAN-wave3 §2.5): { id, kind: 'roi' | 'text' | 'shapes' | 'rect' | 'marker', … }
+ *       in image coordinates; not undo steps; stored in the session meta; cleared (with a warning) by a size change
+ *   settings { get(key), set(key, value) }  localStorage 'lumen3d.ij.prefs'; core keys conv.scale conv.fullRange16 misc.divZero
+ *       colors.foreground colors.background colors.selection appearance.interpolate (only the Edit package writes them); every
+ *       other key lives under the package's own prefix (bg flt seg multi geom roi coloc lay thr enh fft sel io ov ana edit fiji lib)
+ *   sessionData { get(pkg), set(pkg, json) }  the package's own JSON (≤ 256 KiB) in the session meta
+ *   commands() → [{ id, label, path: [menu labels], shortcut, enabled }]     runCommand(id) → Promise (the command runs
+ *       normally, its dialog appears pre-filled)     lastCommand() → { id } | null   (last run command with repeatable !== false)
+ *   call(cmd, args, { transfer, labelKey, long }) → Promise<result | null>   a worker command registered by THIS package with
+ *       IJOpRegistry.defineCommand (another name rejects IJ_EXT_FORBIDDEN); busy / progress / Cancel like api.run
+ *   adopt(info, { placement, provenance, sessionKey }) → Promise<docId>   a document the worker created (E.createDoc)
+ *   addDoc(image, { placement, hidden, provenance, sessionKey }) → Promise<docId>   image = { name, width, height, bitDepth,
+ *       calibration, channels: [{ data, name, color, display? }] }; the arrays are transferred (worker doc.import)
+ *   closeDoc(docId) → Promise<boolean>  (with the unsaved prompt)     view(docId) → { getView, setView, visibleRect } | null
+ *   putBlob(typedArray) → Promise<blobRef>   bytes sent to the worker once; a blobRef is the object { blobRef, kind }: put it
+ *       where the typed array belongs in the params of api.preview / api.run; ≤ 64 MiB; dropped with the documents using it
+ *   setPending({ labelKey, commit() → Promise, cancel() }) / clearPending()   one transient state (a floating paste): commit
+ *       runs before any other command, an image switch or Enter; cancel on Escape; the status bar shows labelKey
+ *   setTool(id)   setThreshold(docId, channel, { lower, upper, dark }) → Promise   drives the Threshold window
+ *   colorValue(docId, channel, 'foreground' | 'background') → number   ImageJ's setColor on a grey image (see colorValueOf)
+ *   registerLut(name, Uint8Array(768)) → Promise   page + worker registry, kept in the session meta
+ *   pickFile({ accept, multiple }) → Promise<File[] | null>    saveFile(suggestedName, mime, ext, descKey, produce) → Promise<boolean>
+ *   copyText(text) → Promise (rejects with the browser's error)   renderPng(docId, { rect }) → Promise<Blob> (as displayed)
+ *   profile(docId, roi, channel) → Promise<{ values, step }>   (worker doc.profile)
+ *   roiManager { list() → [{ name, docId, roi, stroke?, width?, fill? }], add(entries), set(list), select(indices), selected() → [i] }
+ *   run(op, params, { …, placement })  placement 'tab' | 'splitRight' | 'gridWithSource' | 'float' for the images the step creates
  *
  * Key namespaces a package may use (the registry test scans for them): cmd. op. menu. meas. tool. res.
  * err. dlg.<prefix>. (prefix: bg→bg filters→flt seg→seg multi→multi geom→geom roi→roi coloc→coloc), and any key
@@ -206,11 +258,31 @@ const IJApp = (() => {
   // The files the worker loads, in order: the first four are mandatory, every ij-proc-<pkg>.js other than
   // ij-proc-shared.js is a package loaded in its own try/catch (ij-worker.js).
   const WORKER_SCRIPTS = ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js',
-    'ij-proc-bg.js', 'ij-proc-filters.js', 'ij-proc-seg.js', 'ij-proc-multi.js', 'ij-proc-geom.js', 'ij-proc-roi.js', 'ij-proc-coloc.js'];
+    'ij-proc-bg.js', 'ij-proc-filters.js', 'ij-proc-seg.js', 'ij-proc-multi.js', 'ij-proc-geom.js', 'ij-proc-roi.js', 'ij-proc-coloc.js',
+    'ij-proc-thr.js', 'ij-proc-enh.js', 'ij-proc-fft.js', 'ij-proc-sel.js', 'ij-proc-io.js', 'ij-proc-ov.js', 'ij-proc-ana.js',
+    'ij-proc-edit.js', 'ij-proc-fiji.js', 'ij-proc-lib.js'];
   const PACKAGE_FILE_RX = /^ij-proc-([a-z0-9]+)\.js$/;
   const PACKAGE_NAMES = WORKER_SCRIPTS.map((f) => PACKAGE_FILE_RX.exec(f)).filter((m) => m && m[1] !== 'shared').map((m) => m[1]);
   const ESTIMATE_MIN_FRACTION = 1 / 64; // an image under budget/64 never needs the estimate round trip
   const PERSIST_MS = 1200;
+  // The events api.on knows ('ext:<name>' = what a worker command posted), the settings with their defaults, the prefix each
+  // package owns in api.settings (PLAN-wave3 §1.1; the core keys belong to `edit`), ImageJ's colour names.
+  const EVENT_NAMES = new Set(['activeDoc', 'roi', 'doc', 'results', 'layout', 'tool']);
+  const PREFS_KEY = 'lumen3d.ij.prefs';
+  const SETTING_DEFAULTS = { 'conv.scale': true, 'conv.fullRange16': false, 'misc.divZero': 'Infinity', 'colors.foreground': 'white',
+    'colors.background': 'black', 'colors.selection': 'yellow', 'appearance.interpolate': false };
+  const CORE_SETTING_PREFIXES = ['conv', 'misc', 'colors', 'appearance'];
+  const PKG_PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc', lay: 'lay', thr: 'thr', enh: 'enh',
+    fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana', edit: 'edit', fiji: 'fiji', lib: 'lib' };
+  // ij.gui.Toolbar / Colors.java: java.awt.Color constants (orange = 255,200,0; pink = 255,175,175; grays 128 / 192 / 64)
+  const COLOR_NAMES = { red: [255, 0, 0], green: [0, 255, 0], blue: [0, 0, 255], magenta: [255, 0, 255], cyan: [0, 255, 255], yellow: [255, 255, 0],
+    orange: [255, 200, 0], black: [0, 0, 0], white: [255, 255, 255], gray: [128, 128, 128], lightgray: [192, 192, 192], darkgray: [64, 64, 64],
+    pink: [255, 175, 175] };
+  const BLOB_BYTES_MAX = 64 * 1048576;
+  const ANNOTATION_KINDS = ['roi', 'text', 'shapes', 'rect', 'marker'];
+  const ANNOTATIONS_MAX = 100000;       // per image, in memory; the session meta keeps 10 000 (the engine says when it dropped them)
+  const EXT_DATA_MAX = 256 * 1024;
+  const GRID_MEMORY_FRACTION = 0.5;     // a Split Channels grid warns about memory above this share of the engine's budget
   const PREVIEW_COMPUTE_PIXELS = 4e6;  // a compute preview runs at level 0 on a visible region of at most this
   const WORKER_READY_MS = 20000;
   const GIB = 1024 * 1024 * 1024;
@@ -226,7 +298,7 @@ const IJApp = (() => {
   function isAreaRoi(roi) { return !!roi && AREA_TYPES.has(roi.type); }
 
   function cmd(id, menu, extra) {
-    return Object.assign({ id, menu, labelKey: 'cmd.' + id, shortcut: null, keys: [], enabled: has,
+    return Object.assign({ id, menu, labelKey: 'cmd.' + id, shortcut: null, keys: [], enabled: has, repeatable: true,
       run: () => {} }, extra || {});
   }
   const sc = (shortcut, keys) => ({ shortcut, keys: keys || [shortcut] });
@@ -239,12 +311,12 @@ const IJApp = (() => {
     cmd('fileSaveResults', ['File', 'SaveAs'], { enabled: (st) => !st.busy && !!st.hasResults, run: (a) => a.saveResults() }),
     cmd('fileRevert', ['File'], { enabled: (st) => has(st) && !!st.dirty, run: (a) => a.revert() }),
     cmd('fileRecover', ['File'], { enabled: (st) => !st.busy, run: (a) => a.recover() }),
-    cmd('fileClose', ['File'], { run: (a) => a.closeImage() }),
+    cmd('fileClose', ['File'], { repeatable: false, run: (a) => a.closeImage() }),
     cmd('fileSimple', ['File'], { enabled: always, run: (a) => a.simpleView() }),
     cmd('fileCloseStudio', ['File'], { enabled: always, run: (a) => a.closeStudio() }),
 
     // ── Edit
-    cmd('editUndo', ['Edit'], Object.assign(sc('Ctrl+Z'), { enabled: (st) => has(st) && !!st.canUndo, run: (a) => a.undo() })),
+    cmd('editUndo', ['Edit'], Object.assign(sc('Ctrl+Z'), { repeatable: false, enabled: (st) => has(st) && !!st.canUndo, run: (a) => a.undo() })),
     cmd('editRedo', ['Edit'], Object.assign(sc('Ctrl+Shift+Z', ['Ctrl+Shift+Z', 'Ctrl+Y']), { enabled: (st) => has(st) && !!st.canRedo, run: (a) => a.redo() })),
     cmd('editClear', ['Edit'], { enabled: hasArea, run: (a) => a.clearSel(false) }),
     cmd('editClearOutside', ['Edit'], { enabled: hasArea, run: (a) => a.clearSel(true) }),
@@ -313,8 +385,13 @@ const IJApp = (() => {
       cmd('analyzeHistogram', ['Analyze'], Object.assign(sc('h'), { run: (a) => a.histogram() })),
       cmd('analyzePlotProfile', ['Analyze'], Object.assign(sc('k'), { enabled: (st) => has(st) && !!st.roi && (st.roi.type === 'line' || st.roi.type === 'polyline'), run: (a) => a.plotProfile() })),
       cmd('toolsRoiManager', ['Analyze', 'Tools'], { enabled: always, run: (a) => a.openTool('roiManager') }),
+      cmd('toolsSyncWindows', ['Analyze', 'Tools'], { enabled: (st) => st.nDocs > 0, run: (a) => a.syncWindows() }),
 
-      // ── Window
+      // ── Window (ImageJ's fixed items, then the open tool windows and the images, see buildMenuList)
+      cmd('windowShowAll', ['Window'], Object.assign(sc(']'), { enabled: (st) => st.nDocs > 0, run: (a) => a.showAll() })),
+      cmd('windowPutBehind', ['Window'], { enabled: (st) => st.nDocs > 0, run: (a) => a.putBehind() }),
+      cmd('windowCascade', ['Window'], { enabled: (st) => st.nDocs > 0, run: (a) => a.cascade() }),
+      cmd('windowTile', ['Window'], { enabled: (st) => st.nDocs > 0, run: (a) => a.tile() }),
       cmd('windowResults', ['Window'], { enabled: always, run: (a) => a.openTool('results') }),
       cmd('windowRoiManager', ['Window'], { enabled: always, run: (a) => a.openTool('roiManager') }),
       cmd('windowNext', ['Window'], { enabled: (st) => st.nDocs > 1, run: (a) => a.cycleImage(1) }),
@@ -328,34 +405,38 @@ const IJApp = (() => {
   // Menu positions (PLAN-wave2 §1): `order` = position × 10 inside the (sub)menu, `—` = separator above.
   // A package command uses the same scale; a submenu's own position is in GROUP_META.
   const ORDER = {
-    fileOpen: 10, fileSaveTiff: 10, fileSavePng: 20, fileSaveResults: 30, fileRevert: 30, fileRecover: 40, fileClose: 50, fileSimple: 60, fileCloseStudio: 70,
+    fileOpen: 10, fileSaveTiff: 10, fileSavePng: 20, fileSaveResults: 30, fileRevert: 30, fileRecover: 40, fileClose: 20, fileSimple: 60, fileCloseStudio: 70,
     editUndo: 10, editRedo: 20, editClear: 30, editClearOutside: 40, editFill: 50, editInvert: 60,
-    editSelectAll: 10, editSelectNone: 20, editRestoreSelection: 30, editMakeInverse: 110, editAddToManager: 120,
+    editSelectAll: 10, editSelectNone: 20, editRestoreSelection: 30, editMakeInverse: 100, editAddToManager: 240,
     typeBit8: 10, typeBit16: 20, typeBit32: 30,
     adjustBC: 10, adjustThreshold: 20,
-    imageInfo: 30, colorChannels: 40, stackProject: 10, imageCrop: 80, imageDuplicate: 90,
+    imageInfo: 30, colorChannels: 40, stackProject: 20, imageCrop: 80, imageDuplicate: 90,
     transformFlipH: 10, transformFlipV: 20, transformRotateRight: 30, transformRotateLeft: 40,
     zoomIn: 10, zoomOut: 20, zoomOriginal: 30, zoomToSelection: 40, zoomFit: 50,
-    lutApply: 10, lutGrays: 20, lutRed: 30, lutGreen: 40, lutBlue: 50, lutCyan: 60, lutMagenta: 70, lutYellow: 80, lutFire: 90, lutIce: 100,
-    lutSpectrum: 110, lut16Colors: 120, lutHiLo: 130, lutInvert: 140,
+    lutInvert: 10, lutApply: 20, lutFire: 30, lutGrays: 40, lutIce: 50, lutSpectrum: 60, lutRed: 80, lutGreen: 90, lutBlue: 100, lutCyan: 110,
+    lutMagenta: 120, lutYellow: 130, lut16Colors: 150, lutHiLo: 160,
     binMask: 10, binErode: 20, binDilate: 30, binOpen: 40, binClose: 50, binFillHoles: 70,
     mathAdd: 10, mathSubtract: 20, mathMultiply: 30, mathDivide: 40, mathMin: 80, mathMax: 90, mathSet: 110, mathAbs: 180,
     filterGaussian: 20, filterMedian: 30, filterMean: 40, filterMinimum: 50, filterMaximum: 60,
     analyzeMeasure: 10, analyzeParticles: 20, analyzeSummarize: 30, analyzeDistribution: 40, analyzeClearResults: 50, analyzeSetMeasurements: 60, analyzeHistogram: 80, analyzePlotProfile: 90,
-    toolsRoiManager: 10,
-    windowResults: 10, windowRoiManager: 20, windowNext: 30, windowPrevious: 40,
+    toolsRoiManager: 50, toolsSyncWindows: 80,
+    windowShowAll: 10, windowPutBehind: 20, windowCascade: 30, windowTile: 40, windowResults: 50, windowRoiManager: 51, windowNext: 70, windowPrevious: 80,
     helpAbout: 10, helpShortcuts: 20
   };
-  const SEPARATOR_ABOVE = new Set(['editClear', 'editAddToManager', 'imageInfo', 'imageCrop', 'colorChannels', 'binErode', 'analyzeHistogram']);
+  // ImageJ's separators (IJ_Props.txt); the rows other packages own are theirs (PLAN-wave3 §1.2).
+  const SEPARATOR_ABOVE = new Set(['fileClose', 'fileSimple', 'editClear', 'imageInfo', 'imageCrop', 'lutFire', 'lut16Colors', 'binErode', 'analyzeHistogram', 'windowNext']);
   // Position of each submenu inside its parent list (keyed by the path of menu names).
   const GROUP_META = {
-    'File/SaveAs': { order: 20 },
-    'Edit/Selection': { order: 70, separatorBefore: true },
+    'File/New': { order: 5 }, 'File/Import': { order: 15 }, 'File/SaveAs': { order: 25 },
+    'Edit/Selection': { order: 70, separatorBefore: true }, 'Edit/Options': { order: 80 },
     'Image/Type': { order: 10 }, 'Image/Adjust': { order: 20 }, 'Image/Color': { order: 60 }, 'Image/Stacks': { order: 70 },
-    'Image/Transform': { order: 110 }, 'Image/Zoom': { order: 120, separatorBefore: true }, 'Image/LookupTables': { order: 130 },
+    'Image/Transform': { order: 110 }, 'Image/Zoom': { order: 120 }, 'Image/Overlay': { order: 125 },
+    'Image/LookupTables': { order: 130, separatorBefore: true },
     'Process/Noise': { order: 60 }, 'Process/Binary': { order: 70, separatorBefore: true }, 'Process/Math': { order: 80 },
-    'Process/Filters': { order: 90 },
-    'Analyze/Tools': { order: 110 }
+    'Process/FFT': { order: 85 }, 'Process/Filters': { order: 90 },
+    'Analyze/Tools': { order: 110 }, 'Analyze/Colocalization': { order: 120, separatorBefore: true },
+    'Analyze/LocalThickness': { order: 140 }, 'Analyze/Skeleton': { order: 150 },
+    'Plugins/Analyze': { order: 10 }, 'Plugins/Analyze/CellCounter': { order: 10 }, 'Plugins/Process': { order: 20 }, 'Plugins/Utilities': { order: 30 }
   };
   for (const c of COMMANDS) {
     if (ORDER[c.id] !== undefined) c.order = ORDER[c.id];
@@ -450,7 +531,7 @@ const IJApp = (() => {
   // ───────────────────────────── module state ─────────────────────────────
 
   const S = {
-    ctx: null, api: null, root: null, appEl: null, shell: null, display: null, host: null, windows: null,
+    ctx: null, api: null, root: null, appEl: null, shell: null, windows: null,
     mounted: false, worker: null, workerGen: 0, budgetBytes: 0,
     docs: new Map(),          // docId → info
     order: [],                // docIds in opening order
@@ -482,15 +563,34 @@ const IJApp = (() => {
     failedPackages: new Set(), // packages whose ij-proc file did not load in the worker
     previewCompute: 0,        // request id of the running compute preview
     overlayDoc: null,         // the image the overlay items belong to
+    tileCacheBytes: 0,        // the worker tile cache last asked for (engine.configure)
+    previewDocs: new Set(),   // images whose view shows a pixel preview
+    overlayDocs: new Set(),   // images whose view shows transient overlay items
+    placing: false,           // the app itself is placing / activating a view (the layout's activation echo is ignored)
     extWindowSeq: 0,
     lastToolReady: null,      // promise of the tool window opened last (its first update)
     redirect: null,           // Set Measurements › Redirect to: { docId, channel } | null (not kept across a reload, as ImageJ)
+    listeners: new Map(),     // api.on: event → Set<fn>
+    annot: new Map(),         // docId → { visible, items } (persistent annotations, PLAN-wave3 §2.5)
+    annotDims: new Map(),     // docId → { w, h } the annotations were made for
+    annotSeq: 0,
+    hidden: new Set(),        // documents kept in the session without a view or a menu entry (api.addDoc hidden)
+    sync: { cursor: true, imageCoords: true, scaling: false, docs: new Set() },   // Synchronize Windows
+    syncBound: new Map(),     // docId → off() of its view-change listener
+    syncing: false,           // a relayed view change is being applied (the echo guard)
+    pending: null,            // api.setPending: { labelKey, commit, cancel }
+    lastCommand: null,        // id of the last run command with repeatable !== false
+    extData: {},              // package → JSON (api.sessionData)
+    luts: new Map(),          // look-up tables registered through api.registerLut: name → Uint8Array(768)
+    engineUsed: 0,            // bytes the engine says it holds (its 'budget' events)
+    lastActiveEmitted: null,  // the document 'activeDoc' last announced
+    keyHandler: null,         // the capture-phase Enter / Escape listener of a pending state
     wand: { tolerance: 0, mode: 8 } // the Wand tool's options (tolerance in pixel values, 4- or 8-connected)
   };
 
   // ───────────────────────────── extension registry ─────────────────────────────
   const EXTRA_COLUMNS = [];            // [key, header, afterKey] declared through extend({ columns })
-  const EXT = { packages: new Map(), measurements: {} };
+  const EXT = { packages: new Map(), measurements: {}, panels: new Map(), tools: new Map() };
   let extensionsLocked = false;
 
 
@@ -660,12 +760,12 @@ const IJApp = (() => {
     return { scripts, packages };
   }
 
-  function call(cmdName, args, transfer) {
+  function call(cmdName, args, transfer, o) {
     const c = S.worker;
     if (!c || c.dead) return Promise.reject(Object.assign(new Error('worker is down'), { code: 'IJ_WORKER_CRASHED' }));
     const id = c.nextId++;
     const p = new Promise((resolve, reject) => {
-      c.pending.set(id, { resolve, reject, cmd: cmdName });
+      c.pending.set(id, { resolve, reject, cmd: cmdName, long: !!(o && o.long) });
       try { c.w.postMessage({ id, cmd: cmdName, args: args || {} }, transfer || []); }
       catch (err) { c.pending.delete(id); reject(err); }
     });
@@ -703,14 +803,15 @@ const IJApp = (() => {
         }
         break;
       case 'preview':
-        if (m.seq === S.previewSeq && m.docId === S.activeId && S.display) S.display.setPreview(m);
+        { const v = viewOf(m.docId); if (m.seq === S.previewSeq && v) { v.setPreview(m); S.previewDocs.add(m.docId); } }
         break;
       case 'invalidate': {
-        if (m.docId !== S.activeId || !S.display) break;
-        if (m.sizeChanged) refreshInfo(m.docId).then((info) => { afterLayoutChange(m.docId, info); return showDoc(m.docId); }).catch(reportError);
-        else if (m.calibration) refreshInfo(m.docId).then(() => { if (S.shell) S.shell.updateInfo(viewInfo(m.docId)); refreshUi(); }).catch(reportError);
-        else S.display.invalidate(m.channels);
-        scheduleToolRefresh('pixels');
+        const iv = viewOf(m.docId);
+        if (!iv) break;
+        if (m.sizeChanged) refreshInfo(m.docId).then((info) => { afterLayoutChange(m.docId, info); refreshView(m.docId); emit('doc', { docId: m.docId, kind: 'size' }); }).catch(reportError);
+        else if (m.calibration) refreshInfo(m.docId).then(() => { if (S.shell) S.shell.updateInfo(viewInfo(m.docId)); refreshUi(); emit('doc', { docId: m.docId, kind: 'size' }); }).catch(reportError);
+        else { iv.invalidate(m.channels); emit('doc', { docId: m.docId, kind: 'pixels' }); }
+        if (m.docId === S.activeId) scheduleToolRefresh('pixels');
         break;
       }
       case 'packageFailed':
@@ -731,10 +832,14 @@ const IJApp = (() => {
         break;
       case 'budget':
         if (m.budgetBytes > 0) S.engineBudget = m.budgetBytes;
+        if (m.usedBytes >= 0) S.engineUsed = m.usedBytes;
         S.warnBudget = m.budgetBytes && m.usedBytes / m.budgetBytes >= 0.9 ? tr('warn.budget', { pct: Math.round((m.usedBytes / m.budgetBytes) * 100) }) : '';
         showWarning();
         break;
-      default: break;
+      default:
+        // an event a package's worker command posted (E.postEvent): handed to the listeners of api.on('ext:<name>')
+        if (typeof m.event === 'string' && m.event.indexOf('ext:') === 0) emit(m.event, m);
+        break;
     }
   }
 
@@ -742,7 +847,7 @@ const IJApp = (() => {
     if (S.loadAbort) S.loadAbort.abort();
     const c = S.worker;
     if (!c) return;
-    for (const [id, e] of c.pending) if (LONG_COMMANDS.has(e.cmd)) call('cancel', { targetId: id }).catch(() => {});
+    for (const [id, e] of c.pending) if (LONG_COMMANDS.has(e.cmd) || e.long) call('cancel', { targetId: id }).catch(() => {});
   }
 
   /** The worker died (crash, failed script load, out of memory): every document it held is gone from memory. */
@@ -801,6 +906,26 @@ const IJApp = (() => {
   // ───────────────────────────── documents ─────────────────────────────
 
   function activeInfo() { return S.activeId !== null ? S.docs.get(S.activeId) || null : null; }
+
+  // One view per open image (shell.layout owns them); every use of "the display" goes through these.
+  const viewOf = (docId) => (S.shell && docId !== null && docId !== undefined ? S.shell.view(docId) : null);
+  const activeView = () => viewOf(S.activeId);
+  const allViews = () => (S.shell ? S.shell.layout.views() : []);
+  /** The open images in visual order (tabs, then floating windows, then minimised ones). */
+  function winOrder() {
+    const ord = S.shell ? S.shell.layout.order().filter((id) => S.docs.has(id) && !S.hidden.has(id)) : [];
+    for (const id of S.order) if (S.docs.has(id) && !S.hidden.has(id) && !ord.includes(id)) ord.push(id);
+    return ord;
+  }
+  /** Pixel previews are cleared on the views that show one, never on the others. */
+  function clearPreviews() { for (const id of S.previewDocs) { const v = viewOf(id); if (v) v.setPreview(null); } S.previewDocs.clear(); }
+  function clearOverlays() { for (const id of S.overlayDocs) { const v = viewOf(id); if (v) v.setOverlay(null); } S.overlayDocs.clear(); }
+  /** Transient overlay items go on the view of `docId` only. */
+  function setOverlayFor(docId, items) {
+    clearOverlays();
+    const v = viewOf(docId);
+    if (v && items) { v.setOverlay(items); S.overlayDocs.add(docId); S.overlayDoc = docId; }
+  }
   function activeChannel(info) {
     const i = info || activeInfo();
     const n = (i.channels || []).length;
@@ -815,20 +940,22 @@ const IJApp = (() => {
     const rev = S.revs.get(docId);
     return rev !== undefined && rev !== S.cleanRev.get(docId);
   }
-  function dirtyDocs() { return S.order.filter((id) => S.docs.has(id) && isDirty(id)); }
+  function dirtyDocs() { return S.order.filter((id) => S.docs.has(id) && !S.hidden.has(id) && isDirty(id)); }
+  /** The images the operator sees (a hidden one has no view, no tab, no menu entry and is no choice of a dialog). */
+  const shownDocs = () => S.order.filter((id) => S.docs.has(id) && !S.hidden.has(id));
 
   function snapshot() {
     const info = activeInfo();
     const u = info ? S.undo.get(info.docId) || { undo: 0, redo: 0 } : { undo: 0, redo: 0 };
     return {
       doc: info, roi: info ? selOf(info.docId) : null, prevRoi: info ? S.prevSel.get(info.docId) || null : null,
-      busy: S.busy, nDocs: S.docs.size,
+      busy: S.busy, nDocs: shownDocs().length,
       canUndo: info ? (info.undoDepth !== undefined ? info.undoDepth > 0 : u.undo > 0) : false,
       canRedo: info ? (info.redoDepth !== undefined ? info.redoDepth > 0 : u.redo > 0) : false,
       dirty: info ? isDirty(info.docId) : false,
       hasResults: S.results.length > 0,
       canProject: !!(S.desc && S.desc.available),
-      docs: S.order.map((id) => S.docs.get(id)).filter(Boolean),
+      docs: shownDocs().map((id) => S.docs.get(id)),
       threshold: S.threshold,
       activeChannel: info ? activeChannel(info) : 0
     };
@@ -836,7 +963,10 @@ const IJApp = (() => {
 
   function registerDoc(info, { clean = true, sessionKey = null, provenance = null } = {}) {
     const id = info.docId;
+    const isNew = !S.docs.has(id);
     S.docs.set(id, info);
+    if (info.hidden) S.hidden.add(id);
+    S.annotDims.set(id, { w: info.width, h: info.height });
     if (!S.order.includes(id)) S.order.push(id);
     S.undo.set(id, { undo: 0, redo: 0 });
     const rev = info.rev !== undefined ? info.rev : 0;
@@ -846,6 +976,7 @@ const IJApp = (() => {
     if (provenance) S.sources.set(id, provenance);
     initDisplayState(info);
     if (!S.activeCh.has(id)) S.activeCh.set(id, 0);
+    if (isNew) emit('doc', { docId: id, kind: 'opened' });
   }
 
   /** The local display state of a document, from the engine's info (`fresh`: nothing of the old state is kept). */
@@ -875,6 +1006,10 @@ const IJApp = (() => {
     S.activeCh.set(docId, Math.max(0, Math.min(Math.max(0, n - 1), act)));
     initDisplayState(info, true);
     for (const k of Array.from(S.displayPatch.keys())) if (k.startsWith(docId + ':')) S.displayPatch.delete(k);
+    // overlays belong to the pixel grid they were made on: another size drops them (PLAN-wave3 §2.5)
+    const was = S.annotDims.get(docId);
+    S.annotDims.set(docId, { w: info.width, h: info.height });
+    if (was && (was.w !== info.width || was.h !== info.height)) clearAnnotations(docId);
   }
 
   async function refreshInfo(docId) {
@@ -890,10 +1025,11 @@ const IJApp = (() => {
     return { mode: d.mode, active: S.activeCh.get(docId) || 0, visible: d.visible.slice(),
       channels: d.channels.map((c) => ({ min: c.min, max: c.max, lut: c.lut, invert: c.invert })) };
   }
-  function pushDisplay() {
-    if (!S.shell || S.activeId === null) return;
-    const st = displayStateFor(S.activeId);
-    if (st) S.shell.setDisplayState(st);
+  function pushDisplay(docId) {
+    const id = docId !== undefined && docId !== null ? docId : S.activeId;
+    if (!S.shell || id === null) return;
+    const st = displayStateFor(id);
+    if (st) S.shell.setDisplayState(st, id);
   }
 
   /** The image description the display takes: the engine's info with the local display state. */
@@ -915,11 +1051,12 @@ const IJApp = (() => {
     const d = S.dstate.get(docId);
     if (!d || !d.channels[channel]) return;
     Object.assign(d.channels[channel], patch);
-    if (docId === S.activeId) pushDisplay();
+    pushDisplay(docId);
     const key = docId + ':' + channel;
     S.displayPatch.set(key, Object.assign(S.displayPatch.get(key) || {}, patch));
     flushDisplayPatch(docId, channel);
     if (docId === S.activeId) scheduleToolRefresh('display');
+    emit('doc', { docId, kind: 'display' });
   }
   function flushDisplayPatch(docId, channel) {
     const key = docId + ':' + channel;
@@ -938,9 +1075,10 @@ const IJApp = (() => {
     if (patch.mode) d.mode = patch.mode;
     if (patch.visible) d.visible = patch.visible.slice();
     if (patch.active !== undefined) S.activeCh.set(docId, patch.active);
-    if (docId === S.activeId) pushDisplay();
+    pushDisplay(docId);
     call('doc.setDisplay', Object.assign({ docId }, patch)).catch((err) => console.error('[advanced-studio] setDisplay', err));
     if (docId === S.activeId) scheduleToolRefresh('display');
+    emit('doc', { docId, kind: 'display' });
   }
 
   /** fromShell: the pointer drew it (the shell already shows it); otherwise the shell is told. */
@@ -948,53 +1086,100 @@ const IJApp = (() => {
     const cur = S.sel.get(docId) || null;
     if (cur && (!roi || final !== false)) S.prevSel.set(docId, cur);
     if (roi) S.sel.set(docId, roi); else S.sel.delete(docId);
+    if (!fromShell && S.shell) S.shell.setActiveRoi(roi || null, docId);
     if (docId === S.activeId) {
-      if (!fromShell && S.shell) S.shell.setActiveRoi(roi || null);
       // The menus' enabled state depends on whether there is a selection and of which kind: a
       // pointer move that only reshapes it (draw / move / resize, final === false) changes neither.
       if (final !== false || !cur || !roi || cur.type !== roi.type) refreshUi();
       scheduleToolRefresh('selection');
     }
+    emit('roi', { docId, roi: roi || null, final: final !== false });
   }
 
   function refreshRois() {
     if (!S.shell) return;
-    const info = activeInfo();
-    const list = info ? S.roiList.filter((r) => r.docId === info.docId) : [];
-    S.shell.setRois({ all: list.map((r) => ({ roi: r.roi, label: r.name })), showAll: S.showAll });
+    for (const id of S.order) {
+      if (!viewOf(id)) continue;
+      const list = S.roiList.filter((r) => r.docId === id);
+      S.shell.setRois({ all: list.map((r) => ({ roi: r.roi, label: r.name, stroke: r.stroke, width: r.width, fill: r.fill })), showAll: S.showAll }, id);
+    }
   }
 
   function tileProvider(docId) {
     return (channel, level, tx, ty) => call('doc.tile', { docId, channel, level, tx, ty });
   }
 
-  async function showDoc(docId) {
+  /**
+   * Makes sure `docId` has its own view (created on first call, placed as `place` says: { placement, anchor, docIds })
+   * and brings it up to date with the engine's info. Does NOT activate it (a worker invalidate of a background tab
+   * must not steal the focus); showDoc does.
+   */
+  function refreshView(docId, place) {
     const info = S.docs.get(docId);
-    if (!info || !S.shell) return;
+    if (!info || !S.shell || S.hidden.has(docId)) return null;
+    hideEmpty();
+    S.placing = true;
+    try { S.shell.setImage(viewInfo(docId), place || {}); } finally { S.placing = false; }
+    const v = viewOf(docId);
+    if (v) {
+      v.setTileProvider(tileProvider(docId));
+      S.shell.setActiveRoi(selOf(docId), docId);
+      pushDisplay(docId);
+      if (typeof v.setInterpolate === 'function') v.setInterpolate(!!settingGet('appearance.interpolate'));
+      const ar = S.annot.get(docId);
+      if (ar && typeof v.setAnnotations === 'function') v.setAnnotations(ar.items, ar.visible);
+    }
+    refreshRois();
+    syncRebind();
+    return v;
+  }
+
+  /** What follows an activation, whoever caused it (a tab click, a menu entry, showDoc). */
+  function afterActivate(docId) {
+    if (!S.docs.has(docId)) return;
+    const changed = S.activeId !== docId;
     S.activeId = docId;
     hideEmpty();
-    S.display.setTileProvider(tileProvider(docId));
-    S.shell.setImage(viewInfo(docId));
-    S.display.setThresholdOverlay(null);
-    S.display.setPreview(null);
-    if (S.display.setOverlay) S.display.setOverlay(null);
-    S.shell.setActiveRoi(selOf(docId));
-    refreshRois();
     syncWindowMenu();
     refreshUi();
     scheduleToolRefresh('doc');
+    if (changed) {
+      // a floating state (a paste) is committed before another image takes over
+      if (S.pending) flushPending();
+      if (S.lastActiveEmitted !== docId) { S.lastActiveEmitted = docId; emit('activeDoc', docId); }
+    }
+  }
+
+  /** The view of `docId` is refreshed and becomes the active one. */
+  async function showDoc(docId, place) {
+    const info = S.docs.get(docId);
+    if (!info || !S.shell || S.hidden.has(docId)) return;
+    const v = refreshView(docId, place);
+    if (!v) return;
+    S.placing = true;
+    try { S.shell.layout.activate(docId); } finally { S.placing = false; }
+    afterActivate(docId);
   }
 
   /** New images made from `fromId` (default: the active one) take its provenance and session; the last is shown. */
-  async function adoptNewDocs(ids, fromId) {
+  async function adoptNewDocs(ids, fromId, placement) {
     let last = null;
     const from = fromId !== undefined && fromId !== null ? fromId : S.activeId;
+    const got = [];
     for (const id of ids || []) {
       const info = await call('doc.info', { docId: id });
       registerDoc(info, { clean: false, provenance: S.sources.get(from) || null, sessionKey: S.sessionKeys.get(from) || null });
+      got.push(id);
       last = id;
     }
-    if (last !== null) await showDoc(last);
+    // Every new image gets a view; placement 'gridWithSource' puts them all, with the source, in one grid.
+    const place = placement ? { placement, anchor: from, docIds: got } : {};
+    for (const id of got) refreshView(id, place);
+    if (placement === 'gridWithSource' && S.docs.has(from)) {
+      await showDoc(from);
+      // a grid keeps the source open beside its copies: when memory is getting full, say that closing it frees some
+      if (S.engineBudget > 0 && S.engineUsed / S.engineBudget >= GRID_MEMORY_FRACTION) setStatus(tr('status.gridMemory'));
+    } else if (last !== null) await showDoc(last);
   }
 
   function applyRunResult(docId, res) {
@@ -1036,15 +1221,44 @@ const IJApp = (() => {
 
   function scheduleMetaPersist() {
     clearTimeout(S.persistTimer);
-    S.persistTimer = setTimeout(() => {
-      if (!S.worker || S.worker.dead) return;
-      // The UI state belongs to the session of the image being edited; with no stored session
-      // there is nothing to attach it to (a meta write must never create a document-less session).
-      const key = (S.activeId !== null && S.sessionKeys.get(S.activeId)) || Array.from(S.sessionKeys.values())[0];
-      if (!key) return;
-      call('session.putMeta', { key, results: S.results, rois: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })),
-        measurements: S.measurements, windows: Array.from(S.wins.keys()) }).catch((err) => console.error('[advanced-studio] putMeta', err));
-    }, PERSIST_MS);
+    S.persistTimer = setTimeout(persistMeta, PERSIST_MS);
+  }
+
+  /** Tool windows worth reopening after a reload: the built-in ones and the panels that asked for it. */
+  function persistedWindows() {
+    return Array.from(S.wins.keys()).filter((id) => Object.prototype.hasOwnProperty.call(TOOL_WINDOWS, id) || (EXT.panels.has(id) && EXT.panels.get(id).spec.persist === true));
+  }
+
+  /**
+   * The UI state belongs to the sessions of the images being edited; with no stored session there is nothing to attach it
+   * to (a meta write must never create a session without a document). The layout, the sync state, the registered
+   * look-up tables and the packages' data go into EVERY touched session (restore filters them by the restored images);
+   * the annotations into the session of the image they belong to; Results, the ROI list and the open windows into the
+   * session of the active image only (they are added to what is already open, a second copy would double them).
+   */
+  function persistMeta() {
+    if (!S.worker || S.worker.dead) return;
+    const keys = Array.from(new Set(S.sessionKeys.values()));
+    if (!keys.length) return;
+    const primary = (S.activeId !== null && S.sessionKeys.get(S.activeId)) || keys[0];
+    const layout = S.shell ? S.shell.layout.serialize() : null;
+    const luts = {};
+    for (const [name, table] of S.luts) luts[name] = Array.from(table);
+    for (const key of keys) {
+      const annotations = {};
+      for (const id of S.order) if (S.sessionKeys.get(id) === key && S.annot.has(id) && S.annot.get(id).items.length) annotations[id] = { visible: S.annot.get(id).visible, items: S.annot.get(id).items };
+      const msg = { key, layout, annotations, sync: syncState(), luts, ext: S.extData };
+      if (key === primary) {
+        msg.results = S.results;
+        msg.rois = S.roiList.map((r) => { const o = { name: r.name, docId: r.docId, roi: r.roi }; for (const k of ['stroke', 'width', 'fill']) if (r[k] !== undefined) o[k] = r[k]; return o; });
+        msg.measurements = S.measurements;
+        msg.windows = persistedWindows();
+      }
+      call('session.putMeta', msg).then((res) => {
+        // what the engine could not keep (too large) is said once; the rest was stored
+        if (res && Array.isArray(res.dropped) && res.dropped.length && !S.metaWarned) { S.metaWarned = true; setStatus(tr('warn.metaTooLarge')); }
+      }).catch((err) => console.error('[advanced-studio] putMeta', err));
+    }
   }
 
   // ───────────────────────────── operations on the active image ─────────────────────────────
@@ -1099,7 +1313,8 @@ const IJApp = (() => {
           if (d.info.rev !== undefined) S.revs.set(docId, d.info.rev);
           S.undo.set(docId, { undo: 0, redo: 0 });
           initDisplayState(d.info);
-          if (docId === S.activeId && S.display) S.display.invalidate(d.changed ? d.changed.channels : undefined);
+          const dv = viewOf(docId);
+          if (dv) dv.invalidate(d.changed ? d.changed.channels : undefined);
           commitHook();
           refreshUi();
         }
@@ -1108,21 +1323,24 @@ const IJApp = (() => {
       applyRunResult(docId, res);
       const ch = res.changed || {};
       const active = docId === S.activeId;
+      const rv = viewOf(docId);
       if (ch.sizeChanged) {
-        // Same geometry (a channel reorder): the selection and the view stay.
-        if (!ch.sameGeometry) S.sel.delete(docId);
-        if (active) { await showDoc(docId); if (S.display && !ch.sameGeometry) S.display.fit(); }
+        // Same geometry (a channel reorder): the selection, the overlays and the view stay.
+        if (!ch.sameGeometry) { S.sel.delete(docId); clearAnnotations(docId); }
+        refreshView(docId);
+        if (rv && !ch.sameGeometry) rv.fit();
+        if (active) scheduleToolRefresh('doc');
       } else if (ch.calibration) {
         // metadata only: the selection and the view stay
-        if (active && S.shell) S.shell.updateInfo(viewInfo(docId));
+        if (S.shell) S.shell.updateInfo(viewInfo(docId));
         refreshUi();
-      } else if (active) {
-        if (S.display) S.display.invalidate(ch.channels);
-        pushDisplay();
-        refreshRois();
-        scheduleToolRefresh('pixels');
+      } else {
+        if (rv) rv.invalidate(ch.channels);
+        pushDisplay(docId);
+        if (active) { refreshRois(); scheduleToolRefresh('pixels'); }
       }
-      if (res.newDocIds && res.newDocIds.length) await adoptNewDocs(res.newDocIds, docId);
+      if (!(res.newDocIds && res.newDocIds.length)) emit('doc', { docId, kind: ch.sizeChanged || ch.calibration ? 'size' : 'pixels' });
+      if (res.newDocIds && res.newDocIds.length) await adoptNewDocs(res.newDocIds, docId, opt.placement);
       return { newDocIds: res.newDocIds || [], changed: ch };
     });
   }
@@ -1137,20 +1355,19 @@ const IJApp = (() => {
       const u = S.undo.get(info.docId) || { undo: 0, redo: 0 };
       S.undo.set(info.docId, kind === 'undo' ? { undo: Math.max(0, u.undo - 1), redo: u.redo + 1 } : { undo: u.undo + 1, redo: Math.max(0, u.redo - 1) });
       if (res.info) { if (res.changed && res.changed.sizeChanged) afterLayoutChange(info.docId, res.info); else initDisplayState(res.info); }
-      if (res.changed && res.changed.sizeChanged) { if (!res.changed.sameGeometry) S.sel.delete(info.docId); await showDoc(info.docId); if (!res.changed.sameGeometry) S.display.fit(); }
+      const uv = viewOf(info.docId);
+      if (res.changed && res.changed.sizeChanged) { if (!res.changed.sameGeometry) { S.sel.delete(info.docId); clearAnnotations(info.docId); } await showDoc(info.docId); if (uv && !res.changed.sameGeometry) uv.fit(); }
       else if (res.changed && res.changed.calibration) { S.shell.updateInfo(viewInfo(info.docId)); refreshUi(); }
-      else { S.display.invalidate(res.changed ? res.changed.channels : undefined); pushDisplay(); }
+      else { if (uv) uv.invalidate(res.changed ? res.changed.channels : undefined); pushDisplay(info.docId); }
       scheduleToolRefresh('pixels');
       scheduleMetaPersist();
+      emit('doc', { docId: info.docId, kind: res.changed && (res.changed.sizeChanged || res.changed.calibration) ? 'size' : 'pixels' });
     });
   }
 
+  /** The value Fill (white = the foreground colour) and Clear (the background colour) write: ImageJ's setColor, see colorValueOf. */
   function fillValue(info, channel, white) {
-    if (!white) return 0;
-    if (info.bitDepth === 8) return 255;
-    if (info.bitDepth === 16) return 65535;
-    const d = S.dstate.get(info.docId);
-    return d && d.channels[channel] && Number.isFinite(d.channels[channel].max) ? d.channels[channel].max : 1;
+    return colorValueOf(info.docId, channel, white ? 'foreground' : 'background');
   }
 
   // ── dialogs: the field types the engine of the packages need, resolved against the open images ──
@@ -1159,7 +1376,7 @@ const IJApp = (() => {
     const out = [];
     for (const id of S.order) {
       const info = S.docs.get(id);
-      if (!info) continue;
+      if (!info || S.hidden.has(id)) continue;
       let keep = true;
       if (typeof filter === 'function') { try { keep = !!filter(info); } catch (err) { console.error('[advanced-studio] doc filter', err); keep = false; } }
       if (keep) out.push({ value: id, label: info.name });
@@ -1196,7 +1413,7 @@ const IJApp = (() => {
   function clearExtPreview() {
     clearTimeout(S.previewTimer);
     S.previewSeq++;
-    if (S.display) { S.display.setPreview(null); if (S.display.setOverlay) S.display.setOverlay(null); }
+    clearPreviews(); clearOverlays();
     if (S.previewCompute && S.worker && !S.worker.dead) call('cancel', { targetId: S.previewCompute }).catch(() => {});
     S.previewCompute = 0;
   }
@@ -1217,20 +1434,20 @@ const IJApp = (() => {
         const region = { x0: Math.max(0, Math.floor(r.x0)), y0: Math.max(0, Math.floor(r.y0)), x1: Math.min(info.width, Math.ceil(r.x1)), y1: Math.min(info.height, Math.ceil(r.y1)) };
         if (pv.compute) {
           // A non-local result (Find Maxima) is only previewed at level 0 over a region of at most ~4 Mpx.
-          if ((region.x1 - region.x0) * (region.y1 - region.y0) > PREVIEW_COMPUTE_PIXELS) { if (S.display && S.display.setOverlay) S.display.setOverlay(null); note(tr('dlg.previewZoomIn')); return; }
+          if ((region.x1 - region.x0) * (region.y1 - region.y0) > PREVIEW_COMPUTE_PIXELS) { clearOverlays(); note(tr('dlg.previewZoomIn')); return; }
           note(null);
           compute(pv.compute, params, { docId: info.docId, channel, roi, region, preview: true }).then((res) => {
             if (seq !== S.previewSeq || res === null || res === undefined) return;
             const items = typeof pv.overlay === 'function' ? pv.overlay(res, values) : null;
-            if (S.display && S.display.setOverlay) { S.overlayDoc = info.docId; S.display.setOverlay(items); }
+            setOverlayFor(info.docId, items);
           }).catch((err) => { if (!err || (err.code !== 'IJ_CANCELLED' && err.code !== 'IJ_SUPERSEDED')) console.error('[advanced-studio] compute preview', err); });
           return;
         }
         S.previewTimer = setTimeout(() => {
-          const level = S.display.getView().level || 0;
+          const level = (viewOf(info.docId) ? viewOf(info.docId).getView().level : 0) || 0;
           call('doc.preview', { docId: info.docId, seq, op: pv.op, params, roi, channel, level, x0: region.x0, y0: region.y0, x1: region.x1, y1: region.y1 })
             .then(() => note(null))
-            .catch((err) => { if (err && err.code === 'IJ_PREVIEW_TOO_LARGE') { S.display.setPreview(null); note(tr('dlg.previewZoomIn')); } else console.error('[advanced-studio] preview', err); });
+            .catch((err) => { if (err && err.code === 'IJ_PREVIEW_TOO_LARGE') { clearPreviews(); note(tr('dlg.previewZoomIn')); } else console.error('[advanced-studio] preview', err); });
         }, 90);
       }
     };
@@ -1254,27 +1471,25 @@ const IJApp = (() => {
   // Previews: the engine renders the visible region of the image with the dialog's parameters.
   /** Level-0 rectangle on screen, from the display's view (screen = image · zoom + origin). */
   function visibleRect(info) {
-    const v = S.display.getView();
-    const z = v.zoom || 1;
-    return { x0: clamp(-v.ox / z, 0, info.width), y0: clamp(-v.oy / z, 0, info.height),
-      x1: clamp((v.viewportWidth - v.ox) / z, 0, info.width), y1: clamp((v.viewportHeight - v.oy) / z, 0, info.height) };
+    const v = viewOf(info.docId);
+    return v ? v.visibleRect() : { x0: 0, y0: 0, x1: info.width, y1: info.height };
   }
   function previewHooks(op, buildParams, info, allChannels) {
     return {
       onChange(values, ctl) {
         clearTimeout(S.previewTimer);
-        if (!values) { S.previewSeq++; S.display.setPreview(null); if (ctl) ctl.note(null); return; }
+        if (!values) { S.previewSeq++; clearPreviews(); if (ctl) ctl.note(null); return; }
         S.previewTimer = setTimeout(() => {
           const seq = ++S.previewSeq;
           const r = visibleRect(info);
-          const level = S.display.getView().level || 0;
+          const level = (viewOf(info.docId) ? viewOf(info.docId).getView().level : 0) || 0;
           call('doc.preview', { docId: info.docId, seq, op, params: buildParams(values), roi: selOf(info.docId),
             channel: values.all && allChannels ? 'all' : activeChannel(info), level,
             x0: Math.max(0, Math.floor(r.x0)), y0: Math.max(0, Math.floor(r.y0)),
             x1: Math.min(info.width, Math.ceil(r.x1)), y1: Math.min(info.height, Math.ceil(r.y1)) })
             .then(() => { if (ctl && seq === S.previewSeq) ctl.note(null); })
             .catch((err) => {
-              if (err && err.code === 'IJ_PREVIEW_TOO_LARGE' && ctl) { S.display.setPreview(null); if (seq === S.previewSeq) ctl.note(tr('dlg.previewZoomIn')); }
+              if (err && err.code === 'IJ_PREVIEW_TOO_LARGE' && ctl) { clearPreviews(); if (seq === S.previewSeq) ctl.note(tr('dlg.previewZoomIn')); }
               else console.error('[advanced-studio] preview', err);
             });
         }, 90);
@@ -1284,7 +1499,7 @@ const IJApp = (() => {
   function endPreview() {
     clearTimeout(S.previewTimer);
     S.previewSeq++;
-    if (S.display) S.display.setPreview(null);
+    clearPreviews();
   }
 
   async function filterDialog(titleKey, fields, op, buildParams) {
@@ -1369,12 +1584,13 @@ const IJApp = (() => {
     try { await saveDocTiff(S.activeId); } catch (err) { await reportError(err); }
   }
 
-  async function savePng() {
-    const info = activeInfo();
-    if (!info || !S.display || !S.display.renderToCanvas) return;
+  async function savePng(docId) {
+    const info = docId !== undefined && docId !== null ? S.docs.get(docId) : activeInfo();
+    const sv = info ? viewOf(info.docId) : null;
+    if (!info || !sv || !sv.renderToCanvas) return;
     try {
       await saveFile(safeName(info.name, '.png'), 'image/png', '.png', 'PNG', async () => {
-        const canvas = await S.display.renderToCanvas({ scale: 1 });
+        const canvas = await sv.renderToCanvas({ scale: 1 });
         return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(Object.assign(new Error('png'), { code: 'IJ_PNG_FAILED' }))), 'image/png'));
       });
     } catch (err) { await reportError(err); }
@@ -1437,7 +1653,7 @@ const IJApp = (() => {
         const info = res.info;
         registerDoc(info, { clean: true });
         await showDoc(info.docId);
-        S.display.fit();
+        if (viewOf(info.docId)) viewOf(info.docId).fit();
         commitHook();
       });
     });
@@ -1457,19 +1673,21 @@ const IJApp = (() => {
       S.undo.set(info.docId, { undo: 0, redo: 0 });
       S.sel.delete(info.docId);
       await showDoc(info.docId);
-      S.display.fit();
+      if (viewOf(info.docId)) viewOf(info.docId).fit();
     });
   }
 
   /** Drop every local trace of a document (the engine has been told, or is gone). */
   function forgetDoc(id) {
     const key = S.sessionKeys.get(id);
-    for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources]) m.delete(id);
-    S.unprotected.delete(id); S.held.delete(id);
+    for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.annot, S.annotDims]) m.delete(id);
+    S.unprotected.delete(id); S.held.delete(id); S.hidden.delete(id);
     S.order = S.order.filter((x) => x !== id);
     S.roiList = S.roiList.filter((r) => r.docId !== id);
     if (S.redirect && S.redirect.docId === id) S.redirect = null;
+    if (S.sync.docs.delete(id)) syncRebind();
     if (key && !Array.from(S.sessionKeys.values()).includes(key)) releaseSessionLock(key);
+    emit('doc', { docId: id, kind: 'closed' });
   }
 
   async function closeImage(docId) {
@@ -1486,10 +1704,14 @@ const IJApp = (() => {
     // left to protect). The session key is shared by every image derived from the projection, so
     // it is never discarded here: that would erase the stored state of the siblings.
     try { await call('doc.close', { docId: id, discard: true }); } catch (err) { console.error('[advanced-studio]', err); }
+    const wasActive = S.activeId === id;
+    const next = S.shell ? S.shell.layout.neighbour(id) : null;
+    S.previewDocs.delete(id); S.overlayDocs.delete(id);
     forgetDoc(id);
-    if (S.activeId === id) {
+    if (S.shell) { S.placing = true; try { S.shell.removeImage(id); } finally { S.placing = false; } }
+    if (wasActive) {
       S.activeId = null;
-      if (S.order.length) await showDoc(S.order[S.order.length - 1]);
+      if (S.order.length) await showDoc(next !== null && S.docs.has(next) ? next : S.order[S.order.length - 1]);
       else { if (S.shell) S.shell.clearImage(); showEmpty(); }
     }
     syncWindowMenu();
@@ -1540,15 +1762,27 @@ const IJApp = (() => {
       let res;
       try { res = await call('session.restore', { key }); }
       catch (err) { if (err && err.code === 'IJ_NO_SESSION') return; throw err; }
+      // the tables an extension registered must exist before a view names one
+      if (res.meta) await restoreLuts(res.meta);
       let last = null;
+      const wasEmpty = !winOrder().length;
+      const restored = [];
       for (const id of res.docIds || []) {
         const info = await call('doc.info', { docId: id });
         registerDoc(info, { clean: false, sessionKey: key });
-        last = id; count++;
+        restored.push(id);
+        if (!info.hidden) last = id;
+        count++;
       }
       if (count) holdSessionLock(key);
-      if (res.meta) restoreMeta(res.meta);
-      if (last !== null) { await showDoc(last); S.display.fit(); }
+      // every restored image gets a view; the stored layout is applied only on an empty workspace, otherwise they join as tabs
+      for (const id of restored) refreshView(id);
+      if (res.meta) restoreMeta(res.meta, { ids: restored, applyLayout: wasEmpty });
+      if (last !== null) {
+        const act = S.shell && S.shell.layout.active() !== null && restored.includes(S.shell.layout.active()) ? S.shell.layout.active() : last;
+        await showDoc(act);
+        for (const id of restored) { const rv = viewOf(id); if (rv) rv.fit(); }
+      }
       warned = res.warnings || [];
     });
     if (warned.length) {
@@ -1568,7 +1802,22 @@ const IJApp = (() => {
   }
 
   /** Results and selections of the restored session are added to the ones already here, not swapped for them. */
-  function restoreMeta(meta) {
+  function restoreMeta(meta, o) {
+    const opt = o || {};
+    if (opt.applyLayout && meta.layout && S.shell) {
+      S.placing = true;
+      try { S.shell.layout.restoreFrom(meta.layout, winOrder()); } finally { S.placing = false; }
+    }
+    // the tool windows the session had open come back (the id list is data from storage: only known windows and panels)
+    if (Array.isArray(meta.windows)) {
+      for (const id of meta.windows) {
+        if (S.wins.has(id)) continue;
+        try {
+          if (Object.prototype.hasOwnProperty.call(TOOL_WINDOWS, id)) openTool(id);
+          else if (EXT.panels.has(id) && EXT.panels.get(id).spec.persist === true) openPanelExt(id, { focus: false }).catch((err) => console.error('[advanced-studio] reopen', err));
+        } catch (err) { console.error('[advanced-studio] reopen', err); }
+      }
+    }
     if (Array.isArray(meta.results)) S.results = S.results.concat(meta.results);
     if (Array.isArray(meta.rois)) {
       const known = new Set(S.roiList.map((r) => r.docId + '|' + r.name));
@@ -1577,8 +1826,28 @@ const IJApp = (() => {
         const k = r.docId + '|' + r.name;
         if (known.has(k)) continue;
         known.add(k);
-        S.roiList.push({ name: r.name, docId: r.docId, roi: r.roi });
+        const entry = { name: r.name, docId: r.docId, roi: r.roi };
+        for (const s of ['stroke', 'width', 'fill']) if (r[s] !== undefined) entry[s] = r[s];
+        S.roiList.push(entry);
       }
+    }
+    // persistent annotations of the restored images (data from storage: every item is checked again)
+    if (meta.annotations && typeof meta.annotations === 'object' && !Array.isArray(meta.annotations)) {
+      for (const id of Object.keys(meta.annotations)) {
+        if (!S.docs.has(id) || (opt.ids && !opt.ids.includes(id))) continue;
+        const rec = meta.annotations[id];
+        if (!rec || !Array.isArray(rec.items)) continue;
+        try {
+          const items = [];
+          for (const raw of rec.items.slice(0, ANNOTATIONS_MAX)) { try { items.push(Object.assign(cleanAnnotation(raw), { id: annotationId(raw, items) })); } catch (err) { console.error('[advanced-studio] annotation dropped', err); } }
+          S.annot.set(id, { visible: rec.visible !== false, items });
+          pushAnnotations(id, false);
+        } catch (err) { console.error('[advanced-studio] annotations', err); }
+      }
+    }
+    if (meta.sync && typeof meta.sync === 'object') applySyncState(meta.sync);
+    if (meta.ext && typeof meta.ext === 'object' && !Array.isArray(meta.ext)) {
+      for (const pkg of Object.keys(meta.ext)) if (PKG_PREFIX[pkg] !== undefined && S.extData[pkg] === undefined) S.extData[pkg] = meta.ext[pkg];
     }
     scheduleToolRefresh('results');
     scheduleToolRefresh('rois');
@@ -1628,11 +1897,11 @@ const IJApp = (() => {
   }
 
   function showEmpty() {
-    if (!S.host || S.emptyEl) return;
+    if (!S.shell || S.emptyEl) return;
     S.emptyEl = h('div', { class: 'ij-empty' },
       h('p', { class: 'ij-banner', text: tr('empty.message') }),
       row(btn(tr('cmd.stackProject'), () => zProject(), 'ij-btn--primary'), btn(tr('cmd.fileOpen'), () => openTiff()), btn(tr('cmd.fileSimple'), () => simpleView())));
-    S.host.appendChild(S.emptyEl);
+    S.shell.workspace.appendChild(S.emptyEl);
   }
   function hideEmpty() { if (S.emptyEl) { S.emptyEl.remove(); S.emptyEl = null; } }
 
@@ -1683,10 +1952,10 @@ const IJApp = (() => {
     const key = (desc && desc.reasonKey) || 'studioAdvanced.notSupported';
     let text = key;
     if (typeof I18n !== 'undefined' && I18n.t) text = I18n.t(key);
-    if (!S.host) return;
+    if (!S.shell) return;
     S.emptyEl = h('div', { class: 'ij-empty' }, h('p', { class: 'ij-banner', text }),
       row(btn(tr('cmd.fileSimple'), () => simpleView(), 'ij-btn--primary')));
-    S.host.appendChild(S.emptyEl);
+    S.shell.workspace.appendChild(S.emptyEl);
   }
 
   /** The Z Project dialog, then the streamed load. Resolves true when an image was loaded. */
@@ -1788,8 +2057,10 @@ const IJApp = (() => {
       const prov = placeholderProvider({ width: session.width, height: session.height });
       if (prov && S.shell) {
         const fake = { docId: -1, name, width: session.width, height: session.height, bitDepth: 8, channels: channels.map((c) => ({ name: c.name, color: c.color, display: { min: 0, max: 255, lut: c.color } })), calibration: cal };
-        S.display.setTileProvider(prov);
-        S.shell.setImage(fake);
+        // the placeholder lives in the view of the document being built (its own tab)
+        fake.docId = docId;
+        S.shell.setImage(fake, {});
+        if (viewOf(docId)) viewOf(docId).setTileProvider(prov);
         hideEmpty();
       }
       // Progress counts the lossless voxels delivered, so its total is the voxels the read
@@ -1831,10 +2102,11 @@ const IJApp = (() => {
       holdSessionLock(sessionKey);
       ok = true;
       await showDoc(docId);
-      S.display.fit();
+      if (viewOf(docId)) viewOf(docId).fit();
       commitHook();
     } catch (err) {
       if (docId !== null && !ok) call('doc.close', { docId }).catch(() => {});
+      if (S.shell && docId !== null && !ok && S.shell.view(docId)) { S.placing = true; try { S.shell.removeImage(docId); } finally { S.placing = false; } }
       if (S.shell && !S.docs.size) { S.shell.clearImage(); showEmpty(); }
       else if (S.activeId !== null) await showDoc(S.activeId);
       endBusy();
@@ -1899,7 +2171,7 @@ const IJApp = (() => {
       const res = await call('doc.duplicate', { docId: info.docId, roi, channels: all ? undefined : [activeChannel(info)], name: info.name.replace(/(-\d+)?$/, '') + '-1' });
       registerDoc(res.info, { clean: false, provenance: S.sources.get(info.docId) || null, sessionKey: S.sessionKeys.get(info.docId) || null });
       await showDoc(res.info.docId);
-      S.display.fit();
+      if (viewOf(res.info.docId)) viewOf(res.info.docId).fit();
       commitHook();
     });
   }
@@ -1917,16 +2189,19 @@ const IJApp = (() => {
   }
 
   function zoom(dir) {
-    if (!S.display || !S.host) return;
-    S.display.zoomAt(S.host.clientWidth / 2, S.host.clientHeight / 2, dir);
+    const v = activeView();
+    if (!v) return;
+    const g = v.getView();
+    v.zoomAt(g.viewportWidth / 2, g.viewportHeight / 2, dir);
   }
-  const zoom100 = () => { if (S.display) S.display.view100(); };
-  const zoomFit = () => { if (S.display) S.display.fit(); };
+  const zoom100 = () => { const v = activeView(); if (v) v.view100(); };
+  const zoomFit = () => { const v = activeView(); if (v) v.fit(); };
   function zoomToSelection() {
     const info = activeInfo();
     const roi = info && selOf(info.docId);
-    if (!roi || !S.display || typeof IJRoi === 'undefined') return;
-    S.display.zoomToRect(IJRoi.bounds(roi));
+    const v = activeView();
+    if (!roi || !v || typeof IJRoi === 'undefined') return;
+    v.zoomToRect(IJRoi.bounds(roi));
   }
 
   function lutOf(info, ch) { const d = S.dstate.get(info.docId); return d && d.channels[ch] ? d.channels[ch] : null; }
@@ -2266,9 +2541,10 @@ const IJApp = (() => {
   }
 
   function cycleImage(dir) {
-    if (S.order.length < 2) return;
-    const i = S.order.indexOf(S.activeId);
-    const next = S.order[(i + dir + S.order.length) % S.order.length];
+    const ord = winOrder();
+    if (ord.length < 2) return;
+    const i = ord.indexOf(S.activeId);
+    const next = ord[(i + dir + ord.length) % ord.length];
     showDoc(next);
   }
 
@@ -2277,33 +2553,40 @@ const IJApp = (() => {
 
   // ───────────────────────────── tool windows ─────────────────────────────
 
-  const TOOL_WINDOWS = { bc: buildBC, channels: buildChannels, threshold: buildThreshold, results: buildResults, roiManager: buildRoiManager, summary: buildSummary };
+  const TOOL_WINDOWS = { bc: buildBC, channels: buildChannels, threshold: buildThreshold, results: buildResults, roiManager: buildRoiManager, summary: buildSummary, sync: buildSync };
 
-  function floatingWindow(id, titleKey, build) {
+  /** `o` = { width, height } of a window opened for the first time (a size the operator chose is kept by the shell). */
+  function floatingWindow(id, titleKey, build, o) {
     if (!S.shell) return null;
     const existing = S.wins.get(id);
     if (existing) { existing.focus(); const u = S.winUpdaters.get(id); S.lastToolReady = Promise.resolve(u ? u('doc') : undefined); return existing; }
     const view = build();
-    const win = S.shell.windows.floating({ id, title: tr(titleKey), content: view.el, onClose: () => {
+    const spec = { id, title: tr(titleKey), content: view.el, onClose: () => {
       S.wins.delete(id); S.winUpdaters.delete(id);
       if (view.dispose) view.dispose();
       scheduleMetaPersist();
-    } });
+      syncWindowMenu();
+    } };
+    if (o && o.width > 0) spec.width = o.width;
+    const win = S.shell.windows.floating(spec);
+    if (o && o.height > 0 && win && win.el && win.el.style && !win.el.style.height) win.el.style.height = o.height + 'px';
     S.wins.set(id, win);
     S.lastToolReady = Promise.resolve(view.update ? view.update('doc') : undefined);
     if (view.update) S.winUpdaters.set(id, view.update);
     scheduleMetaPersist();
+    syncWindowMenu();
     return win;
   }
 
   function openTool(id) {
-    const titles = { bc: 'cmd.adjustBC', channels: 'cmd.colorChannels', threshold: 'cmd.adjustThreshold', results: 'win.results', roiManager: 'cmd.toolsRoiManager', summary: 'part.summaryTitle' };
+    const titles = { bc: 'cmd.adjustBC', channels: 'cmd.colorChannels', threshold: 'cmd.adjustThreshold', results: 'win.results', roiManager: 'cmd.toolsRoiManager', summary: 'part.summaryTitle', sync: 'cmd.toolsSyncWindows' };
     if ((id === 'bc' || id === 'channels' || id === 'threshold') && !activeInfo()) return;
     floatingWindow(id, titles[id], TOOL_WINDOWS[id]);
   }
 
   let toolTimer = 0;
   function scheduleToolRefresh(kind) {
+    if (kind === 'results') emit('results');
     clearTimeout(toolTimer);
     const pending = scheduleToolRefresh.kinds || (scheduleToolRefresh.kinds = new Set());
     pending.add(kind);
@@ -2476,7 +2759,7 @@ const IJApp = (() => {
   // ── Threshold
 
   function buildThreshold() {
-    const T = { method: 'Default', dark: S.thrDark !== false, mode: 'red', lower: 0, upper: 255 };
+    const T = { method: 'Default', dark: S.thrDark !== false, mode: 'red', lower: 0, upper: 255, overlayDoc: null };
     const canvas = h('canvas', { class: 'ij-hist', width: 256, height: 80 });
     const readout = h('div', { class: 'ij-readout' });
     let hist = null, token = 0;
@@ -2490,7 +2773,9 @@ const IJApp = (() => {
       loS.value = toPos(T.lower); hiS.value = toPos(T.upper);
       readout.textContent = num(T.lower) + ' – ' + num(T.upper);
       drawHist(canvas, hist, { band: [T.lower, T.upper] });
-      if (info && S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay({ channel: activeChannel(info), lower: T.lower, upper: T.upper, mode: T.mode });
+      // the overlay is drawn on the view of the image the window works on, and only there
+      if (T.overlayDoc !== undefined && T.overlayDoc !== null && (!info || T.overlayDoc !== info.docId)) { const ov = viewOf(T.overlayDoc); if (ov) ov.setThresholdOverlay(null); T.overlayDoc = null; }
+      if (info && viewOf(info.docId)) { viewOf(info.docId).setThresholdOverlay({ channel: activeChannel(info), lower: T.lower, upper: T.upper, mode: T.mode }); T.overlayDoc = info.docId; }
       // What api.state().threshold reads: the window's current range, on the image and channel it was made for.
       S.threshold = info ? { docId: info.docId, channel: activeChannel(info), lower: T.lower, upper: T.upper, dark: T.dark } : null;
     }
@@ -2521,7 +2806,8 @@ const IJApp = (() => {
     }
     function reset() {
       S.threshold = null;
-      if (S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay(null);
+      if (T.overlayDoc !== null && T.overlayDoc !== undefined && viewOf(T.overlayDoc)) viewOf(T.overlayDoc).setThresholdOverlay(null);
+      T.overlayDoc = null;
       if (hist) { T.lower = hist.min; T.upper = hist.max; }
       loS.value = 0; hiS.value = R;
       readout.textContent = '';
@@ -2542,13 +2828,52 @@ const IJApp = (() => {
     return {
       el,
       // 'doc' answers a promise that settles once the first automatic threshold is in S.threshold.
-      update(kind) { if (kind === 'doc' || kind === 'pixels') { const p = refresh(first); first = false; return p; } else if (kind === 'display') commit(); return undefined; },
-      dispose() { S.threshold = null; if (S.display && S.display.setThresholdOverlay) S.display.setThresholdOverlay(null); }
+      // 'setRange' (api.setThreshold): the range, and the polarity when given, are set from outside
+      update(kind, payload) {
+        if (kind === 'setRange' && payload) {
+          T.lower = payload.lower; T.upper = payload.upper;
+          if (payload.dark !== undefined) { T.dark = !!payload.dark; S.thrDark = T.dark; }
+          commit();
+          return undefined;
+        }
+        if (kind === 'doc' || kind === 'pixels') { const p = refresh(first); first = false; return p; } else if (kind === 'display') commit();
+        return undefined;
+      },
+      dispose() { S.threshold = null; if (T.overlayDoc !== null && T.overlayDoc !== undefined && viewOf(T.overlayDoc)) viewOf(T.overlayDoc).setThresholdOverlay(null); T.overlayDoc = null; }
     };
   }
   function IJThresholdMethods() {
     return typeof IJThreshold !== 'undefined' && IJThreshold.methods ? IJThreshold.methods() : ['Default', 'Huang', 'IsoData', 'Li', 'MaxEntropy', 'Mean', 'Otsu', 'Triangle'];
   }
+
+  // ── Synchronize Windows (ij.plugin.frame.SyncWindows, the part this port keeps: cursor, zoom and pan)
+
+  function buildSync() {
+    const list = h('div', { class: 'ij-list is-multi', attrs: { role: 'group' } });
+    function docsNow() { return shownDocs().map((id) => S.docs.get(id)); }
+    function renderDocs() {
+      list.textContent = '';
+      for (const info of docsNow()) {
+        list.appendChild(h('div', { class: 'ij-list-row' }, check(info.name, S.sync.docs.has(info.docId), (on) => {
+          if (on) S.sync.docs.add(info.docId); else S.sync.docs.delete(info.docId);
+          syncRebind(); scheduleMetaPersist();
+          if (on) syncViews(info.docId);
+        })));
+      }
+    }
+    const setFlag = (k) => (on) => { S.sync[k] = on; scheduleMetaPersist(); };
+    const el = h('div', { class: 'ij-panel ij-sync' },
+      check(tr('sync.cursor'), S.sync.cursor, setFlag('cursor')),
+      check(tr('sync.imageCoords'), S.sync.imageCoords, setFlag('imageCoords')),
+      check(tr('sync.scaling'), S.sync.scaling, setFlag('scaling')),
+      list,
+      row(btn(tr('sync.all'), () => { for (const i of docsNow()) S.sync.docs.add(i.docId); syncRebind(); renderDocs(); scheduleMetaPersist(); if (S.activeId !== null) syncViews(S.activeId); }),
+        btn(tr('sync.none'), () => { S.sync.docs.clear(); syncRebind(); renderDocs(); scheduleMetaPersist(); for (const v of allViews()) if (v.setCursorMark) v.setCursorMark(null); })));
+    renderDocs();
+    return { el, update(kind) { if (kind === 'doc' || kind === 'layout') renderDocs(); } };
+  }
+
+  function syncWindows() { openTool('sync'); }
 
   // ── Results
 
@@ -2692,7 +3017,8 @@ const IJApp = (() => {
   function openStaticWindow(idPrefix, title, content) {
     if (!S.shell) return;
     const id = idPrefix + '-' + (++S.openCounter);
-    S.shell.windows.floating({ id, title, content });
+    S.shell.windows.floating({ id, title, content, onClose: () => syncWindowMenu() });
+    syncWindowMenu();
   }
 
   // ── the generic windows of the extension API ────────────────────────────────────────────────────
@@ -2741,7 +3067,8 @@ const IJApp = (() => {
       }));
     const content = h('div', { class: 'ij-panel ij-plotwin' }, wrap, spec.text ? h('pre', { class: 'ij-info-pre', text: String(spec.text) }) : null, buttons);
     const id = 'plot-' + (++S.openCounter);
-    const win = S.shell.windows.floating({ id, title, content, onClose: () => { if (observer) { try { observer.disconnect(); } catch (_) { /* gone */ } } } });
+    const win = S.shell.windows.floating({ id, title, content, onClose: () => { if (observer) { try { observer.disconnect(); } catch (_) { /* gone */ } } syncWindowMenu(); } });
+    syncWindowMenu();
     if (typeof ResizeObserver !== 'undefined') { observer = new ResizeObserver(() => { if (drawn) redraw(); }); observer.observe(wrap); }
     requestAnimationFrame(redraw);
     return win;
@@ -2763,7 +3090,9 @@ const IJApp = (() => {
       data.length > cap ? h('p', { class: 'ij-banner', text: tr('res.capped', { shown: cap, total: data.length }) }) : null,
       row(btn(tr('res.copy'), () => copyText(tableText(cols, data, '\t'))),
         btn(tr('res.save'), async () => { try { await saveFile(safeName(title, '.csv'), 'text/csv', '.csv', 'CSV', async () => new Blob([tableText(cols, data, ',')], { type: 'text/csv' })); } catch (err) { await reportError(err); } })));
-    return S.shell.windows.floating({ id: 'table-' + (++S.openCounter), title, content });
+    const tableWin = S.shell.windows.floating({ id: 'table-' + (++S.openCounter), title, content, onClose: () => syncWindowMenu() });
+    syncWindowMenu();
+    return tableWin;
   }
 
   function openHistogramWindow(info, ch, hist, stats) {
@@ -2835,17 +3164,33 @@ const IJApp = (() => {
 
   // ───────────────────────────── shell wiring, keyboard ─────────────────────────────
 
-  /** The command list the shell reads: the registry (shortcuts = every key), then one entry per open image. */
+  /** The command list the shell reads: the registry (shortcuts = every key), then the dynamic Window rows. */
   function buildMenuList() {
-    const list = COMMANDS.map((c) => Object.assign({}, c, {
-      shortcut: c.keys.length ? c.keys.slice() : null,
-      // a package that did not load: its commands stay in the menus, greyed, with a tooltip
-      unavailable: c.pkg ? () => S.failedPackages.has(c.pkg) : undefined
-    }));
-    for (const id of S.order) {
+    const open = (id) => S.wins.has(id);
+    const list = COMMANDS
+      // Results and ROI Manager open the window while it is closed; an open one is listed by its own row below
+      .filter((c) => !((c.id === 'windowResults' && open('results')) || (c.id === 'windowRoiManager' && open('roiManager'))))
+      .map((c) => Object.assign({}, c, {
+        shortcut: c.keys.length ? c.keys.slice() : null,
+        // a package that did not load: its commands stay in the menus, greyed, with a tooltip
+        unavailable: c.pkg ? () => S.failedPackages.has(c.pkg) : undefined
+      }));
+    // ImageJ: the open non-image windows come BEFORE the images, after a separator (Menus.insertWindowMenuItem)
+    const tools = S.shell ? S.shell.windows.list().filter((w) => w.win && (typeof w.win.isOpen !== 'function' || w.win.isOpen())) : [];
+    let firstTool = true;
+    const staticRows = list.filter((c) => c.id === 'windowResults' || c.id === 'windowRoiManager');
+    tools.forEach((w, k) => {
+      list.push({ id: 'winTool' + w.id, menu: ['Window'], label: w.title, order: 52 + k / 1000, separatorBefore: firstTool && !staticRows.length,
+        enabled: () => true, run: () => { if (w.win && w.win.focus) w.win.focus(); }, shortcut: null, keys: [], dynamic: true, repeatable: false });
+      firstTool = false;
+    });
+    if (staticRows.length) staticRows[0].separatorBefore = true;
+    const ord = winOrder();
+    ord.forEach((id, k) => {
       const info = S.docs.get(id);
-      if (info) list.push({ id: 'winImg' + id, menu: ['Window'], label: info.name, separatorBefore: id === S.order[0], enabled: () => true, run: () => showDoc(id), shortcut: null });
-    }
+      if (info) list.push({ id: 'winImg' + id, menu: ['Window'], label: info.name + ' ' + info.width + 'x' + info.height, order: 60 + k / 1000, separatorBefore: k === 0,
+        enabled: () => true, run: () => showDoc(id), shortcut: null, keys: [], dynamic: true, repeatable: false });
+    });
     return list;
   }
   /** The shell keeps this array by reference: refill it in place and rebuild the menus. */
@@ -2861,15 +3206,18 @@ const IJApp = (() => {
     if (!c || typeof c.run !== 'function') return undefined;
     if (c.pkg && S.failedPackages.has(c.pkg)) return undefined;
     if (!c.enabled(snapshot())) return undefined;
+    // ImageJ's Executer remembers what ran (except Undo and Close) so Repeat Command can run it again
+    if (c.repeatable !== false && !c.dynamic) S.lastCommand = c.id;
     return Promise.resolve()
-      .then(() => c.run(c.ext ? EXT_API : API))
+      .then(() => flushPending())       // a floating paste is committed before anything else runs
+      .then(() => c.run(c.ext ? apiFor(c.pkg) : API))
       .catch((err) => reportError(err));
   }
 
   function refreshUi() { if (S.shell) S.shell.refreshMenus(); }
 
-  function readPixel(x, y) {
-    const info = activeInfo();
+  function readPixel(x, y, docId) {
+    const info = docId !== undefined && docId !== null ? S.docs.get(docId) : activeInfo();
     if (!info) return Promise.resolve(null);
     return call('doc.pixel', { docId: info.docId, x, y }).then((r) => r.values);
   }
@@ -2938,13 +3286,20 @@ const IJApp = (() => {
     return res.points.length;
   }
 
+  // Window › Show All / Put Behind / Cascade / Tile: the workspace layout does the work (ij-layout.js).
+  function layoutOp(name) { if (S.shell && S.shell.layout && typeof S.shell.layout[name] === 'function') S.shell.layout[name](); }
+  const showAll = () => layoutOp('showAll');
+  const putBehind = () => layoutOp('putBehind');
+  const cascade = () => layoutOp('cascade');
+  const tile = () => layoutOp('tile');
+
   // The facade the commands receive.
   const API = {
     openTiff, saveTiff, savePng, saveResults, revert, recover: recoverDialog, closeImage: () => closeImage(), simpleView, closeStudio,
     undo: () => undoRedo('undo'), redo: () => undoRedo('redo'), clearSel, fillSel, invert, selectAll, selectNone, restoreSelection, makeInverse, addToManager,
     convertType, openTool, showInfo, zProject, crop, duplicate, simpleOp, zoom, zoom100, zoomToSelection, zoomFit, applyLut, setLut, invertLut,
     convertToMask, binary, math, gaussian, rank, measure, particles, clearResults, setMeasurements, histogram, plotProfile, cycleImage, showAbout, showShortcuts,
-    summarize, distribution
+    summarize, distribution, showAll, putBehind, cascade, tile, syncWindows
   };
 
   // ───────────────────────────── extension API ─────────────────────────────
@@ -2963,7 +3318,7 @@ const IJApp = (() => {
   function stateForApi() {
     const info = activeInfo();
     return {
-      doc: liveInfo(info), docs: S.order.map((id) => S.docs.get(id)).filter(Boolean).map(liveInfo), roi: info ? selOf(info.docId) : null, busy: S.busy,
+      doc: liveInfo(info), docs: shownDocs().map((id) => liveInfo(S.docs.get(id))), roi: info ? selOf(info.docId) : null, busy: S.busy,
       activeChannel: info ? activeChannel(info) : 0, threshold: S.threshold, measurements: S.measurements.slice(), lineWidth: S.lineWidth,
       roiList: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })), resultsCount: S.results.length
     };
@@ -3006,15 +3361,15 @@ const IJApp = (() => {
   async function previewOp(op, params, o) {
     const opt = o || {};
     const info = docOf(opt);
-    if (!info || !S.display) return { ok: false };
+    if (!info || !viewOf(info.docId)) return { ok: false };
     const seq = ++S.previewSeq;
     const r = visibleRect(info);
     try {
       await call('doc.preview', { docId: info.docId, seq, op, params: params || {}, roi: opt.roi !== undefined ? opt.roi : selOf(info.docId),
-        channel: opt.channel !== undefined ? opt.channel : activeChannel(info), level: S.display.getView().level || 0,
+        channel: opt.channel !== undefined ? opt.channel : activeChannel(info), level: viewOf(info.docId).getView().level || 0,
         x0: Math.max(0, Math.floor(r.x0)), y0: Math.max(0, Math.floor(r.y0)), x1: Math.min(info.width, Math.ceil(r.x1)), y1: Math.min(info.height, Math.ceil(r.y1)) });
     } catch (err) {
-      if (err && err.code === 'IJ_PREVIEW_TOO_LARGE') { S.display.setPreview(null); return { ok: false, tooLarge: true }; }
+      if (err && err.code === 'IJ_PREVIEW_TOO_LARGE') { clearPreviews(); return { ok: false, tooLarge: true }; }
       throw err;
     }
     return { ok: true };
@@ -3033,14 +3388,15 @@ const IJApp = (() => {
     try {
       const res = await call('doc.rename', { docId, name });
       if (res && res.info) S.docs.set(docId, res.info);
-      if (docId === S.activeId && S.shell) S.shell.updateInfo(viewInfo(docId));
+      if (S.shell) S.shell.updateInfo(viewInfo(docId));
       syncWindowMenu();
       scheduleMetaPersist();
+      emit('doc', { docId, kind: 'renamed' });
       return res ? res.info : null;
     } catch (err) { await reportError(err); return null; }
   }
 
-  const TOOL_IDS = ['bc', 'channels', 'threshold', 'results', 'roiManager', 'summary'];
+  const TOOL_IDS = ['bc', 'channels', 'threshold', 'results', 'roiManager', 'summary', 'sync'];
 
   /** api.openTool(id): opens (or raises) a tool window; for 'threshold' it resolves once S.threshold holds the first automatic range. */
   async function openToolExt(id) {
@@ -3062,10 +3418,631 @@ const IJApp = (() => {
     if (patch && patch.lut !== undefined) p.lut = patch.lut;
     if (patch && patch.invert !== undefined) p.invert = !!patch.invert;
     Object.assign(d.channels[channel], p);
-    if (docId === S.activeId) { pushDisplay(); scheduleToolRefresh('display'); }
+    pushDisplay(docId);
+    if (docId === S.activeId) scheduleToolRefresh('display');
+    emit('doc', { docId, kind: 'display' });
     await call('doc.setDisplay', Object.assign({ docId, channel }, p));
     scheduleMetaPersist();
   }
+
+  // ───────────────────────────── extension API, wave 3 (PLAN-wave3 §2.5, §2.6) ─────────────────────────────
+
+  function forbidden(msg) { return Object.assign(new Error(msg), { code: 'IJ_EXT_FORBIDDEN' }); }
+  function needDoc(docId) {
+    if (docId === null || docId === undefined || !S.docs.has(docId)) throw extError('no such image');
+    return S.docs.get(docId);
+  }
+
+  // ── events ──
+  function emit(event, payload) {
+    const set = S.listeners.get(event);
+    if (!set || !set.size) return;
+    for (const fn of Array.from(set)) { try { fn(payload); } catch (err) { console.error('[advanced-studio] listener ' + event, err); } }
+  }
+  function on(event, fn) {
+    if (typeof fn !== 'function' || typeof event !== 'string' || !(EVENT_NAMES.has(event) || /^ext:[A-Za-z][A-Za-z0-9.]*$/.test(event))) throw extError('on: ' + String(event));
+    let set = S.listeners.get(event);
+    if (!set) { set = new Set(); S.listeners.set(event, set); }
+    set.add(fn);
+    return () => { const s = S.listeners.get(event); if (s) s.delete(fn); };
+  }
+
+  // ── settings (localStorage 'lumen3d.ij.prefs') ──
+  let prefsCache = null;
+  function readPrefs() {
+    if (prefsCache) return prefsCache;
+    let o = null;
+    try { o = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); } catch (_) { o = null; }
+    prefsCache = o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+    return prefsCache;
+  }
+  function settingGet(key) {
+    const p = readPrefs();
+    return typeof key === 'string' && Object.prototype.hasOwnProperty.call(p, key) ? p[key] : SETTING_DEFAULTS[key];
+  }
+  /** [r, g, b] of an ImageJ colour name or '#rrggbb'; null when it is neither. */
+  function parseColorValue(v) {
+    if (typeof v !== 'string') return null;
+    const k = v.trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(COLOR_NAMES, k)) return COLOR_NAMES[k].slice();
+    const m = /^#?([0-9a-f]{6})$/.exec(k);
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  const cssColorOf = (v) => { const c = parseColorValue(v); return c ? '#' + c.map((x) => (x < 16 ? '0' : '') + x.toString(16)).join('') : null; };
+  function settingSet(pkg, key, value) {
+    if (typeof key !== 'string' || !/^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9_]+)+$/.test(key)) throw extError('settings.set: key');
+    const prefix = key.slice(0, key.indexOf('.'));
+    const own = pkg ? PKG_PREFIX[pkg] : undefined;
+    if (!(prefix === own || (pkg === 'edit' && CORE_SETTING_PREFIXES.indexOf(prefix) >= 0))) throw forbidden('settings.set: ' + key + ' is not a setting of package ' + String(pkg));
+    let text;
+    try { text = JSON.stringify(value); } catch (_) { text = undefined; }
+    if (text === undefined || text.length > 65536) throw extError('settings.set: value');
+    const p = readPrefs();
+    p[key] = JSON.parse(text);
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* a per-viewer convenience only */ }
+    if (key === 'appearance.interpolate') for (const v of allViews()) if (typeof v.setInterpolate === 'function') v.setInterpolate(!!p[key]);
+    if (key === 'colors.selection') { const css = cssColorOf(p[key]); if (css) for (const v of allViews()) if (typeof v.setSelectionColor === 'function') v.setSelectionColor(css); }
+  }
+
+  // ── session data of a package ──
+  function sessionDataGet(pkg, p) {
+    if (!pkg || p !== pkg) throw forbidden('sessionData: only the data of the package itself');
+    const v = S.extData[pkg];
+    return v === undefined ? null : JSON.parse(JSON.stringify(v));
+  }
+  function sessionDataSet(pkg, p, json) {
+    if (!pkg || p !== pkg) throw forbidden('sessionData: only the data of the package itself');
+    if (json === null || json === undefined) { delete S.extData[pkg]; scheduleMetaPersist(); return; }
+    let text;
+    try { text = JSON.stringify(json); } catch (_) { text = undefined; }
+    if (text === undefined || text.length > EXT_DATA_MAX) throw extError('sessionData: value (JSON, at most 256 KiB)');
+    S.extData[pkg] = JSON.parse(text);
+    scheduleMetaPersist();
+  }
+
+  // ── persistent annotations (PLAN-wave3 §2.5) ──
+  const HEX6 = /^#[0-9a-fA-F]{6}$/;
+  const HEX8 = /^#[0-9a-fA-F]{8}$/;
+  const finiteNumber = (v) => typeof v === 'number' && isFinite(v);
+
+  function cloneRoiPlain(roi) {
+    const o = Object.assign({}, roi);
+    if (roi.points) o.points = roi.points.map((p) => [p[0], p[1]]);
+    if (roi.rle) o.rle = Array.from(roi.rle);
+    return o;
+  }
+  function numberList(v, multiple, what) {
+    if (v === undefined) return [];
+    if (!Array.isArray(v) || v.length % multiple !== 0 || !v.every(finiteNumber)) throw extError('annotation ' + what);
+    return v.slice();
+  }
+  /** A validated, normalised copy of an annotation item (no id yet). */
+  function cleanAnnotation(raw) {
+    if (!raw || typeof raw !== 'object' || ANNOTATION_KINDS.indexOf(raw.kind) < 0) throw extError('annotation kind');
+    const out = { kind: raw.kind };
+    const color = (v, what, nullable, rgba, fallback) => {
+      if ((v === undefined || v === null) && (nullable || fallback !== undefined)) return v === undefined && fallback !== undefined ? fallback : null;
+      if (typeof v !== 'string' || !(rgba ? HEX8 : HEX6).test(v)) throw extError('annotation ' + what);
+      return v;
+    };
+    const nonNeg = (v, what, fallback) => {
+      if (v === undefined && fallback !== undefined) return fallback;
+      if (!finiteNumber(v) || v < 0) throw extError('annotation ' + what);
+      return v;
+    };
+    const coord = (v, what) => { if (!finiteNumber(v)) throw extError('annotation ' + what); return v; };
+    switch (raw.kind) {
+      case 'roi':
+        if (typeof IJRoi !== 'undefined') IJRoi.validate(raw.roi); else if (!raw.roi || typeof raw.roi !== 'object') throw extError('annotation roi');
+        out.roi = cloneRoiPlain(raw.roi);
+        out.stroke = color(raw.stroke, 'stroke', true, false);
+        out.width = nonNeg(raw.width, 'width', 0);
+        out.fill = color(raw.fill, 'fill', true, true);
+        if (raw.name !== undefined) { if (typeof raw.name !== 'string' || raw.name.length > 255) throw extError('annotation name'); out.name = raw.name; }
+        break;
+      case 'text':
+        out.x = coord(raw.x, 'x'); out.y = coord(raw.y, 'y');
+        if (typeof raw.text !== 'string' || raw.text.length > 4000) throw extError('annotation text');
+        out.text = raw.text;
+        if (raw.size !== undefined && !(finiteNumber(raw.size) && raw.size > 0)) throw extError('annotation size');
+        out.size = raw.size === undefined ? 12 : raw.size;
+        out.color = color(raw.color, 'color', false, false, '#ffffff');
+        out.background = color(raw.background, 'background', true, false);
+        out.bold = !!raw.bold; out.serif = !!raw.serif;
+        if (raw.align !== undefined && ['left', 'center', 'right'].indexOf(raw.align) < 0) throw extError('annotation align');
+        out.align = raw.align || 'left';
+        break;
+      case 'shapes':
+        out.lines = numberList(raw.lines, 4, 'lines'); out.circles = numberList(raw.circles, 3, 'circles'); out.points = numberList(raw.points, 2, 'points');
+        out.stroke = color(raw.stroke, 'stroke', false, false, '#ffff00');
+        out.width = nonNeg(raw.width, 'width', 0);
+        break;
+      case 'rect':
+        out.x = coord(raw.x, 'x'); out.y = coord(raw.y, 'y'); out.w = nonNeg(raw.w, 'w'); out.h = nonNeg(raw.h, 'h');
+        out.fill = color(raw.fill, 'fill', false, true, '#ffff0040');
+        break;
+      default: // marker
+        out.x = coord(raw.x, 'x'); out.y = coord(raw.y, 'y');
+        if (!Number.isInteger(raw.type) || raw.type < 1 || raw.type > 8) throw extError('annotation marker type');
+        out.type = raw.type;
+        out.color = color(raw.color, 'color', false, false, '#ffff00');
+        out.label = !!raw.label;
+        break;
+    }
+    if (raw.tag !== undefined && raw.tag !== null) {
+      if (typeof raw.tag !== 'string' || !raw.tag || raw.tag.length > 64) throw extError('annotation tag');
+      out.tag = raw.tag;
+    }
+    return out;
+  }
+  /** The id of an item: the one it came with when it is free, else a new one. */
+  function annotationId(raw, taken) {
+    const id = raw && typeof raw.id === 'string' && raw.id && raw.id.length <= 64 ? raw.id : null;
+    if (id) { const m = /^a(\d+)$/.exec(id); if (m) S.annotSeq = Math.max(S.annotSeq, Number(m[1])); }
+    if (id && !taken.some((t) => t.id === id)) return id;
+    return 'a' + (++S.annotSeq);
+  }
+  function annotRec(docId) {
+    let r = S.annot.get(docId);
+    if (!r) { r = { visible: true, items: [] }; S.annot.set(docId, r); }
+    return r;
+  }
+  function pushAnnotations(docId, persist) {
+    const v = viewOf(docId);
+    const r = S.annot.get(docId);
+    if (v && typeof v.setAnnotations === 'function') v.setAnnotations(r ? r.items : [], r ? r.visible : true);
+    if (persist !== false) scheduleMetaPersist();
+  }
+  function clearAnnotations(docId) {
+    const r = S.annot.get(docId);
+    if (!r || !r.items.length) return;
+    r.items = [];
+    pushAnnotations(docId);
+    setStatus(tr('warn.annotationsCleared'));
+  }
+  function prepareAnnotations(items, existing, tag) {
+    if (!Array.isArray(items)) throw extError('annotations: items');
+    const fresh = [];
+    for (const raw of items) {
+      const it = cleanAnnotation(raw);
+      if (tag !== undefined) it.tag = tag;
+      it.id = annotationId(raw, existing.concat(fresh));
+      fresh.push(it);
+    }
+    return fresh;
+  }
+  function annotationTag(t) {
+    if (typeof t !== 'string' || !t || t.length > 64) throw extError('annotations: tag');
+    return t;
+  }
+  const annotationsApi = Object.freeze({
+    get(docId) {
+      needDoc(docId);
+      const r = S.annot.get(docId) || { visible: true, items: [] };
+      return { visible: r.visible, items: JSON.parse(JSON.stringify(r.items)) };
+    },
+    set(docId, items, o) {
+      needDoc(docId);
+      const tag = o && o.tag !== undefined ? annotationTag(o.tag) : undefined;
+      const rec = annotRec(docId);
+      const kept = tag === undefined ? [] : rec.items.filter((it) => it.tag !== tag);
+      const fresh = prepareAnnotations(items, kept, tag);
+      if (kept.length + fresh.length > ANNOTATIONS_MAX) throw extError('annotations: too many items');
+      rec.items = kept.concat(fresh);
+      pushAnnotations(docId);
+    },
+    add(docId, items) {
+      needDoc(docId);
+      const rec = annotRec(docId);
+      const fresh = prepareAnnotations(items, rec.items, undefined);
+      if (rec.items.length + fresh.length > ANNOTATIONS_MAX) throw extError('annotations: too many items');
+      rec.items = rec.items.concat(fresh);
+      pushAnnotations(docId);
+    },
+    remove(docId, sel) {
+      needDoc(docId);
+      const rec = S.annot.get(docId);
+      if (sel && sel.tag !== undefined) { const t = annotationTag(sel.tag); if (rec) rec.items = rec.items.filter((it) => it.tag !== t); }
+      else if (sel && Array.isArray(sel.ids)) { const ids = new Set(sel.ids); if (rec) rec.items = rec.items.filter((it) => !ids.has(it.id)); }
+      else throw extError('annotations.remove: { tag } or { ids }');
+      pushAnnotations(docId);
+    },
+    setVisible(docId, v) {
+      needDoc(docId);
+      const rec = annotRec(docId);
+      rec.visible = v === 'toggle' ? !rec.visible : !!v;
+      pushAnnotations(docId);
+    }
+  });
+
+  // ── Synchronize Windows (cursor, zoom and pan; IJ1 SyncWindows, the part that applies to a 2D multichannel image) ──
+  const syncState = () => ({ cursor: S.sync.cursor, imageCoords: S.sync.imageCoords, scaling: S.sync.scaling, docs: Array.from(S.sync.docs) });
+  function applySyncState(m) {
+    S.sync.cursor = m.cursor !== false; S.sync.imageCoords = m.imageCoords !== false; S.sync.scaling = !!m.scaling;
+    if (Array.isArray(m.docs)) for (const id of m.docs) if (S.docs.has(id) && !S.hidden.has(id)) S.sync.docs.add(id);
+    syncRebind();
+    scheduleToolRefresh('doc');
+  }
+  /** One view-change listener per synchronised image; a closed one is dropped. */
+  function syncRebind() {
+    for (const [id, off] of Array.from(S.syncBound)) {
+      if (!S.sync.docs.has(id) || !viewOf(id)) { try { off(); } catch (_) { /* gone */ } S.syncBound.delete(id); }
+    }
+    for (const id of S.sync.docs) {
+      if (S.syncBound.has(id)) continue;
+      const v = viewOf(id);
+      if (v && typeof v.onViewChange === 'function') S.syncBound.set(id, v.onViewChange((p) => { if (p && p.user === false) return; syncViews(id); }));
+    }
+  }
+  const pixelWidthOf = (id) => { const c = S.docs.get(id) && S.docs.get(id).calibration; return c && c.pixelWidth > 0 ? c.pixelWidth : 1; };
+  const pixelHeightOf = (id) => { const c = S.docs.get(id) && S.docs.get(id).calibration; return c && c.pixelHeight > 0 ? c.pixelHeight : 1; };
+  /** The pointer over a view is drawn as a crosshair in the other synchronised views. */
+  function syncCursor(docId, x, y, sx, sy) {
+    if (!S.sync.cursor || !S.sync.docs.has(docId)) return;
+    for (const id of S.sync.docs) {
+      if (id === docId) continue;
+      const v = viewOf(id);
+      if (!v || typeof v.setCursorMark !== 'function') continue;
+      if (x === null || x === undefined) { v.setCursorMark(null); continue; }
+      let tx, ty;
+      if (S.sync.imageCoords) {
+        // the same image pixel; with "Image scaling" the same place in micrometres
+        tx = S.sync.scaling ? (x * pixelWidthOf(docId)) / pixelWidthOf(id) : x;
+        ty = S.sync.scaling ? (y * pixelHeightOf(docId)) / pixelHeightOf(id) : y;
+      } else {
+        // the same offset from the top-left corner of the view, in screen pixels
+        const g = v.getView();
+        tx = (sx - g.ox) / g.zoom; ty = (sy - g.oy) / g.zoom;
+      }
+      v.setCursorMark(tx, ty);
+    }
+  }
+  /** A zoom or pan of one view moves the others to the same place (an echo guard: the target's own change is ignored). */
+  function syncViews(fromId) {
+    if (S.syncing || !S.sync.docs.has(fromId)) return;
+    const src = viewOf(fromId);
+    if (!src) return;
+    const g = src.getView();
+    if (!(g.zoom > 0)) return;
+    const near = (a, b, tol) => Math.abs(a - b) <= tol * Math.max(1, Math.abs(a), Math.abs(b));
+    S.syncing = true;
+    try {
+      for (const id of S.sync.docs) {
+        if (id === fromId) continue;
+        const v = viewOf(id);
+        if (!v || typeof v.setView !== 'function') continue;
+        const cur = v.getView();
+        let zoom = g.zoom, ox = g.ox, oy = g.oy;
+        if (S.sync.imageCoords) {
+          // the top-left corner of the source view, in image coordinates, becomes the one of the target
+          const kx = S.sync.scaling ? pixelWidthOf(fromId) / pixelWidthOf(id) : 1;
+          const ky = S.sync.scaling ? pixelHeightOf(fromId) / pixelHeightOf(id) : 1;
+          zoom = g.zoom / kx;           // the same physical size on screen
+          ox = -((-g.ox / g.zoom) * kx) * zoom; oy = -((-g.oy / g.zoom) * ky) * zoom;
+        }
+        if (near(cur.zoom, zoom, 1e-6) && near(cur.ox, ox, 1e-6) && near(cur.oy, oy, 1e-6)) continue;
+        v.setView({ zoom, ox, oy }, { source: 'sync' });
+      }
+    } finally { S.syncing = false; }
+  }
+
+  // ── the pending (floating) state: a paste ──
+  function setPendingExt(p) {
+    if (!p || typeof p.labelKey !== 'string' || typeof p.commit !== 'function' || typeof p.cancel !== 'function') throw extError('setPending');
+    if (S.pending) { const old = S.pending; S.pending = null; try { old.cancel(); } catch (err) { console.error('[advanced-studio] pending cancel', err); } }
+    S.pending = { labelKey: p.labelKey, commit: p.commit, cancel: p.cancel };
+    setStatus(tr(p.labelKey));
+  }
+  function clearPending() { S.pending = null; }
+  /** commit() of the pending state, once; a failure is reported. */
+  async function flushPending() {
+    const p = S.pending;
+    if (!p) return;
+    S.pending = null;
+    try { await p.commit(); } catch (err) { await reportError(err); }
+  }
+  function cancelPending() {
+    const p = S.pending;
+    if (!p) return false;
+    S.pending = null;
+    try { p.cancel(); } catch (err) { console.error('[advanced-studio] pending cancel', err); }
+    return true;
+  }
+  /** Enter commits and Escape cancels the pending state, unless the focus is in a text field. */
+  function onPendingKey(e) {
+    if (!S.pending || !e || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+    const t = e.target;
+    const typing = t && t.tagName && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable === true);
+    if (typing) return;
+    if (e.preventDefault) e.preventDefault();
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.key === 'Enter') flushPending(); else cancelPending();
+  }
+
+  // ── panels, tools ──
+  async function openPanelExt(id, o) {
+    const p = EXT.panels.get(id);
+    if (!p) throw extError('openPanel: ' + String(id));
+    if (!S.shell) return false;
+    if (S.failedPackages.has(p.pkg)) { setStatus(tr('warn.packageFailed', { pkg: p.pkg })); return false; }
+    const focus = !o || o.focus !== false;
+    if (S.wins.has(id)) { if (focus) S.wins.get(id).focus(); return true; }
+    try {
+      floatingWindow(id, p.spec.titleKey, () => {
+        const el = h('div', { class: 'ij-panel ij-panel-ext' });
+        const inst = p.spec.build(el, apiFor(p.pkg)) || {};
+        return {
+          el,
+          update: typeof inst.refresh === 'function' ? (kind) => { try { return inst.refresh(kind); } catch (err) { console.error('[advanced-studio] panel ' + id, err); return undefined; } } : undefined,
+          dispose: typeof inst.dispose === 'function' ? () => { try { inst.dispose(); } catch (err) { console.error('[advanced-studio] panel ' + id, err); } } : undefined
+        };
+      }, p.spec.defaultSize ? { width: p.spec.defaultSize.w, height: p.spec.defaultSize.h } : null);
+    } catch (err) { await reportError(err); return false; }
+    return S.wins.has(id);
+  }
+  function closePanelExt(id) {
+    if (!EXT.panels.has(id)) throw extError('closePanel: ' + String(id));
+    const w = S.wins.get(id);
+    if (w) w.close();
+  }
+  function onExtToolPointer(docId, evt) {
+    const t = EXT.tools.get(S.tool);
+    if (!t || S.failedPackages.has(t.pkg)) return;
+    const fail = (err) => { if (evt.type === 'move') console.error('[advanced-studio] tool ' + t.spec.id, err); else reportError(err); };
+    try {
+      const r = t.spec.onPointer(apiFor(t.pkg), Object.assign({ docId }, evt));
+      if (r && typeof r.catch === 'function') r.catch(fail);
+    } catch (err) { fail(err); }
+  }
+  function setToolExt(id) {
+    if (!TOOLS.some((t) => !t.separator && t.id === id)) throw extError('setTool: ' + String(id));
+    if (!S.shell) return;
+    S.shell.setTool(id);
+    S.tool = id;
+    emit('tool', id);
+  }
+
+  // ── commands ──
+  const menuLabel = (seg) => { const v = tr('menu.' + seg); return v === 'menu.' + seg ? seg : v; };
+  function commandsExt() {
+    const st = snapshot();
+    return COMMANDS.filter((c) => !c.pkg || !S.failedPackages.has(c.pkg)).map((c) => {
+      let enabled = false;
+      try { enabled = !!c.enabled(st) && !(c.pkg && S.failedPackages.has(c.pkg)); } catch (_) { enabled = false; }
+      return { id: c.id, label: tr(c.labelKey), path: c.menu.map(menuLabel), shortcut: c.shortcut || null, enabled };
+    });
+  }
+  function runCommandExt(id) {
+    const c = COMMANDS.find((x) => x.id === id);
+    if (!c) throw extError('runCommand: ' + String(id));
+    return Promise.resolve(onCommand(c));
+  }
+  const lastCommandExt = () => (S.lastCommand ? { id: S.lastCommand } : null);
+
+  /** api.call: a worker command the CALLING package registered (the registry records the package). */
+  async function callExt(pkg, cmd, args, o) {
+    const opt = o || {};
+    const reg = typeof IJOpRegistry !== 'undefined' ? IJOpRegistry : null;
+    const spec = reg && typeof reg.getCommand === 'function' && typeof cmd === 'string' ? reg.getCommand(cmd) : null;
+    if (!pkg || !spec || spec.pkg !== pkg) throw forbidden('call: ' + String(cmd) + ' is not a worker command of package ' + String(pkg));
+    if (S.failedPackages.has(pkg)) throw Object.assign(new Error('package failed'), { code: 'IJ_MODULE_MISSING' });
+    const label = opt.labelKey ? tr(opt.labelKey) : tr('op.working');
+    return busy(label, () => call(cmd, args || {}, opt.transfer, { long: opt.long === true || spec.long === true }));
+  }
+
+  const placementOf = (placement) => (placement ? { placement, anchor: S.activeId !== null ? S.activeId : undefined } : undefined);
+  /** A document the worker created (E.createDoc): view, tab, menu entry and session wiring. */
+  async function adoptExt(info, o) {
+    const opt = o || {};
+    if (!info || info.docId === undefined || info.docId === null) throw extError('adopt: info');
+    const fresh = await call('doc.info', { docId: info.docId });
+    if (!S.docs.has(fresh.docId)) {
+      registerDoc(fresh, { clean: false, provenance: opt.provenance || null, sessionKey: opt.sessionKey || (fresh.provenance && fresh.provenance.sessionKey) || null });
+    }
+    if (!fresh.hidden) await showDoc(fresh.docId, placementOf(opt.placement));
+    commitHook();
+    return fresh.docId;
+  }
+  /** An image the page built: the arrays travel to the worker (doc.import), which keeps its baseline. */
+  async function addDocExt(image, o) {
+    const opt = o || {};
+    if (!image || typeof image !== 'object' || !Array.isArray(image.channels) || !image.channels.length) throw extError('addDoc: image');
+    const transfer = [];
+    const channels = image.channels.map((c) => {
+      if (!c || !ArrayBuffer.isView(c.data)) throw extError('addDoc: channel data');
+      const data = c.data.byteOffset === 0 && c.data.byteLength === c.data.buffer.byteLength ? c.data : c.data.slice();
+      transfer.push(data.buffer);
+      const ch = { data, name: c.name, color: c.color };
+      if (c.display) ch.display = c.display;
+      return ch;
+    });
+    const res = await call('doc.import', {
+      image: { name: image.name, width: image.width, height: image.height, bitDepth: image.bitDepth, calibration: image.calibration, channels },
+      provenance: opt.provenance, sessionKey: opt.sessionKey, hidden: !!opt.hidden
+    }, transfer);
+    registerDoc(res.info, { clean: false, provenance: opt.provenance || null, sessionKey: opt.sessionKey || null });
+    if (!res.info.hidden) await showDoc(res.info.docId, placementOf(opt.placement));
+    commitHook();
+    return res.info.docId;
+  }
+  async function closeDocExt(docId) {
+    if (!S.docs.has(docId)) return false;
+    await closeImage(docId);
+    return !S.docs.has(docId);
+  }
+  function viewExt(docId) {
+    const v = viewOf(docId);
+    if (!v) return null;
+    return { getView: () => v.getView(), setView: (s) => v.setView(s), visibleRect: () => v.visibleRect() };
+  }
+  async function putBlobExt(data) {
+    if (!ArrayBuffer.isView(data) || data instanceof DataView) throw extError('putBlob: a typed array');
+    if (data.byteLength > BLOB_BYTES_MAX) throw Object.assign(new Error('blob too large'), { code: 'IJ_TOO_LARGE' });
+    const copy = data.slice();      // the caller keeps its array; the copy is what travels
+    const res = await call('engine.putBlob', { data: copy }, [copy.buffer]);
+    return Object.freeze({ blobRef: res.blobRef, kind: res.kind });
+  }
+
+  /** api.setThreshold: the Threshold window, opened for this image and channel, takes the range (and the polarity). */
+  async function setThresholdExt(docId, channel, o) {
+    const info = S.docs.get(docId);
+    if (!info || S.hidden.has(docId) || !Number.isInteger(channel) || !(info.channels || [])[channel]) throw extError('setThreshold: image or channel');
+    const lower = Number(o && o.lower), upper = Number(o && o.upper);
+    if (!isFinite(lower) || !isFinite(upper) || lower > upper) throw extError('setThreshold: range');
+    if (S.activeId !== docId) await showDoc(docId);
+    setDocDisplayMode(docId, { active: channel });
+    await openToolExt('threshold');
+    const u = S.winUpdaters.get('threshold');
+    if (!u) throw extError('setThreshold: the Threshold window did not open');
+    await u('setRange', { lower, upper, dark: o && o.dark !== undefined ? !!o.dark : undefined });
+  }
+
+  /**
+   * ImageJ's setColor of a grey image, for the colour of Edit › Options › Colors (colors.foreground / colors.background):
+   * the index of the entry of the channel's look-up table nearest to the colour (ImageProcessor.getBestIndex: the squared RGB
+   * distance, first minimum wins, a non-grey colour weighted by the RGB weights — 1/3 each — when the table is the default
+   * one), then
+   *   8-bit   ByteProcessor.setColor       fgColor = getBestIndex(color)
+   *   16-bit  ShortProcessor.setColor      if (bestIndex>0 && getMin()==0.0 && getMax()==0.0) value = bestIndex
+   *                                        else if (bestIndex==0 && getMin()>0.0 && (color.getRGB()&0xffffff)==0) value = 0
+   *                                        else value = (int)(getMin() + (getMax()-getMin())*(bestIndex/255.0))
+   *   32-bit  FloatProcessor.setColor      the same with (float): fillColor = (float)(getMin() + (getMax()-getMin())*(bestIndex/255.0))
+   * getMin() / getMax() are the display range of the channel. The one place Fill and Clear read their value from.
+   */
+  function colorValueOf(docId, channel, which) {
+    const info = S.docs.get(docId);
+    if (!info || !Number.isInteger(channel) || !(info.channels || [])[channel]) throw extError('colorValue: image or channel');
+    if (which !== 'foreground' && which !== 'background') throw extError('colorValue: foreground or background');
+    const rgb = parseColorValue(settingGet('colors.' + which)) || (which === 'foreground' ? [255, 255, 255] : [0, 0, 0]);
+    const d = S.dstate.get(docId);
+    const st = d && d.channels[channel] ? d.channels[channel] : { min: 0, max: 255, lut: 'Grays', invert: false };
+    let table;
+    try { table = IJLuts.get(st.lut || 'Grays'); } catch (_) { table = IJLuts.get('Grays'); }
+    if (st.invert) { const r = new Uint8Array(768); for (let i = 0; i < 256; i++) { const j = 255 - i; r[i * 3] = table[j * 3]; r[i * 3 + 1] = table[j * 3 + 1]; r[i * 3 + 2] = table[j * 3 + 2]; } table = r; }
+    const isDefaultTable = (!st.lut || st.lut === 'Grays') && !st.invert;
+    let r1 = rgb[0], g1 = rgb[1], b1 = rgb[2];
+    if (!(r1 === g1 && g1 === b1) && isDefaultTable) {
+      const w = 1 / 3;
+      r1 = Math.floor(3 * r1 * w + 0.5); g1 = Math.floor(3 * g1 * w + 0.5); b1 = Math.floor(3 * b1 * w + 0.5);
+    }
+    let best = 0, minDistance = Infinity;
+    for (let i = 0; i < 256; i++) {
+      const dr = table[i * 3] - r1, dg = table[i * 3 + 1] - g1, db = table[i * 3 + 2] - b1;
+      const dist = dr * dr + dg * dg + db * db;
+      if (dist < minDistance) { minDistance = dist; best = i; }
+      if (minDistance === 0) break;
+    }
+    if (info.bitDepth === 8) return best;
+    const min = Number(st.min), max = Number(st.max);
+    const black = rgb[0] === 0 && rgb[1] === 0 && rgb[2] === 0;
+    if (best > 0 && min === 0 && max === 0) return best;
+    if (best === 0 && min > 0 && black) return 0;
+    const v = min + (max - min) * (best / 255.0);
+    return info.bitDepth === 16 ? Math.trunc(v) : Math.fround(v);
+  }
+
+  // ── look-up tables ──
+  async function registerLutExt(name, table) {
+    if (typeof IJLuts === 'undefined' || typeof IJLuts.register !== 'function') throw extError('registerLut: unavailable');
+    if (!ArrayBuffer.isView(table) || !table.constructor || table.constructor.name !== 'Uint8Array' || table.length !== 768) throw extError('registerLut: a Uint8Array of 768 bytes');
+    IJLuts.register(name, table);
+    // a table registered again under a known name must be uploaded again
+    try { if (S.shell && S.shell.renderer && S.shell.renderer.dropLut) S.shell.renderer.dropLut(name); } catch (e) { console.error('[advanced-studio] dropLut', e); }
+    S.luts.set(name, new Uint8Array(table));
+    await call('engine.registerLut', { name, table: new Uint8Array(table) });
+    scheduleMetaPersist();
+  }
+  /** Tables of a stored session come back before any view names one. */
+  async function restoreLuts(meta) {
+    if (!meta || !meta.luts || typeof meta.luts !== 'object') return;
+    for (const name of Object.keys(meta.luts)) {
+      const arr = meta.luts[name];
+      if (!Array.isArray(arr) || arr.length !== 768 || S.luts.has(name)) continue;
+      try { await registerLutExt(name, Uint8Array.from(arr)); } catch (err) { console.error('[advanced-studio] look-up table', err); }
+    }
+  }
+
+  // ── files, clipboard, picture, profile ──
+  function pickFileExt(o) {
+    const opt = o || {};
+    return new Promise((resolve) => {
+      const input = h('input', { type: 'file' });
+      if (opt.accept) input.accept = String(opt.accept);
+      if (opt.multiple) input.multiple = true;
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      input.addEventListener('change', () => { const f = Array.from(input.files || []); finish(f.length ? f : null); });
+      input.addEventListener('cancel', () => finish(null));
+      input.click();
+    });
+  }
+  async function saveFileExt(suggestedName, mime, ext, descKey, produce) {
+    if (typeof produce !== 'function') throw extError('saveFile: produce');
+    return saveFile(String(suggestedName), String(mime), String(ext), descKey ? tr(descKey) : String(ext), produce);
+  }
+  async function copyTextExt(text) {
+    await navigator.clipboard.writeText(String(text));
+    setStatus(tr('status.copied'));
+  }
+  async function renderPngExt(docId, o) {
+    const v = viewOf(docId);
+    if (!v || typeof v.renderToCanvas !== 'function') throw extError('renderPng: no view');
+    const full = await v.renderToCanvas({ scale: 1 });
+    let canvas = full;
+    const r = o && o.rect;
+    if (r && finiteNumber(r.x) && finiteNumber(r.y) && r.w > 0 && r.h > 0 && typeof document !== 'undefined') {
+      canvas = document.createElement('canvas');
+      canvas.width = Math.round(r.w); canvas.height = Math.round(r.h);
+      canvas.getContext('2d').drawImage(full, Math.round(r.x), Math.round(r.y), canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+    }
+    return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(Object.assign(new Error('png'), { code: 'IJ_PNG_FAILED' }))), 'image/png'));
+  }
+  async function profileExt(docId, roi, channel) {
+    const info = needDoc(docId);
+    const res = await call('doc.profile', { docId, line: roi, channel: Number.isInteger(channel) ? channel : activeChannel(info) });
+    return Object.assign({}, res, { step: res && res.step !== undefined ? res.step : (res ? res.stepUm : undefined) });
+  }
+
+  // ── ROI Manager ──
+  function roiEntryOf(e) {
+    if (!e || typeof e !== 'object' || !e.roi) throw extError('roiManager: roi');
+    if (typeof IJRoi !== 'undefined') IJRoi.validate(e.roi);
+    const docId = e.docId !== undefined ? e.docId : S.activeId;
+    if (docId === null || docId === undefined || !S.docs.has(docId)) throw extError('roiManager: image');
+    const out = { name: typeof e.name === 'string' && e.name ? e.name : roiName(e.roi), docId, roi: e.roi };
+    for (const k of ['stroke', 'fill']) {
+      if (e[k] === undefined || e[k] === null) continue;
+      if (typeof e[k] !== 'string' || !(HEX6.test(e[k]) || HEX8.test(e[k]))) throw extError('roiManager: ' + k);
+      out[k] = e[k];
+    }
+    if (e.width !== undefined && e.width !== null) { if (!finiteNumber(e.width) || e.width < 0) throw extError('roiManager: width'); out.width = e.width; }
+    return out;
+  }
+  function roiListChanged() { refreshRois(); scheduleToolRefresh('rois'); scheduleMetaPersist(); }
+  const roiManagerApi = Object.freeze({
+    list() { return S.roiList.map((r) => { const o = { name: r.name, docId: r.docId, roi: r.roi }; for (const k of ['stroke', 'width', 'fill']) if (r[k] !== undefined) o[k] = r[k]; return o; }); },
+    add(entries) {
+      const list = (Array.isArray(entries) ? entries : [entries]).map(roiEntryOf);
+      for (const e of list) S.roiList.push(e);
+      roiListChanged();
+    },
+    set(entries) {
+      if (!Array.isArray(entries)) throw extError('roiManager.set: a list');
+      const list = entries.map(roiEntryOf);
+      S.roiList = list;
+      S.roiSelected.clear();
+      roiListChanged();
+    },
+    select(indices) {
+      if (!Array.isArray(indices)) throw extError('roiManager.select: indices');
+      S.roiSelected.clear();
+      for (const i of indices) if (Number.isInteger(i) && i >= 0 && i < S.roiList.length) S.roiSelected.add(S.roiList[i]);
+      roiListChanged();
+    },
+    selected() { const out = []; S.roiList.forEach((r, i) => { if (S.roiSelected.has(r)) out.push(i); }); return out; }
+  });
 
   const EXT_API = Object.freeze({
     tr: (key, params) => tr(key, params),
@@ -3076,8 +4053,8 @@ const IJApp = (() => {
     estimate: estimateOp,
     preview: previewOp,
     cancelPreview: () => clearExtPreview(),
-    overlay: (items) => { if (S.display && S.display.setOverlay) { S.overlayDoc = S.activeId; S.display.setOverlay(items); } },
-    clearOverlay: () => { if (S.display && S.display.setOverlay) S.display.setOverlay(null); },
+    overlay: (items) => { setOverlayFor(S.activeId, items); },
+    clearOverlay: () => { clearOverlays(); },
     setRoi: (roi, o) => { const id = o && o.docId !== undefined ? o.docId : S.activeId; if (id !== null && S.docs.has(id)) setSelection(id, roi || null, true); },
     addResults: addResultRows,
     openTable,
@@ -3086,8 +4063,51 @@ const IJApp = (() => {
     error: (err) => reportError(err),
     rename: renameDoc,
     setDisplay: setDisplayExt,
-    openTool: openToolExt
+    openTool: openToolExt,
+    // wave 3
+    openPanel: openPanelExt,
+    closePanel: closePanelExt,
+    on,
+    annotations: annotationsApi,
+    settings: Object.freeze({ get: settingGet, set: (k, v) => settingSet(null, k, v) }),
+    sessionData: Object.freeze({ get: (p) => sessionDataGet(null, p), set: (p, j) => sessionDataSet(null, p, j) }),
+    commands: commandsExt,
+    runCommand: runCommandExt,
+    lastCommand: lastCommandExt,
+    call: (cmd, args, o) => callExt(null, cmd, args, o),
+    adopt: adoptExt,
+    putBlob: putBlobExt,
+    setPending: setPendingExt,
+    clearPending,
+    addDoc: addDocExt,
+    closeDoc: closeDocExt,
+    view: viewExt,
+    setTool: setToolExt,
+    setThreshold: setThresholdExt,
+    colorValue: colorValueOf,
+    registerLut: registerLutExt,
+    pickFile: pickFileExt,
+    saveFile: saveFileExt,
+    copyText: copyTextExt,
+    renderPng: renderPngExt,
+    profile: profileExt,
+    roiManager: roiManagerApi
   });
+  /** The api a package's command, panel or tool receives: the same members, with `call`, `settings.set` and `sessionData` bound to the package. */
+  const API_BY_PKG = new Map();
+  function apiFor(pkg) {
+    const key = pkg || '';
+    let a = API_BY_PKG.get(key);
+    if (!a) {
+      a = Object.freeze(Object.assign({}, EXT_API, {
+        call: (cmd, args, o) => callExt(pkg, cmd, args, o),
+        settings: Object.freeze({ get: settingGet, set: (k, v) => settingSet(pkg, k, v) }),
+        sessionData: Object.freeze({ get: (p) => sessionDataGet(pkg, p), set: (p, j) => sessionDataSet(pkg, p, j) })
+      }));
+      API_BY_PKG.set(key, a);
+    }
+    return a;
+  }
   const EXT_API_MEMBERS = Object.keys(EXT_API);
 
   function extError(msg) { return Object.assign(new Error(msg), { code: 'IJ_BAD_ARGS' }); }
@@ -3105,7 +4125,8 @@ const IJApp = (() => {
     for (const raw of spec.commands || []) {
       if (!raw || typeof raw.id !== 'string' || !/^[A-Za-z0-9]+$/.test(raw.id)) throw extError('extend: command id');
       if (known.has(raw.id)) throw extError('extend: duplicate command ' + raw.id);
-      if (!Array.isArray(raw.menu) || !raw.menu.length || !raw.menu.every((x) => typeof x === 'string' && x)) throw extError('extend: menu of ' + raw.id);
+      if (!Array.isArray(raw.menu) || !raw.menu.length || raw.menu.length > 3 || !raw.menu.every((x) => typeof x === 'string' && x)) throw extError('extend: menu of ' + raw.id);
+      if (raw.repeatable !== undefined && typeof raw.repeatable !== 'boolean') throw extError('extend: repeatable of ' + raw.id);
       if (typeof raw.run !== 'function') throw extError('extend: run of ' + raw.id);
       if (!(typeof raw.order === 'number' && isFinite(raw.order))) throw extError('extend: order of ' + raw.id);
       if (raw.enabled !== undefined && typeof raw.enabled !== 'function') throw extError('extend: enabled of ' + raw.id);
@@ -3114,9 +4135,45 @@ const IJApp = (() => {
       const enabled = typeof raw.enabled === 'function' ? raw.enabled : has;
       built.push({
         id: raw.id, menu: raw.menu.slice(), labelKey: raw.labelKey || ('cmd.' + raw.id), shortcut: raw.shortcut || keys[0] || null, keys,
-        order: raw.order, pkg: spec.pkg, long: !!raw.long, ext: true, separatorBefore: !!raw.separatorBefore,
+        order: raw.order, pkg: spec.pkg, long: !!raw.long, ext: true, separatorBefore: !!raw.separatorBefore, repeatable: raw.repeatable !== false,
         enabled: (st) => !S.failedPackages.has(spec.pkg) && !!enabled(st), run: raw.run
       });
+    }
+    // panels (tool windows the package fills), tools (toolbar entries) and the worker commands Cancel may reach: all checked
+    // before anything is registered, like the commands
+    const panels = [];
+    if (spec.panels !== undefined) {
+      if (!spec.panels || typeof spec.panels !== 'object' || Array.isArray(spec.panels)) throw extError('extend: panels');
+      for (const id of Object.keys(spec.panels)) {
+        const p = spec.panels[id];
+        if (!/^[A-Za-z][A-Za-z0-9]*$/.test(id) || Object.prototype.hasOwnProperty.call(TOOL_WINDOWS, id) || EXT.panels.has(id) || panels.some((q) => q.id === id)) throw extError('extend: panel id ' + id);
+        if (!p || typeof p.titleKey !== 'string' || !p.titleKey || typeof p.build !== 'function') throw extError('extend: panel ' + id);
+        if (p.persist !== undefined && typeof p.persist !== 'boolean') throw extError('extend: panel persist ' + id);
+        if (p.defaultSize !== undefined && !(p.defaultSize && typeof p.defaultSize === 'object' && finiteNumber(p.defaultSize.w) && finiteNumber(p.defaultSize.h) && p.defaultSize.w > 0 && p.defaultSize.h > 0)) throw extError('extend: panel defaultSize ' + id);
+        panels.push({ id, spec: p });
+      }
+    }
+    const tools = [];
+    if (spec.tools !== undefined) {
+      if (!Array.isArray(spec.tools)) throw extError('extend: tools');
+      const taken = new Set(TOOLS.filter((t) => !t.separator).map((t) => t.id));
+      for (const t of spec.tools) {
+        if (!t || typeof t.id !== 'string' || !/^[A-Za-z][A-Za-z0-9]*$/.test(t.id) || taken.has(t.id)) throw extError('extend: tool id');
+        if (typeof t.labelKey !== 'string' || !t.labelKey || typeof t.onPointer !== 'function') throw extError('extend: tool ' + t.id);
+        for (const k of ['icon', 'cursor', 'after']) if (t[k] !== undefined && typeof t[k] !== 'string') throw extError('extend: tool ' + k + ' of ' + t.id);
+        if (t.hidden !== undefined && typeof t.hidden !== 'boolean') throw extError('extend: tool hidden ' + t.id);
+        if (t.after !== undefined && !taken.has(t.after)) throw extError('extend: tool after ' + t.after);
+        taken.add(t.id);
+        tools.push(t);
+      }
+    }
+    const longCommands = [];
+    if (spec.longCommands !== undefined) {
+      if (!Array.isArray(spec.longCommands)) throw extError('extend: longCommands');
+      for (const n of spec.longCommands) {
+        if (typeof n !== 'string' || !/^[a-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)+$/.test(n)) throw extError('extend: longCommands ' + String(n));
+        longCommands.push(n);
+      }
     }
     const errors = spec.errors && typeof spec.errors === 'object' ? spec.errors : {};
     for (const code of Object.keys(errors)) {
@@ -3126,16 +4183,26 @@ const IJApp = (() => {
     const cols = Array.isArray(spec.columns) ? spec.columns : [];
     for (const c of cols) if (!Array.isArray(c) || typeof c[0] !== 'string' || typeof c[1] !== 'string' || (c[2] !== undefined && typeof c[2] !== 'string')) throw extError('extend: columns');
     for (const c of built) COMMANDS.push(c);
+    for (const p of panels) EXT.panels.set(p.id, { pkg: spec.pkg, spec: p.spec });
+    for (const t of tools) {
+      const def = { id: t.id, labelKey: t.labelKey, icon: t.icon, cursor: t.cursor, hidden: !!t.hidden, ext: true, pkg: spec.pkg };
+      let at = TOOLS.length;
+      if (t.after !== undefined) { const k = TOOLS.findIndex((x) => !x.separator && x.id === t.after); if (k >= 0) at = k + 1; }
+      TOOLS.splice(at, 0, def);
+      EXT.tools.set(t.id, { pkg: spec.pkg, spec: t });
+    }
+    for (const n of longCommands) LONG_COMMANDS.add(n);
     Object.assign(ERROR_KEYS, errors);
     for (const c of cols) EXTRA_COLUMNS.push(c.slice(0, 3));
     if (spec.measurements) EXT.measurements[spec.pkg] = spec.measurements;
-    EXT.packages.set(spec.pkg, { commands: built.map((c) => c.id) });
+    EXT.packages.set(spec.pkg, { commands: built.map((c) => c.id), panels: panels.map((p) => p.id), tools: tools.map((t) => t.id) });
   }
 
   // ───────────────────────────── public lifecycle ─────────────────────────────
 
   function mount(root, { ctx, api }) {
     extensionsLocked = true;
+    prefsCache = null;
     S.ctx = ctx; S.api = api; S.root = root;
     if (S.appEl && S.shell) {
       // Back from the Simple view: the DOM, the worker and the documents are still here, provided
@@ -3150,7 +4217,7 @@ const IJApp = (() => {
       S.mounted = true;
       root.classList.add('ij-root');
       S.appEl.style.display = '';
-      S.display.resize();
+      for (const v of allViews()) v.resize();
       enter().catch((err) => reportError(err));
       return;
     }
@@ -3164,16 +4231,21 @@ const IJApp = (() => {
       S.menuList = buildMenuList();
       S.shell = IJShell.create(S.appEl, {
         commands: S.menuList, getState: snapshot, t: shellT, menuGroups: GROUP_META,
-        tools: TOOLS.map((t) => (t.separator ? t : { id: t.id, labelKey: t.labelKey })),
-        onCommand, onTool: (id) => { S.tool = id; }, onToolOptions, onWand: (x, y, mods) => wandAt(x, y, mods).catch((err) => reportError(err)),
-        onRoi: (roi, o) => { const i = activeInfo(); if (i) setSelection(i.docId, roi, !o || o.final !== false, true); },
-        onChannel: (c) => { const i = activeInfo(); if (i) setDocDisplayMode(i.docId, { active: c }); },
+        tools: TOOLS.map((t) => (t.separator ? t : { id: t.id, labelKey: t.labelKey, icon: t.icon, cursor: t.cursor, hidden: t.hidden, ext: t.ext })),
+        onCommand, onTool: (id) => { S.tool = id; emit('tool', id); }, onToolPointer: onExtToolPointer, onCursor: syncCursor,
+        onMenuOpen: (name) => { if (name === 'Window') syncWindowMenu(); }, onToolOptions, onWand: (x, y, mods) => wandAt(x, y, mods).catch((err) => reportError(err)),
+        onRoi: (roi, o) => { const i = o && o.docId !== undefined && o.docId !== null ? S.docs.get(o.docId) : activeInfo(); if (i) setSelection(i.docId, roi, !o || o.final !== false, true); },
+        onChannel: (c, docId) => { const i = docId !== undefined && docId !== null ? S.docs.get(docId) : activeInfo(); if (i) setDocDisplayMode(i.docId, { active: c }); },
         onCancel: cancelRunning, readPixel, isActive: () => S.mounted,
+        onActivate: (docId) => { if (!S.placing) afterActivate(docId); },
+        onCloseImage: (docId) => { closeImage(docId).catch((err) => reportError(err)); },
+        onLayoutChange: (kind) => { onLayoutChange(kind); },
         display: { onTileError: (err) => console.error('[advanced-studio] tile', err) }
       });
-      S.display = S.shell.display;
-      S.host = S.shell.stage;
       S.windows = S.shell.windows;
+      // Enter commits and Escape cancels a floating state (api.setPending); in the capture phase, before the shell's own keys
+      S.keyHandler = onPendingKey;
+      S.appEl.addEventListener('keydown', S.keyHandler, true);
     } catch (err) {
       console.error('[advanced-studio] mount', err);
       dispose();
@@ -3183,6 +4255,21 @@ const IJApp = (() => {
     document.addEventListener('visibilitychange', S.visHandler);
     showEmpty();
     enter().catch((err) => reportError(err));
+  }
+
+  /** A tab moved, a window floated, a divider was released: the layout is stored, and the worker's tile cache follows the number of visible views. */
+  function onLayoutChange(kind) {
+    if (!S.shell || kind === 'tabinfo') return;
+    scheduleMetaPersist();
+    emit('layout', kind);
+    scheduleToolRefresh('layout');
+    if (kind === 'activate') return;
+    if (typeof IJRenderSched === 'undefined') return;
+    const visible = allViews().filter((v) => v._visible && v._visible()).length;
+    const bytes = IJRenderSched.workerTileCacheBytes(visible, S.engineBudget || S.budgetBytes);
+    if (S.tileCacheBytes === bytes) return;
+    S.tileCacheBytes = bytes;
+    if (S.worker && !S.worker.dead) call('engine.configure', { tileCacheBytes: bytes }).catch(() => { /* an engine without the command keeps its default */ });
   }
 
   function hasUnsavedWork() { return dirtyDocs().length > 0; }
@@ -3241,7 +4328,7 @@ const IJApp = (() => {
       if (S.appEl && S.leaving && S.leaving !== 'simple') dispose();
       return;
     }
-    if (S.leaving === 'simple' && S.display) {
+    if (S.leaving === 'simple' && S.shell) {
       // Hidden, not torn down: the worker and the documents keep running.
       S.mounted = false;
       endPreview();
@@ -3276,21 +4363,29 @@ const IJApp = (() => {
     S.wins.clear(); S.winUpdaters.clear();
     if (S.visHandler) document.removeEventListener('visibilitychange', S.visHandler);
     S.visHandler = null;
+    if (S.keyHandler && S.appEl) { try { S.appEl.removeEventListener('keydown', S.keyHandler, true); } catch (_) { /* gone */ } }
+    S.keyHandler = null;
+    for (const [, off] of S.syncBound) { try { off(); } catch (_) { /* the view is gone */ } }
+    S.syncBound.clear();
     try { if (S.shell) S.shell.destroy(); } catch (err) { console.error('[advanced-studio] shell destroy', err); }
     if (S.appEl) S.appEl.remove();
     if (S.root) S.root.classList.remove('ij-root');
     for (const key of Array.from(S.locks.keys())) releaseSessionLock(key);
-    S.display = null; S.shell = null; S.windows = null; S.appEl = null; S.host = null; S.emptyEl = null; S.menuList = [];
+    S.shell = null; S.windows = null; S.appEl = null; S.emptyEl = null; S.menuList = [];
+    S.previewDocs.clear(); S.overlayDocs.clear(); S.placing = false;
     for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.displayPatch, S.displayInflight]) m.clear();
     S.order = []; S.activeId = null; S.roiList = []; S.roiSelected.clear(); S.results = []; S.summaryRows = []; S.figureKey = null; S.desc = null;
     S.threshold = null; S.previewCompute = 0; S.redirect = null;
+    // the extension state belongs to the session that is gone (listeners are dropped here, not when the Simple view merely hides the page)
+    S.listeners.clear(); S.annot.clear(); S.annotDims.clear(); S.hidden.clear(); S.pending = null; S.lastCommand = null; S.extData = {}; S.luts.clear();
+    S.sync = { cursor: true, imageCoords: true, scaling: false, docs: new Set() }; S.syncing = false; S.metaWarned = false; S.lastActiveEmitted = null; S.engineUsed = 0;
     S.leaving = null; S.busy = false; S.unprotected.clear(); S.held.clear(); S.warnBudget = ''; S.warnLow = false;
   }
 
   return {
     mount, unmount, release, canLeave, hasUnsavedWork,
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
-    extend, EXT_API_MEMBERS, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
+    extend, EXT_API_MEMBERS, apiFor, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
     planLevels, mapRange, mvox, projectionProgress, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
   };

@@ -124,4 +124,75 @@ P7 (Coloc 2) has no ImageJ core reference: no fixtures.
 * `correctCorners=false` for the sliding paraboloid is only reachable through the public method
   (the menu always passes true).
 * The Wand *Legacy* mode, RGB images, stacks, Coloc 2 and RoiManager Multi Measure are out of scope.
-* EDM output types BYTE/SHORT are not recorded (overwrite and float only).
+* EDM output types BYTE/SHORT are not recorded in wave 2 (overwrite and float only); wave 3 records all four in `thr/edm_outputs_*.json`.
+
+---
+
+# Wave 3 (`tests/fixtures/ij-wave3`)
+
+Same schema as above. Three drivers, all local only (never shipped, never in CI):
+
+```
+tools/ij_fixtures/run3.sh <ij-1.54p.jar> [pkg ...]       # IJ1 goldens: thr enh fft sel io ov ana edit fiji lib
+tools/ij_fixtures/fiji/run_fiji.sh DialogCapture    tests/fixtures/ij-wave3/fiji-dialogs.json     # GenericDialog / Swing structure of the Fiji commands
+tools/ij_fixtures/fiji/run_fiji.sh ModuleInfoCapture <out.json>                                   # SciJava ModuleInfo (Frangi); merged into fiji-dialogs.json
+tools/ij_fixtures/fiji/run_fiji.sh CompositeCapture <out.json>                                    # dialogs that change on a composite / 16-bit image; merged into fiji-dialogs.json (`variants`)
+tools/ij_fixtures/fiji/run_fiji.sh FijiRefs tests/fixtures/ij-wave3 [cmd ...]                     # reference outputs of the Fiji plugins (GPL: RUN only, never read)
+tools/ij_fixtures/fiji/run_fiji.sh RepeatCapture tests/fixtures/ij-wave3/repeat-command.json
+```
+
+`run3.sh` starts a GUI-less `ij.ImageJ` instance (menus for `IJ.run`, `java.awt` dialogs in macro mode: it needs a desktop
+session), runs the whole job on one thread named `Run$_fixtures` (ImageJ reads macro options only on such threads) and
+points `user.home` to a temp dir so the operator's `IJ_Prefs` never leaks in. `Prefs.blackBackground=true`,
+`padEdges=false`. The Fiji drivers use the Fiji install (`FIJI`, default `D:/APT/3A/BIOIMAGING/Fiji`) and its bundled Java;
+`FIJI_TMP` picks the class directory. The Fiji drivers also run with a clean `user.home` (no operator `IJ_Prefs`);
+`fiji-dialogs.json` records `prefsBlackBackground`, and `fiji-dialogs.black-false.json` is the same capture with
+`Prefs.blackBackground=false` (identical dialogs: the *White objects on black background* default is Fiji's own).
+`DialogCapture` writes the whole `fiji-dialogs.json` (it calls `CompositeCapture` and `ModuleInfoCapture` and generates `notes`);
+GenericDialog text fields are typed `numeric` / `string`.
+
+Reproducibility. The ImageJ goldens (`run3.sh`) are byte-identical between runs. Fiji references are too, except these fields:
+* `fiji/coloc2/pairs.json`: the p-value, the hash-based `Coloc_Job_Name` and `Mask ID Used`, "Costes Shuffled Mean" / "Std.D.",
+  and in some cases "Ratio of rand. Pearsons...". The Log is printed at 2 (Pearson), 4 (Kendall), 8 (Spearman) and 3 (Manders)
+  decimals and is parsed into `parsed`; the numbers to test are the exact ones in `pairs_exact.json` (numpy / scipy on the same
+  inputs, Fiji's thresholds; rebuild with `fiji/coloc_exact.py`), checked against the Log at its printed precision.
+* `fiji/roiset/roiset_zip.json`: `zipB64` holds the run's date and time in the zip entries (the `entries` summary does not).
+* Text fixtures (`io/text_encoder.json`, `io/xy_writer.json`, `fiji/cellcounter/markers_xml.json`) are normalised to LF (a `lineEnding` note says so; the `io` ones also record
+  `capturedLineSeparator`); ImageJ emits `System.lineSeparator()`, the port emits LF.
+
+Result shapes that differ from wave 2: many files hold `"cases": [ { "params", "input"?, "output"|"result" } ]` with one shared
+`input`; `roi-file` entries (`io/roi_files.json`, `io/roiset_zip.json`, `fiji/roiset/roiset_zip.json`) carry the `.roi` / zip
+bytes as base64 (`b64`, `zipDeflatedB64`, `zipStoredB64`, `zipB64`) next to the decoded selection (`roiFull`: class, type,
+float bounds, float polygon, mask, stroke width, spline flag, name). `edit/draw.json` stores `changed: [[pixelIndex, value]]`
+against a constant background. Stacks are arrays of IMAGE objects.
+
+Packages: `thr` AutoThresholder (17 methods x 20 histograms, 16-bit trimming), Binary options matrix, foreground rule, Binary
+Median, threshold mask · `enh` seeded noise (8/16/32-bit, ROI, one stream across channels), Salt and Pepper · `fft` FHT forward /
+power spectrum / raw PS, inverse with pass and filter masks, Bandpass (+ the filter arrays), Swap Quadrants · `sel` Fit Spline /
+Circle / Rectangle, Interpolate, Scale, Rotate, Translate, Make Band, Line to Area, Area to Line, Straighten · `io` RoiEncoder
+bytes, RoiSet zips, `decode_ours` (RoiDecoder over `io/ours/*.roi`: run `run3.sh <jar> io` AGAIN after P-io drops files there),
+TextEncoder, TextReader, XYWriter, XYCoordinates · `ov` Grid shapes (M/L/C segments), Scale Bar rectangles and auto width ·
+`ana` ParticleAnalyzer outputs / tables, calibrated sizes, Invert Y, Histogram 16/32-bit, ProfilePlot · `edit` paste Blitter
+modes, Filler.draw, NewImage, conversions, full-range invert, Duplicator channels, Montage, built-in and file LUTs · `fiji` (IJ1)
+Fractal Box Count, Curve Fitting (every built-in function, `Minimizer.setRandomSeed(1)`, one thread) · `lib` ZProjector.
+
+Fiji references live under `fiji/<cmd>/`: `autothreshold`, `autolocalthreshold`, `clahe`, `tubeness`, `frangi`, `directionality`,
+`skeleton`, `localthickness`, `coloc2`, `cellcounter` (Fiji-written marker XML), `roiset` (RoiManager zip written inside Fiji).
+Every case stores the options string passed to `IJ.run` and `describe()` = `{ self (the in-place image), created[] (new images),
+table (Results), log }`.
+
+Behaviours recorded here that a port must reproduce (found while building the fixtures):
+
+* `TextReader` always returns a 32-bit float image (no 8/16-bit auto type); an all-NaN first row is dropped as a header.
+* 16-bit `ZProjector` Average and 8/16-bit Sum/SD return 32-bit; Max/Min/Median keep the stack type; 16-bit Average is 16-bit.
+* A `ScaleBar` unit "um" is shown as "µm"; the label width is Java font metrics, so only rectangles that do not depend on it are comparable.
+* `LutLoader.openLut` accepts NIH Image files only when their length exceeds 768 bytes (a 16-colour NIH LUT of 80 bytes is rejected).
+* Fiji Auto Threshold on a 16-bit image (`fiji/autothreshold/blobs16_*.json`, run with `show`: the level is parsed from the Log into
+  `logLevels`, in 16-bit units; `afterMin/MaxThreshold` = the image's threshold after the command, -808080 = none): without
+  "setthreshold" it makes an 8-bit binary image (2 values); WITH "setthreshold" it makes an 8-bit image holding 228 distinct grey
+  values (not binary); Huang on 16-bit does not finish in 15 s and leaves the image 16-bit unchanged. The same 16-bit inputs run
+  through ImageJ's own trimmed 16-bit histogram thresholds in `thr/threshold16_fiji_blobs16_*.json`: compare the levels, do not assume they match.
+* Fiji Auto Threshold's dialog default method is "Try all", its list has no IJ_IsoData and calls MinError "MinError(I)".
+* Process › Repeat Command re-shows the dialog with the last values (`repeat-command.json`); Undo and Close are not remembered
+  (both are tested there: after Undo, Repeat re-runs Invert; after closing an image, Repeat re-runs Invert on the next one).
+* Binary Options "EDM output" (Overwrite / 8-bit / 16-bit / 32-bit) for Distance Map, Ultimate Points and Voronoi: `thr/edm_outputs_*.json`.

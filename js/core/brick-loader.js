@@ -3366,6 +3366,7 @@ const BrickLoader = (() => {
     _planRanges,       // exposed for unit testing
     _packMajorOrder,   // exposed for unit testing
     _fetchPackBuffer,  // exposed for unit testing (ELE-17)
+    validateManifest: _validateManifest,  // public: the Studio library checks a manifest it did not mount
     _validateManifest, // exposed for unit testing (ELE-21)
     _parseV3Index,     // exposed for unit testing (SPEC §13.3)
     _parseMultipartByteranges,  // exposed for unit testing

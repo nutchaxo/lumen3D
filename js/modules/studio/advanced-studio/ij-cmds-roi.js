@@ -206,7 +206,7 @@
       { id: 'selFitEllipse', menu: ['Edit', 'Selection'], order: 70, enabled: hasArea, run: fitEllipse },
       { id: 'selConvexHull', menu: ['Edit', 'Selection'], order: 80, enabled: (st) => hasRoi(st) && st.roi.type !== 'line' && st.roi.type !== 'angle', run: convexHull },
       { id: 'selCreateMask', menu: ['Edit', 'Selection'], order: 90, separatorBefore: true, long: true, enabled: idle, run: createMask },
-      { id: 'selCreateSelection', menu: ['Edit', 'Selection'], order: 100, long: true, enabled: idle, run: createSelection }
+      { id: 'selCreateSelection', menu: ['Edit', 'Selection'], order: 110, long: true, enabled: idle, run: createSelection }
     ],
     errors: {
       IJ_ROI_REDIRECT_SIZE: 'err.roiRedirectSize',

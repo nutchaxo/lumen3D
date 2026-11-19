@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"decode_ours","op":"roiCodec","call":"RoiDecoder.openFromByteArray over io/ours/*.roi (empty until P-io drops files there; run again with `run3.sh <jar> io`)","count":0,"cases":[]}

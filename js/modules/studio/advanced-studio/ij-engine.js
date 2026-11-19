@@ -30,6 +30,13 @@
  *     stored session: nothing is written over its journal, the page is told (`storageError` IJ_REPLAY_HELD);
  *   - option `verifyInputs` (tests): the engine hashes the arrays an op was given and fails an op that wrote in them.
  *
+ * Added in wave 3 (PLAN-wave3 §2.6): worker commands of a package (IJOpRegistry.defineCommand; an unknown `cmd` is
+ * dispatched to it with `E`, see commandContext), engine.configure { tileCacheBytes }, engine.registerLut,
+ * engine.putBlob / engine.dropBlob and doc.import; typed-array params of 64 KiB or more are journaled ONCE per
+ * document as a { blobRef, kind } marker (the roiRef mechanism generalised) and a params value { blobRef } is resolved
+ * against the blob store before validation; session.putMeta keeps layout, annotations, sync, luts and ext besides the
+ * Results / ROI list (each validated by type and size, what does not fit is dropped and named in the answer).
+ *
  * Conventions
  *   - A channel's `data` array is IMMUTABLE once published: an operation builds a new
  *     array and swaps the reference at commit. That makes the undo record a plain
@@ -59,11 +66,19 @@ const IJEngine = (() => {
   const MiB = 1048576;
   const GiB = 1073741824;
   const TILE = 1024;
-  const TILE_CACHE_BYTES = 128 * MiB;
+  const TILE_CACHE_BYTES = 128 * MiB;   // the default; engine.configure { tileCacheBytes } moves it
   const SLICE_MS = 50;
   const IDLE_MS = 3000;
   const MAX_UNDO = 100;
   const MAX_BAND_PIXELS = 4 * 1048576;
+  // typed arrays a blob may hold (a params value of another kind is journaled inline, as before)
+  const BLOB_KINDS = { Uint8Array, Uint8ClampedArray, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array, Float32Array, Float64Array };
+  const BLOB_JOURNAL_BYTES = 65536;     // a typed-array param this size or more is stored once per document
+  const BLOB_MAX_BYTES = 64 * MiB;      // one blob (the clipboard cap)
+  const META_TOTAL_BYTES = 4 * MiB;     // session.putMeta: the whole ui record
+  const META_ANNOT_ITEMS = 10000;       // annotations of one document
+  const META_EXT_BYTES = 256 * 1024;    // one package's sessionData
+  const META_KEYS = ['results', 'rois', 'measurements', 'windows', 'layout', 'annotations', 'sync', 'luts', 'ext'];
   // Replay stops that a later start could cure: the stored journal is kept as it is (doc.held).
   const REPLAY_HOLD_CODES = new Set(['IJ_UNKNOWN_OP', 'IJ_VERSION_MISMATCH', 'IJ_MODULE_MISSING', 'IJ_OVER_BUDGET', 'IJ_NOTHING_TO_UNDO']);
   const ROOT = (typeof globalThis !== 'undefined') ? globalThis : self;
@@ -506,7 +521,7 @@ const IJEngine = (() => {
     }
     function docRec(s, id) {
       let d = s.docs.get(id);
-      if (!d) { d = { baseline: null, snapshot: null, journal: [], rois: {} }; s.docs.set(id, d); }
+      if (!d) { d = { baseline: null, snapshot: null, journal: [], rois: {}, blobs: {} }; s.docs.set(id, d); }
       return d;
     }
     return {
@@ -519,19 +534,22 @@ const IJEngine = (() => {
         else {
           d.snapshot = rec;
           d.journal = d.journal.filter((e) => e.seq > snap.journalSeq);
-          // The engine writes a large selection again, after a snapshot, with the first entry that needs it.
+          // The engine writes a large selection (and a large typed-array param) again, after a snapshot, with the
+          // first entry that needs it.
           d.rois = {};
+          d.blobs = {};
         }
       },
       // A journal entry or a meta patch never creates a session: only a stored document does,
       // so a session that lists is always one that can be restored. A journal entry for a
       // session that is gone fails, which leaves the document unprotected until its next snapshot.
-      async putJournal(key, entry, roiBody) {
+      async putJournal(key, entry, roiBody, blobBodies) {
         const s = sess(key, false);
         if (!s) throw ijError('IJ_STORAGE_FAILED', 'no such session');
         const d = docRec(s, entry.docId);
         d.journal.push(cloneValue(entry));
         if (roiBody) d.rois[roiBody.hash] = cloneValue(roiBody.roi);
+        if (blobBodies) for (const b of blobBodies) d.blobs[b.hash] = { kind: b.kind, data: b.data.slice() };
       },
       async putMeta(key, patch) {
         const s = sess(key, false, patch && patch.datasetId);
@@ -555,7 +573,8 @@ const IJEngine = (() => {
             baseline: parts.includes('baseline') ? cloneValue(d.baseline) : null,
             snapshot: parts.includes('snapshot') ? cloneValue(d.snapshot) : null,
             journal: parts.includes('journal') ? cloneValue(d.journal) : [],
-            rois: parts.includes('journal') ? cloneValue(d.rois) : {}
+            rois: parts.includes('journal') ? cloneValue(d.rois) : {},
+            blobs: parts.includes('journal') ? cloneValue(d.blobs) : {}
           };
         }
         return { key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: cloneValue(s.meta), docs };
@@ -577,7 +596,7 @@ const IJEngine = (() => {
           if (ArrayBuffer.isView(v)) { usage += v.byteLength; return; }
           for (const k of Object.keys(v)) count(v[k]);
         };
-        for (const s of sessions.values()) for (const d of s.docs.values()) { count(d.baseline); count(d.snapshot); count(d.journal); count(d.rois); }
+        for (const s of sessions.values()) for (const d of s.docs.values()) { count(d.baseline); count(d.snapshot); count(d.journal); count(d.rois); count(d.blobs); }
         return { usage, quota: null };
       }
     };
@@ -674,14 +693,20 @@ const IJEngine = (() => {
             tx.objectStore('journal').delete(range([key, snap.docId, 0], [key, snap.docId, snap.journalSeq]));
             // large selections of the entries just covered (stored under 'roi:<hash>' keys)
             tx.objectStore('journal').delete(range([key, snap.docId, 'roi:'], [key, snap.docId, 'roi:\uffff']));
+            // and the typed-array params of those entries ('blob:<hash>' keys, stored as Blobs)
+            tx.objectStore('journal').delete(range([key, snap.docId, 'blob:'], [key, snap.docId, 'blob:\uffff']));
           }
           touchSession(tx.objectStore('sessions'), key, snap.provenance && snap.provenance.datasetId, null, true);
         });
       },
-      putJournal(key, entry, roiBody) {
+      putJournal(key, entry, roiBody, blobBodies) {
         return run(['sessions', 'journal'], 'readwrite', (tx, out) => {
           tx.objectStore('journal').put(entry, [key, entry.docId, entry.seq]);
           if (roiBody) tx.objectStore('journal').put({ kind: 'roi', docId: entry.docId, hash: roiBody.hash, roi: roiBody.roi }, [key, entry.docId, 'roi:' + roiBody.hash]);
+          // a Blob is stored out of line (the same reason as the channel pixels, see toStored)
+          if (blobBodies) for (const b of blobBodies) {
+            tx.objectStore('journal').put({ kind: 'blob', docId: entry.docId, hash: b.hash, bkind: b.kind, length: b.data.length, blob: new ROOT.Blob([b.data]) }, [key, entry.docId, 'blob:' + b.hash]);
+          }
           touchSession(tx.objectStore('sessions'), key, null, null, false, () => {
             out.err = ijError('IJ_STORAGE_FAILED', 'no such session');
             tx.abort();
@@ -715,7 +740,17 @@ const IJEngine = (() => {
       },
       async load(key, what) {
         const v = await api.loadRaw(key, what);
-        if (v) for (const id of Object.keys(v.docs)) { await fromStored(v.docs[id].baseline); await fromStored(v.docs[id].snapshot); }
+        if (v) for (const id of Object.keys(v.docs)) {
+          await fromStored(v.docs[id].baseline); await fromStored(v.docs[id].snapshot);
+          const bl = v.docs[id].blobs || {};
+          for (const hash of Object.keys(bl)) {
+            const rec = bl[hash];
+            const T = BLOB_KINDS[rec.bkind];
+            if (!T || !rec.blob) { delete bl[hash]; continue; }
+            const data = new T(await rec.blob.arrayBuffer());
+            if (data.length !== rec.length) delete bl[hash]; else bl[hash] = { kind: rec.bkind, data };
+          }
+        }
         return v;
       },
       loadRaw(key, what) {
@@ -732,9 +767,13 @@ const IJEngine = (() => {
             const s = sg.result;
             if (!s) { out.v = null; return; }
             const docs = {};
-            const slot = (id) => docs[id] || (docs[id] = { baseline: null, snapshot: null, journal: [], rois: {} });
+            const slot = (id) => docs[id] || (docs[id] = { baseline: null, snapshot: null, journal: [], rois: {}, blobs: {} });
             if (docsReq) for (const r of docsReq.result) if (parts.includes(r.kind)) slot(r.docId)[r.kind] = r;
-            if (jReq) for (const e of jReq.result) { if (e.kind === 'roi') slot(e.docId).rois[e.hash] = e.roi; else slot(e.docId).journal.push(e); }
+            if (jReq) for (const e of jReq.result) {
+              if (e.kind === 'roi') slot(e.docId).rois[e.hash] = e.roi;
+              else if (e.kind === 'blob') slot(e.docId).blobs[e.hash] = e;   // decoded by load()
+              else slot(e.docId).journal.push(e);
+            }
             for (const id of Object.keys(docs)) docs[id].journal.sort((a, b) => a.seq - b.seq);
             out.v = { key: s.key, datasetId: s.datasetId, savedAt: s.savedAt, meta: s.meta || {}, docs };
           };
@@ -816,6 +855,10 @@ const IJEngine = (() => {
     let queue = Promise.resolve();
     let storage = null;
     let storageOn = false;
+    // The tile cache budget (engine.configure moves it) and the blob store (engine.putBlob / typed-array params).
+    let tileCacheBytes = opts.tileCacheBytes > 0 ? opts.tileCacheBytes : TILE_CACHE_BYTES;
+    const blobs = new Map();          // ref → { ref, kind, data, bytes, docs:Set<docId>, at }
+    const blobRefOf = new WeakMap();  // typed array → ref, for the arrays the store holds (no re-hash at commit)
 
     // ---- messaging ---------------------------------------------------------
 
@@ -854,7 +897,7 @@ const IJEngine = (() => {
         const code = storageErrorCode(err);
         if (doc) {
           doc.protected = false; doc.dirty = true;
-          doc.roiWritten = new Set();
+          doc.roiWritten = new Set(); doc.blobWritten = new Set();
           // Whatever was being written is not in storage: a later snapshot may only vouch for
           // the document once it covers this revision.
           doc.unjournaledRev = doc.rev;
@@ -909,6 +952,7 @@ const IJEngine = (() => {
         if (d.baselineData) for (const a of d.baselineData) add(a);
       }
       for (const t of tiles.map.values()) add(t.img.data);
+      for (const b of blobs.values()) add(b.data);
       for (const p of projects.values()) total += p.estimate;
       return total + transientBytes;
     }
@@ -923,6 +967,11 @@ const IJEngine = (() => {
     function dropTiles() {
       tiles.map.clear();
       tiles.bytes = 0;
+    }
+
+    // The blobs no document has used yet (nothing refers to them): given up when memory is short.
+    function dropUnusedBlobs() {
+      for (const [ref, b] of Array.from(blobs)) if (!b.docs.size) { blobs.delete(ref); }
     }
 
     function purgeTiles(docId) {
@@ -945,6 +994,8 @@ const IJEngine = (() => {
       }
       let reclaimable = tiles.bytes;
       const add = (a) => { if (a && !seen.has(a)) { seen.add(a); reclaimable += a.byteLength; } };
+      // a blob no document has used yet (a preview's clipboard, a cancelled paste) is given up like a cached tile
+      for (const b of blobs.values()) if (!b.docs.size) add(b.data);
       const addRec = (r) => {
         if (r.patches) for (const p of r.patches) add(p.data);
         if (r.full) for (const c of r.full.channels) add(c.data);
@@ -979,6 +1030,7 @@ const IJEngine = (() => {
         throw ijError('IJ_OVER_BUDGET', 'not enough memory for this operation', { needBytes: extra, usedBytes: used, budgetBytes });
       }
       dropTiles();
+      dropUnusedBlobs();
       while (usedBytes() + extra > budgetBytes) {
         let best = null;
         for (const d of budgetDocs()) {
@@ -1052,6 +1104,7 @@ const IJEngine = (() => {
       const s = sessions.get(doc.sessionKey);
       if (!s) return;
       s.docs[doc.id] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
+      if (doc.hidden) s.docs[doc.id].hidden = true;
       s.display[doc.id] = displayStateOf(doc);
       if (s.metaQueued) return;
       s.metaQueued = true;
@@ -1072,7 +1125,7 @@ const IJEngine = (() => {
         visible: (p.display && p.display.visible) || new Array(n).fill(true),
         undo: [], redo: [], chain: Promise.resolve(),
         baselineIndex: new WeakMap(), baselineData: null, baselineShape: null, baselineMeta: null, baselineProvenance: null, baselineStored: false,
-        layoutRev: p.layoutRev || 0, roiWritten: new Set(),
+        layoutRev: p.layoutRev || 0, roiWritten: new Set(), blobWritten: new Set(), hidden: !!p.hidden,
         journalSeq: p.journalSeq || 0, snapshotRev: 0, dirty: false, protected: storageOn,
         unjournaledRev: -1, pendingBaseline: null,
         rangeCache: null
@@ -1098,7 +1151,7 @@ const IJEngine = (() => {
         doc.baselineShape.w === doc.width && doc.baselineShape.h === doc.height && doc.baselineShape.bd === doc.bitDepth;
       return {
         kind, docId: doc.id, rev: doc.rev, journalSeq: doc.journalSeq, savedRev: doc.savedRev, layoutRev: doc.layoutRev,
-        name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth,
+        name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth, hidden: !!doc.hidden,
         calibration: plainClone(doc.calibration), provenance: plainClone(doc.provenance),
         display: displayStateOf(doc),
         // A channel that still IS one of the baseline's arrays is stored as a reference to that
@@ -1169,7 +1222,7 @@ const IJEngine = (() => {
       const bytes = recDataBytes(rec);
       // The snapshot drops the stored selections of the entries it covers: the entries committed
       // from now on write the bodies they need again.
-      doc.roiWritten = new Set();
+      doc.roiWritten = new Set(); doc.blobWritten = new Set();
       doc.snapshotRev = doc.rev;
       doc.dirty = false;
       for (const r of doc.undo) r.replayable = false;
@@ -1211,6 +1264,100 @@ const IJEngine = (() => {
 
     const ROI_REF_BYTES = 65536;
 
+    // ---- blobs: typed arrays the params of an op may carry (PLAN-wave3 §2.6) ----------------------------
+
+    // Two independent 32-bit lanes over the bytes (a word at a time when aligned) + the kind + the size: a stored body
+    // is shared by every entry with the same reference, so a collision would replay the wrong bytes silently.
+    function hashBlob(arr, kind) {
+      const n = arr.byteLength;
+      const u8 = new Uint8Array(arr.buffer, arr.byteOffset, n);
+      let h = 0x811c9dc5, g = 0x9e3779b9;
+      for (let k = 0; k < kind.length; k++) { const c = kind.charCodeAt(k); h = Math.imul(h ^ c, 0x01000193) >>> 0; g = Math.imul(g ^ c, 0x5bd1e995) >>> 0; }
+      let i = 0;
+      if ((u8.byteOffset & 3) === 0) {
+        const w = new Uint32Array(u8.buffer, u8.byteOffset, n >> 2);
+        for (; i < w.length; i++) { const x = w[i]; h = Math.imul(h ^ x, 0x01000193) >>> 0; g = Math.imul(g ^ x, 0x5bd1e995); g = (g ^ (g >>> 15)) >>> 0; }
+        i <<= 2;
+      }
+      for (; i < n; i++) { const b = u8[i]; h = Math.imul(h ^ b, 0x01000193) >>> 0; g = Math.imul(g ^ b, 0x5bd1e995); g = (g ^ (g >>> 15)) >>> 0; }
+      return (h >>> 0).toString(16).padStart(8, '0') + (g >>> 0).toString(16).padStart(8, '0') + '-' + n;
+    }
+
+    function blobRefFor(arr) {
+      let ref = blobRefOf.get(arr);
+      if (!ref) { ref = hashBlob(arr, arr.constructor.name); blobRefOf.set(arr, ref); }
+      return ref;
+    }
+
+    const isBlobArray = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView) && !!BLOB_KINDS[v.constructor.name];
+
+    // `v` with every { blobRef } marker replaced by the typed array `lookup(ref)` returns (copy on write: untouched
+    // branches are returned as they are, typed arrays are never walked into).
+    function resolveBlobs(v, lookup, depth) {
+      if (v === null || typeof v !== 'object' || ArrayBuffer.isView(v)) return v;
+      const d = depth || 0;
+      if (d > 8) return v;
+      if (Array.isArray(v)) {
+        if (v.length > 64 && typeof v[0] !== 'object') return v;
+        let out = null;
+        for (let i = 0; i < v.length; i++) {
+          const r = resolveBlobs(v[i], lookup, d + 1);
+          if (r !== v[i]) { if (!out) out = v.slice(); out[i] = r; }
+        }
+        return out || v;
+      }
+      if (typeof v.blobRef === 'string' && Object.keys(v).every((k) => k === 'blobRef' || k === 'kind' || k === 'bytes')) {
+        const got = lookup(v.blobRef);
+        if (!got) throw ijError('IJ_NO_BLOB', 'stored data missing');
+        return got;
+      }
+      let out = null;
+      for (const k of Object.keys(v)) {
+        const r = resolveBlobs(v[k], lookup, d + 1);
+        if (r !== v[k]) { if (!out) out = Object.assign({}, v); out[k] = r; }
+      }
+      return out || v;
+    }
+
+    // The params of a journal entry with every large typed array replaced by a marker, and the bodies not stored yet.
+    function journalBlobs(doc, params) {
+      const bodies = [];
+      const walk = (v, depth) => {
+        if (v === null || typeof v !== 'object') return v;
+        if (ArrayBuffer.isView(v)) {
+          if (!isBlobArray(v) || v.byteLength < BLOB_JOURNAL_BYTES) return v;
+          const ref = blobRefFor(v);
+          if (!doc.blobWritten.has(ref)) { doc.blobWritten.add(ref); bodies.push({ hash: ref, kind: v.constructor.name, data: v }); }
+          return { blobRef: ref, kind: v.constructor.name };
+        }
+        if (depth > 8) return v;
+        if (Array.isArray(v)) {
+          if (v.length > 64 && typeof v[0] !== 'object') return v;
+          let out = null;
+          for (let i = 0; i < v.length; i++) { const r = walk(v[i], depth + 1); if (r !== v[i]) { if (!out) out = v.slice(); out[i] = r; } }
+          return out || v;
+        }
+        let out = null;
+        for (const k of Object.keys(v)) { const r = walk(v[k], depth + 1); if (r !== v[k]) { if (!out) out = Object.assign({}, v); out[k] = r; } }
+        return out || v;
+      };
+      return { params: walk(params, 0), bodies };
+    }
+
+    // A { blobRef } of the live store: the array, and the document now holds it (it stays while the document lives).
+    function liveBlob(doc) {
+      return (ref) => {
+        const b = blobs.get(ref);
+        if (!b) return null;
+        if (doc) { b.docs.add(doc.id); b.used = true; }
+        return b.data;
+      };
+    }
+
+    function forgetBlobsOf(docId) {
+      for (const [ref, b] of Array.from(blobs)) { b.docs.delete(docId); if (!b.docs.size && b.used) blobs.delete(ref); }
+    }
+
     function noteCommit(doc, entry) {
       doc.dirty = true;
       doc.journalSeq++;
@@ -1229,9 +1376,16 @@ const IJEngine = (() => {
           entry.roiRef = ref;
           entry.roi = null;
         }
+        // A typed-array param of 64 KiB or more (a paste, a burn-in mask) is stored once per document under its hash.
+        let blobBodies = null;
+        if (entry.params && typeof entry.params === 'object') {
+          const jb = journalBlobs(doc, entry.params);
+          if (jb.params !== entry.params) entry.params = jb.params;
+          if (jb.bodies.length) blobBodies = jb.bodies;
+        }
         enqueue(async () => {
-          if (!doc.protected) { doc.unjournaledRev = Math.max(doc.unjournaledRev, entry.rev); doc.roiWritten = new Set(); return; }
-          await storage.putJournal(doc.sessionKey, entry, body);
+          if (!doc.protected) { doc.unjournaledRev = Math.max(doc.unjournaledRev, entry.rev); doc.roiWritten = new Set(); doc.blobWritten = new Set(); return; }
+          await storage.putJournal(doc.sessionKey, entry, body, blobBodies);
         }, doc);
       } else if (storageOn) {
         doc.unjournaledRev = doc.rev;
@@ -1248,7 +1402,7 @@ const IJEngine = (() => {
         channels: doc.channels.map((c) => ({ name: c.name, color: c.color, display: Object.assign({}, c.display) })),
         calibration: doc.calibration, provenance: doc.provenance,
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
-        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev,
+        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev, hidden: !!doc.hidden,
         bytes, levels: levelCount(doc.width, doc.height), tileSize: TILE,
         unsaved: doc.savedRev !== doc.rev || !!doc.held, protected: !!(storageOn && doc.protected),
         loading: false, memory: { usedBytes: usedBytes(), budgetBytes }
@@ -1426,8 +1580,10 @@ const IJEngine = (() => {
     // A replayed entry already holds its resolved params, and the state `resolve` reads (display range,
     // threshold) is not the state of the moment the entry was written: resolve is NOT called on a replay
     // (it must still be idempotent — fill what is missing — because a page may send resolved params).
-    function resolvedParams(doc, spec, args, chans, replay, others) {
-      let params = Object.assign({}, args.params || {});
+    // `commit` false (a preview, doc.compute, a size estimate): a blob it resolves is not pinned to the document,
+    // so a cancelled paste can still give its clipboard up.
+    function resolvedParams(doc, spec, args, chans, replay, others, commit = true) {
+      let params = resolveBlobs(Object.assign({}, args.params || {}), liveBlob(commit ? doc : null));
       if (spec.validate) spec.validate(params, infoFor(doc, chans, null, others));
       if (spec.resolve && !replay) { const r = spec.resolve(makeView(doc), params, chans); if (r) params = r; }
       return params;
@@ -1940,7 +2096,7 @@ const IJEngine = (() => {
       if (usedBytes() + bytes <= budgetBytes) {
         tiles.map.set(key, { docId: doc.id, img });
         tiles.bytes += bytes;
-        while (tiles.bytes > TILE_CACHE_BYTES && tiles.map.size > 1) {
+        while (tiles.bytes > tileCacheBytes && tiles.map.size > 1) {
           const first = tiles.map.keys().next().value;
           const t = tiles.map.get(first);
           tiles.map.delete(first);
@@ -2091,17 +2247,47 @@ const IJEngine = (() => {
 
     function finishMutation() { emitBudget(); }
 
-    function addDocFromImage(img, provenance, sessionKey) {
+    function addDocFromImage(img, provenance, sessionKey, hidden) {
       const id = newId();
       const bd = img.bitDepth;
-      const chans = img.channels.map((c) => makeChannel(c.name, c.color, c.data, bd, c.display));
+      const chans = img.channels.map((c) => makeChannel(c.name, c.color, c.data, bd, sanitizeDisplay(c.display)));
       const doc = buildDoc({
         id, sessionKey: sessionKey || sessionKeyFor(provenance, id), name: img.name || 'image',
         width: img.width, height: img.height, bitDepth: bd, channels: chans,
-        calibration: plainClone(img.calibration) || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' }, provenance
+        calibration: plainClone(img.calibration) || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' }, provenance, hidden: !!hidden
       });
       registerDoc(doc, { baseline: true });
       return doc;
+    }
+
+    // The image of doc.import / E.createDoc: checked as a request (IJ_BAD_ARGS), never trusted.
+    function checkImageArgs(img) {
+      if (!img || typeof img !== 'object' || !isInt(img.width) || img.width < 1 || !isInt(img.height) || img.height < 1 ||
+        ![8, 16, 32].includes(img.bitDepth) || !Array.isArray(img.channels) || !img.channels.length || img.channels.length > 64) throw ijError('IJ_BAD_ARGS', 'image');
+      const Ctor = ctorFor(img.bitDepth);
+      let bytes = 0;
+      for (const c of img.channels) {
+        if (!c || !ArrayBuffer.isView(c.data) || c.data.constructor.name !== Ctor.name || c.data.length !== img.width * img.height) throw ijError('IJ_BAD_ARGS', 'image channel');
+        if (c.name !== undefined && c.name !== null && (typeof c.name !== 'string' || c.name.length > 255)) throw ijError('IJ_BAD_ARGS', 'channel name');
+        if (c.color !== undefined && c.color !== null && !(typeof c.color === 'string' && /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(c.color))) throw ijError('IJ_BAD_ARGS', 'channel color');
+        bytes += c.data.byteLength;
+      }
+      const cal = img.calibration;
+      if (cal !== undefined && cal !== null) {
+        if (typeof cal !== 'object' || !(cal.pixelWidth > 0) || !isFinite(cal.pixelWidth) || !(cal.pixelHeight > 0) || !isFinite(cal.pixelHeight) ||
+          (cal.unit !== undefined && (typeof cal.unit !== 'string' || cal.unit.length > 64))) throw ijError('IJ_BAD_ARGS', 'calibration');
+      }
+      return bytes;
+    }
+    // A display the channel may carry: finite min < max and a look-up table that resolves; anything else is the default.
+    function sanitizeDisplay(d) {
+      if (!d || typeof d !== 'object' || !isFinite(d.min) || !isFinite(d.max) || typeof d.min !== 'number' || typeof d.max !== 'number' || !(d.min < d.max)) return null;
+      const lut = d.lut === undefined || d.lut === null ? null : d.lut;
+      if (lut !== null) {
+        if (typeof lut !== 'string' && !(lut instanceof Uint8Array)) return null;
+        try { const t = dep('IJLuts').get(lut); if (!t || t.length !== 768) return null; } catch (e) { return null; }
+      }
+      return Object.assign({}, d, { lut });
     }
 
     const handlers = {};
@@ -2245,6 +2431,7 @@ const IJEngine = (() => {
         } else docs.delete(doc.id);
         purgeTiles(doc.id);
         latestPreview.delete(doc.id);
+        if (!docs.has(doc.id)) forgetBlobsOf(doc.id);
         if (activeSessionKey === doc.sessionKey && ![...docs.values()].some((d) => d.sessionKey === doc.sessionKey)) {
           const other = [...docs.values()].pop();
           activeSessionKey = other ? other.sessionKey : null;
@@ -2312,7 +2499,7 @@ const IJEngine = (() => {
         checkBitDepth(spec, doc);
         const chans = isInt(a.channel) ? [a.channel] : [];
         const others = live.slice(1);
-        const params = resolvedParams(doc, spec, { params: a.params }, chans, false, others);
+        const params = resolvedParams(doc, spec, { params: a.params }, chans, false, others, false);
         const io = makeIo(ctx.task, live, { channel: a.channel, region: a.region, transfer: ctx.transfer,
           scratch: scratchOf(spec, infoFor(doc, doc.channels.map((c, i) => i), null, others, a.roi), params) });
         const guard = guardInputs(live, a.op);
@@ -2332,13 +2519,13 @@ const IJEngine = (() => {
       let need, one;
       if (spec.kind === 'pixel') {
         const plan = planPixel(doc, spec, a);
-        const params = resolvedParams(doc, spec, a, plan.chans);
+        const params = resolvedParams(doc, spec, a, plan.chans, false, undefined, false);
         const n = pixelNeed(doc, spec, plan, params);
         need = n.need; one = n.oneChannel;
       } else {
         const others = (Array.isArray(a.docIds) ? a.docIds : []).filter((id) => id !== a.docId).map(getDoc);
         const all = doc.channels.map((c, i) => i);
-        const params = resolvedParams(doc, spec, a, all, false, others);
+        const params = resolvedParams(doc, spec, a, all, false, others, false);
         need = scratchOf(spec, infoFor(doc, all, null, others, a.roi), params);
         one = need;
       }
@@ -2643,14 +2830,83 @@ const IJEngine = (() => {
       return { kept: [...open] };
     };
 
+    // ---- session meta (the UI state stored beside the documents) ----------------------------------------------------
+    // What the page may keep: the Results table, the ROI list, the measurement set, the open tool windows, the layout of
+    // the workspace, the persistent annotations of every document, the Synchronize Windows state, the look-up tables an
+    // extension registered and each package's own session data. Every key is checked by type and size; what is wrong or
+    // too large is dropped and named in the answer ({ dropped: [{ key, code, docId? }] }), the rest is stored.
+    const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && !ArrayBuffer.isView(v);
+    const jsonBytes = (v) => { try { return JSON.stringify(v).length; } catch (e) { return Infinity; } };
+    function validateMeta(a) {
+      const ui = {}, dropped = [];
+      const bad = (key, code, docId) => dropped.push(docId === undefined ? { key, code } : { key, code, docId });
+      for (const key of META_KEYS) {
+        const v = a[key];
+        if (v === undefined) continue;
+        switch (key) {
+          case 'results': case 'rois': case 'measurements':
+            if (Array.isArray(v)) ui[key] = v; else bad(key, 'IJ_BAD_ARGS');
+            break;
+          case 'windows':
+            // the ids of the open tool windows (an array); an older page stored an object of window boxes
+            if (Array.isArray(v) || isPlain(v)) ui[key] = v; else bad(key, 'IJ_BAD_ARGS');
+            break;
+          case 'layout': case 'sync':
+            if (v === null) ui[key] = null; else if (isPlain(v)) ui[key] = v; else bad(key, 'IJ_BAD_ARGS');
+            break;
+          case 'annotations': {
+            if (!isPlain(v)) { bad(key, 'IJ_BAD_ARGS'); break; }
+            const out = {};
+            for (const id of Object.keys(v)) {
+              const rec = v[id];
+              if (!isPlain(rec) || !Array.isArray(rec.items)) { bad(key, 'IJ_BAD_ARGS', id); continue; }
+              if (rec.items.length > META_ANNOT_ITEMS) { bad(key, 'IJ_LAY_META_TOO_LARGE', id); continue; }
+              out[id] = { visible: rec.visible !== false, items: rec.items };
+            }
+            ui[key] = out;
+            break;
+          }
+          case 'luts': {
+            if (!isPlain(v)) { bad(key, 'IJ_BAD_ARGS'); break; }
+            const out = {};
+            for (const name of Object.keys(v)) {
+              const t = v[name];
+              if (Array.isArray(t) && t.length === 768 && t.every((x) => Number.isInteger(x) && x >= 0 && x <= 255)) out[name] = t; else bad(key, 'IJ_BAD_ARGS', name);
+            }
+            ui[key] = out;
+            break;
+          }
+          case 'ext': {
+            if (!isPlain(v)) { bad(key, 'IJ_BAD_ARGS'); break; }
+            const out = {};
+            for (const pkg of Object.keys(v)) { if (jsonBytes(v[pkg]) > META_EXT_BYTES) bad(key, 'IJ_LAY_META_TOO_LARGE', pkg); else out[pkg] = v[pkg]; }
+            ui[key] = out;
+            break;
+          }
+          default: break;
+        }
+      }
+      // the whole record stays under META_TOTAL_BYTES: the annotations give way first, then the packages' data
+      let total = 0;
+      const sizes = {};
+      for (const k of Object.keys(ui)) { sizes[k] = jsonBytes(ui[k]); total += sizes[k]; }
+      for (const k of ['annotations', 'ext', 'luts', 'results']) {
+        if (total <= META_TOTAL_BYTES) break;
+        if (ui[k] === undefined) continue;
+        total -= sizes[k]; delete ui[k]; bad(k, 'IJ_LAY_META_TOO_LARGE');
+      }
+      return { ui, dropped };
+    }
+
     handlers['session.putMeta'] = async (a) => {
       const key = a.key || activeSessionKey;
       if (!key || !storageOn) return {};
+      const checked = validateMeta(a);
       const s = sessions.get(key);
-      if (s) s.ui = { results: a.results, rois: a.rois, measurements: a.measurements, windows: a.windows };
+      if (s) s.ui = checked.ui;
       // Storage only updates a session that already holds a document (no ghost session).
-      await enqueue(() => storage.putMeta(key, { ui: { results: a.results, rois: a.rois, measurements: a.measurements, windows: a.windows } }), null);
-      return {};
+      await enqueue(() => storage.putMeta(key, { ui: checked.ui }), null);
+      return checked.dropped.length ? { dropped: checked.dropped } : {};
     };
 
     handlers['session.restore'] = async (a, ctx) => {
@@ -2703,7 +2959,7 @@ const IJEngine = (() => {
               id: docId, sessionKey: a.key, name: src.name, width: src.width, height: src.height, bitDepth: src.bitDepth,
               channels: chans, calibration: src.calibration, provenance: src.provenance, rev: src.rev,
               savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0,
-              layoutRev: src.layoutRev || 0
+              layoutRev: src.layoutRev || 0, hidden: !!src.hidden
             });
           } finally { transientBytes -= loadedBytes; }
           if (base) {
@@ -2732,6 +2988,11 @@ const IJEngine = (() => {
                 const body = rec.rois && rec.rois[e.roiRef];
                 if (!body) throw ijError('IJ_NO_ROI', 'stored selection missing');
                 e = Object.assign({}, e, { roi: body });
+              }
+              // typed-array params were journaled once, under their hash
+              if (e.params && typeof e.params === 'object') {
+                const stored = rec.blobs || {};
+                e = Object.assign({}, e, { params: resolveBlobs(e.params, (ref) => (stored[ref] ? stored[ref].data : null)) });
               }
               if (e.kind === 'run') await executeRun(doc, e, replayTask, true);
               else if (e.kind === 'undo' || e.kind === 'redo') await doUndoRedo(doc, e.kind, true);
@@ -2791,6 +3052,123 @@ const IJEngine = (() => {
       return { docIds: ids, meta: (row.meta && row.meta.ui) || null, warnings };
     };
 
+    // doc.import { image: { name, width, height, bitDepth, calibration, channels: [{ data, name, color, display? }] },
+    //              provenance?, sessionKey?, hidden? } -> { docId, info }.
+    // A document the page built itself (the library, a pasted image): the arrays were transferred, the baseline is stored
+    // like any loaded image (so the session restores it), provenance.imported marks it. `hidden` = kept in the session,
+    // no view and no menu entry on the page (info.hidden).
+    handlers['doc.import'] = (a) => {
+      const img = a.image;
+      const bytes = checkImageArgs(img);
+      ensureRoom(bytes);
+      const provenance = Object.assign({ imported: true }, a.provenance && typeof a.provenance === 'object' ? a.provenance : {});
+      const doc = addDocFromImage(img, provenance, typeof a.sessionKey === 'string' && a.sessionKey ? a.sessionKey : undefined, !!a.hidden);
+      doc.savedRev = -1;
+      markMeta(doc);
+      finishMutation();
+      return { docId: doc.id, info: infoOf(doc) };
+    };
+
+    // engine.configure { tileCacheBytes }: the page tells the worker how much pyramid cache the visible views justify.
+    handlers['engine.configure'] = (a) => {
+      if (a.tileCacheBytes !== undefined) {
+        if (typeof a.tileCacheBytes !== 'number' || !isFinite(a.tileCacheBytes) || a.tileCacheBytes < MiB) throw ijError('IJ_BAD_ARGS', 'tileCacheBytes');
+        tileCacheBytes = Math.min(2 * GiB, Math.floor(a.tileCacheBytes));
+        while (tiles.bytes > tileCacheBytes && tiles.map.size > 0) {
+          const first = tiles.map.keys().next().value;
+          const t = tiles.map.get(first);
+          tiles.map.delete(first);
+          tiles.bytes -= t.img.data.byteLength;
+        }
+      }
+      return { tileCacheBytes };
+    };
+
+    // engine.registerLut { name, table: Uint8Array(768) }: a table an extension named (IJLuts.register), so a channel's
+    // display.lut may name it here too (the TIFF export reads it).
+    handlers['engine.registerLut'] = (a) => {
+      const IJLuts = dep('IJLuts');
+      if (typeof IJLuts.register !== 'function') throw ijError('IJ_MODULE_MISSING', 'look-up table registry');
+      const table = ArrayBuffer.isView(a.table) && a.table.constructor.name === 'Uint8Array' ? a.table : (Array.isArray(a.table) ? Uint8Array.from(a.table) : null);
+      if (!table) throw ijError('IJ_BAD_ARGS', 'table');
+      try { IJLuts.register(a.name, table); } catch (err) { throw ijError('IJ_BAD_ARGS', 'lut'); }
+      return { name: a.name };
+    };
+
+    // engine.putBlob { data: TypedArray } -> { blobRef, kind, bytes }: bytes the page will refer to by { blobRef } in the
+    // params of a preview or a run (a clipboard sent once, not with each preview). Counted against the budget; one
+    // 64 MiB at most; the same bytes twice are one blob.
+    handlers['engine.putBlob'] = (a) => {
+      const d = a.data;
+      if (!isBlobArray(d)) throw ijError('IJ_BAD_ARGS', 'blob');
+      if (d.byteLength > BLOB_MAX_BYTES) throw ijError('IJ_TOO_LARGE', 'blob too large');
+      const kind = d.constructor.name;
+      const ref = blobRefFor(d);
+      if (!blobs.has(ref)) {
+        ensureRoom(d.byteLength);
+        blobs.set(ref, { ref, kind, data: d, bytes: d.byteLength, docs: new Set(), used: false, at: Date.now() });
+        finishMutation();
+      }
+      return { blobRef: ref, kind, bytes: d.byteLength };
+    };
+
+    // engine.dropBlob { blobRef }: a blob the page will not use any more (a cancelled paste); one a step already uses stays.
+    handlers['engine.dropBlob'] = (a) => {
+      const b = blobs.get(a.blobRef);
+      let dropped = false;
+      if (b && !b.docs.size) { blobs.delete(a.blobRef); dropped = true; finishMutation(); }
+      return { dropped };
+    };
+
+    // The `E` a package's worker command (IJOpRegistry.defineCommand) receives: the engine's own services, scoped to one
+    // request. What it reserved and did not release is given back when the request ends.
+    function commandContext(ctx) {
+      let reserved = 0;
+      const E = {
+        budgetBytes,
+        ijError,
+        check: () => ctx.task.check(),
+        tick: (f, stepKey, detail) => ctx.task.tick(f, stepKey, detail),
+        reserve(n) {
+          if (!(n >= 0)) throw ijError('IJ_BAD_ARGS', 'reserve');
+          ensureRoom(n); transientBytes += n; reserved += n;
+        },
+        release(n) {
+          const k = Math.min(Math.max(0, Number(n) || 0), reserved);
+          transientBytes -= k; reserved -= k;
+        },
+        // A document the handler built: arrays it reserved become the document's own (the reservation shrinks by their size).
+        createDoc(image, o) {
+          const opt = o || {};
+          const bytes = checkImageArgs(image);
+          const covered = Math.min(bytes, reserved);
+          if (bytes > covered) ensureRoom(bytes - covered);
+          const provenance = Object.assign({}, opt.provenance && typeof opt.provenance === 'object' ? opt.provenance : {});
+          const doc = addDocFromImage(image, provenance, typeof opt.sessionKey === 'string' && opt.sessionKey ? opt.sessionKey : undefined, !!opt.hidden);
+          doc.savedRev = -1;
+          markMeta(doc);
+          E.release(bytes);
+          finishMutation();
+          return infoOf(doc);
+        },
+        readDoc: (docId) => makeView(getDoc(docId)),
+        lockDocs: (ids, fn) => lockDocs((ids || []).map(getDoc), fn),
+        fetch(...args) {
+          const f = ROOT.fetch;
+          if (typeof f !== 'function') throw ijError('IJ_BAD_ARGS', 'fetch is not available');
+          return f.apply(ROOT, args);
+        },
+        // Events a package posts to its page code: the name is prefixed `ext:` so a package cannot speak as the engine.
+        postEvent(ev) {
+          if (!ev || typeof ev.event !== 'string' || !/^[A-Za-z][A-Za-z0-9.]*$/.test(ev.event)) throw ijError('IJ_BAD_ARGS', 'event');
+          post(Object.assign({}, ev, { event: 'ext:' + ev.event }));
+        },
+        transfer: (buf) => { ctx.transfer.push(buf); },
+        done() { if (reserved) { transientBytes -= reserved; reserved = 0; } }
+      };
+      return E;
+    }
+
     // Liveness probe for the page's watchdog: answered at once.
     handlers['ping'] = () => ({ at: Date.now() });
 
@@ -2824,7 +3202,7 @@ const IJEngine = (() => {
       let level = Math.max(0, a.level | 0);
       if (!scalable) level = 0;
       const chans = pixelChannels(doc, spec, a.channel);
-      const params = resolvedParams(doc, spec, a, chans);
+      const params = resolvedParams(doc, spec, a, chans, false, undefined, false);
       const view = makeView(doc);
       const gates = chans.map(() => ({ lo: 0, hi: 1 }));
       const prepareAt = (lv) => chans.map((c, i) => spec.prepare(view, c, params, {
@@ -2944,9 +3322,17 @@ const IJEngine = (() => {
       const task = makeTask(id);
       if (id != null) tasks.set(id, task);
       const ctx = { id, task, transfer: [], release: null };
+      let E = null;
       try {
-        const h = handlers[msg.cmd];
-        if (!h) throw ijError('IJ_UNKNOWN_CMD', 'unknown command');
+        let h = handlers[msg.cmd];
+        if (!h) {
+          // not one of ours: a worker command a package registered (a built-in handler of the same name always wins)
+          const reg = ROOT.IJOpRegistry;
+          const c = reg && typeof reg.getCommand === 'function' && typeof msg.cmd === 'string' ? reg.getCommand(msg.cmd) : null;
+          if (c) { E = commandContext(ctx); h = (args) => c.handler(args, E); }
+          else if (reg && typeof reg.isWithdrawnCommand === 'function' && reg.isWithdrawnCommand(msg.cmd)) throw ijError('IJ_MODULE_MISSING', 'the package of this command did not load');
+          else throw ijError('IJ_UNKNOWN_CMD', 'unknown command');
+        }
         const result = await h(msg.args || {}, ctx);
         post({ id, ok: true, result }, ctx.transfer);
       } catch (err) {
@@ -2954,6 +3340,7 @@ const IJEngine = (() => {
         if (code === 'IJ_INTERNAL' || !String(code).startsWith('IJ_')) console.error('[IJEngine] ' + msg.cmd + ' failed', err);
         post({ id, ok: false, error: { code: String(code), message: String(err && err.message || code), details: err && err.details || null } });
       } finally {
+        if (E) E.done();
         if (ctx.release) ctx.release();
         if (id != null) tasks.delete(id);
       }
@@ -2971,6 +3358,13 @@ const IJEngine = (() => {
     // ---- start ----------------------------------------------------------------------------------------
 
     setupStorage();
+    {
+      // a package command named like a built-in handler would never be reached: withdrawn at start, loudly
+      const reg = ROOT.IJOpRegistry;
+      if (reg && typeof reg.listCommands === 'function') {
+        for (const name of reg.listCommands()) if (handlers[name]) { console.error('[IJEngine] worker command ' + name + ' shadows a built-in handler: withdrawn'); reg.unregisterCommand(name); }
+      }
+    }
     if (typeof self.addEventListener === 'function') self.addEventListener('message', (ev) => { onMessage(ev.data); });
     else self.onmessage = (ev) => { onMessage(ev.data); };
     post({ event: 'ready', protected: storageOn, budgetBytes });

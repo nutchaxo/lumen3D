@@ -6,8 +6,9 @@
  *
  * The four `scripts` are mandatory. Each package is loaded in its own try/catch: one that cannot
  * load (a syntax error, a missing file) is reported as { event: 'packageFailed', pkg } and the ops
- * it had already registered are withdrawn, so its commands are disabled by the page and a journal
- * entry naming one of its ops stops the replay instead of crashing the worker.
+ * and worker commands it had already registered (IJOpRegistry.defineCommand) are withdrawn, so its
+ * commands are disabled by the page, a journal entry naming one of its ops stops the replay instead
+ * of crashing the worker, and a request for one of its worker commands answers IJ_MODULE_MISSING.
  *
  * When the start fails (a mandatory script cannot be loaded, the engine throws) the worker says so
  * with { event: 'initError', code: 'IJ_WORKER_INIT' } and then ANSWERS every request it receives
@@ -24,11 +25,14 @@ self.onmessage = function (ev) {
     for (const p of init.packages || []) {
       const reg = self.IJOpRegistry;
       const before = reg ? reg.list() : [];
+      const beforeCmds = reg && reg.listCommands ? reg.listCommands() : [];
       try {
         importScripts(p.url);
       } catch (err) {
         console.error('[ij-worker] package ' + p.pkg + ' failed', err);
         if (reg) for (const name of reg.list()) if (before.indexOf(name) < 0) reg.unregister(name);
+        // the worker commands it had registered go with its ops (a request for one answers IJ_MODULE_MISSING)
+        if (reg && reg.listCommands) for (const name of reg.listCommands()) if (beforeCmds.indexOf(name) < 0) reg.unregisterCommand(name);
         failed.push(p.pkg);
       }
     }

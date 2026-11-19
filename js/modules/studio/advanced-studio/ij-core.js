@@ -121,6 +121,8 @@
   const IJLuts = (() => {
     const NAMES = ['Grays', 'Red', 'Green', 'Blue', 'Cyan', 'Magenta', 'Yellow', 'Fire', 'Ice', 'Spectrum', '16 Colors', 'HiLo'];
     const cache = new Map();
+    // Tables an extension registered under a name of its own (api.registerLut): never one of NAMES.
+    const customs = new Map();
 
     /* ImageJ LutLoader.interpolate: 32 control colours stretched to 256
      * entries, entry i blends control i1 = ⌊i·32/256⌋ and i2 = i1 + 1 with
@@ -248,6 +250,7 @@
         return new Uint8Array(nameOrTable);
       }
       if (typeof nameOrTable === 'string' && nameOrTable.charAt(0) === '#') return fromColor(nameOrTable);
+      if (typeof nameOrTable === 'string' && customs.has(nameOrTable)) return new Uint8Array(customs.get(nameOrTable));
       if (!cache.has(nameOrTable)) {
         const t = build(nameOrTable);
         if (!t) throw fail('IJ_BAD_LUT', 'unknown lut');
@@ -278,13 +281,28 @@
       for (const rev of [false, true]) {
         const t = rev ? reversed(table) : table;
         for (const n of NAMES) if (same(t, get(n))) return { lut: n, invert: rev };
+        for (const [n, tab] of customs) if (same(t, tab)) return { lut: n, invert: rev };
         const top = [t[765], t[766], t[767]];
         if (top[0] + top[1] + top[2] > 0 && same(t, fromColor(toHex(top)))) return { lut: forColor(toHex(top)), invert: rev };
       }
       return { lut: new Uint8Array(table), invert: false };
     }
 
-    return { names, get, fromColor, forColor, identify };
+    /* Registers a table under a name an extension chose (a LUT file, 3-3-2 RGB, Red/Green): a channel's
+     * display.lut may then name it, the TIFF writer and the renderer read it through get(). The name is a
+     * plain label (1..64 characters, not a built-in name, not '#rrggbb'); registering a name again replaces
+     * its table. The table is copied. */
+    function register(name, table) {
+      if (typeof name !== 'string' || !name.trim() || name.length > 64 || name.charAt(0) === '#' || NAMES.indexOf(name) >= 0) throw fail('IJ_BAD_LUT', 'lut name');
+      // (duck-typed: a table built in another realm, a test's or the page's, is still a Uint8Array)
+      if (!ArrayBuffer.isView(table) || !table.constructor || table.constructor.name !== 'Uint8Array' || table.length !== 768) throw fail('IJ_BAD_LUT', 'lut size');
+      customs.set(name, new Uint8Array(table));
+      return name;
+    }
+    /* The registered names with their tables (copies), registration order: what the page stores in the session meta. */
+    function registered() { return Array.from(customs, ([n, t]) => ({ name: n, table: new Uint8Array(t) })); }
+
+    return { names, get, fromColor, forColor, identify, register, registered };
   })();
 
   // ---------------------------------------------------------------- IJRoi
@@ -304,6 +322,8 @@
 
     function validate(roi) {
       if (!roi || typeof roi !== 'object') throw badRoi('not an object');
+      // A selection may carry a name (ROI Manager, Properties): a short string, never read by the pixel code.
+      if (roi.name !== undefined && (typeof roi.name !== 'string' || roi.name.length > 255)) throw badRoi('name');
       switch (roi.type) {
         case 'rect': case 'oval':
           if (!(finite(roi.x) && finite(roi.y) && finite(roi.w) && finite(roi.h) && roi.w >= 0 && roi.h >= 0)) throw badRoi('box');
@@ -316,6 +336,8 @@
           if (roi.type === 'angle' && roi.points.length !== 3) throw badRoi('angle points');
           if (roi.points.length > MAX_VERTS) throw tooComplex('vertices');
           for (const p of roi.points) if (!Array.isArray(p) || !finite(p[0]) || !finite(p[1])) throw badRoi('point');
+          // a segmented line has a width like a straight line (Properties, Line to Area)
+          if (roi.type === 'polyline' && roi.width !== undefined && !(finite(roi.width) && roi.width >= 0)) throw badRoi('polyline width');
           break;
         }
         case 'line':
@@ -1200,13 +1222,15 @@
   // ---------------------------------------------------------------- IJProject
   const IJProject = (() => {
     const METHODS = ['max', 'min', 'sum', 'avg', 'sd', 'median'];
+    const FLOAT_MAX = 3.4028234663852886e38; // Float.MAX_VALUE
 
     /* Output bit depth. Without `inputBd` (legacy): sum is 16-bit while
      * 255·depth ≤ 65535 (depth ≤ 257), else 32-bit float; avg / sd / median are
      * 32-bit float; max / min keep 8 bits.
-     * With `inputBd` (8 or 16) the rules are ImageJ ZProjector's: max / min / avg
-     * keep the input depth (avg rounded half up), median is 8-bit for 8-bit
-     * input and 32-bit float for 16-bit input, sum and sd are 32-bit float. */
+     * With `inputBd` (8, 16 or 32) the rules are ImageJ ZProjector's: max / min / avg
+     * keep the input depth (avg rounded half up; a 32-bit average is its own
+     * NaN-skipping float path), median is 8-bit for 8-bit input and 32-bit float
+     * otherwise, sum and sd are 32-bit float. */
     function outputBitDepth(method, depth, inputBd) {
       if (inputBd) {
         if (method === 'sum' || method === 'sd') return 32;
@@ -1220,29 +1244,48 @@
 
     function channelCount(c) { return typeof c === 'number' ? c : Array.isArray(c) ? c.length : 1; }
 
+    function inputDepth(o) {
+      const d = o.inputBitDepth;
+      if (d === undefined || d === null || d === 8) return 8;
+      if (d === 16 || d === 32) return d;
+      throw fail('IJ_BAD_DEPTH', 'projection input bit depth ' + d);
+    }
+
     /* Bytes held: the full output images + the accumulators of one band of
-     * `bandRows` rows for every channel (the peak while streaming band by band). */
+     * `bandRows` rows for every channel (the peak while streaming band by band) + the planes of a
+     * 16 / 32-bit in-order sum that arrived before their turn. */
     function estimateBytes(o) {
       const C = channelCount(o.channels), w = o.width, h = o.height, depth = o.depth;
+      const inBD = inputDepth(o), bytesIn = inBD / 8;
       const bandRows = Math.min(o.bandRows || 64, h);
       const out = C * w * h * (outputBitDepth(o.method, depth, o.inputBitDepth) / 8);
       const P = bandRows * w;
       let band;
       switch (o.method) {
-        case 'max': case 'min': band = P; break;
-        case 'sum': case 'avg': band = P * 4; break;
+        case 'max': case 'min': band = P * bytesIn; break;
+        case 'sum': band = P * 4; break;
+        case 'avg': band = inBD === 32 ? P * 12 : P * 4; break; // 32-bit: Float64 sums + Int32 counts
         case 'sd': band = P * 16; break;
-        default: band = P * depth;
+        default: band = P * depth * bytesIn;
       }
-      return out + C * band;
+      // 16 / 32-bit sums are taken in z order: a plane that arrives early waits as a copy (`pending`). With
+      // readPages' two requests in flight, up to one run of pages (`pendingPlanes`, default 32) can wait per band.
+      const inOrder = inBD !== 8 && (o.method === 'sum' || o.method === 'avg' || o.method === 'sd');
+      const wait = inOrder ? Math.min(depth, o.pendingPlanes === undefined ? 32 : Math.max(0, o.pendingPlanes | 0)) * P * bytesIn : 0;
+      return out + C * (band + wait);
     }
+
+    const TAGS = { 8: ['[object Uint8Array]', '[object Uint8ClampedArray]'], 16: ['[object Uint16Array]'], 32: ['[object Float32Array]'] };
 
     function create(o) {
       const method = o.method;
       if (METHODS.indexOf(method) < 0) throw fail('IJ_BAD_OP', 'projection ' + method);
       const width = o.width | 0, height = o.height | 0, depth = o.depth | 0, C = channelCount(o.channels);
       if (!(width > 0 && height > 0 && depth > 0 && C > 0)) throw fail('IJ_BAD_SIZE', 'projection size');
+      const inBD = inputDepth(o);
       const outBD = outputBitDepth(method, depth, o.inputBitDepth);
+      // sums of 16 / 32-bit input are float or double running sums: z order matters
+      const inOrder = inBD !== 8 && (method === 'sum' || method === 'avg' || method === 'sd');
       const outs = [];
       for (let c = 0; c < C; c++) outs.push(typedArrayFor(outBD, width * height));
       const rowsDone = new Array(C).fill(0);
@@ -1251,13 +1294,22 @@
       const total = C * height * depth;
 
       function newState(P) {
-        const s = { seen: new Uint8Array(depth), got: 0 };
+        const s = { seen: new Uint8Array(depth), got: 0, next: 0, pending: inOrder ? new Map() : null };
         switch (method) {
-          case 'max': s.a = new Uint8Array(P); break;
-          case 'min': s.a = new Uint8Array(P).fill(255); break;
-          case 'sum': case 'avg': s.a = new Uint32Array(P); break;
+          case 'max':
+            s.a = inBD === 8 ? new Uint8Array(P) : inBD === 16 ? new Uint16Array(P) : new Float32Array(P).fill(-FLOAT_MAX);
+            break;
+          case 'min':
+            s.a = inBD === 8 ? new Uint8Array(P).fill(255) : inBD === 16 ? new Uint16Array(P).fill(65535) : new Float32Array(P).fill(FLOAT_MAX);
+            break;
+          case 'sum': s.a = inBD === 8 ? new Uint32Array(P) : new Float32Array(P); break; // ZProjector adds in float
+          case 'avg':
+            if (inBD === 8) s.a = new Uint32Array(P);
+            else if (inBD === 16) s.a = new Float32Array(P);
+            else { s.a = new Float64Array(P); s.n = new Int32Array(P); } // doAverageFloatProjection
+            break;
           case 'sd': s.a = new Float64Array(P); s.b = new Float64Array(P); break;
-          default: s.raw = new Uint8Array(P * depth);
+          default: s.raw = inBD === 8 ? new Uint8Array(P * depth) : inBD === 16 ? new Uint16Array(P * depth) : new Float32Array(P * depth);
         }
         return s;
       }
@@ -1266,37 +1318,60 @@
         switch (method) {
           case 'max': { const a = s.a; for (let i = 0; i < P; i++) if (plane[i] > a[i]) a[i] = plane[i]; break; }
           case 'min': { const a = s.a; for (let i = 0; i < P; i++) if (plane[i] < a[i]) a[i] = plane[i]; break; }
-          case 'sum': case 'avg': { const a = s.a; for (let i = 0; i < P; i++) a[i] += plane[i]; break; }
+          case 'sum': { const a = s.a; for (let i = 0; i < P; i++) a[i] += plane[i]; break; }
+          case 'avg': {
+            const a = s.a;
+            if (inBD === 32) { const n = s.n; for (let i = 0; i < P; i++) { const v = plane[i]; if (v === v) { a[i] += v; n[i]++; } } }
+            else for (let i = 0; i < P; i++) a[i] += plane[i];
+            break;
+          }
           case 'sd': { const a = s.a, b = s.b; for (let i = 0; i < P; i++) { const v = plane[i]; a[i] += v; b[i] += v * v; } break; }
           default: break;
         }
+      }
+
+      /* ZProjector.StandardDeviation.postProcess, term for term (NaN sums give 0 there too). */
+      function sdValue(sum, sum2) {
+        if (depth < 2) return 0;
+        const n = depth, sd = (n * sum2 - sum * sum) / n;
+        return sd > 0 ? Math.sqrt(sd / (n - 1)) : 0;
       }
 
       function finalize(c, band, s) {
         const out = outs[c], P = band.rows * width, base = band.y0 * width;
         switch (method) {
           case 'max': case 'min': case 'sum': for (let i = 0; i < P; i++) out[base + i] = s.a[i]; break;
-          case 'avg': for (let i = 0; i < P; i++) out[base + i] = outBD < 32 ? Math.floor(s.a[i] / depth + 0.5) : s.a[i] / depth; break;
-          case 'sd': // sample SD (n − 1) from exact Float64 sums: √((n·Σx² − (Σx)²) / (n·(n−1)))
-            for (let i = 0; i < P; i++) {
-              if (depth < 2) { out[base + i] = 0; continue; }
-              const num = depth * s.b[i] - s.a[i] * s.a[i];
-              out[base + i] = Math.sqrt((num > 0 ? num : 0) / (depth * (depth - 1)));
-            }
+          case 'avg':
+            if (inBD === 8) for (let i = 0; i < P; i++) out[base + i] = outBD < 32 ? Math.floor(s.a[i] / depth + 0.5) : s.a[i] / depth;
+            else if (inBD === 16) { // float mean, then (short)(mean + 0.5f)
+              for (let i = 0; i < P; i++) out[base + i] = Math.fround(Math.fround(s.a[i] / depth) + 0.5) | 0;
+            } else for (let i = 0; i < P; i++) out[base + i] = s.a[i] / s.n[i]; // (float)(sum / count); 0 / 0 = NaN
             break;
-          default: { // median: counting sort per pixel; even n → mean of the two middle values
-            const counts = new Uint32Array(256), raw = s.raw;
-            const kLo = (depth - 1) >> 1, kHi = depth >> 1;
-            for (let p = 0; p < P; p++) {
-              for (let z = 0; z < depth; z++) counts[raw[z * P + p]]++;
-              let cum = 0, lo = -1, hi = -1;
-              for (let v = 0; v < 256; v++) {
-                cum += counts[v];
-                if (lo < 0 && cum > kLo) lo = v;
-                if (cum > kHi) { hi = v; break; }
+          case 'sd':
+            for (let i = 0; i < P; i++) out[base + i] = sdValue(s.a[i], s.b[i]);
+            break;
+          default: { // median: even n → mean of the two middle values
+            const kLo = (depth - 1) >> 1, kHi = depth >> 1, raw = s.raw;
+            if (inBD === 8) { // counting sort per pixel; 8-bit result rounded half up
+              const counts = new Uint32Array(256);
+              for (let p = 0; p < P; p++) {
+                for (let z = 0; z < depth; z++) counts[raw[z * P + p]]++;
+                let cum = 0, lo = -1, hi = -1;
+                for (let v = 0; v < 256; v++) {
+                  cum += counts[v];
+                  if (lo < 0 && cum > kLo) lo = v;
+                  if (cum > kHi) { hi = v; break; }
+                }
+                out[base + p] = outBD < 32 ? Math.floor((lo + hi) / 2 + 0.5) : (lo + hi) / 2;
+                for (let z = 0; z < depth; z++) counts[raw[z * P + p]] = 0;
               }
-              out[base + p] = outBD < 32 ? Math.floor((lo + hi) / 2 + 0.5) : (lo + hi) / 2;
-              for (let z = 0; z < depth; z++) counts[raw[z * P + p]] = 0;
+            } else { // 16 / 32-bit: Arrays.sort (NaN last), float (a + b) / 2f
+              const scratch = inBD === 16 ? new Uint16Array(depth) : new Float32Array(depth);
+              for (let p = 0; p < P; p++) {
+                for (let z = 0; z < depth; z++) scratch[z] = raw[z * P + p];
+                scratch.sort();
+                out[base + p] = (depth & 1) ? scratch[kHi] : Math.fround(Math.fround(scratch[kLo] + scratch[kHi]) / 2);
+              }
             }
           }
         }
@@ -1304,13 +1379,15 @@
       }
 
       /* block: { channel, y0, rows, z0, depth: d, data } — data is z-major
-       * (plane, row, column) Uint8 of d·rows·width. Blocks of one band may
-       * arrive in any z order; planes are placed by index, never by arrival. */
+       * (plane, row, column) of d·rows·width samples of the input bit depth (Uint8Array,
+       * Uint16Array or Float32Array). Blocks of one band may arrive in any z order;
+       * planes are placed by index, never by arrival. */
       function addBlock(b) {
         const c = b.channel | 0, y0 = b.y0 | 0, rows = b.rows | 0, z0 = b.z0 | 0, d = b.depth | 0;
         if (c < 0 || c >= C || y0 < 0 || rows <= 0 || y0 + rows > height || z0 < 0 || d <= 0 || z0 + d > depth) throw fail('IJ_BAD_BLOCK', 'block range');
         const P = rows * width;
         if (!b.data || b.data.length !== d * P) throw fail('IJ_BAD_BLOCK', 'block size');
+        if (TAGS[inBD].indexOf(Object.prototype.toString.call(b.data)) < 0) throw fail('IJ_BAD_BLOCK', 'block type');
         const key = y0 + ':' + rows;
         let band = bands.get(key);
         if (!band) {
@@ -1324,7 +1401,15 @@
         for (let zi = 0; zi < d; zi++) {
           const plane = b.data.subarray(zi * P, (zi + 1) * P);
           s.seen[z0 + zi] = 1;
-          if (method === 'median') s.raw.set(plane, (z0 + zi) * P); else accumulate(s, plane, P);
+          if (method === 'median') s.raw.set(plane, (z0 + zi) * P);
+          else if (inOrder) {
+            // float / double running sums are not associative: ImageJ adds the planes in z order, so a plane
+            // that arrives early waits (a private copy: the caller reuses its block) for the ones before it
+            if (z0 + zi !== s.next) { s.pending.set(z0 + zi, plane.slice()); continue; }
+            accumulate(s, plane, P);
+            s.next++;
+            for (let q = s.pending.get(s.next); q; q = s.pending.get(s.next)) { s.pending.delete(s.next); accumulate(s, q, P); s.next++; }
+          } else accumulate(s, plane, P);
         }
         s.got += d;
         received += d * rows;
@@ -1765,7 +1850,46 @@
     // Only the worker's package loader uses this: the ops a package registered before it threw are
     // withdrawn, so a half-loaded package cannot leave half its commands working.
     function unregister(name) { return specs.delete(name); }
-    return { define, get, list, unregister };
+
+    // ── worker commands of a package (PLAN-wave3 §2.6) ──
+    // A package whose work does not fit "an op on a document" (a streaming accumulator, a library read) registers a
+    // worker command of its own. The engine dispatches an unknown `cmd` name to it, the page's api.call may reach
+    // it only from the package that registered it. Page and worker both load the package file, so both see the
+    // names; only the worker ever runs a handler.
+    //   IJOpRegistry.defineCommand(name, { pkg, long?, handler(args, E) })   name: 'doc.tiff.project' (lower-case
+    //                              first segment, at least one dot; `engine.` and `session.` belong to the engine)
+    //   IJOpRegistry.getCommand(name) → spec | null    listCommands(pkg?) → [name]
+    //   IJOpRegistry.unregisterCommand(name)           the worker's package loader (a package that failed to load);
+    //                              the name is remembered: a request for it answers IJ_MODULE_MISSING, not IJ_UNKNOWN_CMD
+    const commands = new Map();
+    const withdrawnCommands = new Set();
+    function defineCommand(name, spec) {
+      if (typeof name !== 'string' || !/^[a-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)+$/.test(name) || /^(engine|session)\./.test(name)) throw bad('command name');
+      if (!spec || typeof spec !== 'object' || typeof spec.pkg !== 'string' || !/^[a-z][a-z0-9]*$/.test(spec.pkg)) throw bad('command pkg ' + name);
+      if (typeof spec.handler !== 'function') throw bad('command handler ' + name);
+      if (spec.long !== undefined && typeof spec.long !== 'boolean') throw bad('command long ' + name);
+      const old = commands.get(name);
+      if (old) {
+        if (old === spec) return spec;
+        throw bad('command ' + name + ' is already defined');
+      }
+      commands.set(name, spec);
+      withdrawnCommands.delete(name);
+      return spec;
+    }
+    function getCommand(name) { return commands.get(name) || null; }
+    function listCommands(pkg) {
+      const out = [];
+      for (const [n, sp] of commands) if (!pkg || sp.pkg === pkg) out.push(n);
+      return out;
+    }
+    function unregisterCommand(name) {
+      const had = commands.delete(name);
+      if (had) withdrawnCommands.add(name);
+      return had;
+    }
+    function isWithdrawnCommand(name) { return withdrawnCommands.has(name); }
+    return { define, get, list, unregister, defineCommand, getCommand, listCommands, unregisterCommand, isWithdrawnCommand };
   })();
 
   root.IJImage = IJImage;

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { ROOT } from './harness.mjs';
+import { makeShellStub } from './ij_harness.mjs';
 
 const DIR = path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio');
 const EN = JSON.parse(fs.readFileSync(path.join(DIR, 'lang', 'en.json'), 'utf8'));
@@ -151,33 +152,9 @@ function boot() {
   sandbox.Dialog = { ask: async (cfg) => { script.asks.push(cfg); const n = script.nextAsk; if (n) { script.nextAsk = null; return n; } const o = (cfg.options || []).find((x) => x.primary) || cfg.options[0]; return o.id; }, isOpen: () => false };
 
   // The chrome of ij-view.js, recorded.
-  const shells = [];
-  sandbox.IJShell = {
-    create(root, opts) {
-      const calls = [];
-      const display = {
-        setTileProvider(f) { display.provider = f; }, invalidate(c) { calls.push(['invalidate', c]); }, setPreview(p) { display.preview = p; },
-        setThresholdOverlay(t) { display.overlay = t; }, setDisplay() {}, zoomAt() {}, fit() { calls.push(['fit']); }, view100() {}, zoomToRect() {},
-        getView: () => ({ zoom: 1, ox: 0, oy: 0, level: 0, viewportWidth: 800, viewportHeight: 600 }), resize() {}, renderToCanvas: async () => null
-      };
-      const floats = new Map();
-      const shell = {
-        opts, calls, display, stage: fakeEl('div'), images: [], status: [], progress: [], warnings: [], menuRefreshes: 0, rois: [],
-        windows: {
-          dialog: async (spec) => answer(spec), confirm: async (s) => sandbox.Dialog.ask(s),
-          hasModal: () => false, closeAll() { shell.closedAll = true; },
-          floating(spec) { const w = { id: spec.id, spec, focus() {}, close() { floats.delete(spec.id); if (spec.onClose) spec.onClose(); } }; floats.set(spec.id, w); return w; }, floats
-        },
-        setImage(i) { shell.images.push(i); }, clearImage() { shell.images.push(null); }, setDisplayState(s) { shell.displayState = s; },
-        setActiveRoi(r) { shell.activeRoi = r; }, setRois(r) { shell.rois.push(r); }, setStatus(t) { shell.status.push(t); },
-        setProgress(p) { shell.progress.push(p); }, setWarning(w) { shell.warnings.push(w); }, setLineWidth() {}, setTool() {},
-        refreshMenus() { shell.menuRefreshes++; }, destroy() { shell.destroyed = true; }
-      };
-      shells.push(shell);
-      return shell;
-    }
-  };
-  sandbox.IJDisplay = {};
+  const stub = makeShellStub({ fakeEl, answer, ask: (s) => sandbox.Dialog.ask(s), status: [] });
+  const shells = stub.shells;
+  sandbox.IJShell = { create: stub.create };
   vm.runInContext(fs.readFileSync(path.join(DIR, 'ij-app.js'), 'utf8') + '\n;globalThis.__IJApp = IJApp;', sandbox, { filename: 'ij-app.js' });
 
   // Plugin ctx.
@@ -218,7 +195,7 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   await until(() => t.shells[0] && t.shells[0].images.find((i) => i && i.name), 'projection loaded');
   const sh = t.shells[0];
   assert.deepEqual(J(t.log.init.scripts), ['blob:ij-core.js', 'blob:ij-analysis.js', 'blob:ij-proc-shared.js', 'blob:ij-engine.js'], 'worker init carries the verified URLs of the mandatory scripts');
-  assert.deepEqual(J(t.log.init.packages).map((p) => p.pkg), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc'], 'and the packages, each loaded on its own by the worker');
+  assert.deepEqual(J(t.log.init.packages).map((p) => p.pkg), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'], 'and the packages, each loaded on its own by the worker');
   assert.ok(t.log.init.budgetBytes >= 512 * 1048576 && t.log.init.budgetBytes <= 2 * 1024 * 1048576, 'budget within [512 MiB, 2 GiB]');
   assert.equal(t.workers[0].url, 'asset/ij-worker.js');
   await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.bitDepth === 16), 'doc shown');

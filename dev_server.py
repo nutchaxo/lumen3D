@@ -4708,6 +4708,385 @@ def _list_download_entries(download_root: Path, target: Path, dataset_id: str, r
     return entries
 
 
+# ── TIFF index (api/tiff-index) ──────────────────────────────────────────────
+# The structural index of a download-bundle TIFF: what the browser needs to range-read
+# its pages itself (page geometry, codec, the byte run of every strip) plus ImageJ's own
+# metadata (description, tags 50838 / 50839). Twin of api/tiff-index.php: both write the
+# same JSON byte for byte (tests/test_tiff_index_php.php runs both on the same files).
+
+_TIFF_VERSION = 1
+_TIFF_MAX_PAGES = 100000
+_TIFF_MAX_STRIPS = 1000000
+_TIFF_INFO_CAP = 65536
+_TIFF_META_CAP = 16 * 1024 * 1024
+_TIFF_TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 16: 8, 17: 8, 18: 8}
+_TIFF_INT_FMT = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 16: "Q", 17: "q", 18: "Q"}
+_TIFF_FILE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._ -]*\.(?:tif|tiff)", re.IGNORECASE)
+_TIFF_CACHE = OrderedDict()
+_TIFF_CACHE_LOCK = threading.Lock()
+_TIFF_CACHE_MAX = 32
+_IJ_MAGIC = 0x494A494A
+_IJ_INFO, _IJ_LABL, _IJ_RANG, _IJ_LUTS = 0x696E666F, 0x6C61626C, 0x72616E67, 0x6C757473
+
+
+class _TiffError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _tiff_num(v):
+    """An integral float is written as an integer (both twins agree on it), a non-finite one as null."""
+    if isinstance(v, float):
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        if v == int(v) and abs(v) < 2 ** 53:
+            return int(v)
+    return v
+
+
+def _tiff_int_text(text):
+    return int(text) if text is not None and re.fullmatch(r"-?[0-9]{1,15}", text) else None
+
+
+def _tiff_float_text(text):
+    if text is not None and re.fullmatch(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", text):
+        return _tiff_num(float(text))
+    return None
+
+
+def _tiff_utf16(raw, bo):
+    raw = raw[:_TIFF_INFO_CAP]
+    raw = raw[:len(raw) - (len(raw) % 2)]
+    return raw.decode("utf-16-le" if bo == "<" else "utf-16-be", "replace")
+
+
+def _tiff_ij_meta(meta, counts, bo, channels):
+    """ImageJ's IJMetaData (tag 50839) cut by its byte counts (tag 50838): info, labels, ranges, LUT colours."""
+    out = {"ranges": [], "colors": [], "labels": [], "info": None}
+    if not counts or not meta:
+        return out
+    hdr = counts[0]
+    if hdr < 12 or (hdr - 4) % 8 != 0 or hdr > len(meta):
+        return out
+    if struct.unpack(bo + "I", meta[0:4])[0] != _IJ_MAGIC:
+        return out
+    blocks = {_IJ_INFO: [], _IJ_LABL: [], _IJ_RANG: [], _IJ_LUTS: []}
+    pos, bi = hdr, 1
+    done = False
+    for i in range((hdr - 4) // 8):
+        typ, cnt = struct.unpack(bo + "II", meta[4 + 8 * i:12 + 8 * i])
+        for _ in range(cnt):
+            if bi >= len(counts) or pos + counts[bi] > len(meta):
+                done = True
+                break
+            if typ in blocks:
+                blocks[typ].append(meta[pos:pos + counts[bi]])
+            pos += counts[bi]
+            bi += 1
+        if done:
+            break
+    if blocks[_IJ_INFO]:
+        out["info"] = _tiff_utf16(blocks[_IJ_INFO][0], bo)
+    out["labels"] = [_tiff_utf16(b, bo) for b in blocks[_IJ_LABL][:channels]]
+    if blocks[_IJ_RANG]:
+        b = blocks[_IJ_RANG][0]
+        n = len(b) // 8
+        out["ranges"] = [_tiff_num(v) for v in struct.unpack(bo + "%dd" % n, b[:n * 8])]
+    for b in blocks[_IJ_LUTS][:channels]:
+        if len(b) >= 768:
+            out["colors"].append("#%02x%02x%02x" % (b[255], b[511], b[767]))
+    return out
+
+
+_TIFF_TRIM = " \t\n\r\x00\x0b"      # PHP trim()'s default set, never Unicode whitespace (parity with api/tiff-index.php)
+
+
+def _tiff_imagej(text, meta_bytes, counts, bo):
+    """The ImageJ block of the first page's description, or None for another writer."""
+    if not text.startswith("ImageJ="):
+        return None
+    kv = {}
+    for line in text.split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            kv[k.strip(_TIFF_TRIM)] = v.strip(_TIFF_TRIM)
+    channels = _tiff_int_text(kv.get("channels")) or 1
+    meta = _tiff_ij_meta(meta_bytes, counts, bo, channels)
+    return {
+        "version": kv.get("ImageJ"),
+        "images": _tiff_int_text(kv.get("images")),
+        "channels": channels,
+        "slices": _tiff_int_text(kv.get("slices")) or 1,
+        "frames": _tiff_int_text(kv.get("frames")) or 1,
+        "hyperstack": kv.get("hyperstack") == "true",
+        "mode": kv.get("mode"),
+        "unit": kv.get("unit"),
+        "spacing": _tiff_float_text(kv.get("spacing")),
+        "min": _tiff_float_text(kv.get("min")),
+        "max": _tiff_float_text(kv.get("max")),
+        "ranges": meta["ranges"],
+        "colors": meta["colors"],
+        "labels": meta["labels"],
+        "info": meta["info"],
+    }
+
+
+def _tiff_parse(path):
+    """Walk the IFD chain of a TIFF / BigTIFF (seeks only: IFDs may sit between the pages' data)."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        head = f.read(16)
+        if len(head) < 8 or head[:2] not in (b"II", b"MM"):
+            raise _TiffError("not_tiff")
+        bo = "<" if head[:2] == b"II" else ">"
+        magic = struct.unpack(bo + "H", head[2:4])[0]
+        if magic == 42:
+            big = False
+            first = struct.unpack(bo + "I", head[4:8])[0]
+        elif magic == 43:
+            if len(head) < 16 or struct.unpack(bo + "HH", head[4:8]) != (8, 0):
+                raise _TiffError("malformed")
+            big = True
+            first = struct.unpack(bo + "Q", head[8:16])[0]
+            if struct.calcsize("P") < 8:
+                raise _TiffError("bigtiff_unsupported")
+        else:
+            raise _TiffError("not_tiff")
+        inline_cap = 8 if big else 4
+        entry_size = 20 if big else 12
+        off_fmt = bo + ("Q" if big else "I")
+
+        def read_at(off, n):
+            if off < 8 or n < 0 or off + n > size:
+                raise _TiffError("malformed")
+            f.seek(off)
+            data = f.read(n)
+            if len(data) != n:
+                raise _TiffError("malformed")
+            return data
+
+        def value_bytes(typ, cnt, raw):
+            total = _TIFF_TYPE_SIZE[typ] * cnt
+            if total <= inline_cap:
+                return raw[:total]
+            return read_at(struct.unpack(off_fmt, raw[:inline_cap])[0], total)
+
+        def ints(tags, tag, limit=64):
+            t = tags.get(tag)
+            if t is None:
+                return None
+            typ, cnt, raw = t
+            if typ not in _TIFF_INT_FMT or cnt < 1 or cnt > limit:
+                raise _TiffError("malformed")
+            data = value_bytes(typ, cnt, raw)
+            return list(struct.unpack(bo + "%d%s" % (cnt, _TIFF_INT_FMT[typ]), data))
+
+        def first_int(tags, tag, default=None):
+            v = ints(tags, tag)
+            return default if not v else v[0]
+
+        pages, offsets, counts, seen = [], [], [], set()
+        first_page = {}
+        off = first
+        while off:
+            if off in seen or off < 8 or off >= size:
+                raise _TiffError("malformed")
+            seen.add(off)
+            if len(pages) >= _TIFF_MAX_PAGES:
+                raise _TiffError("too_many_pages")
+            if big:
+                n = struct.unpack(bo + "Q", read_at(off, 8))[0]
+                if n > 65535:
+                    raise _TiffError("malformed")
+                body = read_at(off + 8, n * entry_size + 8)
+            else:
+                n = struct.unpack(bo + "H", read_at(off, 2))[0]
+                body = read_at(off + 2, n * entry_size + 4)
+            tags = {}
+            for i in range(n):
+                e = body[i * entry_size:(i + 1) * entry_size]
+                if big:
+                    tag, typ, cnt = struct.unpack(bo + "HHQ", e[:12])
+                    raw = e[12:20]
+                else:
+                    tag, typ, cnt = struct.unpack(bo + "HHI", e[:8])
+                    raw = e[8:12]
+                if typ in _TIFF_TYPE_SIZE:
+                    tags[tag] = (typ, cnt, raw)
+            nxt = struct.unpack(off_fmt, body[n * entry_size:n * entry_size + inline_cap])[0]
+
+            tiled = 322 in tags
+            width, height = first_int(tags, 256), first_int(tags, 257)
+            if not width or not height:
+                raise _TiffError("malformed")
+            tag_o, tag_c = (324, 325) if tiled else (273, 279)
+            if tag_o not in tags or tag_c not in tags or tags[tag_o][1] != tags[tag_c][1]:
+                raise _TiffError("malformed")
+            if len(offsets) + tags[tag_o][1] > _TIFF_MAX_STRIPS:
+                raise _TiffError("too_many_pages")
+            po = ints(tags, tag_o, _TIFF_MAX_STRIPS)
+            pc = ints(tags, tag_c, _TIFF_MAX_STRIPS)
+            offsets.extend(po)
+            counts.extend(pc)
+            pages.append({
+                "width": width, "height": height, "bitsPerSample": first_int(tags, 258, 1),
+                "compression": first_int(tags, 259, 1), "predictor": first_int(tags, 317, 1),
+                "strips": len(po), "samplesPerPixel": first_int(tags, 277, 1),
+                "sampleFormat": first_int(tags, 339, 1), "planarConfig": first_int(tags, 284, 1),
+                "photometric": first_int(tags, 262, None), "rowsPerStrip": first_int(tags, 278, height),
+                "tiled": tiled,
+            })
+            if not first_page:
+                desc = tags.get(270)
+                text = ""
+                if desc and desc[0] == 2 and 0 < desc[1] <= 65536:
+                    text = value_bytes(2, desc[1], desc[2]).split(b"\x00")[0].decode("utf-8", "replace")
+
+                def rational(tag):
+                    t = tags.get(tag)
+                    if not t or t[0] != 5 or t[1] != 1:
+                        return None
+                    num, den = struct.unpack(bo + "II", value_bytes(5, 1, t[2]))
+                    return None if den == 0 else num / den
+
+                rx, ry = rational(282), rational(283)
+                first_page["resolution"] = None if rx is None or ry is None else {
+                    "x": _tiff_num(float("%.6g" % rx)), "y": _tiff_num(float("%.6g" % ry)),
+                    "unit": first_int(tags, 296, 2)}
+                first_page["desc"] = text
+                t_cnt, t_meta = tags.get(50838), tags.get(50839)
+                first_page["metaCounts"] = None
+                first_page["meta"] = None
+                if t_cnt and t_meta and t_meta[0] in (1, 7) and t_meta[1] <= _TIFF_META_CAP and t_cnt[1] <= 100000:
+                    first_page["metaCounts"] = ints(tags, 50838, 100000)
+                    first_page["meta"] = value_bytes(t_meta[0], t_meta[1], t_meta[2])
+            off = nxt
+    if not pages:
+        raise _TiffError("malformed")
+    return {"big": big, "bo": bo, "pages": pages, "offsets": offsets, "counts": counts, "first": first_page}
+
+
+def _tiff_b64(fmt, values):
+    import base64
+    return base64.b64encode(struct.pack("<%d%s" % (len(values), fmt), *values)).decode("ascii")
+
+
+def _tiff_index_core(path):
+    p = _tiff_parse(path)
+    pages, first = p["pages"], p["pages"][0]
+    keys = ("width", "height", "bitsPerSample", "compression", "predictor", "strips",
+            "samplesPerPixel", "sampleFormat", "planarConfig", "tiled")
+    uniform = all(all(pg[k] == first[k] for k in keys) for pg in pages)
+    fp = p["first"]
+    out = {
+        "bigtiff": p["big"], "littleEndian": p["bo"] == "<",
+        "width": first["width"], "height": first["height"], "bitsPerSample": first["bitsPerSample"],
+        "sampleFormat": first["sampleFormat"], "samplesPerPixel": first["samplesPerPixel"],
+        "planarConfig": first["planarConfig"], "photometric": first["photometric"],
+        "compression": first["compression"], "predictor": first["predictor"], "tiled": first["tiled"],
+        "rowsPerStrip": first["rowsPerStrip"], "pages": len(pages), "uniform": uniform,
+        "resolution": fp["resolution"],
+        "imagej": _tiff_imagej(fp["desc"], fp["meta"], fp["metaCounts"], p["bo"]),
+    }
+    if uniform:
+        out["strips"] = {"perPage": first["strips"], "offsets": _tiff_b64("d", p["offsets"]),
+                         "byteCounts": _tiff_b64("I", p["counts"])}
+    else:
+        out["pageInfo"] = [{k: pg[k] for k in ("width", "height", "bitsPerSample", "compression", "predictor", "strips")}
+                           for pg in pages]
+        starts, acc = [], 0
+        for pg in pages:
+            starts.append(acc)
+            acc += pg["strips"]
+        out["strips"] = {"perPage": None, "index": _tiff_b64("I", starts),
+                         "offsets": _tiff_b64("d", p["offsets"]), "byteCounts": _tiff_b64("I", p["counts"])}
+    return out
+
+
+def _tiff_index(path, dataset="", file=""):
+    """The index of one TIFF as api/tiff-index answers it (the dict's key order is the JSON's)."""
+    st = os.stat(path)
+    key = (os.path.realpath(path), st.st_size, st.st_mtime_ns)
+    with _TIFF_CACHE_LOCK:
+        core = _TIFF_CACHE.get(key)
+        if core is not None:
+            _TIFF_CACHE.move_to_end(key)
+    if core is None:
+        core = _tiff_index_core(path)
+        with _TIFF_CACHE_LOCK:
+            _TIFF_CACHE[key] = core
+            while len(_TIFF_CACHE) > _TIFF_CACHE_MAX:
+                _TIFF_CACHE.popitem(last=False)
+    doc = {"v": _TIFF_VERSION, "dataset": dataset, "file": file,
+           "url": f"DATA_WEB/{dataset}/download/{file}", "size": st.st_size, "mtime": int(st.st_mtime)}
+    doc.update(core)
+    return doc
+
+
+def _tiff_float_json(v):
+    """A float the way PHP's json_encode writes it (serialize_precision -1): the shortest round-trip digits,
+    `1.0e-5` / `1.0e+22` once the decimal point is more than 3 places left of or 17 right of the digits,
+    else positional, a whole number without a fraction (no JSON_PRESERVE_ZERO_FRACTION). Python's own repr differs (`1e-05`, `1e+22`)."""
+    if v != v or v in (float("inf"), float("-inf")):
+        return "0"                       # json_encode refuses these; the PHP twin answers internal_error, never reached
+    if v == 0:
+        return "-0" if math.copysign(1.0, v) < 0 else "0"
+    r = repr(abs(v))
+    mant, _, exp = r.partition("e")
+    ip, _, fp = mant.partition(".")
+    alld = ip + fp
+    lead = len(alld) - len(alld.lstrip("0"))
+    digits = alld.lstrip("0").rstrip("0") or "0"
+    decpt = len(ip) + int(exp or 0) - lead
+    sign = "-" if v < 0 else ""
+    if (decpt < -3) if decpt < 0 else (decpt > 17):
+        e = decpt - 1
+        body = digits[0] + "." + (digits[1:] or "0") + "e" + ("-" if e < 0 else "+") + str(abs(e))
+    elif decpt <= 0:
+        body = "0." + "0" * (-decpt) + digits
+    elif len(digits) <= decpt:
+        body = digits + "0" * (decpt - len(digits))
+    else:
+        body = digits[:decpt] + "." + digits[decpt:]
+    return sign + body
+
+
+def _tiff_json_value(v, out):
+    if isinstance(v, bool):
+        out.append("true" if v else "false")
+    elif v is None:
+        out.append("null")
+    elif isinstance(v, int):
+        out.append(str(v))
+    elif isinstance(v, float):
+        out.append(_tiff_float_json(v))
+    elif isinstance(v, str):
+        out.append(json.dumps(v, ensure_ascii=False))
+    elif isinstance(v, dict):
+        out.append("{")
+        for i, (k, x) in enumerate(v.items()):
+            if i:
+                out.append(",")
+            out.append(json.dumps(str(k), ensure_ascii=False))
+            out.append(":")
+            _tiff_json_value(x, out)
+        out.append("}")
+    else:
+        out.append("[")
+        for i, x in enumerate(v):
+            if i:
+                out.append(",")
+            _tiff_json_value(x, out)
+        out.append("]")
+
+
+def _tiff_json(doc):
+    out = []
+    _tiff_json_value(doc, out)
+    return "".join(out)
+
+
 def _list_datasets() -> list[dict]:
     datasets = []
     for type_dir in ALLOWED_TYPE_DIRS:
@@ -6480,6 +6859,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._guarded(self._serve_languages)
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
             self._guarded(self._serve_downloads, parsed)
+        elif parsed.path in ("/api/tiff-index", "/api/tiff-index.php"):
+            self._guarded(self._serve_tiff_index, parsed)
         elif parsed.path == "/api/upload.php":
             self._guarded(self._handle_upload, parsed, body=None, raw=None)
         elif parsed.path == "/api/migrations.php":
@@ -6843,6 +7224,54 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             rel = ""
         entries = _list_download_entries(download_root, target, dataset_id, rel)
         self._json_nostore(200, {"dataset": dataset_id, "path": rel, "available": True, "entries": entries})
+
+    def _serve_tiff_index(self, parsed):
+        """GET /api/tiff-index?dataset=<type>/<folder>&file=<name>.tif — the structural index of
+        a TIFF in the dataset's download/ ROOT (see _tiff_index). Same-origin only. A hidden
+        dataset answers like an unknown one. ETag + 304; strips are read by the page with
+        Range requests (never counted as downloads)."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        info = _safe_dataset_dir(params.get("dataset", ""))
+        if not info:
+            self._json_nostore(400, {"error": "invalid_dataset"})
+            return
+        type_dir, folder, ds_dir = info
+        name = params.get("file", "")
+        if not isinstance(name, str) or "\x00" in name or not _TIFF_FILE_RE.fullmatch(name):
+            self._json_nostore(400, {"error": "invalid_file"})
+            return
+        if _dataset_is_hidden(ds_dir):
+            self._json_nostore(404, {"error": "not_found"})
+            return
+        download_root = (ds_dir / "download").resolve()
+        target = (download_root / name).resolve()
+        if target.parent != download_root or not target.is_file():
+            self._json_nostore(404, {"error": "not_found"})
+            return
+        try:
+            st = target.stat()
+            etag = f'"{st.st_size}-{int(st.st_mtime)}-v{_TIFF_VERSION}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
+            doc = _tiff_index(str(target), f"{type_dir}/{folder}", name)
+        except _TiffError as exc:
+            self._json_nostore(422, {"error": exc.code})
+            return
+        except OSError:
+            self._json_nostore(404, {"error": "not_found"})
+            return
+        body = _tiff_json(doc).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("ETag", etag)
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_bytes(self, data: bytes, content_type: str, filename: str, inline: bool):
         """Send an already-fetched body.

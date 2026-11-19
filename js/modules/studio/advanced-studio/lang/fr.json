@@ -21,7 +21,18 @@
     "Tools": "Outils",
     "Window": "Fenêtre",
     "Help": "Aide",
-    "Noise": "Bruit"
+    "Noise": "Bruit",
+    "New": "Nouveau",
+    "Import": "Importer",
+    "Options": "Options",
+    "Overlay": "Surimpression",
+    "FFT": "FFT",
+    "Colocalization": "Colocalisation",
+    "LocalThickness": "Épaisseur locale",
+    "Skeleton": "Squelette",
+    "Plugins": "Plugins",
+    "CellCounter": "Compteur de cellules",
+    "Utilities": "Utilitaires"
   },
   "cmd": {
     "fileOpen": "Ouvrir…",
@@ -160,7 +171,12 @@
     "binDistanceMap": "Carte de distance…",
     "binUltimatePoints": "Points ultimes…",
     "binWatershed": "Ligne de partage des eaux (Watershed)",
-    "binVoronoi": "Voronoï…"
+    "binVoronoi": "Voronoï…",
+    "windowShowAll": "Tout afficher",
+    "windowPutBehind": "Mettre derrière [tab]",
+    "windowCascade": "Cascade",
+    "windowTile": "Mosaïque",
+    "toolsSyncWindows": "Synchroniser les fenêtres"
   },
   "tool": {
     "rect": "Rectangle",
@@ -461,7 +477,8 @@
     "findMaxima": "Recherche des maxima",
     "findMaximaImage": "Recherche des maxima",
     "segOutline": "Calcul du contour",
-    "fltDataRange": "Lecture de la plage de valeurs"
+    "fltDataRange": "Lecture de la plage de valeurs",
+    "working": "Traitement"
   },
   "win": {
     "results": "Résultats"
@@ -517,7 +534,8 @@
   "status": {
     "cancelled": "Annulé.",
     "copied": "Copié.",
-    "saved": "{name} enregistré."
+    "saved": "{name} enregistré.",
+    "gridMemory": "La mémoire se remplit : fermez l'image source pour la libérer."
   },
   "resume": {
     "title": "Reprendre votre travail ?",
@@ -616,7 +634,9 @@
     "held": "Certaines images n’ont été restaurées qu’en partie : vos modifications sur elles ne sont pas enregistrées.",
     "lowStorage": "Il reste peu d’espace dans ce navigateur : enregistrez un TIFF.",
     "budget": "La mémoire est presque pleine ({pct} %) : fermez une image ou libérez des annulations.",
-    "packageFailed": "Certains outils ({pkg}) n'ont pas pu être chargés et sont indisponibles."
+    "packageFailed": "Certains outils ({pkg}) n'ont pas pu être chargés et sont indisponibles.",
+    "annotationsCleared": "La surimpression de cette image a été supprimée car sa taille a changé.",
+    "metaTooLarge": "Une partie de l'état de l'espace de travail (annotations ou données d'outils) est trop volumineuse pour être conservée après un rechargement."
   },
   "bc": {
     "min": "Minimum",
@@ -744,7 +764,13 @@
       "integer": "Saisissez un nombre entier",
       "choice": "Choisissez une option"
     },
-    "unavailable": "Indisponible : cet outil n'a pas pu être chargé"
+    "unavailable": "Indisponible : cet outil n'a pas pu être chargé",
+    "dock": "Images réduites",
+    "tabMinimize": "Réduire",
+    "tabDock": "Ancrer",
+    "tabPopOut": "Détacher",
+    "tabClose": "Fermer",
+    "dockRestore": "Restaurer"
   },
   "help": {
     "space": "Maintenir pour déplacer",
@@ -772,5 +798,12 @@
   },
   "table": {
     "title": "Tableau"
+  },
+  "sync": {
+    "cursor": "Synchroniser le curseur",
+    "imageCoords": "Coordonnées de l'image",
+    "scaling": "Échelle de l'image",
+    "all": "Tout synchroniser",
+    "none": "Tout désynchroniser"
   }
 }

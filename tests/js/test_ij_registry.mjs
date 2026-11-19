@@ -614,7 +614,10 @@ await test('IJApp.extend: the rules, the extension API members, columns and erro
   const t = await boot({ pageSources, workerSources: { 'ij-proc-seg.js': opsSource() } });
   const A = t.IJApp;
   assert.deepEqual(arr(A.EXT_API_MEMBERS).sort(), ['addResults', 'cancelPreview', 'clearOverlay', 'compute', 'dialog', 'error', 'estimate', 'openPlot', 'openTable', 'openTool', 'overlay', 'preview',
-    'rename', 'run', 'setDisplay', 'setRoi', 'state', 'toast', 'tr'].sort());
+    'rename', 'run', 'setDisplay', 'setRoi', 'state', 'toast', 'tr',
+    // wave 3 (PLAN-wave3 §2.6)
+    'addDoc', 'adopt', 'annotations', 'call', 'clearPending', 'closeDoc', 'closePanel', 'colorValue', 'commands', 'copyText', 'lastCommand', 'on', 'openPanel', 'pickFile',
+    'profile', 'putBlob', 'registerLut', 'renderPng', 'roiManager', 'runCommand', 'saveFile', 'sessionData', 'setPending', 'setThreshold', 'setTool', 'settings', 'view'].sort());
   const cmd = A.COMMANDS.find((c) => c.id === 'zTestDlg');
   assert.ok(cmd.ext && cmd.pkg === 'bg' && cmd.labelKey === 'cmd.zTestDlg' && cmd.order === 910);
   assert.equal(A.ERROR_KEYS.IJ_TEST_CODE, 'err.badArgs');
@@ -625,7 +628,7 @@ await test('IJApp.extend: the rules, the extension API members, columns and erro
   // the pkg must name an ij-proc-<pkg>.js of WORKER_SCRIPTS (a lang prefix like `flt` could never be disabled when its package fails)
   assert.throws(() => A.extend({ pkg: 'flt', commands: [] }), (e) => e.code === 'IJ_BAD_ARGS' && /not a package/.test(e.message));
   assert.throws(() => A.extend({ pkg: 'shared', commands: [] }), (e) => e.code === 'IJ_BAD_ARGS');
-  assert.deepEqual(arr(A.PACKAGE_NAMES), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc']);
+  assert.deepEqual(arr(A.PACKAGE_NAMES), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib']);
   assert.throws(() => A.extend({ pkg: 'bg' }), (e) => e.code === 'IJ_BAD_ARGS', 'a package registers once');
   assert.equal(A.COMMANDS.find((c) => c.id === 'noOrder'), undefined, 'nothing half-registers');
   // result columns: declared after their anchor, others in first-seen order
@@ -710,7 +713,7 @@ await test('the extension API windows: plot, table, results columns, overlay, co
   await until(() => [...sh.windows.floats.keys()].some((k) => /^plot-/.test(k)), 'plot window');
   assert.ok([...sh.windows.floats.keys()].some((k) => /^table-/.test(k)));
   await t.runCommand('zOverlay');
-  assert.deepEqual(J(sh.display.overlay), [{ kind: 'points', pts: [1, 2, 3, 4], color: '#f00' }]);
+  assert.deepEqual(J(sh.activeView().overlay), [{ kind: 'points', pts: [1, 2, 3, 4], color: '#f00' }]);
   await t.runCommand('zCompute');
   assert.equal(Object.keys(t.page.__zc).length, 1, 'compute answers for the active image');
   await t.runCommand('zState');

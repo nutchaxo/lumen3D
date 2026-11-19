@@ -21,7 +21,18 @@
     "Tools": "Tools",
     "Window": "Window",
     "Help": "Help",
-    "Noise": "Noise"
+    "Noise": "Noise",
+    "New": "New",
+    "Import": "Import",
+    "Options": "Options",
+    "Overlay": "Overlay",
+    "FFT": "FFT",
+    "Colocalization": "Colocalization",
+    "LocalThickness": "Local Thickness",
+    "Skeleton": "Skeleton",
+    "Plugins": "Plugins",
+    "CellCounter": "Cell Counter",
+    "Utilities": "Utilities"
   },
   "cmd": {
     "fileOpen": "Open…",
@@ -160,7 +171,12 @@
     "binDistanceMap": "Distance Map…",
     "binUltimatePoints": "Ultimate Points…",
     "binWatershed": "Watershed",
-    "binVoronoi": "Voronoi…"
+    "binVoronoi": "Voronoi…",
+    "windowShowAll": "Show All",
+    "windowPutBehind": "Put Behind [tab]",
+    "windowCascade": "Cascade",
+    "windowTile": "Tile",
+    "toolsSyncWindows": "Synchronize Windows"
   },
   "tool": {
     "rect": "Rectangle",
@@ -461,7 +477,8 @@
     "findMaxima": "Finding maxima",
     "findMaximaImage": "Finding maxima",
     "segOutline": "Outlining",
-    "fltDataRange": "Reading the data range"
+    "fltDataRange": "Reading the data range",
+    "working": "Working"
   },
   "win": {
     "results": "Results"
@@ -517,7 +534,8 @@
   "status": {
     "cancelled": "Cancelled.",
     "copied": "Copied.",
-    "saved": "Saved {name}."
+    "saved": "Saved {name}.",
+    "gridMemory": "Memory is getting full: close the source image to free it."
   },
   "resume": {
     "title": "Resume your work?",
@@ -616,7 +634,9 @@
     "held": "Some images were only partly restored: your changes to them are not saved.",
     "lowStorage": "Little storage is left in this browser: save a TIFF.",
     "budget": "Memory is almost full ({pct} %): close an image or free undo steps.",
-    "packageFailed": "Some tools ({pkg}) could not be loaded and are unavailable."
+    "packageFailed": "Some tools ({pkg}) could not be loaded and are unavailable.",
+    "annotationsCleared": "The overlay of this image was removed because its size changed.",
+    "metaTooLarge": "Some of the workspace state (annotations or tool data) is too large to be kept for a reload."
   },
   "bc": {
     "min": "Minimum",
@@ -744,7 +764,13 @@
       "integer": "Enter a whole number",
       "choice": "Choose one of the options"
     },
-    "unavailable": "Unavailable: this tool could not be loaded"
+    "unavailable": "Unavailable: this tool could not be loaded",
+    "dock": "Minimised images",
+    "tabMinimize": "Minimise",
+    "tabDock": "Dock",
+    "tabPopOut": "Pop out",
+    "tabClose": "Close",
+    "dockRestore": "Restore"
   },
   "help": {
     "space": "Hold to pan",
@@ -772,5 +798,12 @@
   },
   "table": {
     "title": "Table"
+  },
+  "sync": {
+    "cursor": "Sync cursor",
+    "imageCoords": "Image coordinates",
+    "scaling": "Image scaling",
+    "all": "Synchronize All",
+    "none": "Unsynchronize All"
   }
 }

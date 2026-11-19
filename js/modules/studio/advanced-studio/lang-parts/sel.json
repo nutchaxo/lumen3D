@@ -17,6 +17,7 @@
   "op": {
    "makeBand": "Making the band",
    "lineToArea": "Converting the line to an area",
+   "selTransform": "Transforming the selection",
    "straighten": "Straightening"
   },
   "err": {
@@ -81,6 +82,7 @@
   "op": {
    "makeBand": "Création de la bande",
    "lineToArea": "Conversion de la ligne en surface",
+   "selTransform": "Transformation de la sélection",
    "straighten": "Redressement"
   },
   "err": {
@@ -145,6 +147,7 @@
   "op": {
    "makeBand": "Creando la banda",
    "lineToArea": "Convirtiendo la línea en área",
+   "selTransform": "Transformando la selección",
    "straighten": "Enderezando"
   },
   "err": {
@@ -209,6 +212,7 @@
   "op": {
    "makeBand": "Band maken",
    "lineToArea": "Lijn omzetten naar vlak",
+   "selTransform": "Selectie transformeren",
    "straighten": "Rechttrekken"
   },
   "err": {

@@ -107,7 +107,7 @@ await test('dialogs: the Bandpass and Directionality fields, defaults and limits
   assert.deepEqual(J([f('orientationMap'), f('colorWheel'), f('table')].map((x) => x.value)), [false, false, false]);
   // the histogram end follows its start
   const set = {};
-  spec.onChange({ start: -30 }, (k, v) => { set[k] = v; }, 'start');
+  spec.onChange({ start: -30 }, (patch) => { Object.assign(set, patch); }, 'start');
   assert.equal(set.end, 150);
   assert.ok(spec.validate({ nbins: 4, start: 0 }).nbins, 'Nbins below 5 refused');
   assert.ok(spec.validate({ nbins: 90, start: 200 }).start, 'a start beyond 180 refused');
@@ -523,6 +523,31 @@ await test('Directionality: Fourier components of a grating at 60 degrees (every
   assert.equal(t.errors[m].message, EN.err.dirNoSignal);
   void id;
   t.close(); t2.close();
+});
+
+await test('Bandpass Filter shows the values of its last run (FFTFilter keeps them in static fields); Directionality builds its orientation map in the worker', async () => {
+  const t = await fresh();
+  await t.runCommand('fftBandpass', { large: 12, small: 2, stripes: 'horizontal', tolerance: 7, autoscale: false, saturate: false, displayFilter: false, all: false });
+  await t.runCommand('fftBandpass', {});
+  const spec = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
+  const f = (id) => spec.fields.find((x) => x.id === id);
+  assert.equal(f('large').value, 12); assert.equal(f('small').value, 2); assert.equal(f('stripes').value, 'horizontal'); assert.equal(f('tolerance').value, 7);
+  assert.equal(f('autoscale').value, false); assert.equal(f('saturate').value, false); assert.equal(f('displayFilter').value, false); assert.equal(f('all').value, false);
+  // a cancelled dialog remembers nothing
+  await t.runCommand('fftBandpass', null);
+  await t.runCommand('fftBandpass', {});
+  assert.equal(t.log.dialogSpecs[t.log.dialogSpecs.length - 1].fields.find((x) => x.id === 'large').value, 12);
+  t.close();
+  // the map: made by the worker command, nothing image-sized crosses to the page
+  const t2 = await fresh();
+  await t2.api('fft').addDoc(grating('grating30'), { placement: 'tab' });
+  await t2.runCommand('analyzeDirectionality', { method: 'gradient', nbins: 90, start: -90, orientationMap: true });
+  const map = (await t2.docs()).find((d) => /^Orientation map of/.test(d.name));
+  assert.ok(map && map.bitDepth === 32, 'the map is a 32-bit image');
+  const px = await t2.pixels(map.docId, 0);
+  assert.ok(px.every((v) => v > -1e29), 'no GRADIENT_NONE sentinel is left');
+  assert.ok(px.some((v) => v >= -90 && v < 90), 'orientations are in [start, start + 180)');
+  t2.close();
 });
 
 console.log(`test_ij_fft_commands: ${passed} tests passed`);

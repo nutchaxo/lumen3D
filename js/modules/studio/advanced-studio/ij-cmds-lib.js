@@ -83,17 +83,40 @@
    * go to the worker as they are (doc.photo.create splits R / G / B and tests for a grey picture there: CLAUDE.md §1.2, the main thread does
    * no per-pixel work). → { width, height, rgba: Uint8ClampedArray } */
   async function decodePhoto(url, signal) {
-    const resp = await fetch(url, { signal });
-    if (!resp.ok) throw Object.assign(new Error('HTTP ' + resp.status), { code: 'IJ_LIB_PHOTO' });
-    const blob = await resp.blob();
+    const photoError = (cause) => Object.assign(new Error('photograph'), { code: 'IJ_LIB_PHOTO', cause });
+    let blob;
+    try {
+      const resp = await fetch(url, { signal });
+      if (!resp.ok) throw photoError(new Error('HTTP ' + resp.status));
+      blob = await resp.blob();
+    } catch (e) { if (isAbort(e) || (e && e.code === 'IJ_LIB_PHOTO')) throw e; throw photoError(e); }
     let bmp;
-    try { bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none' }); } catch (_) { bmp = await createImageBitmap(blob); }
+    try {
+      try { bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none' }); } catch (_) { bmp = await createImageBitmap(blob); }
+    } catch (e) { if (isAbort(e)) throw e; throw photoError(e); }
     try {
       const w = bmp.width, hgt = bmp.height;
-      const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(w, hgt) : Object.assign(document.createElement('canvas'), { width: w, height: hgt });
+      // read in bands of ~1 Mpx, yielding between them (never one full-size canvas: a browser limits a canvas's area), and refuse
+      // a picture the page could not hold next to the worker's copy
+      const budget = ATT.budget();
+      if (!(w > 0 && hgt > 0)) throw photoError(null);
+      if (w * hgt > 33554432 || (budget > 0 && 4 * w * hgt > budget)) throw Object.assign(new Error('photograph too large'), { code: 'IJ_TOO_LARGE' });
+      const rgba = new Uint8ClampedArray(4 * w * hgt);
+      const bandH = Math.max(1, Math.min(hgt, Math.floor(1048576 / w)));
+      const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(w, bandH) : Object.assign(document.createElement('canvas'), { width: w, height: bandH });
       const c2 = canvas.getContext('2d', { willReadFrequently: true });
-      c2.drawImage(bmp, 0, 0);
-      return { width: w, height: hgt, rgba: c2.getImageData(0, 0, w, hgt).data };
+      if (!c2) throw photoError(null);
+      try {
+        for (let y0 = 0; y0 < hgt; y0 += bandH) {
+          if (signal && signal.aborted) throw abortError();
+          const bh = Math.min(bandH, hgt - y0);
+          c2.clearRect(0, 0, w, bandH);
+          c2.drawImage(bmp, 0, y0, w, bh, 0, 0, w, bh);
+          rgba.set(c2.getImageData(0, 0, w, bh).data, 4 * w * y0);
+          await sleep(0);
+        }
+      } catch (e) { if (isAbort(e)) throw e; throw photoError(e); }
+      return { width: w, height: hgt, rgba };
     } finally { if (bmp && typeof bmp.close === 'function') bmp.close(); }
   }
 

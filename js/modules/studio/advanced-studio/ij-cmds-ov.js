@@ -8,8 +8,7 @@
  *
  * What the browser changes (listed in the About box):
  *   • Add Selection adds at once with the remembered style, as ImageJ does; its dialog (RoiProperties, reduced to the stroke / width /
- *     fill / New overlay fields that fit a stored selection) opens with Alt held, which this file follows with its own key listener
- *     (the command dispatch hands over no modifiers). The point type / size fields of a point selection are not offered.
+ *     fill / New overlay fields that fit a stored selection) opens with Alt held (run(api, { alt }), the modifiers of the menu click). The point type / size fields of a point selection are not offered.
  *   • Grid and Scale Bar preview ONLY while the dialog's Preview box is ticked; Cancel puts the previous grid / bar back.
  *   • A grid's Bold width follows Grid.java:129-135 (2 px, widened by 1/mag when zoomed out) with the zoom of the moment the grid is made.
  *   • A vertical scale bar label is set horizontally beside its bar in the overlay (an annotation text has no rotation); a burnt-in
@@ -59,11 +58,14 @@
      * inside it. angle 0: the anchor is the top left of the text; angle 90: ImageJ's TextRoi anchor, the bottom left of a text
      * that reads upwards. null when the browser has no canvas.
      */
+    MAX_RASTER_PIXELS: 33554432,
     rasterText(text, size, bold, serif, angle, width) {
       const pad = 2;
       const horizontal = angle !== 90;
       const w = horizontal ? Math.ceil(width) + 2 * pad : Math.ceil(size * 1.5) + 2 * pad;
       const h = horizontal ? Math.ceil(size * 1.5) + 2 * pad : Math.ceil(width) + 2 * pad;
+      // a label of this many pixels is read back and walked on the main thread: beyond ~32 Mpx it is refused (null is only "no canvas")
+      if (!(w * h <= UI.MAX_RASTER_PIXELS)) throw ovError('IJ_OV_LABEL_TOO_LARGE');
       const ctx = UI.canvas(w, h);
       if (!ctx) return null;
       ctx.clearRect(0, 0, w, h);
@@ -85,17 +87,6 @@
       return Date.now() & 0x7fffffff;
     }
   };
-  // Alt held: ImageJ's IJ.altKeyDown(). The command dispatch hands over no modifiers, so the page's keys are followed here.
-  let altHeld = false;
-  if (typeof G.addEventListener === 'function') {
-    try {
-      const track = (e) => { altHeld = !!(e && e.altKey); };
-      G.addEventListener('keydown', track, true); G.addEventListener('keyup', track, true);
-      G.addEventListener('mousedown', track, true); G.addEventListener('click', track, true);
-      G.addEventListener('blur', () => { altHeld = false; });
-    } catch (e) { /* no window: Alt never held */ }
-  }
-  UI.altDown = () => altHeld;
   G.IJOvUi = UI;
   /** Grid.saveAreaPerPoint: a static of the session (0 = the default of the next image). */
   let sessionGridArea = 0;
@@ -133,7 +124,7 @@
   // ───────────────────────────── Image › Overlay ─────────────────────────────
 
   /** OverlayCommands.addSelection, through the dialog of RoiProperties ("Stroke color", "Width", "Fill color", "New overlay"). */
-  async function addSelection(api) {
+  async function addSelection(api, mods) {
     const st = api.state(), info = st.doc;
     if (!info || !OV()) return;
     const docId = info.docId, roi = st.roi;
@@ -155,7 +146,7 @@
     // `if (IJ.altKeyDown() || …) { RoiProperties rp = new RoiProperties("Add to Overlay", roi); if (!rp.showDialog()) return; … }`
     // RoiProperties.showDialog: a point has the stroke colour only, a line has no fill, any other selection stroke, width and fill.
     const isPoint = roi.type === 'point', isLine = roi.type === 'line' || roi.type === 'polyline' || roi.type === 'freeline' || roi.type === 'angle';
-    if (UI.altDown()) {
+    if (mods && mods.alt) {
       const fields = [{ type: 'string', id: 'stroke', labelKey: isPoint ? 'dlg.ov.strokePoint' : 'dlg.ov.stroke', value: vals.stroke }];
       if (!isPoint) fields.push({ type: 'number', id: 'width', labelKey: 'dlg.ov.width', value: vals.width, min: 0, step: 'any', decimals: Number.isInteger(vals.width) ? 0 : 1 });
       if (!isPoint && !isLine) fields.push({ type: 'string', id: 'fill', labelKey: 'dlg.ov.fill', value: vals.fill });
@@ -331,7 +322,7 @@
     for (const it of res.items) {
       if (it.kind !== 'text') continue;
       const patch = UI.rasterText(it.text, cfg.fontSize, cfg.boldText, cfg.serifFont, it.angle, it.width);
-      if (!patch) continue;
+      if (!patch) throw ovError('IJ_OV_LABEL_CANVAS');          // no drawing surface: refused, never burnt without its text
       patches.push({ x: it.x - patch.ax, y: it.y - patch.ay, w: patch.w, h: patch.h, data: patch.data });
     }
     const layers = [];
@@ -380,7 +371,7 @@
         { type: 'number', id: 'width', label: api.tr('dlg.ov.sbWidth', { unit }), value: cfg.hBarWidth, step: 'any', decimals: digitsOf(cfg.hDigits) },
         { type: 'number', id: 'height', label: api.tr('dlg.ov.sbHeight', { unit }), value: cfg.vBarHeight, step: 'any', decimals: digitsOf(cfg.vDigits) },
         { type: 'number', id: 'thickness', labelKey: 'dlg.ov.sbThickness', value: cfg.barThicknessInPixels, min: 1, integer: true },
-        { type: 'number', id: 'fontSize', labelKey: 'dlg.ov.sbFontSize', value: cfg.fontSize, min: 1, integer: true },
+        { type: 'number', id: 'fontSize', labelKey: 'dlg.ov.sbFontSize', value: cfg.fontSize, min: 1, max: 2 * Math.max(img.width, img.height), integer: true },
         { type: 'choice', id: 'color', labelKey: 'dlg.ov.sbColor', value: cfg.color, options: opts('dlg.ov.c.', o.SB_COLORS) },
         { type: 'choice', id: 'background', labelKey: 'dlg.ov.sbBackground', value: cfg.bcolor, options: opts('dlg.ov.c.', o.SB_BCOLORS) },
         { type: 'choice', id: 'location', labelKey: 'dlg.ov.sbLocation', value: cfg.location, options: opts('dlg.ov.loc.', o.SB_LOCATIONS) },
@@ -431,7 +422,8 @@
   IJApp.extend({
     pkg: 'ov',
     errors: {
-      IJ_OV_NO_OVERLAY: 'err.ovNoOverlay', IJ_OV_MANAGER_EMPTY: 'err.ovManagerEmpty', IJ_OV_NO_ROI_ITEMS: 'err.ovNoRoiItems'
+      IJ_OV_NO_OVERLAY: 'err.ovNoOverlay', IJ_OV_MANAGER_EMPTY: 'err.ovManagerEmpty', IJ_OV_NO_ROI_ITEMS: 'err.ovNoRoiItems',
+      IJ_OV_LABEL_TOO_LARGE: 'err.ovLabelTooLarge', IJ_OV_LABEL_CANVAS: 'err.ovLabelCanvas'
     },
     commands: [
       // Image › Overlay (IJ_Props.txt overlay01-08; Add Image, List Elements, Flatten, Labels, Measure Overlay, Options are out of scope)

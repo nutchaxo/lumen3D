@@ -17,7 +17,8 @@
    "analyzeSkeleton": "Analyzing the skeleton",
    "skeletonTagged": "Tagging the skeleton",
    "localThickness": "Local thickness",
-   "cellMarkerValues": "Reading the pixel values at the markers"
+   "cellMarkerValues": "Reading the pixel values at the markers",
+   "fitApply": "Applying the fitted function"
   },
   "res": {
    "skeletonBranchInfo": "Branch information",
@@ -61,7 +62,7 @@
     "fitDataCount": "At least two (x, y) pairs are needed, as pairs of numbers.",
     "fitDataBad": "Bad number in the pair {n}.",
     "fitFailed": "Curve Fitting Error: {reason}",
-    "fitNoImage": "Open an image first: a fit needs one open image to run.",
+    "fitNoImage": "Open an image first: Apply transforms the image with the fitted function.",
     "fitFormula": "Formula:",
     "fitStatus": "Status:",
     "fitIterations": "Number of iterations:",
@@ -113,11 +114,20 @@
     "ccLoadMarkers": "Load Markers",
     "ccExportImage": "Export Image",
     "ccMeasure": "Measure...",
-    "fitMinimizations": "Number of completed minimizations:"
+    "fitMinimizations": "Number of completed minimizations:",
+    "fractalTitle": "Fractal Box Counter",
+    "skelTitle": "Analyze Skeleton",
+    "ltTitle": "EDT...",
+    "skelLoops": "Elimination of Loops:",
+    "skelEnds": "Elimination of End-points:",
+    "skelResults": "Results and Output:",
+    "fitApply": "Apply",
+    "fitNoFunction": "No function available: run a fit first.",
+    "colocMaskType": "The mask must be an 8-bit image."
    }
   },
   "about": {
-   "fijiDeviations": "Fiji tools, where they differ: Analyze Skeleton cuts cycles at the same voxels as Fiji when intensities differ, but where branches tie, and for the \"lowest intensity voxel\" method (Fiji stops earlier), the Results table can differ; Branch information lists the same branches in another order, with another first end and running average; a pruned skeleton comes out as a new image, \"<name>-pruned\", instead of changing the source. Coloc 2's default Costes threshold search stops at other values than Fiji's, so the thresholds, tM1 / tM2 and the Pearson values above and below the thresholds differ a little (Bisection matches on the tested pairs); a negative slope gives the maximum of channel 1. Coloc 2 shows no result images, Cell Counter has no Keep Original or Show All, and Curve Fitting has no Apply."
+   "fijiDeviations": "Fiji tools, where they differ: Analyze Skeleton cuts cycles at the same voxels as Fiji when intensities differ, but where branches tie, and for the \"lowest intensity voxel\" method (Fiji stops earlier), the Results table can differ; Branch information lists the same branches in another order, with another first end and running average; a pruned skeleton comes out as a new image, \"<name>-pruned\", instead of changing the source. Coloc 2's default Costes threshold search stops at other values than Fiji's, so the thresholds, tM1 / tM2 and the Pearson values above and below the thresholds differ a little (Bisection matches on the tested pairs); a negative slope gives the maximum of channel 1. Coloc 2 shows no result images, Cell Counter has no Keep Original or Show All, and Curve Fitting has no \"Show settings\" and no user-defined formula."
   }
  },
  "fr": {
@@ -138,7 +148,8 @@
    "analyzeSkeleton": "Analyse du squelette",
    "skeletonTagged": "Étiquetage du squelette",
    "localThickness": "Épaisseur locale",
-   "cellMarkerValues": "Lecture des valeurs aux marqueurs"
+   "cellMarkerValues": "Lecture des valeurs aux marqueurs",
+   "fitApply": "Application de la fonction ajustée"
   },
   "res": {
    "skeletonBranchInfo": "Branch information",
@@ -182,7 +193,7 @@
     "fitDataCount": "Il faut au moins deux paires (x, y), données par paires de nombres.",
     "fitDataBad": "Nombre incorrect dans la paire {n}.",
     "fitFailed": "Erreur d’ajustement : {reason}",
-    "fitNoImage": "Ouvrez d’abord une image : l’ajustement en demande une d’ouverte.",
+    "fitNoImage": "Ouvrez d’abord une image : Appliquer transforme l’image avec la fonction ajustée.",
     "fitFormula": "Formule :",
     "fitStatus": "État :",
     "fitIterations": "Nombre d’itérations :",
@@ -234,11 +245,20 @@
     "ccLoadMarkers": "Charger les marqueurs",
     "ccExportImage": "Exporter l’image",
     "ccMeasure": "Mesurer…",
-    "fitMinimizations": "Nombre de minimisations terminées :"
+    "fitMinimizations": "Nombre de minimisations terminées :",
+    "fractalTitle": "Fractal Box Counter",
+    "skelTitle": "Analyze Skeleton",
+    "ltTitle": "EDT...",
+    "skelLoops": "Élimination des boucles :",
+    "skelEnds": "Élimination des extrémités :",
+    "skelResults": "Résultats et sortie :",
+    "fitApply": "Appliquer",
+    "fitNoFunction": "Aucune fonction disponible : lancez d’abord un ajustement.",
+    "colocMaskType": "Le masque doit être une image 8 bits."
    }
   },
   "about": {
-   "fijiDeviations": "Outils Fiji, là où ils diffèrent : Analyze Skeleton coupe les cycles aux mêmes voxels que Fiji quand les intensités diffèrent, mais en cas d'égalité entre branches, et pour la méthode « lowest intensity voxel » (Fiji s'arrête plus tôt), le tableau de résultats peut différer ; Branch information liste les mêmes branches dans un autre ordre, avec une autre première extrémité et une autre moyenne glissante ; un squelette élagué donne une nouvelle image, « <nom>-pruned », au lieu de modifier la source. La recherche de seuil Costes par défaut de Coloc 2 s'arrête à d'autres valeurs que celle de Fiji : les seuils, tM1 / tM2 et les valeurs de Pearson au-dessus et en dessous des seuils diffèrent un peu (Bisection concorde sur les paires testées) ; une pente négative donne le maximum du canal 1. Coloc 2 n'affiche pas d'images de résultat, Cell Counter n'a ni Keep Original ni Show All, et Curve Fitting n'a pas Apply."
+   "fijiDeviations": "Outils Fiji, là où ils diffèrent : Analyze Skeleton coupe les cycles aux mêmes voxels que Fiji quand les intensités diffèrent, mais en cas d'égalité entre branches, et pour la méthode « lowest intensity voxel » (Fiji s'arrête plus tôt), le tableau de résultats peut différer ; Branch information liste les mêmes branches dans un autre ordre, avec une autre première extrémité et une autre moyenne glissante ; un squelette élagué donne une nouvelle image, « <nom>-pruned », au lieu de modifier la source. La recherche de seuil Costes par défaut de Coloc 2 s'arrête à d'autres valeurs que celle de Fiji : les seuils, tM1 / tM2 et les valeurs de Pearson au-dessus et en dessous des seuils diffèrent un peu (Bisection concorde sur les paires testées) ; une pente négative donne le maximum du canal 1. Coloc 2 n'affiche pas d'images de résultat, Cell Counter n'a ni Keep Original ni Show All, et Curve Fitting n'a ni « Show settings » ni formule définie par l'utilisateur."
   }
  },
  "es": {
@@ -259,7 +279,8 @@
    "analyzeSkeleton": "Analizando el esqueleto",
    "skeletonTagged": "Etiquetando el esqueleto",
    "localThickness": "Grosor local",
-   "cellMarkerValues": "Leyendo los valores en los marcadores"
+   "cellMarkerValues": "Leyendo los valores en los marcadores",
+   "fitApply": "Aplicando la función ajustada"
   },
   "res": {
    "skeletonBranchInfo": "Branch information",
@@ -303,7 +324,7 @@
     "fitDataCount": "Hacen falta al menos dos pares (x, y), dados como pares de números.",
     "fitDataBad": "Número incorrecto en el par {n}.",
     "fitFailed": "Error de ajuste: {reason}",
-    "fitNoImage": "Abra primero una imagen: el ajuste necesita una abierta.",
+    "fitNoImage": "Abra primero una imagen: Aplicar transforma la imagen con la función ajustada.",
     "fitFormula": "Fórmula:",
     "fitStatus": "Estado:",
     "fitIterations": "Número de iteraciones:",
@@ -355,11 +376,20 @@
     "ccLoadMarkers": "Cargar marcadores",
     "ccExportImage": "Exportar imagen",
     "ccMeasure": "Medir…",
-    "fitMinimizations": "Número de minimizaciones completadas:"
+    "fitMinimizations": "Número de minimizaciones completadas:",
+    "fractalTitle": "Fractal Box Counter",
+    "skelTitle": "Analyze Skeleton",
+    "ltTitle": "EDT...",
+    "skelLoops": "Eliminación de bucles:",
+    "skelEnds": "Eliminación de extremos:",
+    "skelResults": "Resultados y salida:",
+    "fitApply": "Aplicar",
+    "fitNoFunction": "Ninguna función disponible: haga primero un ajuste.",
+    "colocMaskType": "La máscara debe ser una imagen de 8 bits."
    }
   },
   "about": {
-   "fijiDeviations": "Herramientas de Fiji, donde difieren: Analyze Skeleton corta los ciclos en los mismos vóxeles que Fiji cuando las intensidades difieren, pero con ramas empatadas, y con el método « lowest intensity voxel » (Fiji se detiene antes), la tabla de resultados puede diferir; Branch information lista las mismas ramas en otro orden, con otro primer extremo y otro promedio móvil; un esqueleto podado sale como una imagen nueva, « <nombre>-pruned », en lugar de modificar el origen. La búsqueda de umbral de Costes por defecto de Coloc 2 se detiene en otros valores que la de Fiji, de modo que los umbrales, tM1 / tM2 y los valores de Pearson por encima y por debajo de los umbrales difieren un poco (Bisection coincide en los pares probados); una pendiente negativa da el máximo del canal 1. Coloc 2 no muestra imágenes de resultado, Cell Counter no tiene Keep Original ni Show All, y Curve Fitting no tiene Apply."
+   "fijiDeviations": "Herramientas de Fiji, donde difieren: Analyze Skeleton corta los ciclos en los mismos vóxeles que Fiji cuando las intensidades difieren, pero con ramas empatadas, y con el método « lowest intensity voxel » (Fiji se detiene antes), la tabla de resultados puede diferir; Branch information lista las mismas ramas en otro orden, con otro primer extremo y otro promedio móvil; un esqueleto podado sale como una imagen nueva, « <nombre>-pruned », en lugar de modificar el origen. La búsqueda de umbral de Costes por defecto de Coloc 2 se detiene en otros valores que la de Fiji, de modo que los umbrales, tM1 / tM2 y los valores de Pearson por encima y por debajo de los umbrales difieren un poco (Bisection coincide en los pares probados); una pendiente negativa da el máximo del canal 1. Coloc 2 no muestra imágenes de resultado, Cell Counter no tiene Keep Original ni Show All, y Curve Fitting no tiene « Show settings » ni fórmula definida por el usuario."
   }
  },
  "nl": {
@@ -380,7 +410,8 @@
    "analyzeSkeleton": "Skelet analyseren",
    "skeletonTagged": "Skelet labelen",
    "localThickness": "Lokale dikte",
-   "cellMarkerValues": "Waarden bij de markeringen lezen"
+   "cellMarkerValues": "Waarden bij de markeringen lezen",
+   "fitApply": "De gefitte functie toepassen"
   },
   "res": {
    "skeletonBranchInfo": "Branch information",
@@ -424,7 +455,7 @@
     "fitDataCount": "Minstens twee (x, y)-paren zijn nodig, als paren getallen.",
     "fitDataBad": "Ongeldig getal in paar {n}.",
     "fitFailed": "Fitfout: {reason}",
-    "fitNoImage": "Open eerst een beeld: voor een fit moet een beeld open staan.",
+    "fitNoImage": "Open eerst een beeld: Toepassen transformeert het beeld met de gefitte functie.",
     "fitFormula": "Formule:",
     "fitStatus": "Status:",
     "fitIterations": "Aantal iteraties:",
@@ -476,11 +507,20 @@
     "ccLoadMarkers": "Markeringen laden",
     "ccExportImage": "Beeld exporteren",
     "ccMeasure": "Meten…",
-    "fitMinimizations": "Aantal voltooide minimalisaties:"
+    "fitMinimizations": "Aantal voltooide minimalisaties:",
+    "fractalTitle": "Fractal Box Counter",
+    "skelTitle": "Analyze Skeleton",
+    "ltTitle": "EDT...",
+    "skelLoops": "Lussen verwijderen:",
+    "skelEnds": "Eindpunten verwijderen:",
+    "skelResults": "Resultaten en uitvoer:",
+    "fitApply": "Toepassen",
+    "fitNoFunction": "Geen functie beschikbaar: voer eerst een fit uit.",
+    "colocMaskType": "Het masker moet een 8-bits afbeelding zijn."
    }
   },
   "about": {
-   "fijiDeviations": "Fiji-hulpmiddelen, waar ze verschillen: Analyze Skeleton snijdt cycli op dezelfde voxels als Fiji wanneer de intensiteiten verschillen, maar bij gelijke takken, en bij de methode « lowest intensity voxel » (Fiji stopt eerder), kan de resultatentabel verschillen; Branch information toont dezelfde takken in een andere volgorde, met een ander eerste uiteinde en een ander lopend gemiddelde; een gesnoeid skelet komt als nieuw beeld « <naam>-pruned » in plaats van de bron te wijzigen. De standaard Costes-drempelzoektocht van Coloc 2 stopt bij andere waarden dan die van Fiji, zodat de drempels, tM1 / tM2 en de Pearson-waarden boven en onder de drempels iets verschillen (Bisection komt overeen op de geteste paren); een negatieve helling geeft het maximum van kanaal 1. Coloc 2 toont geen resultaatbeelden, Cell Counter heeft geen Keep Original of Show All, en Curve Fitting heeft geen Apply."
+   "fijiDeviations": "Fiji-hulpmiddelen, waar ze verschillen: Analyze Skeleton snijdt cycli op dezelfde voxels als Fiji wanneer de intensiteiten verschillen, maar bij gelijke takken, en bij de methode « lowest intensity voxel » (Fiji stopt eerder), kan de resultatentabel verschillen; Branch information toont dezelfde takken in een andere volgorde, met een ander eerste uiteinde en een ander lopend gemiddelde; een gesnoeid skelet komt als nieuw beeld « <naam>-pruned » in plaats van de bron te wijzigen. De standaard Costes-drempelzoektocht van Coloc 2 stopt bij andere waarden dan die van Fiji, zodat de drempels, tM1 / tM2 en de Pearson-waarden boven en onder de drempels iets verschillen (Bisection komt overeen op de geteste paren); een negatieve helling geeft het maximum van kanaal 1. Coloc 2 toont geen resultaatbeelden, Cell Counter heeft geen Keep Original of Show All, en Curve Fitting heeft geen « Show settings » en geen door de gebruiker gedefinieerde formule."
   }
  }
 }

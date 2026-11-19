@@ -89,7 +89,7 @@ await test('enabled(): Cut needs an area selection, Draw any selection, Montage 
 });
 
 // ═════════════════════════════════════════ Duplicate ═════════════════════════════════════════
-await test('Duplicate…: Title, Ignore selection (area selections only), Channels (c):; the bounding box, the selection moves to 0,0, a copy of a copy keeps counting', async () => {
+await test('Duplicate (several channels): Title and Channels (c): — no Ignore selection (showHSDialog); the bounding box, the selection moves to 0,0, a copy of a copy keeps counting', async () => {
   const t = await fresh();
   const api = t.api(null);
   const srcName = api.state().doc.name;
@@ -114,8 +114,8 @@ await test('Duplicate…: Title, Ignore selection (area selections only), Channe
   setRoi(t, { type: 'oval', x: 6, y: 5, w: 12, h: 10 });
   await t.runCommand('imageDuplicate', { title: 'oval copy', channels: '2-3' });
   spec = lastSpec(t);
-  eq(spec.fields.map((f) => f.id), ['title', 'ignore', 'channels']);
-  assert.equal(field(spec, 'ignore').value, false);
+  eq(spec.fields.map((f) => f.id), ['title', 'channels'], 'a multichannel image: showHSDialog has no Ignore selection');
+  assert.equal(spec.title, 'Duplicate', 'the title of the hyperstack dialog has no ellipsis');
   const oc = (await t.docs()).find((d) => d.name === 'oval copy');
   assert.ok(oc && oc.width === 12 && oc.height === 10 && oc.channels.length === 2, 'the bounding box of the selection, channels 2 and 3');
   assert.equal(oc.channels[0].name, src.channels[1].name, 'the channels keep their names');
@@ -123,22 +123,10 @@ await test('Duplicate…: Title, Ignore selection (area selections only), Channe
   for (let y = 0; y < 10; y++) for (let x = 0; x < 12; x++) assert.equal(got[y * 12 + x], px[(5 + y) * 40 + 6 + x], 'pixel ' + x + ',' + y + ' of the copy');
   const sel = activeRoi(t);
   assert.ok(sel && sel.type === 'oval' && sel.x === 0 && sel.y === 0, 'the copy carries the selection moved to 0,0: ' + JSON.stringify(sel));
-  // Ignore selection: the whole image, the selection stays where it was; the answer is remembered
-  back();
-  setRoi(t, { type: 'rect', x: 3, y: 3, w: 9, h: 7 });
-  await t.runCommand('imageDuplicate', { title: 'whole', ignore: true });
-  const wh = (await t.docs()).find((d) => d.name === 'whole');
-  assert.ok(wh.width === 40 && wh.height === 30, 'a selection that is ignored does not crop');
-  const r2 = activeRoi(t);
-  assert.ok(r2 && r2.type === 'rect' && r2.x === 3 && r2.w === 9, 'the original selection is carried at its place');
-  back();
-  setRoi(t, { type: 'rect', x: 3, y: 3, w: 9, h: 7 });
-  await t.runCommand('imageDuplicate', { title: 'again' });
-  assert.equal(field(lastSpec(t), 'ignore').value, true, 'Duplicator keeps staticIgnoreSelection');
   // a rectangle: cropped, no selection on the copy
   back();
   setRoi(t, { type: 'rect', x: 4, y: 4, w: 10, h: 6 });
-  await t.runCommand('imageDuplicate', { title: 'rectcopy', ignore: false });
+  await t.runCommand('imageDuplicate', { title: 'rectcopy' });
   const rc = (await t.docs()).find((d) => d.name === 'rectcopy');
   assert.ok(rc.width === 10 && rc.height === 6);
   assert.equal(activeRoi(t), null, 'a rectangle needs no selection on the copy');
@@ -164,6 +152,50 @@ await test('Duplicate…: Title, Ignore selection (area selections only), Channe
   assert.equal(r.warnings.length, 0, JSON.stringify(r.warnings));
   assert.ok(r.docs.some((d) => d.name === 'oval copy'));
   r.close();
+});
+
+await test('Duplicate… (one channel): Ignore selection for ANY selection, remembered; an empty Channels (c): text is refused with a message, not a throw', async () => {
+  const t = await fresh({ channels: 1 });
+  const srcName = t.api(null).state().doc.name;
+  setRoi(t, { type: 'rect', x: 3, y: 3, w: 9, h: 7 });
+  await t.runCommand('imageDuplicate', { title: 'whole', ignore: true });
+  let spec = lastSpec(t);
+  eq(spec.fields.map((f) => f.id), ['title', 'ignore']);
+  assert.equal(spec.title, 'Duplicate…');
+  const wh = (await t.docs()).find((d) => d.name === 'whole');
+  assert.ok(wh.width === 40 && wh.height === 30, 'a selection that is ignored does not crop');
+  const r2 = activeRoi(t);
+  assert.ok(r2 && r2.type === 'rect' && r2.x === 3 && r2.w === 9, 'the original selection is carried at its place');
+  const src = (await t.docs()).find((d) => d.name === srcName);
+  t.layout().activate(src.docId);
+  setRoi(t, { type: 'rect', x: 3, y: 3, w: 9, h: 7 });
+  await t.runCommand('imageDuplicate', { title: 'again' });
+  assert.equal(field(lastSpec(t), 'ignore').value, true, 'Duplicator keeps staticIgnoreSelection');
+  // the selection of the image is a line: still offered
+  t.layout().activate(src.docId);
+  setRoi(t, { type: 'line', x1: 1, y1: 1, x2: 9, y2: 9 });
+  await t.runCommand('imageDuplicate', { title: 'line' });
+  eq(lastSpec(t).fields.map((f) => f.id), ['title', 'ignore'], 'any selection offers Ignore selection');
+  // a selection outside the image: the field is still shown, on the remembered value (1.54p overwrites the roiOutside tick), and the copy is whole
+  t.layout().activate(src.docId);
+  setRoi(t, { type: 'rect', x: 2, y: 2, w: 9, h: 7 });
+  await t.runCommand('imageDuplicate', { title: 'unticked', ignore: false });
+  t.layout().activate(src.docId);
+  setRoi(t, { type: 'rect', x: 500, y: 500, w: 9, h: 7 });
+  await t.runCommand('imageDuplicate', { title: 'outside' });
+  const fo = lastSpec(t).fields;
+  eq(fo.map((f) => f.id), ['title', 'ignore'], 'an outside selection still offers Ignore selection');
+  assert.equal(fo.find((f) => f.id === 'ignore').value, false, 'on the remembered value, not forced on');
+  assert.equal((await t.docs()).find((d) => d.name === 'outside').width, src.width, 'an outside selection is ignored, ticked or not');
+  t.close();
+  // several channels: an empty Channels (c): text is refused by the dialog's validate with a translated key
+  const t3 = await fresh();
+  let refused = null;
+  t3.script.dialogs.push((s) => { refused = s.validate({ title: 'x', channels: '  ' }); return { title: 'ok copy', channels: '1-2' }; });
+  await t3.runCommand('imageDuplicate');
+  eq(refused, { channels: 'dlg.dupChannelsEmpty' });
+  assert.ok((await t3.docs()).some((d) => d.name === 'ok copy'));
+  t3.close();
 });
 
 // ═══════════════════════════════════ Copy, Cut, Paste ═══════════════════════════════════
@@ -354,6 +386,37 @@ await test('Paste: another bit depth is refused (IJ_EDIT_PASTE_TYPE); an empty i
   assert.ok((await t2.runCommand('fileNewSystemClipboard', undefined, { expectError: true })).length >= 1);
   assert.ok((await t2.runCommand('editCopyToSystem', undefined, { expectError: true })).length >= 1);
   t2.close();
+});
+
+await test('Copy to System during a floating paste: the paste lands before the picture is rendered, and the write starts synchronously', async () => {
+  const t = await fresh();
+  const id = idOf(t);
+  const before = arr(await t.pixels(id, 0)).join();
+  setRoi(t, { type: 'rect', x: 5, y: 4, w: 8, h: 6 });
+  await t.runCommand('editCopy');
+  setRoi(t, { type: 'rect', x: 30, y: 20, w: 8, h: 6 });
+  await t.runCommand('editPaste');
+  assert.equal(arr(await t.pixels(id, 0)).join(), before, 'still floating');
+  let atRender = null, started = false;
+  t.page.ClipboardItem = function (o) { this.png = o['image/png']; };
+  t.page.navigator.clipboard = { write: async ([item]) => { started = true; await item.png.catch(() => {}); atRender = arr(await t.pixels(id, 0)).join(); } };
+  await t.runCommand('editCopyToSystem');
+  assert.ok(started, 'the clipboard write was called');
+  assert.notEqual(atRender, before, 'the floating paste had landed by the time the picture was produced');
+  t.close();
+});
+
+await test('A floating paste whose image is closed gives its blobs back to the worker', async () => {
+  const t = await fresh();
+  const id = idOf(t);
+  setRoi(t, { type: 'rect', x: 5, y: 4, w: 8, h: 6 });
+  await t.runCommand('editCopy');
+  setRoi(t, { type: 'rect', x: 30, y: 20, w: 8, h: 6 });
+  await t.runCommand('editPaste');
+  t.script.nextAsk = 'discard';
+  await t.shell.opts.onCloseImage(id);
+  await until(() => t.log.msgs.some((m) => m.cmd === 'engine.dropBlob'), 'the blob is dropped');
+  t.close();
 });
 
 await test('Internal Clipboard: the clipboard as an image "Clipboard" (a non-rectangular selection is cleared outside); empty = refusal', async () => {
@@ -655,6 +718,20 @@ await test('Invert LUTs (the macro InvertAllLuts): every channel gets the invers
     const a = E.effectiveTable(d.lut, d.invert, colorOf(i)), b = E.effectiveTable(before[i].lut, before[i].invert, colorOf(i));
     for (let k = 0; k < 768; k++) assert.ok(Math.abs(a[k] - b[k]) <= 1, 'channel ' + i + ' entry ' + k);
   });
+  t.close();
+});
+
+await test('LutLoader on a grayscale composite: every channel takes the table and the image goes to Color mode (api.setDisplayMode)', async () => {
+  const t = await fresh();
+  await t.engine('doc.setDisplay', { docId: idOf(t), mode: 'gray' });
+  await t.runCommand('lut332RGB');
+  await sleep(50);
+  const d = (await t.docs())[0];
+  assert.ok(d.channels.length > 1);
+  const luts = d.channels.map((c) => c.display.lut);
+  assert.ok(luts.every((l) => l === luts[0]), 'one table on every channel: ' + luts.join('|'));
+  const disp = await t.engine('edit.display', { docId: idOf(t) });
+  assert.equal(disp.mode, 'color');
   t.close();
 });
 

@@ -1055,18 +1055,24 @@
     }
 
     /* 8-bit 255 − v. 16-bit: about the data's own range, max + min − v (ImageJ
-     * ShortProcessor.invert without Prefs.fullRange16bitInversions). 32-bit:
-     * max + min − v on opts.min / opts.max (the display range ImageJ's
-     * FloatProcessor.invert reads), default the finite data range. */
+     * ShortProcessor.invert without Prefs.fullRange16bitInversions); with
+     * opts.fullRange (that preference) 65535 − v. 32-bit: FloatProcessor.process
+     * INVERT, "v2 = max2 − (v1 − min2)" in float arithmetic, on opts.min / opts.max
+     * (the display range ImageJ's FloatProcessor.invert reads), default the finite
+     * data range. */
     function invert(ch, opts) {
       const out = blank(ch, ch.width, ch.height);
       const s = ch.data, d = out.data, n = s.length;
       if (ch.bitDepth === 8) { for (let i = 0; i < n; i++) d[i] = 255 - s[i]; return out; }
-      const r = IJImage.dataRange(s);
       const o = opts || {};
-      const mn = ch.bitDepth === 32 && o.min !== undefined ? o.min : r.min;
-      const mx = ch.bitDepth === 32 && o.max !== undefined ? o.max : r.max;
-      const t = mx + mn;
+      if (ch.bitDepth === 16 && o.fullRange) { for (let i = 0; i < n; i++) d[i] = 65535 - s[i]; return out; }
+      const r = IJImage.dataRange(s);
+      if (ch.bitDepth === 32) {
+        const mn = Math.fround(o.min !== undefined ? o.min : r.min), mx = Math.fround(o.max !== undefined ? o.max : r.max);
+        for (let i = 0; i < n; i++) d[i] = Math.fround(mx - Math.fround(Math.fround(s[i]) - mn));
+        return out;
+      }
+      const t = r.max + r.min;
       for (let i = 0; i < n; i++) d[i] = t - s[i];
       return out;
     }
@@ -1826,6 +1832,11 @@
       if (spec.preview !== false && spec.preview !== 'region' && spec.preview !== 'reduced') throw bad('op preview ' + name);
       if (spec.kind !== 'pixel' && spec.preview !== false) throw bad('only a pixel op previews ' + name);
       for (const f of ['validate', 'resolve', 'scratchBytes']) if (spec[f] !== undefined && typeof spec[f] !== 'function') throw bad('op ' + f + ' ' + name);
+      // display: true = the step resets the display range of the channels it changes (resetMinAndMax) as part of its undo step;
+      // '16/32' = only on a 16 or 32-bit image (8-bit keeps its range). docless: a compute op that needs no document (run gets view = null).
+      if (spec.display !== undefined && spec.display !== true && spec.display !== false && spec.display !== '16/32') throw bad('op display ' + name);
+      if (spec.docless !== undefined && typeof spec.docless !== 'boolean') throw bad('op docless ' + name);
+      if (spec.docless && spec.kind !== 'compute') throw bad('only a compute op can be docless ' + name);
       if (spec.kind === 'pixel') { if (typeof spec.prepare !== 'function') throw bad('op prepare ' + name); }
       else if (typeof spec.run !== 'function') throw bad('op run ' + name);
       return spec;

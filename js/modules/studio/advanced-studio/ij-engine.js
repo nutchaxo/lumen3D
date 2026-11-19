@@ -275,14 +275,25 @@ const IJEngine = (() => {
 
     def('invert', {
       kind: 'pixel', version: 1,
+      // A 32-bit image inverts about its DISPLAY range (FloatProcessor.invert reads getMin()/getMax()); the range is not journaled,
+      // so it is copied into the params (a replay gives the same pixels).
+      resolve(view, params, chans) {
+        if (view.bitDepth !== 32) return null;
+        const p = Object.assign({}, params);
+        p.ranges = Object.assign({}, p.ranges);
+        for (const c of chans) {
+          const d = view.channels[c].display;
+          if (!p.ranges[c] && d && Number.isFinite(d.min) && Number.isFinite(d.max)) p.ranges[c] = { min: d.min, max: d.max };
+        }
+        return p;
+      },
       prepare(view, c, p, ctx) {
         if (view.bitDepth === 32) {
-          // ImageJ inverts a float image about the data range: v' = max + min - v.
-          const r = ctx.range(c);
-          const s = r.max + r.min;
-          return { apron: noApron(), fn(src) { const d = src.data, o = new Float32Array(d.length); for (let i = 0; i < d.length; i++) o[i] = s - d[i]; return o; } };
+          // FloatProcessor.process(INVERT): v2 = max2 - (v1 - min2), every step a float; the data range only when no display range is set.
+          const r = (p.ranges && p.ranges[c]) || ctx.range(c);
+          return { apron: noApron(), fn: (src) => dep('IJOps').invert(src, { min: r.min, max: r.max }).data };
         }
-        return { apron: noApron(), fn: (src) => dep('IJOps').invert(src) };
+        return { apron: noApron(), fn: (src) => dep('IJOps').invert(src, { fullRange: p.fullRange === true }) };
       }
     });
     def('math', {
@@ -978,9 +989,10 @@ const IJEngine = (() => {
       tiles.bytes = 0;
     }
 
-    // The blobs no document has used yet (nothing refers to them): given up when memory is short.
+    // The blobs no document has used yet (nothing refers to them): given up when memory is short. A blob a preview refers to is
+    // pinned (a floating paste is still on screen): only engine.dropBlob gives that one up.
     function dropUnusedBlobs() {
-      for (const [ref, b] of Array.from(blobs)) if (!b.docs.size) { blobs.delete(ref); }
+      for (const [ref, b] of Array.from(blobs)) if (!b.docs.size && !b.pinned) { blobs.delete(ref); }
     }
 
     function purgeTiles(docId) {
@@ -1004,7 +1016,7 @@ const IJEngine = (() => {
       let reclaimable = tiles.bytes;
       const add = (a) => { if (a && !seen.has(a)) { seen.add(a); reclaimable += a.byteLength; } };
       // a blob no document has used yet (a preview's clipboard, a cancelled paste) is given up like a cached tile
-      for (const b of blobs.values()) if (!b.docs.size) add(b.data);
+      for (const b of blobs.values()) if (!b.docs.size && !b.pinned) add(b.data);
       const addRec = (r) => {
         if (r.patches) for (const p of r.patches) add(p.data);
         if (r.full) for (const c of r.full.channels) add(c.data);
@@ -1354,11 +1366,12 @@ const IJEngine = (() => {
     }
 
     // A { blobRef } of the live store: the array, and the document now holds it (it stays while the document lives).
-    function liveBlob(doc) {
+    // `pin` (a preview: no document) keeps the blob out of the memory reclaim until engine.unpinBlobs / dropBlob.
+    function liveBlob(doc, pin) {
       return (ref) => {
         const b = blobs.get(ref);
         if (!b) return null;
-        if (doc) { b.docs.add(doc.id); b.used = true; }
+        if (doc) { b.docs.add(doc.id); b.used = true; } else if (pin) b.pinned = true;
         return b.data;
       };
     }
@@ -1589,10 +1602,11 @@ const IJEngine = (() => {
     // A replayed entry already holds its resolved params, and the state `resolve` reads (display range,
     // threshold) is not the state of the moment the entry was written: resolve is NOT called on a replay
     // (it must still be idempotent — fill what is missing — because a page may send resolved params).
-    // `commit` false (a preview, doc.compute, a size estimate): a blob it resolves is not pinned to the document,
-    // so a cancelled paste can still give its clipboard up.
-    function resolvedParams(doc, spec, args, chans, replay, others, commit = true) {
-      let params = resolveBlobs(Object.assign({}, args.params || {}), liveBlob(commit ? doc : null));
+    // `commit` false (a preview, doc.compute, a size estimate): a blob it resolves is not held by the document,
+    // so a cancelled paste can still give its clipboard up. `pin` (a preview only) keeps the blob out of the memory reclaim while the
+    // preview is on screen; engine.unpinBlobs (the page cancelled its preview) or engine.dropBlob ends it.
+    function resolvedParams(doc, spec, args, chans, replay, others, commit = true, pin = false) {
+      let params = resolveBlobs(Object.assign({}, args.params || {}), liveBlob(commit ? doc : null, pin));
       if (spec.validate) spec.validate(params, infoFor(doc, chans, null, others));
       if (spec.resolve && !replay) { const r = spec.resolve(makeView(doc), params, chans); if (r) params = r; }
       return params;
@@ -1778,6 +1792,8 @@ const IJEngine = (() => {
         });
       });
       const noUndo = !!args.noUndo;
+      // spec.display: true resets the display range of every changed channel; '16/32' only on a 16 / 32-bit image
+      const resetsDisplay = spec.display === true || (spec.display === '16/32' && bd !== 8);
       const n = pixelNeed(doc, spec, plan, params);
       const need = noUndo ? n.oneChannel : n.need;
       ensureRoom(need);
@@ -1793,7 +1809,7 @@ const IJEngine = (() => {
         ch.data = out;
         // A step that resets the display range (resetMinAndMax) keeps the channel's lookup table and its
         // inverted flag: only min and max come from the new data.
-        if (spec.display) {
+        if (resetsDisplay) {
           const d = defaultDisplay(ch, bd), old = ch.display || {};
           ch.display = { min: d.min, max: d.max, lut: old.lut != null ? old.lut : d.lut, invert: old.invert != null ? !!old.invert : d.invert };
         }
@@ -1841,7 +1857,7 @@ const IJEngine = (() => {
         c, rect: Object.assign({}, reg),
         data: fullReg ? doc.channels[c].data : copyRect(doc.channels[c].data, W, reg.x, reg.y, reg.w, reg.h)
       }));
-      if (spec.display) {
+      if (resetsDisplay) {
         rec.display = {};
         for (const c of chans) rec.display[c] = Object.assign({}, doc.channels[c].display);
       }
@@ -2346,7 +2362,7 @@ const IJEngine = (() => {
     // for P = bandRows * width pixels, so the band decides the peak, not the image).
     function projectEstimate(a, bandRows) {
       const e = dep('IJProject').estimateBytes({
-        method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length, bandRows
+        method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length, bandRows, inputBitDepth: a.inputBitDepth
       });
       if (!(e > 0)) throw ijError('IJ_BAD_ARGS', 'projection size');
       return e;
@@ -2376,7 +2392,7 @@ const IJEngine = (() => {
       if (projects.has(docId)) projects.delete(docId);
       ensureRoom(estimate);
       const projector = IJProject.create({
-        method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length
+        method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels.length, inputBitDepth: a.inputBitDepth
       });
       projects.set(docId, { projector, meta: plainClone({ name: a.name, method: a.method, width: a.width, height: a.height, depth: a.depth, channels: a.channels, calibration: a.calibration, provenance: a.provenance }), estimate, fraction: 0 });
       finishMutation();
@@ -2416,10 +2432,21 @@ const IJEngine = (() => {
       return { info: infoOf(doc) };
     };
 
-    handlers['doc.open'] = (a) => {
+    handlers['doc.open'] = async (a, ctx) => {
       if (!a.bytes || !a.bytes.byteLength) throw ijError('IJ_BAD_ARGS', 'bytes');
       ensureRoom(a.bytes.byteLength * 2);
-      const img = dep('IJTiff').read(a.bytes, typeof a.name === 'string' && a.name ? a.name : undefined);
+      const name = typeof a.name === 'string' && a.name ? a.name : undefined;
+      // A deflate / predictor TIFF (the Download Center writes them) is decoded HERE, strip by strip, never on the page.
+      const Local = ROOT.IJLocalTiff;
+      let compressed = false;
+      try { compressed = !!(Local && Local.needsDecoder(a.bytes)); } catch (_) { compressed = false; }   // a file neither reader takes: IJTiff says why
+      let img;
+      if (compressed) {
+        img = await Local.read(a.bytes, name, { check: () => ctx.task.check() });
+        let bytes = 0;
+        for (const c of img.channels) bytes += c.data.byteLength;
+        ensureRoom(bytes);
+      } else img = dep('IJTiff').read(a.bytes, name);
       const doc = addDocFromImage(img, Object.assign({ opened: true }, a.provenance || {}), a.sessionKey);
       // A file just read from disk is what is on disk: nothing is unsaved until it is edited.
       doc.savedRev = doc.rev;
@@ -2522,6 +2549,18 @@ const IJEngine = (() => {
     // Locks every named document, so it runs after any operation already accepted for them.
     handlers['doc.compute'] = (a, ctx) => {
       const spec = specOf(a.op, ['compute']);
+      if (a.docId === null || a.docId === undefined) {
+        // a compute op that declares `docless` runs with no document (view = null): Curve Fitting
+        if (spec.docless !== true) throw ijError('IJ_BAD_ARGS', 'this operation needs a document');
+        return lockDocs([], async () => {
+          ctx.task.check();
+          const params = resolveBlobs(Object.assign({}, a.params || {}), liveBlob(null, false));
+          const none = { width: 0, height: 0, bitDepth: 0, channels: 0, region: null, roi: null, docs: [] };
+          if (spec.validate) spec.validate(params, none);
+          const io = makeIo(ctx.task, [], { channel: null, region: null, transfer: ctx.transfer, scratch: scratchOf(spec, none, params) });
+          try { return await spec.run(null, params, null, io); } finally { io.done(); }
+        });
+      }
       const ids = [a.docId].concat(Array.isArray(a.docIds) ? a.docIds : []).filter((v, i, arr) => arr.indexOf(v) === i);
       const list = ids.map(getDoc);
       return lockDocs(list, async () => {
@@ -3231,12 +3270,18 @@ const IJEngine = (() => {
       return { blobRef: ref, kind, bytes: d.byteLength };
     };
 
-    // engine.dropBlob { blobRef }: a blob the page will not use any more (a cancelled paste); one a step already uses stays.
+    // engine.dropBlob { blobRef }: a blob the page will not use any more (a cancelled paste, even one a preview pinned); one a step already uses stays.
     handlers['engine.dropBlob'] = (a) => {
       const b = blobs.get(a.blobRef);
       let dropped = false;
       if (b && !b.docs.size) { blobs.delete(a.blobRef); dropped = true; finishMutation(); }
       return { dropped };
+    };
+
+    // engine.unpinBlobs: the page's preview is over (cancelled, or a paste committed / escaped): its blobs are reclaimable again.
+    handlers['engine.unpinBlobs'] = () => {
+      for (const b of blobs.values()) b.pinned = false;
+      return { ok: true };
     };
 
     // The `E` a package's worker command (IJOpRegistry.defineCommand) receives: the engine's own services, scoped to one
@@ -3321,7 +3366,7 @@ const IJEngine = (() => {
       let level = Math.max(0, a.level | 0);
       if (!scalable) level = 0;
       const chans = pixelChannels(doc, spec, a.channel);
-      const params = resolvedParams(doc, spec, a, chans, false, undefined, false);
+      const params = resolvedParams(doc, spec, a, chans, false, undefined, false, true);
       const view = makeView(doc);
       const gates = chans.map(() => ({ lo: 0, hi: 1 }));
       const prepareAt = (lv) => chans.map((c, i) => spec.prepare(view, c, params, {

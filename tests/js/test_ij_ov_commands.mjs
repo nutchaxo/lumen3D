@@ -76,9 +76,9 @@ await test('the nine commands: menu paths, orders, the b key, labels, enabled() 
 // ───────────────────────── Image › Overlay ─────────────────────────
 await test('Add Selection: the dialog of RoiProperties (Alt held); stroke, width, fill; ImageJ colour names; next run remembers; New overlay', async () => {
   const { t, id, api, ui } = await fresh();
-  ui.altDown = () => true;
+  const ALT = { mods: { alt: true } };     // the keys held at the menu click, handed to run(api, { alt })
   api.setRoi({ type: 'rect', x: 3, y: 4, w: 10, h: 8 }, { docId: id });
-  await t.runCommand('overlayAddSelection', { stroke: 'red', width: 3, fill: '#80ff0000', newOverlay: false });
+  await t.runCommand('overlayAddSelection', { stroke: 'red', width: 3, fill: '#80ff0000', newOverlay: false }, ALT);
   const spec = lastSpec(t);
   deepEq(spec.fields.map((f) => f.id), ['stroke', 'width', 'fill', 'newOverlay']);
   assert.equal(field(spec, 'stroke').value, 'yellow', 'first use: the selection colour');
@@ -90,26 +90,27 @@ await test('Add Selection: the dialog of RoiProperties (Alt held); stroke, width
   deepEq(J(t.view(id).annotations.items.map((x) => x.kind)), ['roi'], 'the view draws it');
   assert.ok(api.state().roi, 'the selection stays');
   // the next run is pre-filled with the last values
-  await t.runCommand('overlayAddSelection', { width: 3 });
+  await t.runCommand('overlayAddSelection', { width: 3 }, ALT);
   const spec2 = lastSpec(t);
   assert.equal(field(spec2, 'stroke').value, 'red'); assert.equal(field(spec2, 'width').value, 3); assert.equal(field(spec2, 'fill').value, '#80ff0000');
   assert.equal(items(api, id).length, 2, 'added, not replaced');
   // a text that is no colour is no colour (Colors.decode(text, null)): with no fill either, the selection colour; with a fill, a fill only
-  await t.runCommand('overlayAddSelection', { stroke: 'zzz', width: 0, fill: 'none', newOverlay: true });
+  await t.runCommand('overlayAddSelection', { stroke: 'zzz', width: 0, fill: 'none', newOverlay: true }, ALT);
   it = items(api, id);
   assert.equal(it.length, 1); assert.equal(it[0].stroke, '#ffff00'); assert.equal(it[0].fill, null); assert.equal(it[0].width, 0);
-  await t.runCommand('overlayAddSelection', { stroke: 'zzz', width: 0, fill: 'blue', newOverlay: true });
+  await t.runCommand('overlayAddSelection', { stroke: 'zzz', width: 0, fill: 'blue', newOverlay: true }, ALT);
   it = items(api, id);
   assert.equal(it[0].stroke, null, 'an invalid stroke text leaves a fill-only element'); assert.equal(it[0].fill, '#0000ffff');
   // the colour of the selection is the one of Edit › Options › Colors
   t.api('edit').settings.set('colors.selection', 'cyan');
-  await t.runCommand('overlayAddSelection', { stroke: 'nonsense', width: 0, fill: 'none', newOverlay: true });
+  await t.runCommand('overlayAddSelection', { stroke: 'nonsense', width: 0, fill: 'none', newOverlay: true }, ALT);
   assert.equal(items(api, id)[0].stroke, '#00ffff');
   t.close();
 });
 
 await test('Add Selection without Alt: no dialog, the remembered style applies at once; the dialog follows the selection type', async () => {
-  const { t, id, api, ui } = await fresh();
+  const { t, id, api } = await fresh();
+  const ALT = { mods: { alt: true } };
   api.setRoi({ type: 'rect', x: 3, y: 4, w: 10, h: 8 }, { docId: id });
   const before = t.log.dialogSpecs.length;
   await t.runCommand('overlayAddSelection');
@@ -119,19 +120,16 @@ await test('Add Selection without Alt: no dialog, the remembered style applies a
   await t.runCommand('overlayAddSelection');
   assert.equal(items(api, id).length, 2, 'b again adds again');
   // the style chosen with Alt is the one `b` uses afterwards
-  ui.altDown = () => true;
-  await t.runCommand('overlayAddSelection', { stroke: 'red', width: 2, fill: 'none', newOverlay: false });
-  ui.altDown = () => false;
+  await t.runCommand('overlayAddSelection', { stroke: 'red', width: 2, fill: 'none', newOverlay: false }, ALT);
   await t.runCommand('overlayAddSelection');
   it = items(api, id);
   assert.equal(it[it.length - 1].stroke, '#ff0000'); assert.equal(it[it.length - 1].width, 2);
   // RoiProperties: a line has no fill; a point has the stroke colour only
-  ui.altDown = () => true;
   api.setRoi({ type: 'line', x1: 1, y1: 1, x2: 9, y2: 9 }, { docId: id });
-  await t.runCommand('overlayAddSelection', { stroke: 'red', width: 1, newOverlay: false });
+  await t.runCommand('overlayAddSelection', { stroke: 'red', width: 1, newOverlay: false }, ALT);
   deepEq(lastSpec(t).fields.map((f) => f.id), ['stroke', 'width', 'newOverlay']);
   api.setRoi({ type: 'point', points: [[3, 3]] }, { docId: id });
-  await t.runCommand('overlayAddSelection', { stroke: 'red', newOverlay: false });
+  await t.runCommand('overlayAddSelection', { stroke: 'red', newOverlay: false }, ALT);
   deepEq(lastSpec(t).fields.map((f) => f.id), ['stroke', 'newOverlay']);
   assert.equal(field(lastSpec(t), 'stroke').labelKey, 'dlg.ov.strokePoint');
   t.close();
@@ -528,16 +526,16 @@ await test('Scale Bar, Overlay off: the text is rastered into the mask, a vertic
   t.close();
 });
 
-await test('Scale Bar, Overlay off, no canvas: the bars are burnt, the text is skipped', async () => {
+await test('Scale Bar, Overlay off, no canvas: refused with a translated message, nothing burnt (never a bar without its text)', async () => {
   const { t, id, ui } = await fresh();
   ui.rasterText = () => null;
   const before = await t.pixels(id, 0);
-  await t.runCommand('toolsScaleBar', { width: 10, height: 5, thickness: 3, fontSize: 9, color: 'White', background: 'None', location: 'Lower Left', horizontal: true, vertical: false, bold: true, hideText: false, serif: false, overlay: false });
+  const errs = await t.runCommand('toolsScaleBar', { width: 10, height: 5, thickness: 3, fontSize: 9, color: 'White', background: 'None', location: 'Lower Left', horizontal: true, vertical: false, bold: true, hideText: false, serif: false, overlay: false }, { expectError: true });
+  assert.equal(errs[0].message, EN.err.ovLabelCanvas);
   const after = await t.pixels(id, 0);
   let changed = 0;
   for (let i = 0; i < after.length; i++) if (after[i] !== before[i]) changed++;
-  assert.equal(changed, 20 * 3 - [...Array(60).keys()].filter((k) => before[0] === 0 && false).length - 0 || changed > 0, true);
-  assert.ok(changed > 0 && changed <= 60, 'only the bar: ' + changed);
+  assert.equal(changed, 0, 'nothing burnt');
   t.close();
 });
 

@@ -484,7 +484,7 @@ assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW
 // ── the error codes the controller maps are codes the engine / pure modules really throw ──
 const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
 // IJ_SIZE_MISMATCH is mapped by W0 for the packages that compare two images (Image Calculator, Coloc): they throw it.
-const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH']); // the client raises its own crash code
+const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH', 'IJ_PICTURE_TOO_LARGE']); // the client raises its own crash code; File › Open of a picture (ij-app.js) raises the other
 for (const code of Object.keys(IJApp.ERROR_KEYS)) {
   if (!code.startsWith('IJ_') || PACKAGE_THROWN.has(code)) continue;
   assert.ok(CODE_SRC.includes(`'${code}'`), `ERROR_KEYS maps ${code}, which no engine module throws`);
@@ -518,6 +518,11 @@ assert.ok(/--ij-warn-text/.test(CSS) && /\[data-theme="light"\] \.ij-root\s*\{[^
   // ImageJ's separators: before Close, before the Simple view, before Lookup Tables' file LUTs, before Next Image; none before Color › Channels Tool, none before Edit › Selection › Add to Manager
   for (const id of ['fileClose', 'fileSimple', 'lutFire', 'lut16Colors', 'windowNext']) assert.equal(orderOf[id].separatorBefore, true, `${id} has a separator above`);
   for (const id of ['colorChannels', 'editAddToManager']) assert.ok(!orderOf[id].separatorBefore, `${id} has no separator above`);
+  // ij.Menus.addMenuBar: ONE separator between Image › Type and Image › Adjust (the Adjust submenu carries it); none between Adjust and Show Info…, none above Size…
+  for (const id of ['imageInfo', 'adjustSize', 'adjustCanvasSize']) assert.ok(!orderOf[id].separatorBefore, `${id} has no separator above`);
+  assert.equal(IJApp.GROUP_META['Image/Adjust'].separatorBefore, true, 'a separator between Type and Adjust');
+  assert.ok(!IJApp.GROUP_META['Image/Type'].separatorBefore);
+  assert.equal(orderOf.noiseDespeckle.separatorBefore, true, 'Process › Noise: Fiji has a separator above Despeckle');
   const G = IJApp.GROUP_META;
   const wantGroups = { 'File/New': 5, 'File/Import': 15, 'File/SaveAs': 25, 'Edit/Selection': 70, 'Edit/Options': 80, 'Image/Overlay': 125, 'Image/LookupTables': 130, 'Process/FFT': 85, 'Analyze/Tools': 110,
     'Analyze/Colocalization': 120, 'Analyze/LocalThickness': 140, 'Analyze/Skeleton': 150, 'Plugins/Analyze': 10, 'Plugins/Analyze/CellCounter': 10, 'Plugins/Process': 20, 'Plugins/Utilities': 30 };

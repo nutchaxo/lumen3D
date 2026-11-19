@@ -42,16 +42,6 @@
   // The "process all channels" box exists only on an image with several channels (as the other packages' dialogs).
   const allField = (st) => (nChan(st.doc) > 1 ? [{ type: 'check', id: 'all', labelKey: 'dlg.allChannels', value: false }] : []);
 
-  /* ShortProcessor.noise / FloatProcessor.noise end with resetMinAndMax(): the display range of the channel becomes the exact
-   * data range of the whole image. Only the display is set (api.setDisplay: not an undo step, no pixel touched). */
-  async function resetDisplay(api, st, channels) {
-    if (st.doc.bitDepth === 8) return;
-    for (const c of channels) {
-      const r = await api.compute('enhDataRange', {}, { docId: st.doc.docId, channel: c, roi: null });
-      if (r && Number.isFinite(r.min) && Number.isFinite(r.max) && r.min <= r.max) await api.setDisplay(st.doc.docId, c, { min: r.min, max: r.max });
-    }
-  }
-  const channelsOf = (st, all) => (all ? st.doc.channels.map((c, i) => i) : [st.activeChannel]);
 
   /* ImageJ asks "Process all N images?" (IJ.setupDialog) of a command with no dialog of its own too: Add Noise and Salt and Pepper on an
    * image with several channels offer the same choice; null = cancelled. */
@@ -67,8 +57,8 @@
   async function addNoise(api, sd, all, labelKey) {
     const st = api.state();
     if (!st.doc) return;
-    const res = await api.run('addNoise', { seed: newSeed(), sd }, { docId: st.doc.docId, channel: all ? 'all' : st.activeChannel, labelKey });
-    if (res) await resetDisplay(api, st, channelsOf(st, all));
+    // ShortProcessor.noise / FloatProcessor.noise end with resetMinAndMax(): the op's display '16/32' does that inside the undo step
+    await api.run('addNoise', { seed: newSeed(), sd }, { docId: st.doc.docId, channel: all ? 'all' : st.activeChannel, labelKey });
   }
 
   const timeText = (api, seconds) => (seconds < 90 ? api.tr('dlg.enh.seconds', { n: Math.max(1, Math.round(seconds)) }) : api.tr('dlg.enh.minutes', { n: Math.round(seconds / 60) }));

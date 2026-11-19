@@ -408,7 +408,9 @@
         "count": "Aantal"
       },
       "previewCountApprox": "~{n} maxima (alleen zichtbaar gebied)"
-    }
+    },
+    "dupDialogHS": "Dupliceren",
+    "dupChannelsEmpty": "Geef de te kopiëren kanalen op, bijvoorbeeld 1-3."
   },
   "op": {
     "invert": "Omkeren",
@@ -592,6 +594,9 @@
     "not8bit": "Hiervoor is een 8-bit afbeelding nodig.",
     "badRoi": "Deze selectie kan hier niet worden gebruikt.",
     "tooLarge": "Deze afbeelding is te groot voor één TIFF (4 GiB).",
+    "pictureTooLarge": "Deze afbeelding is te groot om hier te openen (meer dan 268 miljoen pixels).",
+    "ovLabelTooLarge": "Het label is te groot om in de afbeelding te branden. Gebruik een kleiner lettertype.",
+    "ovLabelCanvas": "Het label kon niet worden getekend: de browser biedt geen tekenvlak. Er is niets gewijzigd.",
     "tiffUnsupported": "Deze TIFF kan niet worden gelezen: alleen ongecomprimeerde grijswaardenbestanden van 8, 16 en 32 bit worden ondersteund.",
     "incomplete": "Het volume is niet volledig gelezen. Probeer het opnieuw.",
     "workerCrashed": "De rekenmotor is gestopt.",
@@ -727,9 +732,9 @@
   },
   "about": {
     "intro": "Geavanceerde weergave: een editor in ImageJ-stijl voor de plak die u in de Studio koos. Hij werkt op de verliesvrije voxels van de dataset.",
-    "source": "Meerdere plakken worden met Z-projectie samengevoegd; de opgeslagen gegevens zijn 8-bit: maximum en minimum blijven 8-bit, de som is 16-bit (exact tot 257 plakken), gemiddelde, standaarddeviatie en mediaan zijn 32-bit.",
+    "source": "Meerdere plakken worden met Z-projectie samengevoegd, zoals de ZProjector van ImageJ doet: maximum, minimum, gemiddelde en mediaan blijven 8-bit op de opgeslagen gegevens (een oorspronkelijke TIFF behoudt zijn eigen diepte voor maximum, minimum en gemiddelde), som en standaarddeviatie zijn 32-bit.",
     "depth": "Weergavewijzigingen (helderheid, contrast, kleurtabellen, drempeloverlay) raken de pixels nooit; Toepassen, filters en typewijzigingen wel, en ze kunnen ongedaan worden gemaakt zolang het geheugen het toelaat.",
-    "deviations": "Verschillen met ImageJ: Wissen en Buitenkant wissen gebruiken 0 (zwart) en Vullen gebruikt de maximumwaarde, omdat fluorescentiebeelden een donkere achtergrond hebben; Naar masker omzetten en Drempel toepassen maken een nieuwe afbeelding; de somprojectie is 16-bit.",
+    "deviations": "Verschillen met ImageJ: Wissen en Buitenkant wissen gebruiken 0 (zwart) en Vullen gebruikt de maximumwaarde, omdat fluorescentiebeelden een donkere achtergrond hebben; Naar masker omzetten en Drempel toepassen maken een nieuwe afbeelding.",
     "storage": "Uw werk wordt onderweg in deze browser opgeslagen, zodat een crash of gesloten tabblad het niet kwijtraakt. Sla op als TIFF om een bestand te bewaren.",
     "tables": "Tabelvensters (lijsten, colocalisatieresultaten, verdelingen) en grafiekvensters blijven niet bewaard als de pagina opnieuw wordt geladen: kopieer ze of sla ze op als CSV of PNG. Resultaten blijven met uw werk opgeslagen.",
     "familiesTitle": "Meegeleverde hulpmiddelen",
@@ -743,7 +748,25 @@
     "famMeasure": "Metingen: Meten, Deeltjes analyseren, Samenvatten, Verdeling, Histogram en Profiel, met Metingen instellen (vormkenmerken, Feret, Omleiden naar, Beperken tot drempel).",
     "famColoc": "Colocalisatie: Pearson, Manders, automatische drempel van Costes en ICQ van Li, met een 2D-histogram.",
     "missingTitle": "Niet in deze versie",
-    "missing": "Stacks en 3D (hyperstacks, orthogonale aanzichten, 3D-hulpmiddelen), macro's, tekst en pijlen, FFT- en bandpassfilters, Bio-Formats, oppervlakgrafieken, het RGB-kleurtype en de Legacy-modus van de toverstaf."
+    "missing": "Stacks en 3D (hyperstacks, orthogonale aanzichten, 3D-hulpmiddelen), macro's, tekst en pijlen, Bio-Formats, oppervlakgrafieken, het RGB-kleurtype en de Legacy-modus van de toverstaf.",
+    "thisTitle": "Over deze geavanceerde weergave",
+    "resultsWindow": "Venster > Resultaten is de meettabel waarin elk Analyse-commando schrijft (Meten, Deeltjes analyseren, de ROI-beheerder, de statistieken van het histogram): één rij per meting, de kolommen gekozen in Metingen instellen. De menu's Edit en File kopiëren de tabel of bewaren hem als CSV.",
+    "pixelSource": "De pixels van een beeld dat vanuit de Studio wordt geopend komen uit de oorspronkelijke TIFF van de dataset als die er is en de z-stack gekozen werd (met zijn eigen bitdiepte en kalibratie), anders uit het verwerkte volume (8-bit, zonder verlies).",
+    "limitsTitle": "Beperkingen en verschillen met Fiji",
+    "dev": {
+      "autoLocalPhansalkar": "Auto Local Threshold, Phansalkar: enkele pixels verschillen van Fiji op de beelden waarmee het werd gecontroleerd.",
+      "autoLi16": "Auto Threshold, Li, op een 16-bit beeld met de Ignore-opties: het niveau kan één eenheid van dat van Fiji afwijken.",
+      "autoStack": "Auto Threshold: de opties Stack en Use stack histogram worden niet aangeboden (de Studio heeft kanalen, geen stacks).",
+      "skeleton": "Analyze Skeleton: bij het snoeien van cycli wordt dezelfde voxel doorgesneden als in Fiji, maar de volgorde van de sneden kan op sommige roosters verschillen; Branch information toont de takken in een andere volgorde, met een ander eerste uiteinde en een ander lopend gemiddelde.",
+      "coloc": "Coloc 2: de standaard Costes-drempelzoektocht stopt volgens een andere regel dan die van Fiji; Bisection bij een negatieve helling geeft 255 / 13 waar Fiji 253 / 14 geeft; de logkolommen \"% zero-zero\", \"% saturated\", \"b to y-mean ratio\" en de geïntegreerde intensiteiten worden niet geschreven.",
+      "selection": "Selecties: Interpolate past de clausule van Fiji voor een vergroting van 12 of meer niet toe, en een selectie van meerdere delen wordt als één even-oneven-unie geïnterpoleerd; Straighten toont altijd zijn dialoogvenster, schrijft de lijnbreedte niet terug en weigert een gedraaide rechthoek.",
+      "traced": "Getraceerde en samengestelde selecties: het startpunt en de volgorde van de hoekpunten kunnen van die van Fiji verschillen (zichtbaar in Save XY Coordinates).",
+      "plot": "Plot: elk symbool wordt als vierkante markering getekend; er is geen tweede vulkleur en geen veld Visible.",
+      "particles": "Analyze Particles: een binair beeld zonder drempel wordt gelezen als 255 = voorgrond (geen Black background- of omgekeerde-kleurtabellogica).",
+      "directionality": "Directionality: hoogstens 100 stukken worden geanalyseerd; de resultaattekst meldt dat wanneer er stukken zijn weggelaten.",
+      "invertLut": "Invert LUTs op een samengesteld beeld in de modus Composite wordt geweigerd; schakel eerst over naar Color of Grayscale.",
+      "log": "Er is geen Log-venster: de waarden die ImageJ daar schrijft verschijnen in de statusbalk."
+    }
   },
   "view": {
     "menubar": "Menubalk",

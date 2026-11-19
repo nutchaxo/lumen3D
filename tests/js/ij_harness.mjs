@@ -302,7 +302,7 @@ export async function boot(opts = {}) {
   const workers = [];
   const workerStorage = { shared: store };
   function makeWorkerContext(fw) {
-    const w = { console, setTimeout, clearTimeout, MessageChannel, performance, TextEncoder, TextDecoder, Blob, queueMicrotask, navigator: {} };
+    const w = { console, setTimeout, clearTimeout, MessageChannel, performance, TextEncoder, TextDecoder, Blob, queueMicrotask, navigator: {}, DecompressionStream: globalThis.DecompressionStream };
     w.self = w;
     w.onmessage = null;
     w.postMessage = (m) => { if (!fw.dead) setTimeout(() => { if (!fw.dead && fw.onmessage) fw.onmessage({ data: m }); }, 0); };
@@ -468,7 +468,7 @@ export async function boot(opts = {}) {
     /**
      * Runs a menu command; `values` = the scripted answers of its dialog(s) (an object, or an array of them).
      * Rejects with the recorded failure when a dialog spec / key / assertion / preview failed inside it, and
-     * when the app showed an error dialog — unless `o.expectError` (then it returns the error list, >= 1).
+     * when the app showed an error dialog — unless `o.expectError` (then it returns the error list, >= 1). `o.mods` = { alt, shift } held.
      */
     async runCommand(id, values, o) {
       const c = t.cmd(id);
@@ -477,7 +477,8 @@ export async function boot(opts = {}) {
       assert.ok(c.enabled(t.shell.opts.getState()), id + ' is enabled');
       const f0 = log.failures.length, e0 = log.errors.length;
       if (values !== undefined) for (const v of (Array.isArray(values) ? values : [values])) script.dialogs.push(v);
-      await t.shell.opts.onCommand(c, { source: 'menu' });
+      // o.mods = the keys held at the click ({ alt, shift }), as the menu / the shortcut hand them over; o.source = 'menu' | 'key'
+      await t.shell.opts.onCommand(c, Object.assign({ source: (o && o.source) || 'menu' }, (o && o.mods) || {}));
       script.dialogs.length = 0;
       if (log.failures.length > f0) throw log.failures[f0];
       const errs = log.errors.slice(e0);

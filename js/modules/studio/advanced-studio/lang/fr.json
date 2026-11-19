@@ -408,7 +408,9 @@
         "count": "Nombre"
       },
       "previewCountApprox": "~{n} maxima (zone visible seulement)"
-    }
+    },
+    "dupDialogHS": "Dupliquer",
+    "dupChannelsEmpty": "Indiquez les canaux à copier, par exemple 1-3."
   },
   "op": {
     "invert": "Inversion",
@@ -592,6 +594,9 @@
     "not8bit": "Il faut une image 8 bits.",
     "badRoi": "Cette sélection ne peut pas être utilisée ici.",
     "tooLarge": "Cette image est trop grande pour un seul TIFF (4 Gio).",
+    "pictureTooLarge": "Cette image est trop grande pour être ouverte ici (plus de 268 millions de pixels).",
+    "ovLabelTooLarge": "L'étiquette est trop grande pour être incrustée dans l'image. Utilisez une police plus petite.",
+    "ovLabelCanvas": "L'étiquette n'a pas pu être dessinée : le navigateur ne fournit pas de surface de dessin. Rien n'a été modifié.",
     "tiffUnsupported": "Ce TIFF est illisible : seuls les fichiers en niveaux de gris 8, 16 et 32 bits non compressés sont pris en charge.",
     "incomplete": "Le volume n’a pas été lu en entier. Réessayez.",
     "workerCrashed": "Le moteur de calcul s’est arrêté.",
@@ -727,9 +732,9 @@
   },
   "about": {
     "intro": "Vue avancée : un éditeur de type ImageJ pour la coupe choisie dans le Studio. Il travaille sur les voxels sans perte du jeu de données.",
-    "source": "Plusieurs coupes sont aplaties en une seule par la projection Z ; les données stockées sont en 8 bits : maximum et minimum restent en 8 bits, la somme est en 16 bits (exacte jusqu’à 257 coupes), la moyenne, l’écart type et la médiane sont en 32 bits.",
+    "source": "Plusieurs coupes sont aplaties en une seule par la projection Z, comme le fait le ZProjector d'ImageJ : maximum, minimum, moyenne et médiane restent en 8 bits sur les données stockées (un TIFF d'origine garde sa propre profondeur pour le maximum, le minimum et la moyenne), la somme et l'écart type sont en 32 bits.",
     "depth": "Les changements d’affichage (luminosité, contraste, tables de couleurs, surcouche de seuil) ne touchent jamais les pixels ; Appliquer, les filtres et les changements de type les modifient, et s’annulent tant que la mémoire le permet.",
-    "deviations": "Différences avec ImageJ : Effacer et Effacer l’extérieur utilisent 0 (noir) et Remplir utilise la valeur maximale, car les images de fluorescence ont un fond sombre ; Convertir en masque et Appliquer le seuil créent une nouvelle image ; la projection somme est en 16 bits.",
+    "deviations": "Différences avec ImageJ : Effacer et Effacer l'extérieur utilisent 0 (noir) et Remplir utilise la valeur maximale, car les images de fluorescence ont un fond sombre ; Convertir en masque et Appliquer le seuil créent une nouvelle image.",
     "storage": "Votre travail est enregistré dans ce navigateur au fur et à mesure : un plantage ou un onglet fermé ne le perd pas. Enregistrez en TIFF pour garder un fichier.",
     "tables": "Les fenêtres de tableau (listes, résultats de colocalisation, distributions) et de graphique ne sont pas conservées quand la page est rechargée : copiez-les ou enregistrez-les en CSV ou PNG. Les résultats restent enregistrés avec votre travail.",
     "familiesTitle": "Outils inclus",
@@ -743,7 +748,25 @@
     "famMeasure": "Mesures : Mesurer, Analyser les particules, Résumer, Distribution, Histogramme et Profil, avec Définir les mesures (descripteurs de forme, Feret, Rediriger vers, Limiter au seuil).",
     "famColoc": "Colocalisation : Pearson, Manders, seuil automatique de Costes et ICQ de Li, avec un histogramme 2D.",
     "missingTitle": "Absent de cette version",
-    "missing": "Piles et 3D (hyperpiles, vues orthogonales, outils 3D), macros, texte et flèches, filtres FFT et passe-bande, Bio-Formats, graphes de surface, le type couleur RVB et le mode Legacy de la baguette magique."
+    "missing": "Piles et 3D (hyperpiles, vues orthogonales, outils 3D), macros, texte et flèches, Bio-Formats, graphes de surface, le type couleur RVB et le mode Legacy de la baguette magique.",
+    "thisTitle": "À propos de cette vue avancée",
+    "resultsWindow": "Fenêtre > Résultats est le tableau de mesures dans lequel écrit chaque commande d'Analyse (Mesurer, Analyser les particules, le gestionnaire de ROI, les statistiques de l'histogramme) : une ligne par mesure, les colonnes choisies dans Définir les mesures. Ses menus Edit et File copient le tableau ou l'enregistrent en CSV.",
+    "pixelSource": "Les pixels d'une image ouverte depuis le Studio viennent du TIFF d'origine du jeu de données quand il en a un et que la pile Z a été choisie (sa profondeur et sa calibration propres), sinon du volume traité (8 bits, sans perte).",
+    "limitsTitle": "Limites et différences avec Fiji",
+    "dev": {
+      "autoLocalPhansalkar": "Auto Local Threshold, Phansalkar : quelques pixels diffèrent de Fiji sur les images utilisées pour le vérifier.",
+      "autoLi16": "Auto Threshold, Li, sur une image 16 bits avec les options Ignore : le niveau peut être décalé d'une unité par rapport à Fiji.",
+      "autoStack": "Auto Threshold : les options Stack et Use stack histogram ne sont pas proposées (le Studio a des canaux, pas des piles).",
+      "skeleton": "Analyze Skeleton : quand les cycles sont élagués, le même voxel est coupé que dans Fiji, mais l'ordre des coupes peut différer sur certains réseaux ; Branch information liste les branches dans un autre ordre, avec une autre première extrémité et une autre moyenne glissante.",
+      "coloc": "Coloc 2 : la recherche de seuil de Costes par défaut s'arrête selon une autre règle que celle de Fiji ; Bisection sur une pente négative donne 255 / 13 là où Fiji donne 253 / 14 ; les colonnes du journal « % zero-zero », « % saturated », « b to y-mean ratio » et les intensités intégrées ne sont pas écrites.",
+      "selection": "Sélections : Interpolate n'applique pas la clause de Fiji pour un grossissement de 12 ou plus, et une sélection de plusieurs parties est interpolée comme une seule union pair-impair ; Straighten affiche toujours sa boîte de dialogue, ne réécrit pas la largeur de la ligne et refuse un rectangle tourné.",
+      "traced": "Sélections tracées et composites : le sommet de départ et l'ordre des sommets peuvent différer de ceux de Fiji (visible dans Save XY Coordinates).",
+      "plot": "Plot : tous les symboles sont dessinés comme un marqueur carré ; il n'y a ni seconde couleur de remplissage ni champ Visible.",
+      "particles": "Analyze Particles : une image binaire sans seuil est lue comme 255 = premier plan (pas de logique Black background ni de table de couleurs inversée).",
+      "directionality": "Directionality : 100 morceaux au plus sont analysés ; le texte du résultat l'indique quand certains ont été écartés.",
+      "invertLut": "Inverser les LUT sur une image composite affichée en mode Composite est refusé ; passez d'abord en mode Couleur ou Niveaux de gris.",
+      "log": "Il n'y a pas de fenêtre Log : les valeurs qu'ImageJ y écrit apparaissent dans la barre d'état."
+    }
   },
   "view": {
     "menubar": "Barre de menus",

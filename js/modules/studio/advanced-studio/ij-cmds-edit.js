@@ -108,7 +108,10 @@
     }
     // The write must start inside the key / menu gesture: the PNG is a promise handed to the ClipboardItem, nothing is awaited before.
     if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.write !== 'function' || typeof ClipboardItem === 'undefined') return Promise.reject(ijError('IJ_EDIT_CLIPBOARD_UNSUPPORTED'));
-    const png = api.renderPng(doc.docId, rect ? { rect } : undefined);
+    // A floating paste is part of what ImageJ copies (Roi.updatePaste writes it into the processor): it lands before the picture is rendered,
+    // inside the promise so the clipboard write itself still starts in the gesture.
+    const landing = FLOAT && !FLOAT.done && FLOAT.docId === doc.docId ? commitFloat(api, FLOAT) : Promise.resolve();
+    const png = landing.then(() => api.renderPng(doc.docId, rect ? { rect } : undefined));
     let item;
     try { item = new ClipboardItem({ 'image/png': png }); } catch (_) { return Promise.reject(ijError('IJ_EDIT_CLIPBOARD_UNSUPPORTED')); }
     return navigator.clipboard.write([item]).then(() => { api.toast('dlg.edit.copiedSystem'); }, (err) => {
@@ -219,7 +222,10 @@
     try { f.off(); } catch (_) { /* gone */ }
     try { api.clearPending(); } catch (_) { /* gone */ }
     try { api.cancelPreview(); } catch (_) { /* gone */ }
-    void why;
+    // a cancelled (or orphaned) paste gives its blobs up; a committed one keeps them, its step still uses them
+    if (why !== 'commit') {
+      for (const ref of [f.blob, f.maskBlob]) if (ref && typeof ref === 'object' && ref.blobRef) Promise.resolve(api.dropBlob(ref)).catch(() => {});
+    }
   }
 
   function schedulePreview(api, f) {
@@ -250,7 +256,12 @@
     if (!f || f.done) return;
     stopFloat(api, f, 'commit');
     // Roi.endPaste: ip.copyBits(clipboard, x, y, pasteMode) at the selection's place, then reset(mask)
-    await api.run('paste', pasteParams(api, f), { docId: f.docId, channel: f.channel, roi: f.roi, labelKey: 'op.paste' });
+    try { await api.run('paste', pasteParams(api, f), { docId: f.docId, channel: f.channel, roi: f.roi, labelKey: 'op.paste' }); }
+    catch (err) {
+      // the step never took the blobs: they go back to the worker
+      for (const ref of [f.blob, f.maskBlob]) if (ref && typeof ref === 'object' && ref.blobRef) Promise.resolve(api.dropBlob(ref)).catch(() => {});
+      throw err;
+    }
   }
 
   async function pasteCommand(api) {
@@ -303,7 +314,8 @@
       // the selection was dropped or replaced by another one: the paste lands where it was (Roi.endPaste)
       commitFloat(api, f).catch((err) => api.error(err));
     });
-    f.off = () => { offRoi(); };
+    const offDoc = api.on('doc', (ev) => { if (ev && ev.kind === 'closed' && ev.docId === f.docId) stopFloat(api, f, 'gone'); });
+    f.off = () => { offRoi(); offDoc(); };
     api.setPending({
       labelKey: 'dlg.edit.pasting',
       commit: () => commitFloat(api, f),
@@ -404,11 +416,25 @@
     }, { placement: 'tab' });
   }
 
+  /** LutLoader.showLut on an image: the active channel takes a fresh table (an inverted one is replaced, not inverted again); a composite
+   *  shown in Grayscale mode gives every channel the table and goes to Color mode, where the tables show. */
+  async function applyLutToDoc(api, st, name) {
+    const docId = st.doc.docId;
+    if (st.doc.channels && st.doc.channels.length > 1) {
+      const d = await displayOf(api, docId);
+      if (d.mode === 'gray') {
+        for (let c = 0; c < d.channels.length; c++) await api.setDisplay(docId, c, { lut: name, invert: false });
+        await api.setDisplayMode(docId, 'color');
+        return;
+      }
+    }
+    await api.setDisplay(docId, st.activeChannel, { lut: name, invert: false });
+  }
+
   async function setNamedLut(api, name) {
     const st = api.state();
     if (!st.doc) { await lutRampImage(api, name === E().LUT_REDGREEN ? 'redgreen' : name, name); return; }
-    // LutLoader.showLut: "ip.setColorModel(cm)" — a fresh table: an inverted look-up table is replaced, not inverted again
-    await api.setDisplay(st.doc.docId, st.activeChannel, { lut: name, invert: false });
+    await applyLutToDoc(api, st, name);
   }
 
   async function importLut(api) {
@@ -422,7 +448,7 @@
     await api.registerLut(name, parsed.table);
     // LutLoader.showLut: "if (imp!=null) {...} else createImage(fi, showImage)" — the ramp image is titled with the file's name
     if (!api.state().doc) { await lutRampImage(api, String(f.name || name), name); return; }
-    await api.setDisplay(st.doc.docId, st.activeChannel, { lut: name, invert: false });
+    await applyLutToDoc(api, st, name);
   }
 
   async function saveLut(api) {
@@ -604,7 +630,7 @@
 
     mk('editCut', ['Edit'], 22, { shortcut: 'Ctrl+X', keys: ['Ctrl+X'], separatorBefore: true, enabled: hasArea, run: (api) => copyToClipboard(api, true) }),
     mk('editCopy', ['Edit'], 24, { shortcut: 'Ctrl+C', keys: ['Ctrl+C'], run: (api) => copyToClipboard(api, false) }),
-    mk('editCopyToSystem', ['Edit'], 26, { run: copyToSystem }),
+    mk('editCopyToSystem', ['Edit'], 26, { gesture: true, run: copyToSystem }),
     mk('editPaste', ['Edit'], 27, { shortcut: 'Ctrl+V', keys: ['Ctrl+V'], enabled: anyIdle, run: pasteCommand }),
     mk('editPasteControl', ['Edit'], 28, { enabled: () => true, run: (api) => api.openPanel('pasteControl') }),
     mk('editDraw', ['Edit'], 55, { shortcut: 'd', keys: ['d'], enabled: (st) => idle(st) && !!st.roi, run: drawCommand }),

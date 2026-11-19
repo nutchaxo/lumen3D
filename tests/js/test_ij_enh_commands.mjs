@@ -136,6 +136,10 @@ test('16 / 32-bit noise: the display range becomes the data range of the whole i
     const px = arr(await pix(t, 0));
     if (bd === 8) assert.deepEqual([info.channels[0].display.min, info.channels[0].display.max], [3, 77], '8-bit: untouched');
     else assert.deepEqual([info.channels[0].display.min, info.channels[0].display.max], [Math.min(...px), Math.max(...px)], bd + '-bit: the data range');
+    // the display reset is part of the undo step: one undo gives back the pixels AND the range that was set
+    await t.runCommand('editUndo');
+    const back = await byId(t, docId);
+    assert.deepEqual([back.channels[0].display.min, back.channels[0].display.max], [3, 77], bd + '-bit: undo restores the display range');
     t.close();
   }
 });

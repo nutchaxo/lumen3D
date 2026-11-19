@@ -408,7 +408,9 @@
         "count": "Count"
       },
       "previewCountApprox": "~{n} maxima (visible area only)"
-    }
+    },
+    "dupDialogHS": "Duplicate",
+    "dupChannelsEmpty": "Enter the channels to copy, for example 1-3."
   },
   "op": {
     "invert": "Inverting",
@@ -592,6 +594,9 @@
     "not8bit": "This needs an 8-bit image.",
     "badRoi": "This selection cannot be used here.",
     "tooLarge": "This image is too large to save as one TIFF (4 GiB).",
+    "pictureTooLarge": "This picture is too large to open here (more than 268 million pixels).",
+    "ovLabelTooLarge": "The label is too large to be burnt into the image. Use a smaller font size.",
+    "ovLabelCanvas": "The label could not be drawn: the browser cannot give a drawing surface for it. Nothing was changed.",
     "tiffUnsupported": "This TIFF cannot be read: only uncompressed 8, 16 and 32-bit grayscale files are supported.",
     "incomplete": "The volume was not read completely. Try again.",
     "workerCrashed": "The calculation engine stopped.",
@@ -727,9 +732,9 @@
   },
   "about": {
     "intro": "Advanced view: an ImageJ-style editor for the slice you chose in the Studio. It works on the lossless voxels of the dataset.",
-    "source": "Several slices are flattened into one with Z Project; the stored data is 8-bit, so Max and Min stay 8-bit, Sum is 16-bit (exact up to 257 slices), Average, Standard Deviation and Median are 32-bit.",
+    "source": "Several slices are flattened into one with Z Project, as ImageJ's ZProjector does: Max, Min, Average and Median stay 8-bit on the stored data (an original TIFF keeps its own depth for Max, Min and Average), Sum and Standard Deviation are 32-bit.",
     "depth": "Display changes (brightness, contrast, lookup tables, threshold overlay) never touch the pixels; Apply, filters and type changes do, and can be undone while memory allows.",
-    "deviations": "Differences from ImageJ: Clear and Clear Outside use 0 (black) and Fill uses the maximum value, because fluorescence images have a dark background; Convert to Mask and Threshold Apply create a new image; Sum projection is 16-bit.",
+    "deviations": "Differences from ImageJ: Clear and Clear Outside use 0 (black) and Fill uses the maximum value, because fluorescence images have a dark background; Convert to Mask and Threshold Apply create a new image.",
     "storage": "Your work is saved in this browser as you go, so a crash or a closed tab does not lose it. Save as TIFF to keep a file.",
     "tables": "Table windows (lists, colocalization results, distributions) and plot windows are not kept when the page is reloaded: copy them or save them as CSV or PNG. Results stay saved with your work.",
     "familiesTitle": "Tools included",
@@ -743,7 +748,25 @@
     "famMeasure": "Measurements: Measure, Analyze Particles, Summarize, Distribution, Histogram and Plot Profile, with Set Measurements (shape descriptors, Feret, Redirect to, Limit to threshold).",
     "famColoc": "Colocalization: Pearson, Manders, Costes automatic threshold and Li's ICQ, with a 2D histogram.",
     "missingTitle": "Not in this version",
-    "missing": "Stacks and 3D (hyperstacks, orthogonal views, 3D tools), macros, text and arrows, FFT and bandpass filters, Bio-Formats, surface plots, the RGB colour type and the Wand's Legacy mode."
+    "missing": "Stacks and 3D (hyperstacks, orthogonal views, 3D tools), macros, text and arrows, Bio-Formats, surface plots, the RGB colour type and the Wand's Legacy mode.",
+    "thisTitle": "About this Advanced view",
+    "resultsWindow": "Window > Results is the measurement table every Analyze command writes to (Measure, Analyze Particles, the ROI Manager, Histogram statistics): one row per measurement, the columns chosen in Set Measurements. Its Edit and File menus copy the table or save it as CSV.",
+    "pixelSource": "The pixels of an image opened from the Studio come from the dataset's original TIFF when the dataset has one and the z-stack was chosen (its own bit depth and calibration), otherwise from the processed volume (8-bit, lossless).",
+    "limitsTitle": "Limitations and deviations from Fiji",
+    "dev": {
+      "autoLocalPhansalkar": "Auto Local Threshold, Phansalkar: a few pixels differ from Fiji on the images used to check it.",
+      "autoLi16": "Auto Threshold, Li, on a 16-bit image with the Ignore options: the level can be one unit away from Fiji's.",
+      "autoStack": "Auto Threshold: the Stack and Use stack histogram options are not offered (the Studio has channels, not stacks).",
+      "skeleton": "Analyze Skeleton: when cycles are pruned the same voxel is cut as in Fiji, but the order of the cuts can differ on some lattices; Branch information lists the branches in another order, with another first end and running average.",
+      "coloc": "Coloc 2: the default Costes threshold search stops by another rule than Fiji's; Bisection on a negative slope gives 255 / 13 where Fiji gives 253 / 14; the log columns \"% zero-zero\", \"% saturated\", \"b to y-mean ratio\" and the integrated intensities are not written.",
+      "selection": "Selections: Interpolate does not apply Fiji's clause for a magnification of 12 or more, and a selection of several parts is interpolated as one even-odd union; Straighten always shows its dialog, does not write the line width back and refuses a rotated rectangle.",
+      "traced": "Traced and composite selections: the start vertex and the order of the vertices can differ from Fiji's (visible in Save XY Coordinates).",
+      "plot": "Plot: every symbol is drawn as a square marker; there is no secondary fill colour and no Visible field.",
+      "particles": "Analyze Particles: a binary image without a threshold is read as 255 = foreground (no Black background or inverting look-up table logic).",
+      "directionality": "Directionality: at most 100 pieces are analysed; the result text says so when some were dropped.",
+      "invertLut": "Invert LUTs on a composite image shown in Composite mode is refused; switch to Color or Grayscale first.",
+      "log": "There is no Log window: the values ImageJ writes there appear in the status bar."
+    }
   },
   "view": {
     "menubar": "Menu bar",

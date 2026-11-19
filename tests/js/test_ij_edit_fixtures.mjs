@@ -397,20 +397,17 @@ await test('Invert (ShortProcessor / FloatProcessor) with and without "Full rang
     const got = IJOps.invert(inp, opts).data;
     if (bd !== 32) sameBits(got, want, label);
     else {
-      // FloatProcessor.process(INVERT): "float min2, max2; v2 = max2 - (v1 - min2);" — float arithmetic, every step rounded to a float. The shared
-      // IJOps.invert computes (max + min) - v in doubles: within one float step of the LARGEST operand (v - min) of ImageJ (reported to W0, not patched here).
+      // FloatProcessor.process(INVERT): "float min2, max2; v2 = max2 - (v1 - min2);" — float arithmetic, every step rounded to a float.
       const mn = c.params.displayRangeSet ? -10 : -300, mx = c.params.displayRangeSet ? 120 : 70000;
       const java = Float32Array.from(inp.data, (v) => Math.fround(Math.fround(mx) - Math.fround(Math.fround(v) - Math.fround(mn))));
       sameBits(java, want, label + ' (ImageJ operation order)');
-      for (let i = 0; i < got.length; i++) assert.ok(Math.abs(got[i] - want[i]) <= Math.max(Math.abs(inp.data[i]), Math.abs(want[i])) * 2.4e-7 + 1e-30, label + ' pixel ' + i + ': ' + got[i] + ' vs ' + want[i]);
+      sameBits(got, want, label);
     }
   }
-  // The consumer of "Full range 16-bit inversions" (ShortProcessor.invert: "setMinAndMax(0, 65535); process(INVERT, 0); resetMinAndMax()") is the
-  // `fullRange` switch of the invert operation, a W0-L item: 65535 - v on data that does not span the range tells whether it exists yet.
+  // ShortProcessor.invert with Prefs.fullRange16bitInversions: "setMinAndMax(0, 65535); process(INVERT, 0); resetMinAndMax()"
   const part = { width: 3, height: 1, bitDepth: 16, data: Uint16Array.from([100, 150, 200]) };
-  const out = IJOps.invert(part, { fullRange: true }).data;
-  if (out[0] !== 65435) console.log('  GAP  IJOps.invert has no fullRange switch yet (W0-L): the Conversions "Full range 16-bit inversions" option is not consumed');
-  else assert.deepEqual(Array.from(out), [65435, 65385, 65335]);
+  assert.deepEqual(Array.from(IJOps.invert(part, { fullRange: true }).data), [65435, 65385, 65335]);
+  assert.deepEqual(Array.from(IJOps.invert(part).data), [200, 150, 100]);
 });
 
 await test('Invert LUTs (macro InvertAllLuts 1.54p): the recorded before / after tables of ten LUTs, entry for entry (invert_luts.json)', async () => {

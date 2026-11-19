@@ -399,7 +399,7 @@
       IJ_GEOM_ENLARGE_SELECTION: 'err.geomEnlargeSelection'
     },
     commands: [
-      { id: 'adjustSize', menu: ['Image', 'Adjust'], order: 30, separatorBefore: true, long: true, run: size },
+      { id: 'adjustSize', menu: ['Image', 'Adjust'], order: 30, long: true, run: size },
       { id: 'adjustCanvasSize', menu: ['Image', 'Adjust'], order: 40, long: true, run: canvasSize },
       { id: 'imageProperties', menu: ['Image'], order: 40, shortcut: 'Ctrl+Shift+P', run: properties },
       { id: 'imageScale', menu: ['Image'], order: 100, shortcut: 'Ctrl+E', long: true, run: scale },

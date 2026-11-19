@@ -236,6 +236,8 @@ await test('File › Open: TIFF (uncompressed and deflate with predictor), sever
   const p0 = new Uint16Array(W * H).map((_, i) => (i * 37) % 4096), p1 = new Uint16Array(W * H).map((_, i) => (i * 11 + 5) % 4096);
   const plain = buildTiff({ width: W, height: H, bitDepth: 16, planes: [p0.slice(), p1.slice()] });
   const packed = buildTiff({ width: W, height: H, bitDepth: 16, planes: [p0.slice(), p1.slice()], compression: 'deflate', predictor: 2, rowsPerStrip: 5, imagejMeta: { labels: ['A', 'B'], ranges: [[0, 4095], [0, 4095]] }, description: 'ImageJ=1.54f\nchannels=2\n' });
+  // the strip loops run in the worker: the page's own copy of the compressed-TIFF reader is never called
+  t.page.IJLocalTiff.read = () => { throw new Error('the page decoded a compressed TIFF'); };
   assert.equal((await openVia(t, [file('plain.tif', plain), file('packed.tiff', packed)])).length, 0);
   const docs = await t.docs();
   const a = byName(docs, 'plain'), b = byName(docs, 'packed');
@@ -258,8 +260,21 @@ await test('File › Open: TIFF (uncompressed and deflate with predictor), sever
 await test('File › Open: PNG / JPEG / GIF / BMP — grey becomes one 8-bit channel, colour three coloured channels', async () => {
   const t = await fresh();
   // the browser's decoder is a stand-in here: the bytes of the "image" are a JSON of the pixels it would decode
-  t.page.createImageBitmap = async (blob) => { const j = JSON.parse(await blob.text()); return { width: j.w, height: j.h, rgba: j.rgba, close() { t.page.__closed = (t.page.__closed || 0) + 1; } }; };
-  t.page.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { const self = this; return { drawImage(bmp) { self.bmp = bmp; }, getImageData() { return { data: Uint8ClampedArray.from(self.bmp.rgba) }; } }; } };
+  t.page.createImageBitmap = async (blob) => { const j = JSON.parse(await blob.text()); return { width: j.w, height: j.h, rgba: j.rgba, fill: j.fill, close() { t.page.__closed = (t.page.__closed || 0) + 1; } }; };
+  // the picture is read in horizontal bands: drawImage(bmp, 0, y0, w, bh, 0, 0, w, bh) then getImageData(0, 0, w, bh)
+  const bands = [];
+  t.page.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() {
+    const self = this;
+    return {
+      clearRect() {},
+      drawImage(bmp, sx, sy, sw, sh) { self.bmp = bmp; self.band = { sy, sh, sw }; },
+      getImageData(x, y, w, h) {
+        const { sy, sh, sw } = self.band; bands.push([sy, sh]);
+        if (self.bmp.fill) { const a = new Uint8ClampedArray(sw * sh * 4); for (let i = 0; i < sw * sh; i++) { a.set([...self.bmp.fill, 255], i * 4); } return { data: a }; }
+        return { data: Uint8ClampedArray.from(self.bmp.rgba.slice(sy * sw * 4, (sy + sh) * sw * 4)) };
+      }
+    };
+  } };
   const grey = { w: 3, h: 2, rgba: [0, 0, 0, 255, 10, 10, 10, 255, 20, 20, 20, 255, 30, 30, 30, 255, 40, 40, 40, 255, 50, 50, 50, 255] };
   const col = { w: 2, h: 1, rgba: [200, 100, 50, 255, 1, 2, 3, 255] };
   assert.equal((await openVia(t, [file('g.png', JSON.stringify(grey)), file('c.jpg', JSON.stringify(col)), file('x.gif', JSON.stringify(grey)), file('y.bmp', JSON.stringify(col)), file('z.jpeg', JSON.stringify(grey))])).length, 0);
@@ -268,17 +283,67 @@ await test('File › Open: PNG / JPEG / GIF / BMP — grey becomes one 8-bit cha
   deq([g.width, g.height, g.bitDepth, g.channels.length], [3, 2, 8, 1]);
   deq(arr(await t.pixels(g.docId, 0)), [0, 10, 20, 30, 40, 50]);
   deq([c.width, c.height, c.bitDepth, c.channels.length], [2, 1, 8, 3]);
-  deq(c.channels.map((x) => x.name), ['Red', 'Green', 'Blue']);
+  deq(c.channels.map((x) => x.name), ['R', 'G', 'B'], 'the naming of File › New › System Clipboard');
   deq(c.channels.map((x) => x.color), ['#ff0000', '#00ff00', '#0000ff']);
   deq(c.channels.map((x) => x.display.lut), ['Red', 'Green', 'Blue']);
   deq([arr(await t.pixels(c.docId, 0)), arr(await t.pixels(c.docId, 1)), arr(await t.pixels(c.docId, 2))], [[200, 1], [100, 2], [50, 3]]);
   assert.ok(byName(docs, 'x') && byName(docs, 'y') && byName(docs, 'z'));
   assert.equal(t.page.__closed, 5, 'every bitmap is released');
+  // a tall picture is read in bands of at most ~1 Mpx, never in one canvas; one over 268 Mpx is refused with the translated message
+  bands.length = 0;
+  assert.equal((await openVia(t, [file('tall.png', JSON.stringify({ w: 1024, h: 2500, fill: [7, 7, 7] }))])).length, 0);
+  assert.ok(bands.length >= 3 && bands.every(([, sh]) => sh * 1024 <= 1048576), 'bands of at most 1 Mpx: ' + JSON.stringify(bands));
+  deq(bands.map(([sy]) => sy), [0, 1024, 2048]);
+  const tall = byName(await t.docs(), 'tall');
+  deq([tall.width, tall.height, tall.channels.length], [1024, 2500, 1]);
+  // 40 Mpx (a large microscopy JPEG) opens; over 268 Mpx is refused with the picture's own message, not the TIFF-save sentence
+  assert.equal((await openVia(t, [file('big.png', JSON.stringify({ w: 8000, h: 5000, fill: [1, 1, 1] }))])).length, 0);
+  assert.ok(byName(await t.docs(), 'big'), '40 Mpx opens');
+  const huge = await openVia(t, [file('huge.png', JSON.stringify({ w: 20000, h: 14000, fill: [1, 1, 1] }))]);
+  assert.equal(huge[0].message, EN.err.pictureTooLarge);
+  assert.ok(!byName(await t.docs(), 'huge'));
   // the browser cannot decode the file
   t.page.createImageBitmap = async () => { throw new Error('boom'); };
   const errs = await openVia(t, [file('broken.png', 'not an image')]);
   assert.equal(errs[0].message, EN.err.ioDecode);
   quiet(t);
+  t.close();
+});
+
+await test('File › Open of a .lut on a multichannel image shown in Grayscale: every channel takes the table and the mode becomes Color', async () => {
+  const t = await fresh({ channels: 2 });
+  const info = (await t.docs())[0];
+  await t.api(null).setDisplayMode(info.docId, 'gray');
+  const table = new Uint8Array(768); for (let i = 0; i < 256; i++) { table[i] = i; table[256 + i] = 0; table[512 + i] = 255 - i; }
+  assert.equal((await openVia(t, [file('mix.lut', table)])).length, 0);
+  let d;
+  for (let i = 0; i < 100; i++) { d = (await t.docs()).find((x) => x.docId === info.docId); if (d.channels.every((c) => c.display.lut === 'mix')) break; await sleep(10); }
+  deq(d.channels.map((c) => c.display.lut), ['mix', 'mix']);
+  assert.equal((await t.engine('doc.info', { docId: info.docId })).mode, 'color');
+  t.close();
+});
+
+await test('File › Open of a .lut behaves like File › Import › LUT: a built-in name is renamed, the table replaces an inverted one, no image opens the 256 × 32 ramp', async () => {
+  const t = await fresh();
+  const info = (await t.docs())[0];
+  const table = new Uint8Array(768); for (let i = 0; i < 256; i++) { table[i] = i; table[256 + i] = 255 - i; table[512 + i] = 0; }
+  const raw = () => Uint8Array.from(table);
+  await t.runCommand('colorInvertLuts').catch(() => {});
+  assert.equal((await openVia(t, [file('Fire.lut', raw())])).length, 0, 'a built-in name is accepted');
+  const d1 = (await t.docs()).find((d) => d.docId === info.docId);
+  assert.equal(d1.channels[0].display.lut, 'Fire (LUT)', 'renamed, not refused');
+  assert.equal(d1.channels[0].display.invert, false, 'an inverted look-up table is replaced, not inverted again');
+  const long = 'x'.repeat(70) + '.lut';
+  assert.equal((await openVia(t, [file(long, raw())])).length, 0);
+  assert.equal((await t.docs()).find((d) => d.docId === info.docId).channels[0].display.lut.length, 56, 'cut to 56 characters');
+  // no image open: the ramp image LutLoader.createImage makes
+  for (const d of await t.docs()) await t.api(null).closeDoc(d.docId);
+  assert.equal((await t.docs()).length, 0);
+  assert.equal((await openVia(t, [file('teal.lut', raw())])).length, 0);
+  const ramp = (await t.docs())[0];
+  assert.ok(ramp && ramp.width === 256 && ramp.height === 32 && ramp.channels[0].display.lut === 'teal');
+  const px = await t.pixels(ramp.docId, 0);
+  assert.equal(px[0], 0); assert.equal(px[255], 255); assert.equal(px[256 * 31 + 100], 100);
   t.close();
 });
 
@@ -471,7 +536,10 @@ await test('ROI Manager: Shift / Ctrl selection, Show All and Labels, Properties
   assert.equal(t.view(info.docId).rois.showAll, true);
   deq(t.view(info.docId).rois.all.map((e) => e.label), ['', '', '', ''], 'Labels is off at start (RoiManager.labelsCheckbox)');
   labels.checked = true; for (const f of labels.listeners.change || []) f({ target: labels });
-  deq(t.view(info.docId).rois.all.map((e) => e.label), ['r0', 'r1', 'r2', 'r3']);
+  deq(t.view(info.docId).rois.all.map((e) => e.label), ['1', '2', '3', '4'], 'ImageCanvas draws ""+(index+1), not the name');
+  t.api('edit').settings.set('appearance.useNames', true);
+  deq(t.view(info.docId).rois.all.map((e) => e.label), ['r0', 'r1', 'r2', 'r3'], 'Prefs.useNamesAsLabels: the names');
+  t.api('edit').settings.set('appearance.useNames', false);
   // Properties… of one entry: name, stroke colour, width, fill colour
   await click(rows(content)[1]);
   let n = t.log.dialogSpecs.length;

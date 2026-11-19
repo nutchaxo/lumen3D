@@ -248,7 +248,10 @@
      * ignores Range altogether: IJ_LIB_TIFF_NO_RANGE. */
     async function requestRanges(url, ranges, signal, fetchImpl) {
       const spec = ranges.map((r) => r.start + '-' + (r.end - 1)).join(',');
-      const resp = await fetchImpl(url, { headers: { Range: 'bytes=' + spec }, signal });
+      // a dropped connection is the host's fault, said as such; only an abort keeps its own name
+      const netFail = (e) => { if (e && e.name === 'AbortError') return e; return fail('IJ_LIB_TIFF_HTTP', 'network', { cause: e }); };
+      let resp;
+      try { resp = await fetchImpl(url, { headers: { Range: 'bytes=' + spec }, signal }); } catch (e) { throw netFail(e); }
       if (resp.status === 200) {
         // the host ignores Range (php -S, some static servers): never read a multi-GB body to find out
         await cancelBody(resp);
@@ -261,7 +264,8 @@
       const multipart = /multipart\/byteranges/i.test(type);
       const cr = multipart ? null : parseContentRange(headerOf(resp, 'content-range'));
       if (!multipart && ranges.length > 1 && !cr) { await cancelBody(resp); return { status: 'multi-refused', pieces: [] }; }
-      const buf = new Uint8Array(await resp.arrayBuffer());
+      let buf;
+      try { buf = new Uint8Array(await resp.arrayBuffer()); } catch (e) { throw netFail(e); }
       throwIfAborted(signal);
       if (multipart) return { status: 206, pieces: parseMultipart(buf, type) };
       if (!cr || cr.end - cr.start !== buf.length) throw fail('IJ_LIB_TIFF_HTTP', 'single range without a usable Content-Range');
@@ -342,7 +346,8 @@
     }
 
     // ---- decoding
-    async function inflate(bytes) {
+    // `limit` = the byte count the strip must hold: a longer stream is truncated to it (ImageReader does), not buffered further
+    async function inflate(bytes, limit) {
       if (typeof DecompressionStream !== 'function') throw fail('IJ_LIB_TIFF_NO_INFLATE', 'DecompressionStream is not available');
       const ds = new DecompressionStream('deflate');
       const writer = ds.writable.getWriter();
@@ -350,16 +355,23 @@
       writer.close().catch(() => {});
       const reader = ds.readable.getReader();
       const chunks = [];
-      let total = 0;
-      for (;;) {
-        const r = await reader.read();
-        if (r.done) break;
-        chunks.push(r.value);
-        total += r.value.length;
+      let total = 0, truncated = false;
+      try {
+        for (;;) {
+          const r = await reader.read();
+          if (r.done) break;
+          chunks.push(r.value);
+          total += r.value.length;
+          if (limit > 0 && total >= limit) { truncated = true; break; } // ImageReader truncates an over-long (padded) strip
+        }
+      } catch (e) {
+        try { await reader.cancel(); } catch (_) { /* already closed */ }
+        throw e && e.code === 'IJ_LIB_TIFF_CORRUPT' ? e : fail('IJ_LIB_TIFF_CORRUPT', 'the deflate stream is damaged', { cause: e });
       }
-      const out = new Uint8Array(total);
+      if (truncated) { try { await reader.cancel(); } catch (_) { /* already closed */ } }
+      const out = new Uint8Array(limit > 0 ? Math.min(total, limit) : total);
       let at = 0;
-      for (const c of chunks) { out.set(c, at); at += c.length; }
+      for (const c of chunks) { if (at >= out.length) break; const part = at + c.length > out.length ? c.subarray(0, out.length - at) : c; out.set(part, at); at += part.length; }
       return out;
     }
 
@@ -368,9 +380,9 @@
      * width — on the bit pattern for 32-bit floats too). */
     async function decodeStrip(p, bytes, rows, o) {
       const inf = (o && o.inflate) || inflate;
-      let raw = p.compression === 1 ? bytes : await inf(bytes);
       const bps = p.bitDepth / 8, w = p.width, spp = p.spp;
       const want = rows * w * spp * bps;
+      let raw = p.compression === 1 ? bytes : await inf(bytes, want);
       if (raw.length < want) throw fail('IJ_LIB_TIFF_CORRUPT', 'a strip holds ' + raw.length + ' bytes, ' + want + ' expected');
       // an aligned private copy: the views below need a 4-byte aligned buffer
       const copy = new Uint8Array(want);

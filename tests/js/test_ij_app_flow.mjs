@@ -189,7 +189,7 @@ const run = async (shell, id) => { const c = cmdOf(shell, id); assert.ok(c, 'com
 const pix = async (shell, x, y) => (await shell.opts.readPixel(x, y));
 const J = (x) => JSON.parse(JSON.stringify(x));
 
-// ═════════════ 1. Z Project (Sum, 16-bit) → pixels → commands ═════════════
+// ═════════════ 1. Z Project (Sum, 32-bit) → pixels → commands ═════════════
 {
   const t = boot();
   t.script.dialogs.push((spec) => { assert.ok(spec.fields.some((f) => f.id === 'method'), 'the first dialog is Z Project'); return { method: 'sum', start: 1, stop: D, level: 0 }; });
@@ -200,9 +200,9 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   assert.deepEqual(J(t.log.init.packages).map((p) => p.pkg), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'], 'and the packages, each loaded on its own by the worker');
   assert.ok(t.log.init.budgetBytes >= 512 * 1048576 && t.log.init.budgetBytes <= 2 * 1024 * 1048576, 'budget within [512 MiB, 2 GiB]');
   assert.equal(t.workers[0].url, 'asset/ij-worker.js');
-  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.bitDepth === 16), 'doc shown');
+  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.bitDepth === 32), 'doc shown');
   const img = sh.images.filter(Boolean).pop();
-  assert.equal(img.bitDepth, 16, 'Sum of 5 slices is 16-bit');
+  assert.equal(img.bitDepth, 32, 'Sum of 5 slices is 32-bit float (ZProjector on the 8-bit processed volume, the rule of the library route)');
   assert.equal(img.width, W); assert.equal(img.height, H);
   assert.equal(img.channels.length, CH);
   assert.equal(img.calibration.pixelWidth, 0.5);
@@ -227,10 +227,10 @@ const J = (x) => JSON.parse(JSON.stringify(x));
   const before = J(await pix(sh, 7, 3));
   await run(sh, 'editInvert');
   const inv = J(await pix(sh, 7, 3));
-  // ImageJ's 16-bit Invert reflects about the data's own min and max (ShortProcessor.invert), not 65535.
+  // ImageJ's Invert reflects about the data's own min and max (FloatProcessor: max - (v - min)), exact for these integers.
   let lo0 = Infinity, hi0 = -Infinity;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = refSum(0, y, x); lo0 = Math.min(lo0, v); hi0 = Math.max(hi0, v); }
-  assert.deepEqual(inv, [lo0 + hi0 - before[0], before[1]], '16-bit invert of the active channel only (ImageJ composite behaviour)');
+  assert.deepEqual(inv, [lo0 + hi0 - before[0], before[1]], 'invert of the active channel only (ImageJ composite behaviour)');
   assert.ok(sh.calls.some((c) => c[0] === 'invalidate'), 'the display drops its tiles');
   assert.equal(cmdOf(sh, 'editUndo').enabled(sh.opts.getState()), true);
   assert.equal(cmdOf(sh, 'fileRevert').enabled(sh.opts.getState()), true, 'a changed image can be reverted');

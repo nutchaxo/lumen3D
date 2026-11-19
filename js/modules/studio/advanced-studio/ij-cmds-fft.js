@@ -27,7 +27,9 @@
     { value: 'horizontal', labelKey: 'dlg.fft.stripeHorizontal' },
     { value: 'vertical', labelKey: 'dlg.fft.stripeVertical' }
   ];
-  const allField = (st) => (nChan(st) > 1 ? [{ type: 'check', id: 'all', labelKey: 'dlg.allChannels', value: true }] : []);
+  const allField = (st, value) => (nChan(st) > 1 ? [{ type: 'check', id: 'all', labelKey: 'dlg.allChannels', value: value !== false }] : []);
+  // FFTFilter keeps every field of its dialog in static fields: the last values come back next time, until the session ends.
+  const BAND = { large: 40, small: 3, stripes: 'none', tolerance: 5, autoscale: true, saturate: true, displayFilter: false, all: true };
 
   // A setting, whatever the api answers (a synchronous value; the recording api of the tests answers a promise).
   function setting(api, key, dflt) {
@@ -76,16 +78,6 @@
     };
   }
 
-  function mapImage(api, st, res, name, start) {
-    const m = res.map, d = m.data, below = noOrientation(start);
-    for (let i = 0; i < d.length; i++) if (d[i] < -1e29) d[i] = below;
-    return {
-      name: api.tr('res.fftMapName', { name }), width: m.width, height: m.height, bitDepth: 32,
-      calibration: st.doc.calibration ? Object.assign({}, st.doc.calibration) : st.doc.calibration,
-      channels: [{ name: 'Orientation', color: '#ffffff', data: d, display: wheelDisplay(start) }]
-    };
-  }
-
   // The colour wheel: the orientation of each pixel of a disc, counter-clockwise on screen, as the histogram labels it.
   function wheelImage(api, start) {
     const n = 128, c = (n - 1) / 2, R = n / 2 - 1, d = new Float32Array(n * n), below = noOrientation(start);
@@ -118,7 +110,7 @@
         { type: 'check', id: 'table', labelKey: 'dlg.fft.table', value: false },
         { type: 'message', id: 'mapNote', labelKey: 'dlg.fft.mapNote', visibleIf: (x) => x.method !== 'gradient' }
       ].concat(allField(st)),
-      onChange(x, set, changed) { if (changed === 'start' && Number.isFinite(x.start)) set('end', x.start + 180); },
+      onChange(x, set, changed) { if (changed === 'start' && Number.isFinite(x.start)) set({ end: x.start + 180 }); },
       validate(x) {
         if (!Number.isInteger(x.nbins) || x.nbins < 5 || x.nbins > 720) return { nbins: 'dlg.fft.nbinsInvalid' };
         if (!(x.start >= -180 && x.start <= 180)) return { start: 'dlg.fft.startInvalid' };
@@ -133,21 +125,27 @@
     const methodKey = v.method === 'gradient' ? 'dlg.fft.methodGradient' : 'dlg.fft.methodFourier';
     const methodLabel = api.tr(methodKey);
     const wantMap = v.method === 'gradient' && !!v.orientationMap;
-    const params = { method: v.method, nbins: v.nbins, start: v.start, map: wantMap };
+    const params = { method: v.method, nbins: v.nbins, start: v.start };
     const rows = [], hists = [];
-    let lutDone = false;
+    // the orientation map is built by the worker (the page never holds an image-sized array); its table must exist first
+    if (wantMap) await api.registerLut(WHEEL_LUT, wheelTable());
     for (const c of channels) {
-      const res = await api.compute('directionality', params, { docId: info.docId, channel: c, labelKey: 'op.directionality' });
-      if (!res) return;
       const chName = (info.channels[c] && info.channels[c].name) || ('C' + (c + 1));
       const name = channels.length > 1 ? info.name + ' - ' + chName : info.name;
+      let res, mapInfo = null;
+      if (wantMap) {
+        const made = await api.call('doc.dirmap.create', { docId: info.docId, channel: c, roi: now.roi || null, nbins: v.nbins, start: v.start, name: api.tr('res.fftMapName', { name: name }) },
+          { labelKey: 'op.directionality', long: true });
+        if (!made) return;
+        res = made.result; mapInfo = made.info;
+      } else {
+        res = await api.compute('directionality', params, { docId: info.docId, channel: c, labelKey: 'op.directionality' });
+      }
+      if (!res) return;
       rows.push([chName, res.direction, res.dispersion, res.amount, res.goodness]);
       hists.push({ chName, res });
       api.openPlot(plotOf(api, res, name, methodLabel));
-      if (res.map) {
-        if (!lutDone) { await api.registerLut(WHEEL_LUT, wheelTable()); lutDone = true; }
-        await api.addDoc(mapImage(api, st, res, name, v.start), { placement: 'splitRight' });
-      }
+      if (mapInfo) await api.adopt(mapInfo, { placement: 'splitRight' });
     }
     // Fiji lists the fit of every slice in a results table (ImageJ's column names stay English)
     api.openTable(api.tr('res.fftDirResults', { name: info.name }), ['Slice', 'Direction (°)', 'Dispersion (°)', 'Amount', 'Goodness'], rows);
@@ -221,18 +219,20 @@
         const v = await api.dialog({
           title: api.tr('dlg.fft.bandTitle'), okLabel: api.tr('dlg.ok'),
           fields: [
-            { type: 'number', id: 'large', labelKey: 'dlg.fft.large', value: 40, min: 0, max: 100000, step: 1, decimals: 0, unitsKey: 'dlg.pixels' },
-            { type: 'number', id: 'small', labelKey: 'dlg.fft.small', value: 3, min: 0, max: 100000, step: 1, decimals: 0, unitsKey: 'dlg.pixels' },
-            { type: 'choice', id: 'stripes', labelKey: 'dlg.fft.stripes', value: 'none', options: STRIPE_OPTIONS },
-            { type: 'number', id: 'tolerance', labelKey: 'dlg.fft.tolerance', value: 5, min: 0, max: 100, step: 1, decimals: 0, units: '%' },
-            { type: 'check', id: 'autoscale', labelKey: 'dlg.fft.autoscale', value: true },
-            { type: 'check', id: 'saturate', labelKey: 'dlg.fft.saturate', value: true },
-            { type: 'check', id: 'displayFilter', labelKey: 'dlg.fft.displayFilter', value: false }
-          ].concat(allField(st))
+            { type: 'number', id: 'large', labelKey: 'dlg.fft.large', value: BAND.large, min: 0, max: 100000, step: 1, decimals: 0, unitsKey: 'dlg.pixels' },
+            { type: 'number', id: 'small', labelKey: 'dlg.fft.small', value: BAND.small, min: 0, max: 100000, step: 1, decimals: 0, unitsKey: 'dlg.pixels' },
+            { type: 'choice', id: 'stripes', labelKey: 'dlg.fft.stripes', value: BAND.stripes, options: STRIPE_OPTIONS },
+            { type: 'number', id: 'tolerance', labelKey: 'dlg.fft.tolerance', value: BAND.tolerance, min: 0, max: 100, step: 1, decimals: 0, units: '%' },
+            { type: 'check', id: 'autoscale', labelKey: 'dlg.fft.autoscale', value: BAND.autoscale },
+            { type: 'check', id: 'saturate', labelKey: 'dlg.fft.saturate', value: BAND.saturate },
+            { type: 'check', id: 'displayFilter', labelKey: 'dlg.fft.displayFilter', value: BAND.displayFilter }
+          ].concat(allField(st, BAND.all))
         });
         if (!v) return;
         const now = api.state();
         if (!now.doc || now.doc.docId !== st.doc.docId) return;
+        Object.assign(BAND, { large: v.large, small: v.small, stripes: v.stripes, tolerance: v.tolerance, autoscale: !!v.autoscale, saturate: !!v.saturate, displayFilter: !!v.displayFilter });
+        if (nChan(st) > 1) BAND.all = !!v.all;
         const params = { large: v.large, small: v.small, stripes: STRIPE_INDEX[v.stripes] || 0, tolerance: v.tolerance, autoscale: !!v.autoscale, saturate: !!v.saturate };
         const res = await api.run('bandpass', params, { docId: st.doc.docId, channel: v.all ? 'all' : st.activeChannel, labelKey: 'op.bandpass' });
         // FFTFilter.filterLargeSmall: "if (displayFilter && slice==1)" the filter of the first image is shown
@@ -258,6 +258,7 @@
   IJApp.extend({
     pkg: 'fft',
     commands,
+    longCommands: ['doc.dirmap.create'],
     errors: {
       IJ_FFT_TOO_LARGE: 'err.fftTooLarge',
       IJ_FFT_NO_OUTPUT: 'err.fftNoOutput',

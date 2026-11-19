@@ -36,6 +36,14 @@
 
   const needDoc = (api) => { const st = api.state(); return st.doc && st.roi ? st : null; };
 
+  /* A composite (mask) selection is traced and rasterised again by Scale, Rotate and Interpolate: image-sized buffers, so it runs in the
+   * worker; polygons and lines are cheap and stay on the page. */
+  const heavy = (st) => st.roi.type === 'mask';
+  async function transform(api, st, op, params, direct) {
+    if (!heavy(st)) return direct();
+    return api.compute('selTransform', Object.assign({ op }, params), { roi: st.roi, labelKey: 'op.selTransform' });
+  }
+
   async function applyResult(api, res) {
     if (!res) return;
     if (res.unchanged) { api.toast('res.roiUnchanged'); return; }
@@ -77,7 +85,7 @@
     });
     if (!v) return;
     MEM.smooth = !!v.smooth; MEM.adjust = !!v.adjust;
-    await applyResult(api, IJSelOps.interpolate(st.roi, v.interval, !!v.smooth, !!v.adjust));
+    await applyResult(api, await transform(api, st, 'interpolate', { interval: v.interval, smooth: !!v.smooth, adjust: !!v.adjust }, () => IJSelOps.interpolate(st.roi, v.interval, !!v.smooth, !!v.adjust)));
   }
 
   /* Edit > Selection > Properties… (RoiProperties): the name and, for a line, its width. "if (!isRange) roi.setName(name.length()>0?
@@ -117,7 +125,7 @@
     });
     if (!v) return;
     MEM.xscale = v.xscale; MEM.yscale = v.yscale;
-    await applyResult(api, IJSelOps.scale(st.roi, v.xscale, v.yscale, !!v.centered, st.doc.width, st.doc.height));
+    await applyResult(api, await transform(api, st, 'scale', { xscale: v.xscale, yscale: v.yscale, centered: !!v.centered }, () => IJSelOps.scale(st.roi, v.xscale, v.yscale, !!v.centered, st.doc.width, st.doc.height)));
   }
 
   /* Edit > Selection > Rotate…: "Angle:" (degrees; negative = counter-clockwise), "Rotate around image center". */
@@ -133,7 +141,7 @@
     });
     if (!v) return;
     MEM.angle = v.angle; MEM.aroundCenter = !!v.aroundCenter;
-    await applyResult(api, IJSelOps.rotate(st.roi, v.angle, !!v.aroundCenter, st.doc.width, st.doc.height));
+    await applyResult(api, await transform(api, st, 'rotate', { angle: v.angle, aroundCenter: !!v.aroundCenter }, () => IJSelOps.rotate(st.roi, v.angle, !!v.aroundCenter, st.doc.width, st.doc.height)));
   }
 
   /* Edit > Selection > Translate…: "X offset (pixels):", "Y offset (pixels):". */

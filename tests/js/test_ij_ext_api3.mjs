@@ -798,7 +798,14 @@ await test('Window menu: ImageJ\'s order, the open tool windows before the image
   assert.ok(ids.includes('winImg' + id));
   assert.ok(ids.indexOf('winImg' + id) > ids.indexOf('windowRoiManager') && ids.indexOf('winImg' + id) < ids.indexOf('windowNext'), 'the images sit between the windows and Next / Previous');
   assert.deepEqual(J(ids.slice(-2)), ['windowNext', 'windowPrevious']);
-  assert.equal(win().find((c) => c.id === 'winImg' + id).label, t.activeId() !== null ? (await t.engine('doc.info', { docId: id })).name + ' 40x30' : '', '"name size" as ImageJ');
+  const inf = (await t.engine('doc.info', { docId: id }));
+  const bytes = inf.width * inf.height * inf.channels.length * (inf.bitDepth / 8);
+  assert.equal(win().find((c) => c.id === 'winImg' + id).label, inf.name + ' ' + t.IJApp.imageSizeString(bytes), '"name size" as ImageJ (ImageWindow.getImageSize)');
+  // ImageWindow.getImageSize: K below 1024, MB with one decimal below 10000 K, whole MB below 1 GB, GB; a trailing ".0" is dropped; d2s rounds half-even
+  const S = t.IJApp.imageSizeString;
+  assert.deepEqual([512, 1536, 2560, 64 * 1024].map(S), ['0K', '2K', '2K', '64K']);
+  assert.deepEqual([1024 * 1024, 1024 * 5000, 1024 * 9999, 1024 * 10000, 1024 * 1024 * 512, 1024 * 1048575].map(S), ['1MB', '4.9MB', '9.8MB', '10MB', '512MB', '1024MB']);
+  assert.deepEqual([1024 * 1048576, 1024 * 1048576 * 3.25].map(S), ['1GB', '3.2GB'], 'GB with one decimal, half-even on 3.25');
   // Results open: its static row gives way to the window's own row, listed before the images
   await t.runCommand('windowResults');
   ids = order(win());

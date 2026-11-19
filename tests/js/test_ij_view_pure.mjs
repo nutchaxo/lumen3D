@@ -725,7 +725,7 @@ function makeGl() {
   root.clientWidth = 1000; root.clientHeight = 700;
   doc.body.appendChild(root);
 
-  const ran = [], rois = [], tools = [];
+  const ran = [], rois = [], tools = [], heldKeys = [];
   const commands = [
     { id: 'file.open', menu: ['File'], label: 'Open...', shortcut: 'Ctrl+O' },
     { id: 'edit.undo', menu: ['Edit'], label: 'Undo', shortcut: 'Ctrl+Z', enabled: () => false },
@@ -736,7 +736,7 @@ function makeGl() {
     t: (k, f) => f,
     commands,
     getState: () => ({}),
-    onCommand: (c, o) => ran.push([c.id, o.source]),
+    onCommand: (c, o) => { ran.push([c.id, o.source]); heldKeys.push([o.alt, o.shift]); },
     onRoi: (r, o) => rois.push([r, o]),
     onTool: (id) => tools.push(id),
     readPixel: async (x, y) => [x + y],
@@ -774,6 +774,18 @@ function makeGl() {
   titles[0].fire('click');
   byClass(shell.el, 'ij-menu-item')[0].fire('click');
   deq(ran.pop(), ['file.open', 'menu']);
+  deq(heldKeys.pop(), [false, false], 'a plain click: no modifier held');
+  // the keys held at the click go to the command (IJ.altKeyDown() / shiftKeyDown())
+  titles[0].fire('click');
+  byClass(shell.el, 'ij-menu-item')[0].fire('click', { altKey: true });
+  deq(ran.pop(), ['file.open', 'menu']); deq(heldKeys.pop(), [true, false], 'Alt + click');
+  titles[0].fire('click');
+  byClass(shell.el, 'ij-menu-item')[0].fire('click', { shiftKey: true });
+  ran.pop(); deq(heldKeys.pop(), [false, true], 'Shift + click');
+  titles[2].fire('click');
+  shell.menubar.fire('keydown', { key: 'ArrowRight' });
+  shell.menubar.fire('keydown', { key: 'Enter', altKey: true });
+  ran.pop(); deq(heldKeys.pop(), [true, false], 'Alt + Enter on a highlighted row');
   // Escape closes
   titles[3].fire('click');
   shell.menubar.fire('keydown', { key: 'Escape' });

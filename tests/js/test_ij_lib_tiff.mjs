@@ -360,4 +360,22 @@ await test('a real bundle TIFF (when the local DATA_WEB holds one)', async () =>
   } finally { closeSync(fd); }
 });
 
+await test('a dropped connection and a damaged deflate strip carry their own codes (never an internal failure); an over-long inflate is truncated', async () => {
+  const lay = layout(2, 4, () => new Uint8Array(16).fill(1));
+  const p = IJTiffStream.plan(indexOf({ pages: 2 }, lay));
+  assert.equal(await codeOf(() => IJTiffStream.inflate(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]))), 'IJ_LIB_TIFF_CORRUPT');
+  const zlib = await import('node:zlib');
+  const z = new Uint8Array(zlib.deflateSync(Buffer.alloc(4096, 7)));
+  assert.equal((await IJTiffStream.inflate(z, 4096)).length, 4096);
+  const cut = await IJTiffStream.inflate(z, 100);
+  assert.equal(cut.length, 100);
+  assert.ok(cut.every((v) => v === 7));
+  const offline = async () => { throw new TypeError('Failed to fetch'); };
+  assert.equal(await codeOf(() => IJTiffStream.readPages('file://x', p, [0], { fetchImpl: offline })), 'IJ_LIB_TIFF_HTTP');
+  const aborted = async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }); };
+  let name = null;
+  try { await IJTiffStream.readPages('file://x', p, [0], { fetchImpl: aborted }); } catch (e) { name = e.name; }
+  assert.equal(name, 'AbortError');
+});
+
 console.log(`test_ij_lib_tiff: ${passed} groups passed`);

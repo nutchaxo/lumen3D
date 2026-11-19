@@ -2,7 +2,8 @@
  * Analyze Skeleton, Local Thickness. Page AND worker; pure (no DOM, no engine globals); every operation is
  * registered with IJOpRegistry.define (ij-core.js).
  *
- *   curveFit          compute  ij.measure.CurveFitter + ij.measure.Minimizer, ported line by line (ImageJ 1.54p, public domain)
+ *   curveFit          compute  ij.measure.CurveFitter + ij.measure.Minimizer, ported line by line (ImageJ 1.54p, public domain); docless
+ *   fitApply          newdoc   ij.plugin.frame.Fitter.applyFunction: 32-bit "<name>-transformed", f(fitted parameters, pixel value)
  *   fractalBoxCount   compute  ij.plugin.filter.FractalBoxCounter (box counts of a binary image + the log-log line)
  *   analyzeSkeleton   compute  Arganda-Carreras et al. 2010 (paper definitions), 2D
  *   skeletonTagged    newdoc   the tagged skeleton image of the same analysis (end-point 30, junction 70, slab 127)
@@ -953,12 +954,48 @@
 
   if (R && S) {
     R.define('curveFit', {
-      kind: 'compute', version: 1, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
+      kind: 'compute', version: 1, docless: true, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
       validate(p) { checkCurveParams(p); },
       scratchBytes(info, p) { return 1048576 + 8 * 40 * ((p && p.x ? p.x.length : 0) + 1000); },
       async run(view, p, roi, io) {
         io.tick(0, 'op.curveFit');
         return fitCurve(p, { check: () => io.check(), tick: (f) => io.tick(f, 'op.curveFit') });
+      }
+    });
+
+    // Fitter.applyFunction: FloatProcessor(w, h, [cf.f(params, ip.getPixelValue(x, y))], colour model of the source) shown as "<title>-transformed".
+    R.define('fitApply', {
+      kind: 'newdoc', version: 1, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
+      validate(p) {
+        if (!p || typeof p !== 'object') throw ijError('IJ_BAD_ARGS', 'params');
+        if (!Number.isInteger(p.fitType) || p.fitType < 0 || p.fitType >= FIT_LIST.length) throw ijError('IJ_BAD_ARGS', 'fitType');
+        if (!Array.isArray(p.params) || p.params.length !== numParamsOf(p.fitType) || p.params.some((v) => typeof v !== 'number')) throw ijError('IJ_BAD_ARGS', 'params');
+      },
+      scratchBytes(info) { return info.width * info.height * 4 + 1048576; },
+      async run(view, p, roi, io) {
+        const c = io.channel !== null && io.channel !== undefined ? io.channel : view.active;
+        const ch = view.channels[c] || view.channels[0];
+        const w = view.width, h = view.height, data = ch.data;
+        const out = new Float32Array(w * h);
+        let min = Infinity, max = -Infinity;
+        io.tick(0, 'op.fitApply');
+        for (let y = 0; y < h; y++) {
+          io.check();
+          for (let x = y * w, e = x + w; x < e; x++) {
+            const v = Math.fround(fValue(p.fitType, p.params, data[x]));
+            out[x] = v;
+            if (v < min && v > -Infinity) min = v;   // FloatProcessor.findMinAndMax skips infinities; NaN never compares
+            if (v > max && v < Infinity) max = v;
+          }
+          io.tick((y + 1) / h, 'op.fitApply');
+        }
+        if (!(min <= max)) { min = 0; max = 1; }
+        return [{
+          name: String(view.name || 'Untitled') + '-transformed', width: w, height: h, bitDepth: 32,
+          // new ImagePlus(title, ip2) is uncalibrated; a missing key would make the engine inherit the source's calibration
+          calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' },
+          channels: [{ data: out, name: ch.name, color: ch.color, display: Object.assign({}, ch.display, { min, max }) }]
+        }];
       }
     });
   }

@@ -27,7 +27,7 @@ const describeOf = (t, o, depth) => Object.assign({ id: '3d/HARNESS', name: 'HAR
 async function start(o) {
   const opt = o || {};
   const tiff = opt.tiff === undefined ? TIFF() : opt.tiff;
-  const t = await boot({ channels: 2, localStore: opt.localStore, storage: opt.storage });
+  const t = await boot({ channels: 2, localStore: opt.localStore, storage: opt.storage, brokenPackages: opt.brokenPackages || [] });
   const datasets = { '3d/HARNESS': { item: { id: '3d/HARNESS' }, tiffs: tiff ? { 'HARNESS.tif': tiff.index } : {}, desc: describeOf(t, tiff ? { tiffs: [{ file: 'HARNESS.tif', url: 'DATA_WEB/3d/HARNESS/download/HARNESS.tif', sizeBytes: tiff.file.length }] } : {}, opt.depth) } };
   const lib = opt.noLibrary ? null : makeLibrary({ datasets });
   if (lib) t.ctx.studio.library = lib;
@@ -62,6 +62,19 @@ await test('without a library the dialog is the one of wave 2 (no Source), Avera
   assert.equal(method.value, 'avg');
   deepEq(method.options.map((o) => o.value), ['avg', 'max', 'min', 'sum', 'sd', 'median']);
   assert.equal(t.settings.get('lib.method'), 'max', 'the method answered is remembered');
+  t.close();
+});
+
+await test('a library package that failed in the worker: the dialog offers no TIFF source (its worker command is gone), the processed volume is read', async () => {
+  const { t } = await start({ brokenPackages: ['ij-proc-lib.js'] });
+  let spec = null;
+  t.script.dialogs.push((s) => { spec = s; return { method: 'max', start: 1, stop: D, level: 0 }; });
+  mountApp(t);
+  const sh = await until(() => t.shells[t.shells.length - 1], 'shell');
+  await until(() => spec, 'the Z Project dialog');
+  await until(() => sh.images.filter(Boolean).some((i) => i.docId !== -1 && i.name), 'first image');
+  assert.ok(t.failedPackages().has('lib'));
+  deepEq(spec.fields.map((f) => f.id), ['start', 'stop', 'method', 'level', 'note'], 'no Source field');
   t.close();
 });
 

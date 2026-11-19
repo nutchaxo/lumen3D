@@ -792,13 +792,16 @@
   /* The filled region of closed polygons under the even-odd rule: ShapeRoi.getMask fills "getFloatPolygon(FILL_FLATNESS, …)" (all
    * sub-paths in ONE PolygonFiller), whose scan lines pair the crossings of every loop — the same set as the XOR of the loops filled
    * one by one. Returns a `mask` selection (or null when nothing is inside). */
+  // Largest box fillLoops rasterises. The worker op selTransform lowers it to four times the image so a typed factor cannot build a
+  // mask far outside the image (the synchronous call sets it and restores it).
+  let fillLimit = 1 << 28;
   function fillLoops(loops) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const l of loops) for (const p of l) { if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0]; if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; }
     if (!(minX <= maxX)) return null;
     const bx = Math.floor(minX), by = Math.floor(minY), bw = Math.ceil(maxX) - bx, bh = Math.ceil(maxY) - by;
     if (bw <= 0 || bh <= 0) return null;
-    if (bw * bh > 1 << 28) throw fail('IJ_ROI_TOO_COMPLEX', 'selection too large');
+    if (bw * bh > fillLimit) throw fail('IJ_ROI_TOO_COMPLEX', 'selection too large');
     const dense = new Uint8Array(bw * bh);
     for (const l of loops) {
       if (l.length < 3) continue;
@@ -1386,6 +1389,40 @@
       if (!roi || !IJRoi.isArea(roi)) throw fail('IJ_NEEDS_ROI', 'an area selection is needed');
       io.check();
       return makeBand(roi, p.n, view.width, view.height, { tick: (f) => io.tick(f, 'op.makeBand'), check: () => io.check() });
+    }
+  });
+
+  /* Scale…, Rotate… and Interpolate of a mask selection: the outlines are traced and the result is rasterised, which touches buffers
+   * the size of the selection box, so the work runs here and not on the page. The result box is limited to four times the image. */
+  const TRANSFORMS = new Set(['scale', 'rotate', 'interpolate']);
+  IJOpRegistry.define('selTransform', {
+    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    validate(p) {
+      if (!p || !TRANSFORMS.has(p.op)) throw fail('IJ_BAD_ARGS', 'transform');
+      const nums = p.op === 'scale' ? [p.xscale, p.yscale] : p.op === 'rotate' ? [p.angle] : [p.interval];
+      if (!nums.every(finite)) throw fail('IJ_BAD_ARGS', 'transform');
+    },
+    scratchBytes(info, p) {
+      const r = info.roi;
+      const limit = Math.max(4 * info.width * info.height, 65536);
+      if (!r || !(r.w > 0 && r.h > 0) || !p) return 65536;
+      let w = r.w, h = r.h;
+      // fillLoops allocates only the scaled box (centered moves it, not its extent)
+      if (p.op === 'scale') { w = r.w * Math.abs(p.xscale) + 2; h = r.h * Math.abs(p.yscale) + 2; }
+      else if (p.op === 'rotate') { w = h = Math.hypot(r.w, r.h) + 2; }
+      // dense box + the mask of the loop being filled (a refused box allocates nothing)
+      return Math.min(w * h, limit) * 2 + r.w * r.h + 65536;
+    },
+    async run(view, p, roi, io) {
+      if (!roi || roi.type !== 'mask') throw fail('IJ_NEEDS_ROI', 'a composite selection is needed');
+      io.check();
+      const saved = fillLimit;
+      fillLimit = Math.max(4 * view.width * view.height, 65536);
+      try {
+        if (p.op === 'scale') return scale(roi, p.xscale, p.yscale, !!p.centered, view.width, view.height);
+        if (p.op === 'rotate') return rotate(roi, p.angle, !!p.aroundCenter, view.width, view.height);
+        return interpolate(roi, p.interval, !!p.smooth, !!p.adjust);
+      } finally { fillLimit = saved; }
     }
   });
 

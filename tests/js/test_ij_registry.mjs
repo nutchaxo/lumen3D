@@ -113,7 +113,7 @@ await test('IJOpRegistry: define is idempotent for one spec, refuses another und
   assert.deepEqual(sizeOps.filter((n) => !['convert', 'crop', 'rotate90'].includes(n)).sort(), WAVE2_SIZE.filter((n) => sizeOps.includes(n)).sort(), 'no unexpected size op');
   const WAVE2_NEWDOC = ['findMaximaImage', 'imageCalculator', 'mergeChannels', 'scaleNew', 'splitChannels', 'createMask', 'edmOutput'];
   // Wave 3 (PLAN-wave3 §1.4): the newdoc ops of the packages that add them (a package that failed to load adds none).
-  const WAVE3_NEWDOC = ['autoThresholdMask', 'autoThresholdTryAll', 'autoLocalThresholdTryAll', 'tubeness', 'frangi', 'fft', 'inverseFft', 'bandpassFilter', 'straighten', 'particleImage', 'newImage', 'montage', 'skeletonTagged', 'localThickness'];
+  const WAVE3_NEWDOC = ['autoThresholdMask', 'autoThresholdTryAll', 'autoLocalThresholdTryAll', 'tubeness', 'frangi', 'fft', 'inverseFft', 'bandpassFilter', 'straighten', 'particleImage', 'newImage', 'montage', 'skeletonTagged', 'localThickness', 'fitApply'];
   assert.deepEqual(newdocOps.filter((n) => !['cropToNew', 'toMask'].includes(n)).filter((n) => !WAVE2_NEWDOC.includes(n) && !WAVE3_NEWDOC.includes(n)), [], 'no unexpected newdoc op');
   assert.equal(R2.get('gaussian').preview, 'reduced');
   assert.equal(R2.get('flipH').preview, false);
@@ -130,7 +130,7 @@ const GOLDEN_LEGACY_FILL = { // the pre-registry engine's output (ij-engine.js o
 const GOLDEN = { // the same scenario since 1.1.0: the polygon selection is filled with ImageJ's PolygonFiller rule
   painted: ['40x30/8', 'a1114875', '5944c1d5', '7dc6b0d5'], gauss: ['40x30/8', '3bf7170f', 'c810c371', '9bcccadb'], ops: ['40x30/8', 'e6a3cabf', '802caadd', '6864cec9'],
   crop: ['25x20/8', '54dd0ac6', '5c99cee5', '7d4a3cb'], rot: ['20x25/8', '8eb29d16', 'a5eedeb9', '968ccf9b'], conv16: ['20x25/16', '3249db42', '6db0b3e7', '96fc6d63'],
-  f32: ['20x25/32', '8f1ed98b', '1b6cc1e', '17afd91f'], undo2: ['20x25/32', '5c5ffa3', '10cf0fd5', '590c39ce'], redo1: ['20x25/32', '8f1ed98b', '6262b6af', '17afd91f'],
+  f32: ['20x25/32', '8f1ed98b', 'b5438844', '17afd91f'], undo2: ['20x25/32', '5c5ffa3', '10cf0fd5', '590c39ce'], redo1: ['20x25/32', '8f1ed98b', '6262b6af', '17afd91f'],
   revert: ['40x30/8', 'eaeee985', 'eaeee985', 'eaeee985']
 };
 
@@ -616,9 +616,9 @@ await test('IJApp.extend: the rules, the extension API members, columns and erro
   const t = await boot({ pageSources, workerSources: { 'ij-proc-seg.js': opsSource() } });
   const A = t.IJApp;
   assert.deepEqual(arr(A.EXT_API_MEMBERS).sort(), ['addResults', 'cancelPreview', 'clearOverlay', 'compute', 'dialog', 'error', 'estimate', 'openPlot', 'openTable', 'openTool', 'overlay', 'preview',
-    'rename', 'run', 'setDisplay', 'setRoi', 'state', 'toast', 'tr',
+    'rename', 'run', 'setDisplay', 'setDisplayMode', 'setRoi', 'state', 'toast', 'tr',
     // wave 3 (PLAN-wave3 §2.6)
-    'addDoc', 'adopt', 'annotations', 'call', 'clearPending', 'closeDoc', 'closePanel', 'colorValue', 'commands', 'copyText', 'lastCommand', 'on', 'openPanel', 'pickFile',
+    'addDoc', 'adopt', 'annotations', 'call', 'clearPending', 'closeDoc', 'closePanel', 'colorValue', 'commands', 'copyText', 'dropBlob', 'lastCommand', 'on', 'openPanel', 'pickFile',
     'profile', 'putBlob', 'registerLut', 'renderPng', 'roiManager', 'runCommand', 'saveFile', 'sessionData', 'setPending', 'setThreshold', 'setTool', 'settings', 'view'].sort());
   const cmd = A.COMMANDS.find((c) => c.id === 'zTestDlg');
   assert.ok(cmd.ext && cmd.pkg === 'bg' && cmd.labelKey === 'cmd.zTestDlg' && cmd.order === 910);
@@ -737,10 +737,10 @@ await test('the extension API windows: plot, table, results columns, overlay, co
 });
 
 await test('run without undo: the app asks, then runs the step with noUndo', async () => {
-  const t = await boot({ pageSources, workerSources: { 'ij-proc-seg.js': opsSource() }, budgetBytes: 112000, volume: { channels: 3, width: 40, height: 30, depth: 2 } });
+  const t = await boot({ pageSources, workerSources: { 'ij-proc-seg.js': opsSource() }, budgetBytes: 120000, volume: { channels: 3, width: 40, height: 30, depth: 2 } });
   await t.open({ method: 'sum', start: 1, stop: 2, level: 0 });
   const doc = t.shell.opts.getState().doc;
-  assert.equal(doc.bitDepth, 16);
+  assert.equal(doc.bitDepth, 32);
   t.script.nextAsk = 'go';
   await t.runCommand('zScratch');
   assert.ok(t.script.asks.some((a) => /undo/i.test(a.title || '')), 'the operator was asked');

@@ -408,7 +408,9 @@
         "count": "Recuento"
       },
       "previewCountApprox": "~{n} máximos (solo la zona visible)"
-    }
+    },
+    "dupDialogHS": "Duplicar",
+    "dupChannelsEmpty": "Indique los canales que copiar, por ejemplo 1-3."
   },
   "op": {
     "invert": "Invirtiendo",
@@ -592,6 +594,9 @@
     "not8bit": "Se necesita una imagen de 8 bits.",
     "badRoi": "Esta selección no se puede usar aquí.",
     "tooLarge": "Esta imagen es demasiado grande para un solo TIFF (4 GiB).",
+    "pictureTooLarge": "Esta imagen es demasiado grande para abrirla aquí (más de 268 millones de píxeles).",
+    "ovLabelTooLarge": "La etiqueta es demasiado grande para grabarse en la imagen. Use un tamaño de fuente menor.",
+    "ovLabelCanvas": "No se pudo dibujar la etiqueta: el navegador no ofrece una superficie de dibujo. No se cambió nada.",
     "tiffUnsupported": "No se puede leer este TIFF: solo se admiten archivos en escala de grises de 8, 16 y 32 bits sin comprimir.",
     "incomplete": "El volumen no se leyó por completo. Inténtelo de nuevo.",
     "workerCrashed": "El motor de cálculo se detuvo.",
@@ -727,9 +732,9 @@
   },
   "about": {
     "intro": "Vista avanzada: un editor al estilo de ImageJ para el corte elegido en el Studio. Trabaja sobre los vóxeles sin pérdida del conjunto de datos.",
-    "source": "Varios cortes se aplanan en uno con la proyección Z; los datos almacenados son de 8 bits: máximo y mínimo siguen en 8 bits, la suma es de 16 bits (exacta hasta 257 cortes), la media, la desviación estándar y la mediana son de 32 bits.",
+    "source": "Varios cortes se aplanan en uno con la proyección Z, como hace el ZProjector de ImageJ: máximo, mínimo, media y mediana siguen en 8 bits sobre los datos almacenados (un TIFF original conserva su propia profundidad para el máximo, el mínimo y la media), la suma y la desviación estándar son de 32 bits.",
     "depth": "Los cambios de visualización (brillo, contraste, tablas de colores, superposición de umbral) nunca tocan los píxeles; Aplicar, los filtros y los cambios de tipo sí, y se pueden deshacer mientras la memoria lo permita.",
-    "deviations": "Diferencias con ImageJ: Borrar y Borrar el exterior usan 0 (negro) y Rellenar usa el valor máximo, porque las imágenes de fluorescencia tienen fondo oscuro; Convertir en máscara y Aplicar umbral crean una imagen nueva; la proyección suma es de 16 bits.",
+    "deviations": "Diferencias con ImageJ: Borrar y Borrar el exterior usan 0 (negro) y Rellenar usa el valor máximo, porque las imágenes de fluorescencia tienen fondo oscuro; Convertir en máscara y Aplicar umbral crean una imagen nueva.",
     "storage": "Su trabajo se guarda en este navegador sobre la marcha: un fallo o una pestaña cerrada no lo pierde. Guarde como TIFF para conservar un archivo.",
     "tables": "Las ventanas de tabla (listas, resultados de colocalización, distribuciones) y de gráfico no se conservan al recargar la página: cópielas o guárdelas como CSV o PNG. Los resultados siguen guardados con su trabajo.",
     "familiesTitle": "Herramientas incluidas",
@@ -743,7 +748,25 @@
     "famMeasure": "Mediciones: Medir, Analizar partículas, Resumir, Distribución, Histograma y Perfil, con Definir mediciones (descriptores de forma, Feret, Redirigir a, Limitar al umbral).",
     "famColoc": "Colocalización: Pearson, Manders, umbral automático de Costes e ICQ de Li, con un histograma 2D.",
     "missingTitle": "No incluido en esta versión",
-    "missing": "Pilas y 3D (hiperpilas, vistas ortogonales, herramientas 3D), macros, texto y flechas, filtros FFT y paso de banda, Bio-Formats, gráficos de superficie, el tipo de color RGB y el modo Legacy de la varita mágica."
+    "missing": "Pilas y 3D (hiperpilas, vistas ortogonales, herramientas 3D), macros, texto y flechas, Bio-Formats, gráficos de superficie, el tipo de color RGB y el modo Legacy de la varita mágica.",
+    "thisTitle": "Acerca de esta vista avanzada",
+    "resultsWindow": "Ventana > Resultados es la tabla de mediciones en la que escribe cada comando de Análisis (Medir, Analizar partículas, el administrador de ROI, las estadísticas del histograma): una fila por medición, las columnas elegidas en Definir mediciones. Sus menús Edit y File copian la tabla o la guardan como CSV.",
+    "pixelSource": "Los píxeles de una imagen abierta desde el Studio proceden del TIFF original del conjunto de datos cuando lo tiene y se eligió la pila Z (su propia profundidad y calibración); si no, del volumen procesado (8 bits, sin pérdida).",
+    "limitsTitle": "Limitaciones y diferencias con Fiji",
+    "dev": {
+      "autoLocalPhansalkar": "Auto Local Threshold, Phansalkar: unos pocos píxeles difieren de Fiji en las imágenes usadas para comprobarlo.",
+      "autoLi16": "Auto Threshold, Li, en una imagen de 16 bits con las opciones Ignore: el nivel puede estar una unidad desplazado respecto a Fiji.",
+      "autoStack": "Auto Threshold: las opciones Stack y Use stack histogram no se ofrecen (el Studio tiene canales, no pilas).",
+      "skeleton": "Analyze Skeleton: al podar los ciclos se corta el mismo vóxel que en Fiji, pero el orden de los cortes puede diferir en algunas redes; Branch information lista las ramas en otro orden, con otro primer extremo y otro promedio móvil.",
+      "coloc": "Coloc 2: la búsqueda de umbral de Costes por defecto se detiene con otra regla que la de Fiji; Bisection con pendiente negativa da 255 / 13 donde Fiji da 253 / 14; las columnas del registro « % zero-zero », « % saturated », « b to y-mean ratio » y las intensidades integradas no se escriben.",
+      "selection": "Selecciones: Interpolate no aplica la cláusula de Fiji para una ampliación de 12 o más, y una selección de varias partes se interpola como una sola unión par-impar; Straighten siempre muestra su cuadro de diálogo, no reescribe el ancho de la línea y rechaza un rectángulo girado.",
+      "traced": "Selecciones trazadas y compuestas: el vértice inicial y el orden de los vértices pueden diferir de los de Fiji (visible en Save XY Coordinates).",
+      "plot": "Plot: todos los símbolos se dibujan como un marcador cuadrado; no hay segundo color de relleno ni campo Visible.",
+      "particles": "Analyze Particles: una imagen binaria sin umbral se lee como 255 = primer plano (sin la lógica de Black background ni de tabla de colores invertida).",
+      "directionality": "Directionality: se analizan como máximo 100 fragmentos; el texto del resultado lo indica cuando se descartaron algunos.",
+      "invertLut": "Invertir LUT en una imagen compuesta mostrada en modo Composite se rechaza; cambie antes a modo Color o Escala de grises.",
+      "log": "No hay ventana Log: los valores que ImageJ escribe allí aparecen en la barra de estado."
+    }
   },
   "view": {
     "menubar": "Barra de menús",

@@ -56,11 +56,12 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   // the dialog = Fiji's: field order, labels, defaults
   await t.runCommand('skelAnalyze', { prune: 'none', pruneEnds: false, excludeRoi: false, shortestPath: true, detailed: true, labeled: true });
   const spec = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
-  assert.deepEqual(J(spec.fields.map((f) => f.id)), ['prune', 'pruneEnds', 'excludeRoi', 'shortestPath', 'detailed', 'labeled']);
-  assert.deepEqual(J(spec.fields.map((f) => labelOf(spec, f.id))), ['Prune cycle method:', 'Prune ends', 'Exclude ROI from pruning', 'Calculate largest shortest path', 'Show detailed info', 'Display labeled skeletons']);
-  assert.deepEqual(J(spec.fields[0].options.map((o) => o.value)), ['none', 'shortest', 'lowestVoxel', 'lowestBranch']);
-  assert.equal(spec.fields[0].value, 'none');
-  assert.ok(spec.fields.slice(1).every((f) => f.value === false), 'every checkbox starts ticked off');
+  assert.equal(spec.title, 'Analyze Skeleton', 'the title is the one of Fiji, not the menu label');
+  assert.deepEqual(J(spec.fields.map((f) => f.id)), ['secLoops', 'prune', 'secEnds', 'pruneEnds', 'excludeRoi', 'secResults', 'shortestPath', 'detailed', 'labeled']);
+  assert.deepEqual(J(spec.fields.map((f) => labelOf(spec, f.id))), ['Elimination of Loops:', 'Prune cycle method:', 'Elimination of End-points:', 'Prune ends', 'Exclude ROI from pruning', 'Results and Output:', 'Calculate largest shortest path', 'Show detailed info', 'Display labeled skeletons']);
+  assert.deepEqual(J(spec.fields.find((f) => f.id === 'prune').options.map((o) => o.value)), ['none', 'shortest', 'lowestVoxel', 'lowestBranch']);
+  assert.equal(spec.fields.find((f) => f.id === 'prune').value, 'none');
+  assert.ok(spec.fields.filter((f) => f.type === 'check').every((f) => f.value === false), 'every checkbox starts ticked off');
   const rows = await results(t, 3);
   assert.equal(rows.length, 3, 'one row per skeleton');
   const cols = want.result.table.headings;
@@ -165,6 +166,7 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   const want = f.cases.find((c) => c.image === 'carpet81' && c.params.blackBackground && !c.params.invertedLut && c.params.boxSizes === '2,3,4,6,8,12,16,32,64').result;
   await t.runCommand('toolsFractalBoxCount', { sizes: '2,3,4,6,8,12,16,32,64', blackBackground: true });
   const spec = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
+  assert.equal(spec.title, 'Fractal Box Counter');
   assert.deepEqual(J(spec.fields.map((x) => x.id)), ['sizes', 'blackBackground']);
   assert.deepEqual(J(spec.fields.map((x) => labelOf(spec, x.id))), ['Box Sizes:', 'Black Background']);
   assert.equal(spec.fields[0].value, '2,3,4,6,8,12,16,32,64'); assert.equal(spec.fields[1].value, false);
@@ -177,6 +179,8 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   // bad sizes are refused by the dialog; a grey image is refused by the operation
   const rowsBefore = rows.length;
   await t.runCommand('toolsFractalBoxCount', { sizes: '0,3', blackBackground: false }).catch(() => {});
+  const again = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
+  assert.deepEqual([again.fields[0].value, again.fields[1].value], ['2,3,4,6,8,12,16,32,64', true], 'both fields are the ones confirmed last (static fields of FractalBoxCounter)');
   const grey = new Uint8Array(100).map((_, i) => i * 2);
   await addImage(t, 'grey', 10, 10, [grey]);
   await t.runCommand('toolsFractalBoxCount', { sizes: '2,4', blackBackground: false }, { expectError: true });
@@ -197,7 +201,12 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   assert.equal(select.children.length, 25, 'every built-in function, in CurveFitter.sortedTypes order');
   assert.deepEqual(select.children.map((o) => o.textContent).slice(0, 4), ['Straight Line', '2nd Degree Polynomial', '3rd Degree Polynomial', '4th Degree Polynomial']);
   const fit = button(panel, 'Fit');
-  assert.ok(fit && button(panel, 'Open'));
+  assert.ok(fit && button(panel, 'Open') && button(panel, 'Apply'));
+  // Apply before any fit: nothing to apply, no image made
+  const nBefore = (await t.docs()).length;
+  fire(button(panel, 'Apply'), 'click');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal((await t.docs()).length, nBefore, 'Apply without a fitted function makes no image');
   // the fixture's 4th-degree polynomial data
   const cf = fx('curve_fit.json'), c4 = cf.cases.find((c) => c.fitType === 3);
   area.value = c4.x.map((x, i) => x + ' ' + c4.y[i]).join('\n');
@@ -216,6 +225,17 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   const fn = t.page.IJFijiUi.fitNumber;
   assert.deepEqual(['2.25000', '123456789', '1.00000E-7', '0.00000E0', '-0.12346', '1.23457E-5'].map((x, i) => fn([2.25, 123456789.123, 1e-7, 0, -0.123456, 0.0000123456789][i])), ['2.25000', '123456789', '1.00000E-7', '0.00000E0', '-0.12346', '1.23457E-5']);
   assert.ok(/Number of completed minimizations: [0-9]+[\s]+Number of iterations: [0-9]+ \(max: [0-9]+\)/.test(pre.textContent), 'the nonlinear fit prints its minimizations and the maximum');
+  // Apply: the fitted function of the last fit applied to every pixel, in a new 32-bit image "<name>-transformed" (Fitter.applyFunction)
+  const ramp = new Uint8Array(64).map((_, i) => i * 4);
+  await addImage(t, 'ramp', 8, 8, [ramp]);
+  fire(button(panel, 'Apply'), 'click');
+  const tr = await until(async () => (await docByName(t, 'ramp-transformed')) || null, 'the transformed image');
+  assert.equal(tr.bitDepth, 32);
+  assert.ok(tr.calibration && tr.calibration.pixelWidth === 1 && tr.calibration.unit === 'pixel', 'a new uncalibrated image, like new ImagePlus(title, ip)');
+  const fitted = await t.page.IJCurveFit.fitCurve({ fitType: 3, x: c4.x, y: c4.y, randomSeed: 0 });
+  const got = await t.pixels(tr.docId, 0);
+  for (let i = 0; i < 64; i += 7) assert.equal(got[i], Math.fround(t.page.IJCurveFit.fValue(3, fitted.params, ramp[i])), 'pixel ' + i + ' = f(params, value)');
+  assert.equal((await t.engine('doc.info', { docId: (await docByName(t, 'ramp')).docId })).undoDepth, 0, 'the source image is untouched');
   // not enough data
   area.value = '1 2';
   fire(fit, 'click');
@@ -246,7 +266,7 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   assert.ok(Math.abs(at("Kendall's Tau-b rank correlation value") - c.exact.kendallTauB) < 1e-3);
   assert.equal(at('T1'), c.thresholds[0], 'the bisection threshold of Fiji');
   assert.equal(tab.td[tab.th.indexOf('Threshold regression')], 'Bisection');
-  assert.ok(tab.th.includes('Costes P-Value') && tab.th.includes('Costes seed') && tab.th.includes('Pearson r (all ROI pixels)'), 'the wave-2 columns stay, the new ones follow');
+  assert.ok(tab.th.includes('Costes P-Value') && !tab.th.includes('Costes seed') && tab.th.includes('Pearson r (all ROI pixels)'), 'the wave-2 columns stay, the new ones follow');
   assert.ok(Math.abs(at('tM1 (sum ch1 above T1 and T2 / sum ch1 above T1)') - c.exact.tM1_ge) < 2e-2 || tab.th.some((h) => /^tM1/.test(h)));
   await until(() => plots.some((s) => s.image && s.image.w === 256), 'the 2D histogram');
   await until(() => plots.some((s) => /Li plot, channel 1/.test(s.title || '')), 'the Li plot of channel 1');
@@ -266,6 +286,17 @@ const labelOf = (spec, id) => { const f = spec.fields.find((x) => x.id === id); 
   assert.equal(Number(tab3.td[tab3.th.indexOf('ROI pixels')]), 64 * 32, 'the mask halves the measured pixels');
   const before = await t.pixels(id, 0);
   assert.deepEqual(Array.from(before), Array.from(A), 'nothing was written to the images');
+  // the mask list holds every open image (Fiji's), a mask that cannot be one is refused by the dialog with a message
+  const wide = await addImage(t, 'wide', 64, 64, [new Uint16Array(64 * 64).fill(1)], { bitDepth: 16 });
+  await t.runCommand('colocColoc2', Object.assign({}, values, { doc1: id, doc2: id, roi: 'doc:' + mid, costesTest: false, hist2d: false, liHistCh1: false }));
+  const spec2 = t.log.dialogSpecs[t.log.dialogSpecs.length - 1];
+  const maskValues = spec2.fields.find((f) => f.id === 'roi').options.map((o) => o.value);
+  assert.deepEqual(J(maskValues.slice(0, 4)), ['none', 'roi1', 'roi2', 'manager']);
+  assert.ok(maskValues.includes('doc:' + wide) && maskValues.includes('doc:' + mid) && maskValues.includes('doc:' + id), 'every open image is a mask choice');
+  const nTables = tableWindows(t).length;
+  await t.runCommand('colocColoc2', Object.assign({}, values, { doc1: id, doc2: id, roi: 'doc:' + wide, costesTest: false, hist2d: false, liHistCh1: false })).catch(() => {});
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(tableWindows(t).length, nTables, 'a 16-bit mask is refused: no table');
   await t.close();
 }
 

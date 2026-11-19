@@ -1916,7 +1916,7 @@ const IJShell = (() => {
    *   getState()          app state handed to command.enabled(state)
    *   tools               [{ id, labelKey?, label?, icon?, cursor?, hidden?, ext? } | { separator: true }] (default: ImageJ's set);
    *                       `ext` = a tool of a package: its pointer events go to onToolPointer; `hidden` = no button until selected
-   *   onCommand(cmd, { source: 'menu' | 'key' })
+   *   onCommand(cmd, { source: 'menu' | 'key', alt, shift })
    *   onTool(id)  onToolOptions(id)  (double-click on line / point)
    *   onRoi(roi | null, { final, source: 'draw' | 'move' | 'resize' | 'nudge' | 'clear' })
    *   onChannel(index)    onCancel()
@@ -2179,7 +2179,7 @@ const IJShell = (() => {
             e.stopPropagation();
             if (it.disabled) return;
             if (it.type === 'group') { menuState = { open: true, stack: [...menuState.stack.slice(0, d + 1).map((v, k) => (k === d ? idx : v)), P.firstSelectable(it.children)] }; renderMenus(); return; }
-            runCommand(it.command, 'menu');
+            runCommand(it.command, 'menu', e);
           });
           panel.appendChild(row);
         });
@@ -2209,10 +2209,11 @@ const IJShell = (() => {
       renderMenus();
     }
 
-    function runCommand(cmd, source) {
+    // `ev` = the click / key event: the modifiers it carried go to the command (IJ.altKeyDown(), IJ.shiftKeyDown())
+    function runCommand(cmd, source, ev) {
       closeMenus();
       try { focusTargetEl().focus({ preventScroll: true }); } catch (e) { /* no view yet */ }
-      if (opts.onCommand) opts.onCommand(cmd, { source });
+      if (opts.onCommand) opts.onCommand(cmd, { source, alt: !!(ev && ev.altKey), shift: !!(ev && ev.shiftKey) });
     }
 
     listen(menubar, 'keydown', (e) => {
@@ -2222,7 +2223,7 @@ const IJShell = (() => {
       e.preventDefault(); e.stopPropagation();
       const r = P.menuKey(tree, menuState, k);
       menuState = r.state;
-      if (r.activate) { runCommand(r.activate.command, 'key'); return; }
+      if (r.activate) { runCommand(r.activate.command, 'key', e); return; }
       if (!menuState.open && k === 'Escape') { try { focusTargetEl().focus({ preventScroll: true }); } catch (x) { /* none */ } }
       renderMenus();
       const b = titleButtons[menuState.stack[0]];
@@ -2681,7 +2682,7 @@ const IJShell = (() => {
       let enabled = true;
       if (typeof cmd.enabled === 'function') { try { enabled = !!cmd.enabled(opts.getState ? opts.getState() : null); } catch (x) { enabled = false; } }
       e.preventDefault();
-      if (enabled && opts.onCommand) { closeMenus(); opts.onCommand(cmd, { source: 'key' }); }
+      if (enabled && opts.onCommand) { closeMenus(); opts.onCommand(cmd, { source: 'key', alt: !!e.altKey, shift: !!e.shiftKey }); }
     }
     function onKeyUp(e) {
       if (e.key === ' ' && spaceDown) { spaceDown = false; for (const c of ctls.values()) c.stageCursor(); }

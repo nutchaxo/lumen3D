@@ -110,7 +110,7 @@
   const NOISE_MAX_SD = 100000;
   const NOISE_CHECK_DRAWS = 4096;   // a power of two
   REG.define('addNoise', {
-    kind: 'pixel', version: 1, preview: false,
+    kind: 'pixel', version: 1, preview: false, display: '16/32',
     validate(p) {
       if (!isNum(p.seed) || !Number.isInteger(p.seed)) throw bad('seed');
       if (!isNum(p.sd) || p.sd < 0 || p.sd > NOISE_MAX_SD) throw bad('sd');

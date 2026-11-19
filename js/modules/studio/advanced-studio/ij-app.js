@@ -114,7 +114,11 @@
  *       `after` = the tool id it follows
  *   longCommands: ['doc.tiff.project', …]   worker commands Cancel may target
  * a command also takes `repeatable` (default true; false only for Repeat itself, Undo and Close: ImageJ's Executer does
- * not remember those) and a menu path of up to three segments (every submenu must have its place in IJApp.GROUP_META).
+ * not remember those), `gesture: true` (run() is called synchronously in the click / key task, BEFORE a pending floating paste is
+ * committed, so the browser's user activation is still alive: the clipboard write of Copy to System; the commit follows the command)
+ * and a menu path of up to three segments (every submenu must have its place in IJApp.GROUP_META).
+ * run(api, { alt, shift, source }) → every command's run gets the keys held when the menu item was clicked / the shortcut pressed
+ *       (ImageJ's IJ.altKeyDown() / shiftKeyDown() inside the command); `source` is 'menu' | 'key' | 'api'. runCommand(id, { alt, shift }) passes them on.
  * New api members (each package gets its OWN api object: `call`, `settings.set` and `sessionData` know their package):
  *   openPanel(id, { focus }) → Promise<boolean>      closePanel(id)       a registered panel as a tool window
  *   on(event, fn) → off()   events: 'activeDoc' docId · 'roi' { docId, roi, final } · 'doc' { docId, kind: 'opened' | 'pixels' |
@@ -126,11 +130,14 @@
  *       persistent per-document overlay items (PLAN-wave3 §2.5): { id, kind: 'roi' | 'text' | 'shapes' | 'rect' | 'marker', … }
  *       in image coordinates; not undo steps; stored in the session meta; cleared (with a warning) by a size change
  *   settings { get(key), set(key, value) }  localStorage 'lumen3d.ij.prefs'; core keys conv.scale conv.fullRange16 misc.divZero
- *       colors.foreground colors.background colors.selection appearance.interpolate (only the Edit package writes them); every
+ *       colors.foreground colors.background colors.selection appearance.interpolate appearance.useNames (Prefs.useNamesAsLabels: the ROI
+ *       Manager's Labels show the names instead of the numbers) (only the Edit package writes them); every
  *       other key lives under the package's own prefix (bg flt seg multi geom roi coloc lay thr enh fft sel io ov ana edit fiji lib)
  *   sessionData { get(pkg), set(pkg, json) }  the package's own JSON (≤ 256 KiB) in the session meta
- *   commands() → [{ id, label, path: [menu labels], shortcut, enabled }]     runCommand(id) → Promise (the command runs
- *       normally, its dialog appears pre-filled)     lastCommand() → { id } | null   (last run command with repeatable !== false)
+ *   commands() → [{ id, label, path: [menu labels], shortcut, enabled }]     runCommand(id, { alt, shift }) → Promise (the command runs
+ *       normally; its dialogs come back pre-filled with the last run's values ONLY when Repeat Command is the caller — never a text field, a
+ *       field with `remember: false` or a default that is not the one offered last time; a command another command started does not
+ *       replace the last command)     lastCommand() → { id } | null   (last command the operator ran, repeatable !== false)
  *   call(cmd, args, { transfer, labelKey, long }) → Promise<result | null>   a worker command registered by THIS package with
  *       IJOpRegistry.defineCommand (another name rejects IJ_EXT_FORBIDDEN); busy / progress / Cancel like api.run
  *   adopt(info, { placement, provenance, sessionKey }) → Promise<docId>   a document the worker created (E.createDoc)
@@ -139,6 +146,13 @@
  *   closeDoc(docId) → Promise<boolean>  (with the unsaved prompt)     view(docId) → { getView, setView, visibleRect } | null
  *   putBlob(typedArray) → Promise<blobRef>   bytes sent to the worker once; a blobRef is the object { blobRef, kind }: put it
  *       where the typed array belongs in the params of api.preview / api.run; ≤ 64 MiB; dropped with the documents using it
+ *   dropBlob(blobRef | { blobRef }) → Promise<boolean>   gives a blob up (a cancelled paste): true when it was dropped; a blob a committed
+ *       step already uses stays. A blob a preview refers to is PINNED (never reclaimed under memory pressure) until this call or until the
+ *       preview is cancelled (api.cancelPreview); compute / estimate calls do not pin
+ *   compute(op, params, { docless: true, labelKey }) → Promise<result | null>   an op whose IJOpRegistry spec says `docless: true` (a compute
+ *       op that needs no image: run(null, params, null, io)); any other op keeps needing the image of `docId` / the active one
+ *   setDisplayMode(docId, 'composite' | 'color' | 'gray') → Promise   the channel display mode of an image ('grayscale' is accepted for 'gray');
+ *       not an undo step, never touches pixels
  *   setPending({ labelKey, commit() → Promise, cancel() }) / clearPending()   one transient state (a floating paste): commit
  *       runs before any other command, an image switch or Enter; cancel on Escape; the status bar shows labelKey
  *   setTool(id)   setThreshold(docId, channel, { lower, upper, dark }) → Promise   drives the Threshold window
@@ -149,6 +163,10 @@
  *   profile(docId, roi, channel) → Promise<{ values, step }>   (worker doc.profile)
  *   roiManager { list() → [{ name, docId, roi, stroke?, width?, fill? }], add(entries), set(list), select(indices), selected() → [i] }
  *   run(op, params, { …, placement })  placement 'tab' | 'splitRight' | 'gridWithSource' | 'float' for the images the step creates
+ *
+ * Fields of an IJOpRegistry op spec the app honours: `display: true` (the step resets the display range of the channels it changes, in its undo
+ * step), `display: '16/32'` (the same, only on a 16 / 32-bit image), `docless: true` on a compute op (api.compute(…, { docless: true }) runs it
+ * with view = null and no image open).
  *
  * Open from Library (package lib, PLAN-wave3 §4): ij-cmds-lib.js registers File › Open from Library… and its panel. The extension API has no
  * member for the Studio facade (`ctx.studio.library`), so enter() hands the page's ctx to the panel through the package's own global
@@ -215,18 +233,13 @@ const IJApp = (() => {
     ['area', 'Area'], ['perimeter', 'Perim.'], ['circularity', 'Circ.'], ['bx', 'BX'], ['by', 'BY'],
     ['bw', 'Width'], ['bh', 'Height'], ['xCentroid', 'X'], ['yCentroid', 'Y']
   ];
-  // A particle row also carries the image measurements Set Measurements asks for (ImageJ
-  // measures every particle's mask): these follow the particle's own columns, in COLUMNS order.
-  const PARTICLE_MEASURE_KEYS = ['mean', 'stdDev', 'mode', 'min', 'max', 'xCenterOfMass', 'yCenterOfMass',
-    'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis', 'major', 'minor', 'angle', 'aspectRatio', 'roundness', 'solidity',
-    'feret', 'feretX', 'feretY', 'feretAngle', 'minFeret', 'areaFraction', 'minThreshold', 'maxThreshold'];
-  const SUMMARY_COLUMNS = ['Image', 'Count', 'Total Area', 'Average Size', '%Area'];
   // IJ_* codes (engine, pure modules) and loader codes → plugin lang keys.
   const ERROR_KEYS = {
     IJ_OVER_BUDGET: 'err.overBudget',
     IJ_NOT_32BIT: 'err.not32bit',
     IJ_BAD_ROI: 'err.badRoi',
     IJ_TOO_LARGE: 'err.tooLarge',
+    IJ_PICTURE_TOO_LARGE: 'err.pictureTooLarge',
     IJ_TIFF_UNSUPPORTED: 'err.tiffUnsupported',
     IJ_INCOMPLETE: 'err.incomplete',
     IJ_WORKER_CRASHED: 'err.workerCrashed',
@@ -241,6 +254,7 @@ const IJApp = (() => {
     IJ_BAD_ARGS: 'err.badArgs',
     IJ_BAD_TYPE: 'err.badType',
     IJ_UNKNOWN_OP: 'err.unknownOp',
+    IJ_UNKNOWN_CMD: 'err.moduleMissing',
     IJ_ROI_TOO_COMPLEX: 'err.roiTooComplex',
     IJ_SIZE_MISMATCH: 'err.sizeMismatch',
     STUDIO_NOT_SUPPORTED: 'err.notSupported',
@@ -281,7 +295,7 @@ const IJApp = (() => {
   const EVENT_NAMES = new Set(['activeDoc', 'roi', 'doc', 'results', 'layout', 'tool']);
   const PREFS_KEY = 'lumen3d.ij.prefs';
   const SETTING_DEFAULTS = { 'conv.scale': true, 'conv.fullRange16': false, 'misc.divZero': 'Infinity', 'colors.foreground': 'white',
-    'colors.background': 'black', 'colors.selection': 'yellow', 'appearance.interpolate': false };
+    'colors.background': 'black', 'colors.selection': 'yellow', 'appearance.interpolate': false, 'appearance.useNames': false };
   const CORE_SETTING_PREFIXES = ['conv', 'misc', 'colors', 'appearance'];
   const PKG_PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc', lay: 'lay', thr: 'thr', enh: 'enh',
     fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana', edit: 'edit', fiji: 'fiji', lib: 'lib' };
@@ -435,12 +449,12 @@ const IJApp = (() => {
     helpAbout: 10, helpShortcuts: 20
   };
   // ImageJ's separators (IJ_Props.txt); the rows other packages own are theirs (PLAN-wave3 §1.2).
-  const SEPARATOR_ABOVE = new Set(['fileClose', 'fileSimple', 'editClear', 'imageInfo', 'imageCrop', 'lutFire', 'lut16Colors', 'binErode', 'analyzeHistogram', 'windowNext']);
+  const SEPARATOR_ABOVE = new Set(['fileClose', 'fileSimple', 'editClear', 'imageCrop', 'lutFire', 'lut16Colors', 'binErode', 'analyzeHistogram', 'windowNext']);
   // Position of each submenu inside its parent list (keyed by the path of menu names).
   const GROUP_META = {
     'File/New': { order: 5 }, 'File/Import': { order: 15 }, 'File/SaveAs': { order: 25 },
     'Edit/Selection': { order: 70, separatorBefore: true }, 'Edit/Options': { order: 80 },
-    'Image/Type': { order: 10 }, 'Image/Adjust': { order: 20 }, 'Image/Color': { order: 60 }, 'Image/Stacks': { order: 70 },
+    'Image/Type': { order: 10 }, 'Image/Adjust': { order: 20, separatorBefore: true }, 'Image/Color': { order: 60 }, 'Image/Stacks': { order: 70 },
     'Image/Transform': { order: 110 }, 'Image/Zoom': { order: 120 }, 'Image/Overlay': { order: 125 },
     'Image/LookupTables': { order: 130, separatorBefore: true },
     'Process/Noise': { order: 60 }, 'Process/Binary': { order: 70, separatorBefore: true }, 'Process/Math': { order: 80 },
@@ -457,6 +471,22 @@ const IJApp = (() => {
   // ───────────────────────────── pure helpers (also used by tests) ─────────────────────────────
 
   const bytesPerPixel = (bitDepth) => (bitDepth === 8 ? 1 : bitDepth === 16 ? 2 : 4);
+
+  /**
+   * ij.gui.ImageWindow.getImageSize: the size the Window menu shows after an image's title. size = bytes / 1024.0;
+   * < 1024 → d2s(size, 0) + "K"; < 10000 → d2s(size / 1024, 1) + "MB"; < 1048576 → d2s(round(size / 1024), 0) + "MB";
+   * else d2s(size / 1048576, 1) + "GB"; a trailing ".0" is dropped.
+   */
+  function imageSizeString(bytes) {
+    const d2s = (n, p) => (typeof IJOv !== 'undefined' ? IJOv.d2s(n, p) : n.toFixed(p));
+    const size = bytes / 1024.0;
+    let s;
+    if (size < 1024.0) s = d2s(size, 0) + 'K';
+    else if (size < 10000.0) s = d2s(size / 1024.0, 1) + 'MB';
+    else if (size < 1048576.0) s = d2s(Math.floor(size / 1024.0 + 0.5), 0) + 'MB';
+    else s = d2s(size / 1048576.0, 1) + 'GB';
+    return s.replace(/\.0(?=[KMG])/, '');
+  }
 
   /** Output bit depth of a projection (PLAN §3.4 IJProject). */
   function outputBitDepth(method, depth, inputBitDepth) {
@@ -1117,7 +1147,9 @@ const IJApp = (() => {
     for (const id of S.order) {
       if (!viewOf(id)) continue;
       const list = S.roiList.filter((r) => r.docId === id);
-      S.shell.setRois({ all: list.map((r) => ({ roi: r.roi, label: roiLabels ? r.name : '', stroke: r.stroke, width: r.width, fill: r.fill })), showAll: S.showAll }, id);
+      // ImageCanvas draws ""+(index+1); the names only with Prefs.useNamesAsLabels
+      const names = settingGet('appearance.useNames') === true;
+      S.shell.setRois({ all: list.map((r, i) => ({ roi: r.roi, label: roiLabels ? (names ? r.name : String(i + 1)) : '', stroke: r.stroke, width: r.width, fill: r.fill })), showAll: S.showAll }, id);
     }
   }
 
@@ -1432,6 +1464,8 @@ const IJApp = (() => {
     clearPreviews(); clearOverlays();
     if (S.previewCompute && S.worker && !S.worker.dead) call('cancel', { targetId: S.previewCompute }).catch(() => {});
     S.previewCompute = 0;
+    // the blobs its previews pinned (a floating paste) are reclaimable again
+    if (S.worker && !S.worker.dead) call('engine.unpinBlobs', {}).catch(() => {});
   }
 
   /** { op | compute, params(values), ... } of a dialog spec → the preview hook the view's dialog calls. */
@@ -1471,12 +1505,19 @@ const IJApp = (() => {
 
   // ── Repeat Command (owner P-ana; ij.Executer: "if (!(cmd.equals("Undo")||cmd.equals("Close"))) previousCommand = cmd;") ──
   // ImageJ re-runs the command and its dialog comes back with the values the last run used (the plugins keep them in static fields). Here the
-  // dialogs a command opened are remembered by command id and position; api.runCommand puts them back as the pre-filled values of the same dialogs.
-  const REPEAT = { run: null, memory: new Map(), next: null };
-  function prefillFields(fields, values) {
+  // dialogs a command opened are remembered by command id and position; Repeat Command (and only it: Executer.java re-runs the command, a
+  // command started from Find Commands or by another command computes its defaults afresh) puts them back as the pre-filled values of the
+  // same dialogs. A value is NOT put back where the default is not a plain remembered setting: a field with `remember: false`, a text field
+  // (titles, names: Duplicate computes a unique title each time, `remember: true` opts a text field in) and a field whose default is not the one
+  // it was offered last time (a size, a title or a range derived from the image on screen).
+  const REPEAT = { run: null, memory: new Map(), offered: new Map(), next: null, nested: false };
+  const REPEAT_CALLER = 'procRepeatCommand';
+  function prefillFields(fields, values, offered) {
     if (!values || typeof values !== 'object') return fields;
     return fields.map((f) => {
       if (!f || !f.id || !Object.prototype.hasOwnProperty.call(values, f.id)) return f;
+      if (f.remember === false || ((f.type === 'string' || f.type === 'textarea') && f.remember !== true)) return f;
+      if (offered && Object.prototype.hasOwnProperty.call(offered, f.id) && offered[f.id] !== f.value) return f;
       const v = values[f.id];
       switch (f.type) {
         case 'check': return typeof v === 'boolean' ? Object.assign({}, f, { value: v }) : f;
@@ -1494,7 +1535,12 @@ const IJApp = (() => {
     if (Array.isArray(config.fields)) spec.fields = config.fields.map(expandField);
     const rep = REPEAT.run;
     const at = rep ? rep.k++ : -1;
-    if (rep && rep.replay && rep.replay[at] && Array.isArray(spec.fields)) spec.fields = prefillFields(spec.fields, rep.replay[at]);
+    if (rep && Array.isArray(spec.fields)) {
+      const offered = {};
+      for (const f of spec.fields) if (f && f.id && (f.value === undefined || typeof f.value !== 'object')) offered[f.id] = f.value;
+      rep.offered[at] = offered;
+      if (rep.replay && rep.replay[at]) spec.fields = prefillFields(spec.fields, rep.replay[at], rep.replayOffered && rep.replayOffered[at]);
+    }
     const info = activeInfo();
     const ext = !!(config.preview && (config.preview.op || config.preview.compute) && !config.preview.onChange);
     if (ext) spec.preview = info ? extPreviewHook(config.preview, info) : undefined;
@@ -1723,23 +1769,50 @@ const IJApp = (() => {
   // the browser decodes, a text image, a selection (.roi), a RoiSet (.zip) or a LUT (.lut). The dispatcher asks the file's
   // extension first, then its first bytes.
   const OPEN_ACCEPT = '.tif,.tiff,.png,.jpg,.jpeg,.gif,.bmp,.txt,.roi,.zip,.lut';
-  /** A picture the browser decodes → an image document (IJFileKinds.imageFromRgba: grey = one 8-bit channel, colour = R / G / B). */
+  /** A picture the browser decodes → an image document: grey = one 8-bit channel C1, colour = the channels R / G / B (the naming of
+   *  File › New › System Clipboard, which decodes the same way). The main thread reads the picture in bands of at most ~1 Mpx, yielding
+   *  between them, and refuses one larger than 268 Mpx (a microscopy picture can be large: the bands, not a full canvas, bound the memory). */
+  const PICTURE_MAX_PIXELS = 268435456;
+  const pictureTooLarge = () => Object.assign(new Error('too large'), { code: 'IJ_PICTURE_TOO_LARGE' });
   async function decodeBrowserImage(bytes, name) {
     if (typeof createImageBitmap !== 'function') throw IJFileKinds.error('IJ_IO_DECODE');
     let bmp;
     try { bmp = await createImageBitmap(new Blob([bytes])); } catch (_) { throw IJFileKinds.error('IJ_IO_DECODE'); }
-    const w = bmp.width, hh = bmp.height;
-    if (!(w > 0 && hh > 0) || w * hh > 268435456) { if (bmp.close) bmp.close(); throw Object.assign(new Error('too large'), { code: 'IJ_TOO_LARGE' }); }
-    let data;
     try {
+      const w = bmp.width, h = bmp.height;
+      if (!(w > 0 && h > 0) || w * h > PICTURE_MAX_PIXELS) throw pictureTooLarge();
+      const n = w * h;
+      const bandH = Math.max(1, Math.min(h, Math.floor(1048576 / w)));
       let canvas;
-      if (typeof OffscreenCanvas === 'function') canvas = new OffscreenCanvas(w, hh);
-      else { canvas = document.createElement('canvas'); canvas.width = w; canvas.height = hh; }
+      try {
+        if (typeof OffscreenCanvas === 'function') canvas = new OffscreenCanvas(w, bandH);
+        else { canvas = document.createElement('canvas'); canvas.width = w; canvas.height = bandH; }
+      } catch (_) { throw pictureTooLarge(); }
       const g = canvas.getContext('2d', { willReadFrequently: true });
-      g.drawImage(bmp, 0, 0);
-      data = g.getImageData(0, 0, w, hh).data;
-    } catch (_) { throw IJFileKinds.error('IJ_IO_DECODE'); } finally { if (bmp.close) bmp.close(); }
-    return IJFileKinds.imageFromRgba(data, w, hh, name);
+      if (!g) throw IJFileKinds.error('IJ_IO_DECODE');
+      const R = new Uint8Array(n), G = new Uint8Array(n), B = new Uint8Array(n);
+      let gray = true;
+      try {
+        for (let y0 = 0; y0 < h; y0 += bandH) {
+          const bh = Math.min(bandH, h - y0);
+          g.clearRect(0, 0, w, bandH);
+          g.drawImage(bmp, 0, y0, w, bh, 0, 0, w, bh);
+          const px = g.getImageData(0, 0, w, bh).data;
+          const o = y0 * w;
+          for (let i = 0, m = w * bh; i < m; i++) {
+            const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+            R[o + i] = r; G[o + i] = gg; B[o + i] = b;
+            if (r !== gg || gg !== b) gray = false;
+          }
+          await new Promise((res) => setTimeout(res, 0));
+        }
+      } catch (err) { if (err && err.code) throw err; throw IJFileKinds.error('IJ_IO_DECODE'); }
+      const calibration = { pixelWidth: 1, pixelHeight: 1, unit: 'px' };
+      const colors = gray ? ['#ffffff'] : ['#ff0000', '#00ff00', '#0000ff'];
+      const names = gray ? ['C1'] : ['R', 'G', 'B'];
+      return { name, width: w, height: h, bitDepth: 8, calibration,
+        channels: (gray ? [R] : [R, G, B]).map((data, i) => ({ data, name: names[i], color: colors[i], display: { min: 0, max: 255, lut: IJLuts.forColor(colors[i]), invert: false } })) };
+    } finally { if (bmp.close) bmp.close(); }
   }
 
   /** What File › Open and Import › Text Image do with a parsed text image: a 32-bit image, display range = the finite data range. */
@@ -1770,9 +1843,7 @@ const IJApp = (() => {
   }
 
   async function openTiffBytes(bytes, buf, base) {
-    let compressed = false;
-    try { compressed = IJLocalTiff.needsDecoder(bytes); } catch (_) { compressed = false; }   // the worker reports a file it cannot read
-    if (compressed) { await openOpened(await IJLocalTiff.read(bytes, base)); return; }
+    // the worker reads every TIFF, the compressed ones too (doc.open): no strip loop runs on the page
     const res = await call('doc.open', { bytes, name: base }, [buf]);
     const info = res.info;
     registerDoc(info, { clean: true });
@@ -1814,15 +1885,41 @@ const IJApp = (() => {
     if (d.width > 0) e.width = d.width;
     return e;
   }
-  async function openLutFile(bytes, base) {
-    const info = activeInfo();
-    if (!info) throw IJFileKinds.error('IJ_IO_NEEDS_IMAGE');
+  /** The channels a look-up table is installed on: the active one, or every channel of a multichannel image shown in Grayscale mode
+   *  (LutLoader.showLut: `if (imp.isComposite() && mode == GRAYSCALE) { setMode(COLOR); for each channel setC(c); setChannelColorModel(cm) }`). */
+  function lutChannelsOf(info) {
+    const n = (info.channels || []).length;
+    const d = S.dstate.get(info.docId);
+    if (n > 1 && d && d.mode === 'gray') return Array.from({ length: n }, (_, c) => c);
+    return [activeChannel(info)];
+  }
+
+  /** File › Open of a .lut: the same behaviour as File › Import › LUT (package edit). A name of a built-in table or starting with '#' gets
+   *  " (LUT)", a long one is cut to 56 characters; the table replaces the channel's (an inverted look-up table is not inverted again, as
+   *  LutLoader.showLut: "ip.setColorModel(cm)"); with no image open the 256 x 32 ramp image (LutLoader.createImage) shows it. */
+  async function openLutFile(bytes, base, fileName) {
     if (typeof IJLutFile === 'undefined' || typeof IJLutFile.parse !== 'function') throw IJFileKinds.error('IJ_IO_UNKNOWN_FORMAT');
     const parsed = IJLutFile.parse(bytes);
     const table = parsed && parsed.table ? parsed.table : parsed;
-    const name = base || 'LUT';
+    const reserved = IJLuts.names().concat(typeof IJEdit !== 'undefined' ? [IJEdit.LUT_RGB332, IJEdit.LUT_REDGREEN] : []);
+    let name = String(base || 'LUT').trim().slice(0, 56) || 'LUT';
+    if (name.charAt(0) === '#' || reserved.indexOf(name) >= 0) name += ' (LUT)';
     await registerLutExt(name, table);
-    await setDisplayExt(info.docId, activeChannel(info), { lut: name });
+    const info = activeInfo();
+    if (info) {
+      // LutLoader.showLut on a composite shown in Grayscale: every channel takes the table and the image switches to Color
+      const all = lutChannelsOf(info);
+      for (const c of all) await setDisplayExt(info.docId, c, { lut: name, invert: false });
+      if (all.length > 1) await setDisplayModeExt(info.docId, 'color');
+      return;
+    }
+    const ramp = new Uint8Array(256 * 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 256; x++) ramp[y * 256 + x] = x;
+    const title = String(fileName || name);
+    const taken = Array.from(S.docs.values(), (i) => i.name);
+    await addDocExt({ name: typeof IJEdit !== 'undefined' && IJEdit.makeUniqueName ? IJEdit.makeUniqueName(title, taken) : title, width: 256, height: 32, bitDepth: 8,
+      calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
+      channels: [{ data: ramp, name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: name, invert: false } }] }, { placement: 'tab' });
   }
 
   async function openFileBody(f) {
@@ -1836,7 +1933,7 @@ const IJApp = (() => {
       case 'text': return openOpened(textImageOf(await IJTextIo.parseTextImageAsync(bytes), base));
       case 'roi': return openRoiFile(bytes, fname);
       case 'zip': return openRoiSet(bytes);
-      case 'lut': return openLutFile(bytes, base);
+      case 'lut': return openLutFile(bytes, base, fname);
       default: throw IJFileKinds.error('IJ_IO_UNKNOWN_FORMAT');
     }
   }
@@ -2234,7 +2331,8 @@ const IJApp = (() => {
    *  XY stack, no TIFF in download/, none the stream can read or that covers the volume. Cached per figure; never delays the dialog long. */
   let tiffProbe = null;
   async function probeFigureTiff(desc) {
-    if (desc.axis !== 'z' || typeof IJLibSource === 'undefined') return null;
+    // the worker half of the library (doc.tiff.project) lives in ij-proc-lib.js: a copy that failed there leaves only the volume as a source
+    if (desc.axis !== 'z' || typeof IJLibSource === 'undefined' || S.failedPackages.has('lib')) return null;
     const lib = S.ctx && S.ctx.studio && S.ctx.studio.library;
     if (!lib || typeof lib.describe !== 'function') return null;
     const key = figureKeyOf(desc);
@@ -2350,7 +2448,8 @@ const IJApp = (() => {
     if (!lvDesc) return false;
     const [lo, hi] = mapRange(opt.a, opt.b, opt.n0, lvDesc.indices.length);
     const depth = hi - lo;
-    const outBits = outputBitDepth(opt.method, depth);
+    // ZProjector's own output depth for the 8-bit processed volume, the rule of the library route (doc.zproj.begin): one image type from both routes
+    const outBits = outputBitDepth(opt.method, depth, 8);
     const here = planLevels(desc, S.budgetBytes, outBits).find((l) => l.level === lvDesc.level);
     if (!here || !here.fits) { await reportError(Object.assign(new Error('level over budget'), { code: 'IJ_OVER_BUDGET' })); return false; }
     const channels = desc.channels || [];
@@ -2374,7 +2473,7 @@ const IJApp = (() => {
       session = await S.ctx.studio.source.open({ level: lvDesc.level, signal: ac.signal });
       // The band decides the peak of a median / sd accumulator (P * depth for P = rows * width):
       // the engine fits it to the budget and says which band to stream with.
-      const begin = await call('doc.project.begin', { name, method: opt.method, width: session.width, height: session.height, depth,
+      const begin = await call('doc.project.begin', { name, method: opt.method, width: session.width, height: session.height, depth, inputBitDepth: 8,
         channels: channels.map((c) => ({ name: c.name, color: c.color })), calibration: cal, provenance, bandRows: session.bandRows });
       docId = begin.docId;
       const bandRows = Math.max(1, Math.min(session.bandRows, Number.isInteger(begin.bandRows) && begin.bandRows > 0 ? begin.bandRows : session.bandRows));
@@ -2478,7 +2577,7 @@ const IJApp = (() => {
     if (!info) return;
     return runOp('fill', { value: fillValue(info, activeChannel(info), true) });
   }
-  const invert = () => runOp('invert', {});
+  const invert = () => runOp('invert', { fullRange: settingGet('conv.fullRange16') === true });
   const crop = () => runOp('crop', {}, { all: true });
 
   // ij.plugin.Duplicator keeps "Ignore selection" in a static field (staticIgnoreSelection) and marks every image it made with the property
@@ -2506,13 +2605,22 @@ const IJApp = (() => {
     }
     const existing = shownDocs().map((id) => S.docs.get(id).name);
     const defaultTitle = typeof IJEdit !== 'undefined' ? IJEdit.uniqueName(info.name, existing, DUP.made.has(info.docId)) : info.name.replace(/(-\d+)?$/, '') + '-1';
+    // Duplicator.showDialog (one channel): "Duplicate…" with "Ignore selection" when ANY selection is there, opened on the remembered value (in
+    // 1.54p the `if (roiOutside) ignoreSelection = true` store is overwritten from staticIgnoreSelection before the dialog). A selection outside
+    // the image is always ignored here, ticked or not: ImageJ's crop of it would be an empty 0×0 image. showHSDialog (several channels):
+    // "Duplicate", "Channels (c):", no Ignore selection.
+    const anySel = !!roi0;
     const fields = [{ type: 'string', id: 'title', labelKey: 'dlg.edit.dupTitle', value: defaultTitle }];
-    if (area && !outside) fields.push({ type: 'check', id: 'ignore', labelKey: 'dlg.edit.ignoreSelection', value: DUP.ignoreSelection });
+    if (nCh <= 1 && anySel) fields.push({ type: 'check', id: 'ignore', labelKey: 'dlg.edit.ignoreSelection', value: DUP.ignoreSelection });
     if (nCh > 1) fields.push({ type: 'string', id: 'channels', labelKey: 'dlg.edit.channelsRange', value: '1-' + nCh });
-    const v = await dialog({ title: tr('dlg.edit.dupDialog'), okLabel: tr('dlg.ok'), fields });
+    // ImageJ's range[0] throws on an empty "Channels (c):" text; here the dialog refuses it with a message
+    const validate = nCh > 1 ? (vals) => (String(vals.channels === undefined || vals.channels === null ? '' : vals.channels).trim() === '' ? { channels: 'dlg.dupChannelsEmpty' } : null) : undefined;
+    const spec = { title: nCh > 1 ? tr('dlg.dupDialogHS') : tr('dlg.edit.dupDialog'), okLabel: tr('dlg.ok'), fields };
+    if (validate) spec.validate = validate;
+    const v = await dialog(spec);
     if (!v) return;
-    const ignore = outside || (area && !!v.ignore);
-    if (area && !outside) DUP.ignoreSelection = !!v.ignore;
+    const ignore = outside || (area && nCh <= 1 && !!v.ignore);
+    if (anySel && nCh <= 1) DUP.ignoreSelection = !!v.ignore;
     let channels;
     if (nCh > 1 && typeof IJEdit !== 'undefined') {
       const r = IJEdit.parseChannelRange(v.channels, nCh);
@@ -2548,7 +2656,7 @@ const IJApp = (() => {
         options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
       if (a !== 'ok') return;
     }
-    await runOp('convert', { bitDepth: bits, scale: true }, { all: true, noRoi: true });
+    await runOp('convert', { bitDepth: bits, scale: settingGet('conv.scale') !== false }, { all: true, noRoi: true });
   }
 
   function zoom(dir) {
@@ -2572,7 +2680,9 @@ const IJApp = (() => {
     const info = activeInfo();
     if (!info) return;
     // LutLoader.showLut: "ip.setColorModel(cm)" installs a fresh table: a table that was inverted (Invert LUT) is replaced, not inverted again
-    setChannelDisplay(info.docId, activeChannel(info), { lut: name, invert: false });
+    const all = lutChannelsOf(info);
+    for (const c of all) setChannelDisplay(info.docId, c, { lut: name, invert: false });
+    if (all.length > 1) setDisplayModeExt(info.docId, 'color').catch((err) => console.error('[advanced-studio] set mode', err));
   }
   function invertLut() {
     const info = activeInfo();
@@ -2893,7 +3003,7 @@ const IJApp = (() => {
         { type: 'number', id: 'xMin', labelKey: 'dlg.ana.histXMin', value: last.useRange === false && Number.isFinite(last.xMin) ? last.xMin : lo, step: 'any' },
         { type: 'number', id: 'xMax', labelKey: 'dlg.ana.histXMax', value: last.useRange === false && Number.isFinite(last.xMax) ? last.xMax : hi, step: 'any' },
         { type: 'string', id: 'yMax', labelKey: 'dlg.ana.histYMax', value: last.yMax === undefined ? 'Auto' : String(last.yMax) }],
-      onChange: (values, set, changedId) => { if (changedId === 'xMin' || changedId === 'xMax') set('useRange', false); } });
+      onChange: (values, set, changedId) => { if (changedId === 'xMin' || changedId === 'xMax') set({ useRange: false }); } });
       if (!v) return;
       bins = Math.max(2, Math.min(65536, Math.round(Number(v.bins))));
       ANA.hist = { docId: info.docId, bins, useRange: !!v.useRange, xMin: Number(v.xMin), xMax: Number(v.xMax), yMax: String(v.yMax) };
@@ -2975,6 +3085,8 @@ const IJApp = (() => {
     const overlayMode = opt.show === 'overlay' || opt.show === 'overlayMasks' || (opt.overlay && opt.show === 'nothing');
     const maskedOverlay = opt.show === 'overlayMasks';
     let summary = null;
+    // particleImage and the Invert Y option live in ij-proc-ana.js: when its worker copy failed to load they are skipped with a message
+    const anaFailed = S.failedPackages.has('ana');
     await busy(tr('op.particles'), async () => {
       const roi = isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null;
       const ch = activeChannel(info);
@@ -2988,7 +3100,7 @@ const IJApp = (() => {
       // ParticleAnalyzer.setThresholdLevels: the threshold range of the image, else a binary image (refused with ImageJ's message for any other)
       const pthr = thresholdFor(info, ch);
       const res = await call('doc.particles', { docId: info.docId, channel: ch, opts: Object.assign({ roi }, analysis), keys, redirect: mo.redirect,
-        invertY: S.measurements.includes('invertY'), composite: opt.composite && !opt.holes, threshold: pthr, requireBinary: !pthr });
+        invertY: S.measurements.includes('invertY') && !anaFailed, composite: opt.composite && !opt.holes, threshold: pthr, requireBinary: !pthr });
       // The table the rows go to (ParticleAnalyzer.java:566-576): "Display results" off while a Results window is open measures into a private table
       // — unless "Clear results" is ticked, which clears and closes the window and uses the system table. The system table keeps the rows even
       // when nothing shows them. `rowBase` = rt.size() before the first particle: what the labels, Count Masks levels and overlay names count from.
@@ -3057,7 +3169,8 @@ const IJApp = (() => {
         annotationsApi.set(info.docId, items, { tag: 'ana.particles' });
       }
       // the "Show:" image
-      if (!overlayMode && opt.show !== 'nothing') {
+      if (!overlayMode && opt.show !== 'nothing' && anaFailed) setStatus(tr('warn.packageFailed', { pkg: 'ana' }));
+      else if (!overlayMode && opt.show !== 'nothing') {
         const run = await call('doc.run', { docId: info.docId, op: 'particleImage', params: { show: opt.show, opts: analysis, threshold: pthr, rowOffset: rowBase, composite: opt.composite && !opt.holes }, roi, channel: ch });
         applyRunResult(info.docId, run);
         if (run && run.newDocIds && run.newDocIds.length) {
@@ -3273,7 +3386,7 @@ const IJApp = (() => {
       if (!info) return;
       const my = ++token;
       try {
-        const hh = await call('doc.histogram', { docId: info.docId, roi: null, channel: activeChannel(info), bins: 256 });
+        const hh = await call('doc.histogram', { docId: info.docId, roi: null, channel: activeChannel(info), bins: 256, stats: false });
         if (my !== token) return;
         hist = hh;
         def = info.bitDepth === 8 ? { min: 0, max: 255 } : { min: hh.min, max: hh.max };
@@ -3370,7 +3483,7 @@ const IJApp = (() => {
       if (!info) return;
       const my = ++token;
       try {
-        const hh = await call('doc.histogram', { docId: info.docId, roi: null, channel: activeChannel(info), bins: 256 });
+        const hh = await call('doc.histogram', { docId: info.docId, roi: null, channel: activeChannel(info), bins: 256, stats: false });
         if (my !== token) return;
         hist = hh;
         hist16Row.style.display = info.bitDepth === 16 ? '' : 'none'; // only a 16-bit image has a 16-bit histogram
@@ -4269,15 +4382,22 @@ const IJApp = (() => {
     openStaticWindow('info', tr('cmd.imageInfo'), h('div', { class: 'ij-panel' }, h('pre', { class: 'ij-info-pre', text: lines.join('\n') })));
   }
 
+  const ABOUT_DEVIATIONS = ['about.dev.autoLocalPhansalkar', 'about.dev.autoLi16', 'about.dev.autoStack', 'about.dev.skeleton', 'about.dev.coloc', 'about.dev.selection',
+    'about.dev.traced', 'about.dev.plot', 'about.dev.particles', 'about.dev.directionality', 'about.dev.invertLut', 'about.dev.log'];
   function showAbout() {
     const para = (k) => h('p', { text: tr(k) });
     const families = ['about.famDisplay', 'about.famSelect', 'about.famBackground', 'about.famFilters', 'about.famBinary', 'about.famMulti', 'about.famGeometry', 'about.famMeasure', 'about.famColoc']
       .map((k) => h('li', { text: tr(k) }));
+    // every deviation that stays (ORCHESTRATOR-DECISIONS), then the Fiji tools' own list (package fiji, lang-parts until integration)
+    const limits = ABOUT_DEVIATIONS.map((k) => h('li', { text: tr(k) }));
+    limits.push(h('li', { text: tr('about.fijiDeviations') }));
     openStaticWindow('about', tr('cmd.helpAbout'), h('div', { class: 'ij-panel ij-about' }, [
       para('about.intro'), para('about.source'), para('about.depth'),
       h('h4', { text: tr('about.familiesTitle') }), h('ul', null, families),
       h('h4', { text: tr('about.missingTitle') }), para('about.missing'),
-      para('about.deviations'), para('about.storage'), para('about.tables')
+      para('about.deviations'), para('about.storage'), para('about.tables'),
+      h('h4', { text: tr('about.thisTitle') }), para('about.resultsWindow'), para('about.pixelSource'),
+      h('h4', { text: tr('about.limitsTitle') }), h('ul', { class: 'ij-about-limits' }, limits)
     ]));
   }
 
@@ -4314,7 +4434,7 @@ const IJApp = (() => {
     const ord = winOrder();
     ord.forEach((id, k) => {
       const info = S.docs.get(id);
-      if (info) list.push({ id: 'winImg' + id, menu: ['Window'], label: info.name + ' ' + info.width + 'x' + info.height, order: 60 + k / 1000, separatorBefore: k === 0,
+      if (info) list.push({ id: 'winImg' + id, menu: ['Window'], label: info.name + ' ' + imageSizeString(info.width * info.height * (info.channels || []).length * bytesPerPixel(info.bitDepth)), order: 60 + k / 1000, separatorBefore: k === 0,
         enabled: () => true, run: () => showDoc(id), shortcut: null, keys: [], dynamic: true, repeatable: false });
     });
     return list;
@@ -4328,28 +4448,48 @@ const IJApp = (() => {
   }
 
   /** The shell ignores the result; it is a promise so a caller (the tests) can wait for the command. */
-  function onCommand(c) {
+  function onCommand(c, ev) {
     if (!c || typeof c.run !== 'function') return undefined;
     if (c.pkg && S.failedPackages.has(c.pkg)) return undefined;
     if (!c.enabled(snapshot())) return undefined;
     // ImageJ's Executer remembers what ran (except Undo and Close) so Repeat Command can run it again
-    if (c.repeatable !== false && !c.dynamic) S.lastCommand = c.id;
+    // (a command another command started, REPEAT.run set, is not the one the operator chose: Executer's previousCommand is the menu command)
+    if (c.repeatable !== false && !c.dynamic && !REPEAT.nested) S.lastCommand = c.id;
     // the dialogs of this run: pre-filled from the last run when the command is repeated, remembered for the next repeat
-    const run = { id: c.id, list: [], k: 0, replay: REPEAT.next && REPEAT.next.id === c.id ? REPEAT.next.list : null };
+    REPEAT.nested = false;
+    const replaying = REPEAT.next && REPEAT.next.id === c.id;
+    const outer = REPEAT.run;
+    const run = { id: c.id, list: [], offered: [], k: 0, replay: replaying ? REPEAT.next.list : null, replayOffered: replaying ? REPEAT.next.offered : null, done: false };
     REPEAT.next = null;
     REPEAT.run = run;
-    return Promise.resolve()
-      .then(() => flushPending())       // a floating paste is committed before anything else runs
-      .then(() => c.run(c.ext ? apiFor(c.pkg) : API))
+    // run(api, { alt, shift, source }): the keys held at the menu click / shortcut (IJ.altKeyDown() and IJ.shiftKeyDown() of the command)
+    const mods = { alt: !!(ev && ev.alt), shift: !!(ev && ev.shift), source: ev && typeof ev.source === 'string' ? ev.source : 'menu' };
+    const start = () => c.run(c.ext ? apiFor(c.pkg) : API, mods);
+    let chain;
+    if (c.gesture) {
+      // a command that needs the user activation of the click (the clipboard write of Copy to System): run() starts in this very task,
+      // BEFORE the floating paste is committed (an await first would lose the gesture)
+      let first;
+      try { first = Promise.resolve(start()); } catch (err) { first = Promise.reject(err); }
+      chain = first.then((v) => flushPending().then(() => v), (err) => flushPending().then(() => { throw err; }));
+    } else {
+      chain = Promise.resolve()
+        .then(() => flushPending())       // a floating paste is committed before anything else runs
+        .then(start);
+    }
+    return chain
       .catch((err) => reportError(err))
       .then(() => {
         // dialogs opened later outside a command (Results menus, histogram window, ROI Manager) belong to no run
-        if (REPEAT.run === run) REPEAT.run = null;
+        run.done = true;
+        if (REPEAT.run === run) REPEAT.run = outer && !outer.done ? outer : null;
         // a dialog the operator cancelled leaves the remembered values as they were (ImageJ's statics change on OK only)
         if (!run.list.some(Boolean) || c.repeatable === false || c.dynamic) return;
         const mem = REPEAT.memory.get(c.id) || [];
-        run.list.forEach((v, i) => { if (v) mem[i] = v; });
+        const off = REPEAT.offered.get(c.id) || [];
+        run.list.forEach((v, i) => { if (v) { mem[i] = v; off[i] = run.offered[i]; } });
         REPEAT.memory.set(c.id, mem);
+        REPEAT.offered.set(c.id, off);
       });
   }
 
@@ -4471,6 +4611,11 @@ const IJApp = (() => {
 
   async function compute(op, params, o) {
     const opt = o || {};
+    if (opt.docless === true) {
+      // an op that declares `docless` (IJOpRegistry spec): no image needed, run() gets view = null
+      if (S.busy) return null;
+      return busy(opt.labelKey ? tr(opt.labelKey) : tr('op.' + op), () => call('doc.compute', { docId: null, op, params: params || {}, roi: null, channel: null }));
+    }
     const info = docOf(opt);
     if (!info) return null;
     const args = { docId: info.docId, op, params: params || {}, roi: opt.roi !== undefined ? opt.roi : selOf(info.docId),
@@ -4621,6 +4766,7 @@ const IJApp = (() => {
     const p = readPrefs();
     p[key] = JSON.parse(text);
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* a per-viewer convenience only */ }
+    if (key === 'appearance.useNames') refreshRois();
     if (key === 'appearance.interpolate') for (const v of allViews()) if (typeof v.setInterpolate === 'function') v.setInterpolate(!!p[key]);
     if (key === 'colors.selection') { const css = cssColorOf(p[key]); if (css) for (const v of allViews()) if (typeof v.setSelectionColor === 'function') v.setSelectionColor(css); }
   }
@@ -4953,13 +5099,15 @@ const IJApp = (() => {
       return { id: c.id, label: tr(c.labelKey), path: c.menu.map(menuLabel), shortcut: c.shortcut || null, enabled };
     });
   }
-  function runCommandExt(id) {
+  function runCommandExt(id, o) {
     const c = COMMANDS.find((x) => x.id === id);
     if (!c) throw extError('runCommand: ' + String(id));
-    // the command runs normally; the dialogs it opens come back with the values of its last run (Repeat Command)
-    REPEAT.next = { id, list: REPEAT.memory.get(id) || null };
-    const p = onCommand(c);
+    // the command runs normally; only Repeat Command brings the dialogs back with the values of the last run
+    REPEAT.next = REPEAT.run && REPEAT.run.id === REPEAT_CALLER ? { id, list: REPEAT.memory.get(id) || null, offered: REPEAT.offered.get(id) || null } : null;
+    REPEAT.nested = !!REPEAT.run;
+    const p = onCommand(c, { source: 'api', alt: !!(o && o.alt), shift: !!(o && o.shift) });
     REPEAT.next = null;
+    REPEAT.nested = false;
     return Promise.resolve(p);
   }
   const lastCommandExt = () => (S.lastCommand ? { id: S.lastCommand } : null);
@@ -5031,6 +5179,30 @@ const IJApp = (() => {
     return Object.freeze({ blobRef: res.blobRef, kind: res.kind });
   }
 
+  /** api.setDisplayMode: composite / color / gray (ImageJ's CompositeImage modes) of one image; the engine keeps it with the document. */
+  async function setDisplayModeExt(docId, mode) {
+    needDoc(docId);
+    const m = mode === 'grayscale' ? 'gray' : mode;
+    if (m !== 'composite' && m !== 'color' && m !== 'gray') throw extError('setDisplayMode: mode');
+    const d = S.dstate.get(docId);
+    if (!d) throw extError('setDisplayMode: image');
+    if (d.mode === m) return;
+    d.mode = m;
+    pushDisplay(docId);
+    if (docId === S.activeId) scheduleToolRefresh('display');
+    emit('doc', { docId, kind: 'display' });
+    await call('doc.setDisplay', { docId, mode: m });
+    scheduleMetaPersist();
+  }
+
+  /** api.dropBlob: the page will not use this blob any more (a cancelled paste). A blob a committed step already uses stays. */
+  async function dropBlobExt(ref) {
+    const r = ref && typeof ref === 'object' ? ref.blobRef : ref;
+    if (typeof r !== 'string' || !r) throw extError('dropBlob: a blobRef');
+    const res = await call('engine.dropBlob', { blobRef: r });
+    return !!(res && res.dropped);
+  }
+
   /** api.setThreshold: the Threshold window, opened for this image and channel, takes the range (and the polarity). */
   async function setThresholdExt(docId, channel, o) {
     const info = S.docs.get(docId);
@@ -5073,6 +5245,8 @@ const IJApp = (() => {
       const w = 1 / 3;
       r1 = Math.floor(3 * r1 * w + 0.5); g1 = Math.floor(3 * g1 * w + 0.5); b1 = Math.floor(3 * b1 * w + 0.5);
     }
+    // ByteProcessor.setMinAndMax installs a LUT stretched over the display range, and getBestIndex searches that one (IJOv.burnValue).
+    if (info.bitDepth === 8 && typeof IJOv !== 'undefined') return IJOv.burnValue(rgb, 8, table, isDefaultTable, { min: st.min, max: st.max });
     let best = 0, minDistance = Infinity;
     for (let i = 0; i < 256; i++) {
       const dr = table[i * 3] - r1, dg = table[i * 3 + 1] - g1, db = table[i * 3 + 2] - b1;
@@ -5224,6 +5398,8 @@ const IJApp = (() => {
     call: (cmd, args, o) => callExt(null, cmd, args, o),
     adopt: adoptExt,
     putBlob: putBlobExt,
+    dropBlob: dropBlobExt,
+    setDisplayMode: setDisplayModeExt,
     setPending: setPendingExt,
     clearPending,
     addDoc: addDocExt,
@@ -5274,6 +5450,7 @@ const IJApp = (() => {
       if (known.has(raw.id)) throw extError('extend: duplicate command ' + raw.id);
       if (!Array.isArray(raw.menu) || !raw.menu.length || raw.menu.length > 3 || !raw.menu.every((x) => typeof x === 'string' && x)) throw extError('extend: menu of ' + raw.id);
       if (raw.repeatable !== undefined && typeof raw.repeatable !== 'boolean') throw extError('extend: repeatable of ' + raw.id);
+      if (raw.gesture !== undefined && typeof raw.gesture !== 'boolean') throw extError('extend: gesture of ' + raw.id);
       if (typeof raw.run !== 'function') throw extError('extend: run of ' + raw.id);
       if (!(typeof raw.order === 'number' && isFinite(raw.order))) throw extError('extend: order of ' + raw.id);
       if (raw.enabled !== undefined && typeof raw.enabled !== 'function') throw extError('extend: enabled of ' + raw.id);
@@ -5282,7 +5459,7 @@ const IJApp = (() => {
       const enabled = typeof raw.enabled === 'function' ? raw.enabled : has;
       built.push({
         id: raw.id, menu: raw.menu.slice(), labelKey: raw.labelKey || ('cmd.' + raw.id), shortcut: raw.shortcut || keys[0] || null, keys,
-        order: raw.order, pkg: spec.pkg, long: !!raw.long, ext: true, separatorBefore: !!raw.separatorBefore, repeatable: raw.repeatable !== false,
+        order: raw.order, pkg: spec.pkg, long: !!raw.long, gesture: raw.gesture === true, ext: true, separatorBefore: !!raw.separatorBefore, repeatable: raw.repeatable !== false,
         enabled: (st) => !S.failedPackages.has(spec.pkg) && !!enabled(st), run: raw.run
       });
     }
@@ -5498,6 +5675,9 @@ const IJApp = (() => {
 
   function dispose() {
     S.mounted = false;
+    // a floating paste still pending owns a timer and blob refs: its own cancel stops them (before the worker goes)
+    cancelPending();
+    REPEAT.run = null; REPEAT.next = null; REPEAT.nested = false;
     clearTimeout(S.persistTimer); clearTimeout(toolTimer); clearTimeout(S.previewTimer);
     if (S.loadAbort) S.loadAbort.abort();
     const w = S.worker;
@@ -5535,6 +5715,6 @@ const IJApp = (() => {
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
     extend, EXT_API_MEMBERS, apiFor, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
-    planLevels, mapRange, mvox, projectionProgress, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
+    imageSizeString, planLevels, mapRange, mvox, projectionProgress, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
   };
 })();

@@ -7,7 +7,8 @@
  *   Analyze > Tools > Fractal Box Count… / Curve Fitting…    Analyze > Colocalization > Coloc 2    Plugins > Analyze > Cell Counter > Cell Counter
  * Dialogs: the fields, labels and defaults Fiji / ImageJ have (tests/fixtures/ij-wave3/fiji-dialogs.json, PLAN-wave3 §1.5 / §10.2).
  *   Dropped on purpose (display only or no stacks): Coloc 2's "Show Save PDF Dialog", "Display Images in Result", "Display Shuffled Images";
- *   Cell Counter's "Keep Original" and "Show All" (they act on stacks); Curve Fitting's "Show settings", "Apply" and the user-defined formula (macro language).
+ *   Cell Counter's "Keep Original" and "Show All" (they act on stacks); Curve Fitting's "Show settings" and the user-defined formula (macro language).
+ *   Curve Fitting's "Apply" is built (op fitApply: a 32-bit "<name>-transformed" image, like Fitter.applyFunction).
  * Nothing here writes into an image: results go to the Results table, table / plot windows or new images; the Cell Counter's markers are
  * persistent annotations of the image (tag |CC|), not undo steps.
  */
@@ -60,11 +61,14 @@
     if (!st.doc) return;
     if (st.doc.bitDepth !== 8) throw badType();
     const v = await api.dialog({
-      title: api.tr('cmd.skelAnalyze'), okLabel: api.tr('dlg.ok'),
+      title: api.tr('dlg.fiji.skelTitle'), okLabel: api.tr('dlg.ok'),
       fields: [
+        { type: 'message', id: 'secLoops', labelKey: 'dlg.fiji.skelLoops' },
         { type: 'choice', id: 'prune', labelKey: 'dlg.fiji.prune', value: 'none', options: PRUNE.map((value, i) => ({ value, labelKey: PRUNE_KEYS[i] })) },
+        { type: 'message', id: 'secEnds', labelKey: 'dlg.fiji.skelEnds' },
         { type: 'check', id: 'pruneEnds', labelKey: 'dlg.fiji.pruneEnds', value: false },
         { type: 'check', id: 'excludeRoi', labelKey: 'dlg.fiji.excludeRoi', value: false },
+        { type: 'message', id: 'secResults', labelKey: 'dlg.fiji.skelResults' },
         { type: 'check', id: 'shortestPath', labelKey: 'dlg.fiji.shortestPath', value: false },
         { type: 'check', id: 'detailed', labelKey: 'dlg.fiji.detailed', value: false },
         { type: 'check', id: 'labeled', labelKey: 'dlg.fiji.labeled', value: false }
@@ -89,7 +93,7 @@
     if (!st.doc) return;
     if (st.doc.bitDepth !== 8) throw badType();
     const v = await api.dialog({
-      title: api.tr('cmd.ltComplete'), okLabel: api.tr('dlg.ok'),
+      title: api.tr('dlg.fiji.ltTitle'), okLabel: api.tr('dlg.ok'),
       fields: [
         { type: 'number', id: 'threshold', labelKey: 'dlg.fiji.ltThreshold', value: 128, min: 1, max: 255, step: 1, integer: true },
         { type: 'check', id: 'inverse', labelKey: 'dlg.fiji.ltInverse', value: false }
@@ -101,16 +105,18 @@
 
   // ═════════════════════════ Fractal Box Count ═════════════════════════
   const BOX_DEFAULT = '2,3,4,6,8,12,16,32,64';
+  // FractalBoxCounter keeps both fields in static fields: the next call of the session starts from what was confirmed
+  const boxLast = { sizes: BOX_DEFAULT, blackBackground: false };
   async function runFractal(api) {
     const st = api.state();
     if (!st.doc) return;
     if (st.doc.bitDepth !== 8) throw badType();
     const parse = (s) => (g.IJFractal ? g.IJFractal.parseBoxSizes(s) : null);
     const v = await api.dialog({
-      title: api.tr('cmd.toolsFractalBoxCount'), okLabel: api.tr('dlg.ok'),
+      title: api.tr('dlg.fiji.fractalTitle'), okLabel: api.tr('dlg.ok'),
       fields: [
-        { type: 'string', id: 'sizes', labelKey: 'dlg.fiji.boxSizes', value: BOX_DEFAULT },
-        { type: 'check', id: 'blackBackground', labelKey: 'dlg.fiji.blackBackground', value: false }
+        { type: 'string', id: 'sizes', labelKey: 'dlg.fiji.boxSizes', value: boxLast.sizes },
+        { type: 'check', id: 'blackBackground', labelKey: 'dlg.fiji.blackBackground', value: boxLast.blackBackground }
       ],
       validate(x) {
         const s = parse(x.sizes);
@@ -119,6 +125,7 @@
       }
     });
     if (!v) return;
+    boxLast.sizes = String(v.sizes); boxLast.blackBackground = !!v.blackBackground;
     const ch = channelOf(st);
     const info = st.doc.channels && st.doc.channels[ch];
     // FractalBoxCounter.run: foreground = black background ? 255 : 0, flipped for an inverted LUT
@@ -175,19 +182,17 @@
     area.value = FIT_DATA;
     area.style.fontFamily = 'monospace';
     const out = h('pre', { class: 'ij-info-pre', text: '' });
-    let fitting = false;
+    let fitting = false, last = null;   // last = the fit Apply transforms an image with (Fitter's static cf / fitType)
     const fit = async () => {
       if (fitting) return;
-      const st = papi.state();
-      // API gap: compute() needs an open image to address the worker (the fit itself uses none)
-      if (!st.doc) { papi.toast('dlg.fiji.fitNoImage'); return; }
       const data = parseFitData(area.value);
       if (data.error) { out.textContent = papi.tr(data.error, { n: (data.at || 0) + 1 }); return; }
       fitting = true;
       try {
         const fitType = Number(select.value);
-        const res = await papi.compute('curveFit', { fitType, x: data.x, y: data.y, randomSeed: 0 }, { docId: st.doc.docId, labelKey: 'op.curveFit' });
+        const res = await papi.compute('curveFit', { fitType, x: data.x, y: data.y, randomSeed: 0 }, { docless: true, labelKey: 'op.curveFit' });
         if (!res) return;
+        last = null;
         if (!res.ok) { out.textContent = papi.tr('dlg.fiji.fitFailed', { reason: res.statusString }); return; }
         const letters = 'abcdefghi';
         const lines = [
@@ -202,6 +207,7 @@
           papi.tr('dlg.fiji.fitParams')
         ];
         res.params.forEach((p, i) => lines.push('  ' + letters[i] + ' = ' + sig(p)));
+        last = { fitType, params: res.params.slice() };
         out.textContent = lines.join('\n');
         papi.openPlot({
           title: res.formula, xLabel: 'X', yLabel: 'Y', text: res.name + '\nR^2 = ' + d2s(res.rSquared, 4),
@@ -216,6 +222,14 @@
       } catch (err) { papi.error(err); } finally { fitting = false; }
     };
     const fitBtn = h('button', { class: 'ij-btn', type: 'button', text: papi.tr('dlg.fiji.fitFit'), on: { click: fit } });
+    const applyBtn = h('button', { class: 'ij-btn', type: 'button', text: papi.tr('dlg.fiji.fitApply'), on: { click: async () => {
+      try {
+        const st = papi.state();
+        if (!last) { papi.toast('dlg.fiji.fitNoFunction'); return; }
+        if (!st.doc) { papi.toast('dlg.fiji.fitNoImage'); return; }
+        await papi.run('fitApply', { fitType: last.fitType, params: last.params }, { docId: st.doc.docId, channel: channelOf(st), placement: 'tab', labelKey: 'op.fitApply' });
+      } catch (err) { papi.error(err); }
+    } } });
     const openBtn = h('button', { class: 'ij-btn', type: 'button', text: papi.tr('dlg.fiji.fitOpen'), on: { click: async () => {
       try {
         const files = await papi.pickFile({ accept: '.txt,.csv,.tsv,text/plain', multiple: false });
@@ -227,7 +241,7 @@
         area.value = kept.join('\n') + '\n';
       } catch (err) { papi.error(err); }
     } } });
-    el.appendChild(h('div', { class: 'ij-row' }, [select, fitBtn, openBtn]));
+    el.appendChild(h('div', { class: 'ij-row' }, [select, fitBtn, applyBtn, openBtn]));
     el.appendChild(h('div', { class: 'ij-row' }, [area]));
     el.appendChild(out);
     return { refresh() {}, dispose() {} };
@@ -262,7 +276,6 @@
     const st = api.state();
     if (!st.doc) return;
     const docs = st.docs;
-    const maskDocs = docs.filter((d) => d.bitDepth === 8);
     const second = st.doc.channels.length > 1 ? 1 : 0;
     const v = await api.dialog({
       title: api.tr('cmd.colocColoc2'), okLabel: api.tr('dlg.ok'),
@@ -274,7 +287,7 @@
         { type: 'choice', id: 'roi', labelKey: 'dlg.fiji.colocRoi', value: COLOC_ROI_NONE, options: [
           { value: COLOC_ROI_NONE, labelKey: 'dlg.fiji.colocRoiNone' }, { value: COLOC_ROI_1, labelKey: 'dlg.fiji.colocRoi1' },
           { value: COLOC_ROI_2, labelKey: 'dlg.fiji.colocRoi2' }, { value: COLOC_ROI_MANAGER, labelKey: 'dlg.fiji.colocRoiManager' }
-        ].concat(maskDocs.map((d) => ({ value: 'doc:' + d.docId, label: d.name }))) },
+        ].concat(docs.map((d) => ({ value: 'doc:' + d.docId, label: d.name }))) },
         { type: 'choice', id: 'regression', labelKey: 'dlg.fiji.colocRegression', value: 'costes', options: [
           { value: 'costes', labelKey: 'dlg.fiji.colocCostes' }, { value: 'bisection', labelKey: 'dlg.fiji.colocBisection' }] },
         { type: 'message', id: 'algorithms', labelKey: 'dlg.fiji.colocAlgorithms' },
@@ -302,6 +315,7 @@
         if (typeof x.roi === 'string' && x.roi.indexOf('doc:') === 0) {
           const md = docInfoOf(st, x.roi.slice(4));
           if (md && d1 && (md.width !== d1.width || md.height !== d1.height)) out.roi = 'err.sizeMismatch';
+          else if (md && md.bitDepth !== 8) out.roi = 'dlg.fiji.colocMaskType';
         }
         return Object.keys(out).length ? out : null;
       }
@@ -344,8 +358,8 @@
     if (v.spearman) { columns.push("Spearman's rank correlation value", "Spearman's correlation t-statistic", 't-statistic degrees of freedom'); row.push(ui.cell(res.spearman), ui.cell(res.spearmanT), ui.cell(res.spearmanDf)); }
     if (v.kendall) { columns.push("Kendall's Tau-b rank correlation value"); row.push(ui.cell(res.kendall)); }
     if (v.costesTest) {
-      columns.push('Costes P-Value', 'Costes Shuffled Mean', 'Costes Shuffled Std.D.', 'Ratio of rand. Pearsons >= actual Pearsons value', 'Costes randomisations', 'PSF', 'Costes seed');
-      row.push(ui.cell(res.costesP), ui.cell(res.costesMean), ui.cell(res.costesSd), ui.cell(res.costesRatioGE), res.costesN, v.psf, seed);
+      columns.push('Costes P-Value', 'Costes Shuffled Mean', 'Costes Shuffled Std.D.', 'Ratio of rand. Pearsons >= actual Pearsons value', 'Costes randomisations', 'PSF');
+      row.push(ui.cell(res.costesP), ui.cell(res.costesMean), ui.cell(res.costesSd), ui.cell(res.costesRatioGE), res.costesN, v.psf);
     }
     api.openTable(api.tr('res.colocTable', { a: i1.name, b: i2.name }), columns, [row]);
     if (v.hist2d) api.openPlot(ui.plotOf(api, res, params, i1, i2));

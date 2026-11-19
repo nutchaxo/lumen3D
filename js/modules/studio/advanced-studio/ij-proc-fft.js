@@ -1212,6 +1212,14 @@
       if (!(c >= 0 && c < view.channels.length)) throw ijError('IJ_BAD_ARGS', 'channel');
       const rect = selectionRect(roi, view.width, view.height, io);
       const hk = hooksOf(io, 'op.directionality');
+      const out = await directionalityAnalyse(view, params, rect, c, hk);
+      if (out.map) io.transfer(out.map.data.buffer);
+      return out;
+    }
+  });
+
+  async function directionalityAnalyse(view, params, rect, c, hk) {
+    {
       if (Math.min(rect.w, rect.h) < (params.method === 'fourier' ? 16 : 8)) throw ijError('IJ_DIR_TOO_SMALL', 'the image is too small');
       const data = cropRect(view.channels[c].data, view.width, rect);
       const nb = params.nbins, start = params.start;
@@ -1237,10 +1245,49 @@
         fit: { a: a.a, b: a.b, c: a.c, d: a.d, sse: a.sse },
         direction: a.direction, dispersion: a.dispersion, amount: a.amount, goodness: a.goodness
       };
-      if (map) { out.map = { width: rect.w, height: rect.h, data: map, none: GRADIENT_NONE }; io.transfer(map.buffer); }
+      if (map) out.map = { width: rect.w, height: rect.h, data: map, none: GRADIENT_NONE };
       return out;
     }
-  });
+  }
+
+  /* The orientation map as a document built in the worker: the page never holds the image-sized array. The pixels no gradient reached
+   * take the value just under the wheel's range (display index 0 = black), as the page used to write them. args: { docId, channel, roi,
+   * method: 'gradient', nbins, start, name }. → { result (the fit, no map), info } */
+  const WHEEL_LUT = 'Directionality';
+  if (typeof R.defineCommand === 'function') {
+    R.defineCommand('doc.dirmap.create', {
+      pkg: 'fft', long: true,
+      async handler(a, E) {
+        if (!a || typeof a !== 'object' || a.docId === undefined || a.docId === null) throw ijError('IJ_BAD_ARGS', 'args');
+        const params = { method: 'gradient', nbins: a.nbins, start: a.start, map: true };
+        if (!Number.isInteger(params.nbins) || params.nbins < 5 || params.nbins > 720) throw ijError('IJ_BAD_ARGS', 'nbins');
+        if (!isNum(params.start) || params.start < -180 || params.start > 180) throw ijError('IJ_BAD_ARGS', 'start');
+        if (typeof a.name !== 'string' || !a.name || a.name.length > 255) throw ijError('IJ_BAD_ARGS', 'name');
+        if (a.roi && root.IJRoi) root.IJRoi.validate(a.roi);
+        return E.lockDocs([a.docId], async () => {
+          const view = E.readDoc(a.docId);
+          const c = Number.isInteger(a.channel) ? a.channel : (view.active || 0);
+          if (!(c >= 0 && c < view.channels.length)) throw ijError('IJ_BAD_ARGS', 'channel');
+          const rect = selectionRect(a.roi || null, view.width, view.height, null);
+          const n = rect.w * rect.h;
+          // the same working set as the compute operation: two float images of the gradients, the map (which becomes the document), the crop
+          E.reserve(n * 4 * 3 + n * bytesOf(view.bitDepth) + 1048576);
+          const hk = { check: () => E.check(), tick: (f) => E.tick(Math.min(1, Math.max(0, f)), 'op.directionality') };
+          const res = await directionalityAnalyse(view, params, rect, c, hk);
+          const map = res.map.data, below = params.start - 180 / 255 - 1;
+          for (let i = 0; i < map.length; i++) if (map[i] < -1e29) map[i] = below;
+          E.check();
+          const info = E.createDoc({
+            name: a.name, width: rect.w, height: rect.h, bitDepth: 32,
+            calibration: view.calibration ? Object.assign({}, view.calibration) : view.calibration,
+            channels: [{ name: 'Orientation', color: '#ffffff', data: map, display: { min: params.start - 180 / 255, max: params.start + 180, lut: WHEEL_LUT, invert: false } }]
+          }, { provenance: {} });
+          delete res.map;
+          return { result: res, info };
+        });
+      }
+    });
+  }
 
   root.IJFftPkg = {
     gaussFit, analyseHistogram, gradientHistogram, fourierHistogram, DIR_KD, DIR_KS, PIECE_MAX,

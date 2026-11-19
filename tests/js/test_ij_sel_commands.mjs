@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, until, J, DIR } from './ij_harness.mjs';
+import { boot, until, J, DIR, EN } from './ij_harness.mjs';
 
 const arr = (x) => Array.from(x);
 // values built inside the page's vm context have another Array prototype: compare their JSON
@@ -470,6 +470,50 @@ await test('lang parts: every key the package reads exists in en, fr, es and nl 
   assert.equal(en.get('dlg.sel.dx'), 'X offset (pixels):'); assert.equal(en.get('dlg.sel.bandSize'), 'Band Size:'); assert.equal(en.get('dlg.sel.lineWidth'), 'Line Width:');
   // the other languages say something else than English for every sentence
   for (const code of ['fr', 'es', 'nl']) { const m = new Map(flat(parts[code])); let same = 0; for (const [k, v] of m) if (v === en.get(k) && !['dlg.sel.pixel', 'dlg.sel.interval', 'dlg.sel.title'].includes(k)) same++; assert.ok(same <= 3, code + ' untranslated: ' + same); }
+});
+
+await test('Scale, Rotate and Interpolate of a composite selection run in the worker (selTransform); a typed factor cannot build a mask far outside the image', async () => {
+  const t = await fresh();
+  const R = t.page.IJRoi, S = t.page.IJSelOps;
+  const w = 20, h = 14, dense = new Uint8Array(w * h);
+  for (let y = 2; y < 12; y++) for (let x = 3; x < 9; x++) dense[y * w + x] = 1;
+  for (let y = 3; y < 9; y++) for (let x = 12; x < 18; x++) dense[y * w + x] = 1;
+  const roi = R.translate(R.fromMask(dense, w, h), 4, 3);
+  assert.equal(roi.type, 'mask');
+  const [d] = await t.docs();
+  const want = {
+    scale: S.scale(roi, 1.5, 1.5, false, d.width, d.height).roi,
+    rotate: S.rotate(roi, 15, false, d.width, d.height).roi,
+    interpolate: S.interpolate(roi, 2, false, false).roi
+  };
+  // the page's own geometry must not run for a composite: a call of it fails the command
+  const page = { scale: S.scale, rotate: S.rotate, interpolate: S.interpolate };
+  for (const k of Object.keys(page)) S[k] = () => { throw new Error('ran on the page: ' + k); };
+  await setRoi(t, roi);
+  await t.runCommand('selScale', { xscale: 1.5, yscale: 1.5, centered: false });
+  eq(maskSet(t, activeRoi(t)), maskSet(t, want.scale));
+  await setRoi(t, roi);
+  await t.runCommand('selRotate', { angle: 15, aroundCenter: false });
+  eq(maskSet(t, activeRoi(t)), maskSet(t, want.rotate));
+  await setRoi(t, roi);
+  await t.runCommand('selInterpolate', { interval: 2, smooth: false, adjust: false });
+  eq(maskSet(t, activeRoi(t)), maskSet(t, want.interpolate));
+  Object.assign(S, page);
+  // the box of the result is limited to four times the image: refused with the translated sentence, the selection is kept
+  await setRoi(t, roi);
+  const n0 = t.errors.length;
+  await t.runCommand('selScale', { xscale: 400, yscale: 400, centered: false }, { expectError: true });
+  assert.equal(t.errors.length, n0 + 1);
+  assert.equal(t.errors[n0].message, EN.err.roiTooComplex);
+  eq(activeRoi(t), roi);
+  // a small mask far from the origin of a large image declares scratch for its own box, not for the image
+  const spec = t.page.IJOpRegistry.get('selTransform');
+  const far = { type: 'mask', x: 11900, y: 11900, w: 50, h: 50 };
+  for (const centered of [false, true]) {
+    const need = spec.scratchBytes({ width: 12000, height: 12000, roi: far }, { op: 'scale', xscale: 2, yscale: 2, centered });
+    assert.ok(need < 1 << 20, 'scratch ' + need);
+  }
+  t.close();
 });
 
 console.log(`ij sel commands: OK (${n} groups)`);

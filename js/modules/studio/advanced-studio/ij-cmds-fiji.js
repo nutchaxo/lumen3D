@@ -480,7 +480,8 @@
     const status = h('div', { class: 'ij-note', text: '' });
     const rowsBox = h('div', { class: 'ij-list' });
     const draw = () => {
-      rowsBox.children.length = 0;
+      // a real DOM's children is a read-only HTMLCollection
+      if (typeof rowsBox.replaceChildren === 'function') rowsBox.replaceChildren(); else while (rowsBox.firstChild) rowsBox.removeChild(rowsBox.firstChild);
       rows.length = 0; radios.length = 0;
       const counts = ccCounts(papi);
       CC.types.forEach((t, i) => {

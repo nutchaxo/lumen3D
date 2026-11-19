@@ -401,7 +401,7 @@ await test('a package that failed in the worker only greys out its own parts: An
   const BIN = new Uint8Array(Buffer.from(f.input.data.b64, 'base64'));
   const t = await boot({ channels: 1, brokenPackages: ['ij-proc-ana.js'] });
   const create = t.page.document.createElement;
-  t.page.document.createElement = (tag) => { const e = create(tag); let v = ''; Object.defineProperty(e, 'textContent', { get: () => v, set: (x) => { v = x; if (x === '') e.children.length = 0; }, configurable: true }); return e; };
+  t.page.document.createElement = (tag) => { const e = create(tag); let v = ''; Object.defineProperty(e, 'textContent', { get: () => v, set: (x) => { v = x; if (x === '') e.replaceChildren(); }, configurable: true }); return e; };
   await t.open();
   assert.ok(t.failedPackages().has('ana'));
   const id = await t.api('ana').addDoc({ name: 'particles', width: 72, height: 56, bitDepth: 8, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' },

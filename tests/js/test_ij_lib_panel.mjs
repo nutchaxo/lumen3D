@@ -673,12 +673,9 @@ await test('the panel builds on a DOM whose `children` is getter-only (an Elemen
   const { t, ctl } = await start({ dom: (tt) => {
     const orig = tt.page.document.createElement;
     tt.page.document.createElement = (tag) => {
+      // the harness's elements already have a read-only `children` (a frozen copy, as an HTMLCollection): assigning it throws
       const e = orig(tag);
-      const kids = e.children;
-      delete e.children;
-      Object.defineProperty(e, 'children', { get: () => kids });
-      e.replaceChildren = () => { kids.length = 0; };
-      e.remove = () => { const p = e.parentNode; if (p) { const i = p.children.indexOf(e); if (i >= 0) p.children.splice(i, 1); } };
+      assert.throws(() => { e.children.length = 0; });
       return e;
     };
   } });

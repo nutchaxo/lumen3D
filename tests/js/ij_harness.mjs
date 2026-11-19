@@ -96,11 +96,17 @@ export function loadViewModules(sandbox = {}) {
 const anyCtx = () => new Proxy({}, { get: (t, k) => (k in t ? t[k] : (typeof k === 'string' ? () => undefined : undefined)), set: (t, k, v) => { t[k] = v; return true; } });
 function fakeEl(tag) {
   const listeners = {};
+  // children is read-only as in a real DOM (an HTMLCollection): code that assigns to it, or to its length, must fail here too
+  let kids = [];
   const el = {
-    tagName: String(tag).toUpperCase(), children: [], style: {}, className: '', textContent: '', hidden: false,
+    tagName: String(tag).toUpperCase(), style: {}, className: '', textContent: '', hidden: false,
+    get children() { return Object.freeze(kids.slice()); },
+    get firstChild() { return kids[0] || null; },
     classList: { add() {}, remove() {}, contains: () => false, toggle() {} },
-    appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
-    remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((x) => x !== this); },
+    appendChild(c) { if (c.parentNode && c.parentNode !== this && c.parentNode.removeChild) c.parentNode.removeChild(c); kids.push(c); c.parentNode = this; return c; },
+    removeChild(c) { kids = kids.filter((x) => x !== c); if (c) c.parentNode = null; return c; },
+    replaceChildren(...nodes) { for (const k of kids) k.parentNode = null; kids = []; for (const n of nodes) el.appendChild(n); },
+    remove() { if (this.parentNode && this.parentNode.removeChild) this.parentNode.removeChild(this); },
     setAttribute() {}, removeAttribute() {}, addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); },
     removeEventListener() {}, focus() {}, click() { el.clicked = true; }, select() {}, listeners,
     getContext: () => anyCtx(), toBlob(cb) { cb(new Blob([new Uint8Array(4)])); },

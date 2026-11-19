@@ -30,7 +30,7 @@ async function fresh(opts) {
   t.page.document.createElement = (tag) => {
     const e = create(tag);
     let v = '';
-    Object.defineProperty(e, 'textContent', { get: () => v, set: (x) => { v = x; if (x === '') e.children.length = 0; }, configurable: true });
+    Object.defineProperty(e, 'textContent', { get: () => v, set: (x) => { v = x; if (x === '') e.replaceChildren(); }, configurable: true });
     return e;
   };
   await t.open();

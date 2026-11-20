@@ -12,7 +12,7 @@
  * WebAssembly (strict CSP, and a macro must never reach the network).
  *
  * API
- *   IJMacro.run(source, { host, onLog, signal, sliceMs = 50, arg })
+ *   IJMacro.run(source, { host, onLog, signal, sliceMs = 50, arg, fastPath = true, syncLoops = false, syncRecursion = false, abortFlag })
  *       -> Promise<{ ok, error: null | { message, line, lineText, excerpt, calledFrom, silent, dialogText }, aborted, exited, returnValue }>
  *     `silent`: ImageJ shows no error window for this error (the program had already run off its end),
  *     so a host must not either; otherwise `dialogText` is the window's text and `calledFrom` the lines of
@@ -22,11 +22,22 @@
  *     iterations / user-function calls) the driver yields to the event loop, so a worker stays
  *     responsive; `signal.aborted` is honoured ("Macro canceled") at once, also while a wait() or a
  *     host Promise is pending (the signal is passed to host.call as ctx.signal).
+ *     fastPath:  statements that cannot suspend run in a generated plain-function twin of the interpreter (about 3x
+ *                faster; see "Synchronous fast path"); false = generators everywhere.
+ *     syncLoops: also run whole loops in the twin (fastest; a loop is then neither time-sliced nor abortable by signal).
+ *     syncRecursion: also run recursive user functions whole in the twin (about 3x faster, but a recursion is then neither
+ *                abortable nor sliced, and it overflows a worker's native stack near 550 levels instead of ImageJ's 1000).
+ *     abortFlag: Int32Array (SharedArrayBuffer): non-zero stops a stretch that cannot yield; host.syncFunctions: Set of
+ *                host built-in names ('getPixel', 'List.get') that never return a Promise.
+ *   IJMacro.analyze(source, { host, syncLoops, syncRecursion }) -> { statements: [{ line, class: 'twin'|'loop'|'gen' }], functions: { name: { suspends, loops, recursive } } }
  *   IJMacro.tokenize(source) -> Program { code, lineNumbers, table, hasVars, hasFunctions, ... }
  *   IJMacro.compile(source)  -> { program, macros: [labels], functions: [names], tokens: [{...}] }
  *   IJMacro.d2s(n, decimals) / d2s3(x, significantDigits, maxDigits) / numToString(x)
  *   IJMacro.BUILTINS         the dispatch table (see "Built-in dispatch" below)
- *   IJMacro.define(kind, id, fn)   plug a built-in in ('do' | 'num' | 'str' | 'arr' | 'variable')
+ *   IJMacro.define(kind, id, fn, { suspends, sync })   plug a built-in in ('do' | 'num' | 'str' | 'arr' | 'variable').
+ *     suspends: true | false | 'host' (default for a built-in defined here: 'host') | { subName: ... } | (pgm, tokenIndex, host) => bool
+ *     sync:     an optional plain function (f) => value for the synchronous fast path (arguments through f.getArg$s() ...);
+ *               without it a built-in declared not-suspending is run to completion from its generator (slower).
  *   IJMacro.K / IJMacro.NAME_OF    MacroConstants ids and id -> function name
  *
  * Built-in dispatch: a built-in parses its own arguments from the token stream, as in ImageJ's
@@ -57,16 +68,261 @@ const IJMacro = (() => {
 /* ======================================================================================
  * MacroConstants (generated from ij/macro/MacroConstants.java)
  * ==================================================================================== */
-const K = {"TOK_SHIFT":12, "TOK_MASK":0, "PLUS_PLUS":1, "MINUS_MINUS":2, "EQ":3, "NEQ":4, "GT":5, "GTE":6, "LT":7, "LTE":8, "PLUS_EQUAL":9, "MINUS_EQUAL":10, "MUL_EQUAL":11, "DIV_EQUAL":12, "LOGICAL_AND":13, "LOGICAL_OR":14, "SHIFT_RIGHT":15, "SHIFT_LEFT":16, "EOF":128, "WORD":129, "NUMBER":130, "NOP":131, "EOL":132, "STRING_CONSTANT":133, "PREDEFINED_FUNCTION":134, "NUMERIC_FUNCTION":135, "STRING_FUNCTION":136, "ARRAY_FUNCTION":137, "USER_FUNCTION":138, "ARRAY":139, "VARIABLE_FUNCTION":140, "MACRO":200, "VAR":201, "IF":202, "ELSE":203, "WHILE":204, "DO":205, "FOR":206, "FUNCTION":207, "RETURN":208, "TRUE":209, "FALSE":210, "PI":211, "NaN":212, "BREAK":213, "CONTINUE":214, "RUN":300, "INVERT":301, "SELECT":302, "WAIT":303, "BEEP":304, "RESET_MIN_MAX":305, "RESET_THRESHOLD":306, "PRINT":307, "WRITE":308, "DO_WAND":309, "SET_MIN_MAX":310, "SET_THRESHOLD":311, "SET_TOOL":312, "SET_FOREGROUND":313, "SET_BACKGROUND":314, "MAKE_LINE":315, "MAKE_OVAL":316, "MAKE_RECTANGLE":317, "DUMP":318, "MOVE_TO":319, "LINE_TO":320, "DRAW_LINE":321, "REQUIRES":322, "AUTO_UPDATE":323, "UPDATE_DISPLAY":324, "DRAW_STRING":325, "SET_PASTE_MODE":326, "DO_COMMAND":327, "SHOW_STATUS":328, "SHOW_PROGRESS":329, "SHOW_MESSAGE":330, "PUT_PIXEL":331, "SET_PIXEL":332, "SNAPSHOT":333, "RESET":334, "FILL":335, "SET_COLOR":336, "SET_LINE_WIDTH":337, "CHANGE_VALUES":338, "SELECT_IMAGE":339, "EXIT":340, "SET_LOCATION":341, "GET_CURSOR_LOC":342, "GET_LINE":343, "GET_VOXEL_SIZE":344, "GET_HISTOGRAM":345, "GET_STATISTICS":346, "GET_BOUNDING_RECT":347, "GET_LUT":348, "SET_LUT":349, "GET_COORDINATES":350, "SHOW_MESSAGE_WITH_CANCEL":351, "MAKE_SELECTION":352, "SET_RESULT":353, "UPDATE_RESULTS":354, "SET_BATCH_MODE":355, "SET_JUSTIFICATION":357, "SET_Z_COORDINATE":358, "GET_THRESHOLD":359, "GET_PIXEL_SIZE":360, "SETUP_UNDO":361, "SAVE_SETTINGS":362, "RESTORE_SETTINGS":363, "SET_KEY_DOWN":364, "OPEN":365, "SET_FONT":366, "GET_MIN_AND_MAX":367, "CLOSE":368, "SET_SLICE":369, "NEW_IMAGE":370, "SAVE_AS":371, "SAVE":372, "SET_AUTO_THRESHOLD":373, "RENAME":374, "GET_BOUNDS":375, "FILL_RECT":376, "GET_RAW_STATISTICS":377, "FLOOD_FILL":378, "RESTORE_PREVIOUS_TOOL":379, "SET_VOXEL_SIZE":380, "GET_LOCATION_AND_SIZE":381, "GET_DATE_AND_TIME":382, "SET_METADATA":383, "CALCULATOR":384, "SET_RGB_WEIGHTS":385, "MAKE_POLYGON":386, "SET_SELECTION_NAME":387, "DRAW_RECT":388, "DRAW_OVAL":389, "FILL_OVAL":390, "SET_OPTION":391, "SHOW_TEXT":392, "SET_SELECTION_LOC":393, "GET_DIMENSIONS":394, "WAIT_FOR_USER":395, "MAKE_POINT":396, "MAKE_TEXT":397, "MAKE_ELLIPSE":398, "GET_DISPLAYED_AREA":399, "TO_SCALED":400, "TO_UNSCALED":401, "MAKE_ARROW":402, "MAKE_ROTATED_RECT":403, "GET_PIXEL":1000, "ABS":1001, "COS":1002, "EXP":1003, "FLOOR":1004, "LOG":1005, "MAX_OF":1006, "MIN_OF":1007, "POW":1008, "ROUND":1009, "SIN":1010, "SQRT":1011, "TAN":1012, "GET_TIME":1013, "GET_WIDTH":1014, "GET_HEIGHT":1015, "RANDOM":1016, "GET_RESULT":1017, "GET_COUNT":1018, "GET_NUMBER":1019, "NIMAGES":1020, "NSLICES":1021, "LENGTH_OF":1022, "NRESULTS":1023, "GET_ID":1024, "BIT_DEPTH":1025, "SELECTION_TYPE":1026, "ATAN":1027, "IS_OPEN":1028, "IS_ACTIVE":1029, "INDEX_OF":1030, "LAST_INDEX_OF":1031, "CHAR_CODE_AT":1032, "GET_BOOLEAN":1033, "STARTS_WITH":1034, "ENDS_WITH":1035, "ATAN2":1036, "IS_NAN":1037, "GET_ZOOM":1038, "PARSE_INT":1039, "PARSE_FLOAT":1040, "IS_KEY_DOWN":1041, "GET_SLICE_NUMBER":1042, "SCREEN_WIDTH":1043, "SCREEN_HEIGHT":1044, "CALIBRATE":1045, "ASIN":1046, "ACOS":1047, "ROI_MANAGER":1048, "TOOL_ID":1049, "IS":1050, "GET_VALUE":1051, "STACK":1052, "MATCHES":1053, "GET_STRING_WIDTH":1054, "FIT":1055, "OVERLAY":1056, "SELECTION_CONTAINS":1057, "PLOT":1058, "MATH":1059, "D2S":2000, "TO_HEX":2001, "TO_BINARY":2002, "GET_TITLE":2003, "GET_STRING":2004, "SUBSTRING":2005, "FROM_CHAR_CODE":2006, "GET_INFO":2007, "GET_DIRECTORY":2008, "GET_ARGUMENT":2009, "GET_IMAGE_INFO":2010, "TO_LOWER_CASE":2011, "TO_UPPER_CASE":2012, "RUN_MACRO":2013, "EVAL":2014, "TO_STRING":2015, "REPLACE":2016, "DIALOG":2017, "GET_METADATA":2018, "FILE":2019, "SELECTION_NAME":2020, "GET_VERSION":2021, "GET_RESULT_LABEL":2022, "CALL":2023, "STRING":2024, "EXT":2025, "EXEC":2026, "LIST":2027, "DEBUG":2028, "IJ_CALL":2029, "GET_RESULT_STRING":2030, "GET_DIR":2031, "TRIM":2032, "CHARAT":2033, "GET_PROFILE":3000, "NEW_ARRAY":3001, "SPLIT":3002, "GET_FILE_LIST":3003, "GET_FONT_LIST":3004, "NEW_MENU":3005, "GET_LIST":3006, "ARRAY_FUNC":3007, "TABLE":4000, "ROI":4001, "ROI_MANAGER2":4002, "PROPERTY":4003, "IMAGE":4004, "COLOR":4005};
-const SYS_KEYWORDS = [["macro", K.MACRO], ["var", K.VAR], ["if", K.IF], ["else", K.ELSE], ["while", K.WHILE], ["do", K.DO], ["for", K.FOR], ["function", K.FUNCTION], ["return", K.RETURN], ["true", K.TRUE], ["false", K.FALSE], ["PI", K.PI], ["NaN", K.NaN], ["break", K.BREAK], ["continue", K.CONTINUE]];
-const SYS_FUNCTIONS = [["run", K.RUN], ["invert", K.INVERT], ["selectWindow", K.SELECT], ["wait", K.WAIT], ["beep", K.BEEP], ["resetMinAndMax", K.RESET_MIN_MAX], ["resetThreshold", K.RESET_THRESHOLD], ["print", K.PRINT], ["write", K.WRITE], ["doWand", K.DO_WAND], ["setMinAndMax", K.SET_MIN_MAX], ["setThreshold", K.SET_THRESHOLD], ["setTool", K.SET_TOOL], ["setForegroundColor", K.SET_FOREGROUND], ["setBackgroundColor", K.SET_BACKGROUND], ["makeLine", K.MAKE_LINE], ["makeOval", K.MAKE_OVAL], ["makeRectangle", K.MAKE_RECTANGLE], ["dump", K.DUMP], ["moveTo", K.MOVE_TO], ["lineTo", K.LINE_TO], ["drawLine", K.DRAW_LINE], ["requires", K.REQUIRES], ["autoUpdate", K.AUTO_UPDATE], ["updateDisplay", K.UPDATE_DISPLAY], ["drawString", K.DRAW_STRING], ["setPasteMode", K.SET_PASTE_MODE], ["doCommand", K.DO_COMMAND], ["showStatus", K.SHOW_STATUS], ["showProgress", K.SHOW_PROGRESS], ["showMessage", K.SHOW_MESSAGE], ["putPixel", K.PUT_PIXEL], ["setPixel", K.SET_PIXEL], ["snapshot", K.SNAPSHOT], ["reset", K.RESET], ["fill", K.FILL], ["setColor", K.SET_COLOR], ["setLineWidth", K.SET_LINE_WIDTH], ["changeValues", K.CHANGE_VALUES], ["selectImage", K.SELECT_IMAGE], ["exit", K.EXIT], ["setLocation", K.SET_LOCATION], ["getCursorLoc", K.GET_CURSOR_LOC], ["getLine", K.GET_LINE], ["getVoxelSize", K.GET_VOXEL_SIZE], ["getHistogram", K.GET_HISTOGRAM], ["getStatistics", K.GET_STATISTICS], ["getBoundingRect", K.GET_BOUNDING_RECT], ["getLut", K.GET_LUT], ["setLut", K.SET_LUT], ["getSelectionCoordinates", K.GET_COORDINATES], ["showMessageWithCancel", K.SHOW_MESSAGE_WITH_CANCEL], ["makeSelection", K.MAKE_SELECTION], ["setResult", K.SET_RESULT], ["updateResults", K.UPDATE_RESULTS], ["setBatchMode", K.SET_BATCH_MODE], ["setJustification", K.SET_JUSTIFICATION], ["setZCoordinate", K.SET_Z_COORDINATE], ["getThreshold", K.GET_THRESHOLD], ["getPixelSize", K.GET_PIXEL_SIZE], ["setupUndo", K.SETUP_UNDO], ["saveSettings", K.SAVE_SETTINGS], ["restoreSettings", K.RESTORE_SETTINGS], ["setKeyDown", K.SET_KEY_DOWN], ["open", K.OPEN], ["setFont", K.SET_FONT], ["getMinAndMax", K.GET_MIN_AND_MAX], ["close", K.CLOSE], ["setSlice", K.SET_SLICE], ["newImage", K.NEW_IMAGE], ["saveAs", K.SAVE_AS], ["save", K.SAVE], ["setAutoThreshold", K.SET_AUTO_THRESHOLD], ["rename", K.RENAME], ["getSelectionBounds", K.GET_BOUNDS], ["fillRect", K.FILL_RECT], ["getRawStatistics", K.GET_RAW_STATISTICS], ["floodFill", K.FLOOD_FILL], ["restorePreviousTool", K.RESTORE_PREVIOUS_TOOL], ["setVoxelSize", K.SET_VOXEL_SIZE], ["getLocationAndSize", K.GET_LOCATION_AND_SIZE], ["getDateAndTime", K.GET_DATE_AND_TIME], ["setMetadata", K.SET_METADATA], ["imageCalculator", K.CALCULATOR], ["setRGBWeights", K.SET_RGB_WEIGHTS], ["makePolygon", K.MAKE_POLYGON], ["setSelectionName", K.SET_SELECTION_NAME], ["drawRect", K.DRAW_RECT], ["drawOval", K.DRAW_OVAL], ["fillOval", K.FILL_OVAL], ["setOption", K.SET_OPTION], ["showText", K.SHOW_TEXT], ["setSelectionLocation", K.SET_SELECTION_LOC], ["getDimensions", K.GET_DIMENSIONS], ["waitForUser", K.WAIT_FOR_USER], ["makePoint", K.MAKE_POINT], ["makeText", K.MAKE_TEXT], ["makeEllipse", K.MAKE_ELLIPSE], ["getDisplayedArea", K.GET_DISPLAYED_AREA], ["toScaled", K.TO_SCALED], ["toUnscaled", K.TO_UNSCALED], ["makeArrow", K.MAKE_ARROW], ["makeRotatedRectangle", K.MAKE_ROTATED_RECT]];
-const SYS_NUMERICFUNCTIONS = [["getPixel", K.GET_PIXEL], ["abs", K.ABS], ["cos", K.COS], ["exp", K.EXP], ["floor", K.FLOOR], ["log", K.LOG], ["maxOf", K.MAX_OF], ["minOf", K.MIN_OF], ["pow", K.POW], ["round", K.ROUND], ["sin", K.SIN], ["sqrt", K.SQRT], ["tan", K.TAN], ["getTime", K.GET_TIME], ["getWidth", K.GET_WIDTH], ["getHeight", K.GET_HEIGHT], ["random", K.RANDOM], ["getResult", K.GET_RESULT], ["getResultsCount", K.GET_COUNT], ["getNumber", K.GET_NUMBER], ["nImages", K.NIMAGES], ["nSlices", K.NSLICES], ["lengthOf", K.LENGTH_OF], ["nResults", K.NRESULTS], ["getImageID", K.GET_ID], ["bitDepth", K.BIT_DEPTH], ["selectionType", K.SELECTION_TYPE], ["atan", K.ATAN], ["isOpen", K.IS_OPEN], ["isActive", K.IS_ACTIVE], ["indexOf", K.INDEX_OF], ["lastIndexOf", K.LAST_INDEX_OF], ["charCodeAt", K.CHAR_CODE_AT], ["getBoolean", K.GET_BOOLEAN], ["startsWith", K.STARTS_WITH], ["endsWith", K.ENDS_WITH], ["atan2", K.ATAN2], ["isNaN", K.IS_NAN], ["getZoom", K.GET_ZOOM], ["parseInt", K.PARSE_INT], ["parseFloat", K.PARSE_FLOAT], ["isKeyDown", K.IS_KEY_DOWN], ["getSliceNumber", K.GET_SLICE_NUMBER], ["screenWidth", K.SCREEN_WIDTH], ["screenHeight", K.SCREEN_HEIGHT], ["calibrate", K.CALIBRATE], ["asin", K.ASIN], ["acos", K.ACOS], ["roiManager", K.ROI_MANAGER], ["toolID", K.TOOL_ID], ["is", K.IS], ["getValue", K.GET_VALUE], ["Stack", K.STACK], ["matches", K.MATCHES], ["getStringWidth", K.GET_STRING_WIDTH], ["Fit", K.FIT], ["Overlay", K.OVERLAY], ["selectionContains", K.SELECTION_CONTAINS], ["Plot", K.PLOT], ["Math", K.MATH]];
-const SYS_STRINGFUNCTIONS = [["d2s", K.D2S], ["toHex", K.TO_HEX], ["toBinary", K.TO_BINARY], ["getTitle", K.GET_TITLE], ["getString", K.GET_STRING], ["substring", K.SUBSTRING], ["fromCharCode", K.FROM_CHAR_CODE], ["getInfo", K.GET_INFO], ["getDirectory", K.GET_DIRECTORY], ["getArgument", K.GET_ARGUMENT], ["getImageInfo", K.GET_IMAGE_INFO], ["toLowerCase", K.TO_LOWER_CASE], ["toUpperCase", K.TO_UPPER_CASE], ["runMacro", K.RUN_MACRO], ["eval", K.EVAL], ["toString", K.TO_STRING], ["replace", K.REPLACE], ["Dialog", K.DIALOG], ["getMetadata", K.GET_METADATA], ["File", K.FILE], ["selectionName", K.SELECTION_NAME], ["getVersion", K.GET_VERSION], ["getResultLabel", K.GET_RESULT_LABEL], ["call", K.CALL], ["String", K.STRING], ["Ext", K.EXT], ["exec", K.EXEC], ["List", K.LIST], ["debug", K.DEBUG], ["IJ", K.IJ_CALL], ["getResultString", K.GET_RESULT_STRING], ["getDir", K.GET_DIR], ["trim", K.TRIM], ["charAt", K.CHARAT]];
-const SYS_ARRAYFUNCTIONS = [["getProfile", K.GET_PROFILE], ["newArray", K.NEW_ARRAY], ["split", K.SPLIT], ["getFileList", K.GET_FILE_LIST], ["getFontList", K.GET_FONT_LIST], ["newMenu", K.NEW_MENU], ["getList", K.GET_LIST], ["Array", K.ARRAY_FUNC]];
-const SYS_VARIABLEFUNCTIONS = [["Table", K.TABLE], ["Roi", K.ROI], ["RoiManager", K.ROI_MANAGER2], ["Property", K.PROPERTY], ["Image", K.IMAGE], ["Color", K.COLOR]];
+const K = {"TOK_SHIFT":12, "TOK_MASK":4095, "PLUS_PLUS":1, "MINUS_MINUS":2, "EQ":3, "NEQ":4, "GT":5, "GTE":6, "LT":7, "LTE":8, "PLUS_EQUAL":9, "MINUS_EQUAL":10, "MUL_EQUAL":11, "DIV_EQUAL":12, "LOGICAL_AND":13, "LOGICAL_OR":14, "SHIFT_RIGHT":15, "SHIFT_LEFT":16, "EOF":128, "WORD":129, "NUMBER":130, "NOP":131, "EOL":132, "STRING_CONSTANT":133, "PREDEFINED_FUNCTION":134, "NUMERIC_FUNCTION":135, "STRING_FUNCTION":136, "ARRAY_FUNCTION":137, "USER_FUNCTION":138, "ARRAY":139, "VARIABLE_FUNCTION":140, "MACRO":200, "VAR":201, "IF":202, "ELSE":203, "WHILE":204, "DO":205, "FOR":206, "FUNCTION":207, "RETURN":208, "TRUE":209, "FALSE":210, "PI":211, "NaN":212, "BREAK":213, "CONTINUE":214, "RUN":300, "INVERT":301, "SELECT":302, "WAIT":303, "BEEP":304, "RESET_MIN_MAX":305, "RESET_THRESHOLD":306, "PRINT":307, "WRITE":308, "DO_WAND":309, "SET_MIN_MAX":310, "SET_THRESHOLD":311, "SET_TOOL":312, "SET_FOREGROUND":313, "SET_BACKGROUND":314, "MAKE_LINE":315, "MAKE_OVAL":316, "MAKE_RECTANGLE":317, "DUMP":318, "MOVE_TO":319, "LINE_TO":320, "DRAW_LINE":321, "REQUIRES":322, "AUTO_UPDATE":323, "UPDATE_DISPLAY":324, "DRAW_STRING":325, "SET_PASTE_MODE":326, "DO_COMMAND":327, "SHOW_STATUS":328, "SHOW_PROGRESS":329, "SHOW_MESSAGE":330, "PUT_PIXEL":331, "SET_PIXEL":332, "SNAPSHOT":333, "RESET":334, "FILL":335, "SET_COLOR":336, "SET_LINE_WIDTH":337, "CHANGE_VALUES":338, "SELECT_IMAGE":339, "EXIT":340, "SET_LOCATION":341, "GET_CURSOR_LOC":342, "GET_LINE":343, "GET_VOXEL_SIZE":344, "GET_HISTOGRAM":345, "GET_STATISTICS":346, "GET_BOUNDING_RECT":347, "GET_LUT":348, "SET_LUT":349, "GET_COORDINATES":350, "SHOW_MESSAGE_WITH_CANCEL":351, "MAKE_SELECTION":352, "SET_RESULT":353, "UPDATE_RESULTS":354, "SET_BATCH_MODE":355, "SET_JUSTIFICATION":357, "SET_Z_COORDINATE":358, "GET_THRESHOLD":359, "GET_PIXEL_SIZE":360, "SETUP_UNDO":361, "SAVE_SETTINGS":362, "RESTORE_SETTINGS":363, "SET_KEY_DOWN":364, "OPEN":365, "SET_FONT":366, "GET_MIN_AND_MAX":367, "CLOSE":368, "SET_SLICE":369, "NEW_IMAGE":370, "SAVE_AS":371, "SAVE":372, "SET_AUTO_THRESHOLD":373, "RENAME":374, "GET_BOUNDS":375, "FILL_RECT":376, "GET_RAW_STATISTICS":377, "FLOOD_FILL":378, "RESTORE_PREVIOUS_TOOL":379, "SET_VOXEL_SIZE":380, "GET_LOCATION_AND_SIZE":381, "GET_DATE_AND_TIME":382, "SET_METADATA":383, "CALCULATOR":384, "SET_RGB_WEIGHTS":385, "MAKE_POLYGON":386, "SET_SELECTION_NAME":387, "DRAW_RECT":388, "DRAW_OVAL":389, "FILL_OVAL":390, "SET_OPTION":391, "SHOW_TEXT":392, "SET_SELECTION_LOC":393, "GET_DIMENSIONS":394, "WAIT_FOR_USER":395, "MAKE_POINT":396, "MAKE_TEXT":397, "MAKE_ELLIPSE":398, "GET_DISPLAYED_AREA":399, "TO_SCALED":400, "TO_UNSCALED":401, "MAKE_ARROW":402, "MAKE_ROTATED_RECT":403, "GET_PIXEL":1000, "ABS":1001, "COS":1002, "EXP":1003, "FLOOR":1004, "LOG":1005, "MAX_OF":1006, "MIN_OF":1007, "POW":1008, "ROUND":1009, "SIN":1010, "SQRT":1011, "TAN":1012, "GET_TIME":1013, "GET_WIDTH":1014, "GET_HEIGHT":1015, "RANDOM":1016, "GET_RESULT":1017, "GET_COUNT":1018, "GET_NUMBER":1019, "NIMAGES":1020, "NSLICES":1021, "LENGTH_OF":1022, "NRESULTS":1023, "GET_ID":1024, "BIT_DEPTH":1025, "SELECTION_TYPE":1026, "ATAN":1027, "IS_OPEN":1028, "IS_ACTIVE":1029, "INDEX_OF":1030, "LAST_INDEX_OF":1031, "CHAR_CODE_AT":1032, "GET_BOOLEAN":1033, "STARTS_WITH":1034, "ENDS_WITH":1035, "ATAN2":1036, "IS_NAN":1037, "GET_ZOOM":1038, "PARSE_INT":1039, "PARSE_FLOAT":1040, "IS_KEY_DOWN":1041, "GET_SLICE_NUMBER":1042, "SCREEN_WIDTH":1043, "SCREEN_HEIGHT":1044, "CALIBRATE":1045, "ASIN":1046, "ACOS":1047, "ROI_MANAGER":1048, "TOOL_ID":1049, "IS":1050, "GET_VALUE":1051, "STACK":1052, "MATCHES":1053, "GET_STRING_WIDTH":1054, "FIT":1055, "OVERLAY":1056, "SELECTION_CONTAINS":1057, "PLOT":1058, "MATH":1059, "D2S":2000, "TO_HEX":2001, "TO_BINARY":2002, "GET_TITLE":2003, "GET_STRING":2004, "SUBSTRING":2005, "FROM_CHAR_CODE":2006, "GET_INFO":2007, "GET_DIRECTORY":2008, "GET_ARGUMENT":2009, "GET_IMAGE_INFO":2010, "TO_LOWER_CASE":2011, "TO_UPPER_CASE":2012, "RUN_MACRO":2013, "EVAL":2014, "TO_STRING":2015, "REPLACE":2016, "DIALOG":2017, "GET_METADATA":2018, "FILE":2019, "SELECTION_NAME":2020, "GET_VERSION":2021, "GET_RESULT_LABEL":2022, "CALL":2023, "STRING":2024, "EXT":2025, "EXEC":2026, "LIST":2027, "DEBUG":2028, "IJ_CALL":2029, "GET_RESULT_STRING":2030, "GET_DIR":2031, "TRIM":2032, "CHARAT":2033, "GET_PROFILE":3000, "NEW_ARRAY":3001, "SPLIT":3002, "GET_FILE_LIST":3003, "GET_FONT_LIST":3004, "NEW_MENU":3005, "GET_LIST":3006, "ARRAY_FUNC":3007, "TABLE":4000, "ROI":4001, "ROI_MANAGER2":4002, "PROPERTY":4003, "IMAGE":4004, "COLOR":4005};
+/* A property read on K is a dictionary lookup (257 properties): the interpreter reads these module constants instead
+ * (3x on a hot loop). K_<NAME> === K.<NAME>; tests/js/test_ijm_sync_twin.mjs fails on a K.<NAME> read in the code. */
+const K_ABS = K.ABS,
+  K_ACOS = K.ACOS,
+  K_ARRAY_FUNC = K.ARRAY_FUNC,
+  K_ASIN = K.ASIN,
+  K_ATAN = K.ATAN,
+  K_ATAN2 = K.ATAN2,
+  K_AUTO_UPDATE = K.AUTO_UPDATE,
+  K_BEEP = K.BEEP,
+  K_BIT_DEPTH = K.BIT_DEPTH,
+  K_BREAK = K.BREAK,
+  K_CALCULATOR = K.CALCULATOR,
+  K_CALIBRATE = K.CALIBRATE,
+  K_CALL = K.CALL,
+  K_CHANGE_VALUES = K.CHANGE_VALUES,
+  K_CHARAT = K.CHARAT,
+  K_CHAR_CODE_AT = K.CHAR_CODE_AT,
+  K_CLOSE = K.CLOSE,
+  K_COLOR = K.COLOR,
+  K_CONTINUE = K.CONTINUE,
+  K_COS = K.COS,
+  K_D2S = K.D2S,
+  K_DEBUG = K.DEBUG,
+  K_DIALOG = K.DIALOG,
+  K_DIV_EQUAL = K.DIV_EQUAL,
+  K_DO = K.DO,
+  K_DO_COMMAND = K.DO_COMMAND,
+  K_DO_WAND = K.DO_WAND,
+  K_DRAW_LINE = K.DRAW_LINE,
+  K_DRAW_OVAL = K.DRAW_OVAL,
+  K_DRAW_RECT = K.DRAW_RECT,
+  K_DRAW_STRING = K.DRAW_STRING,
+  K_DUMP = K.DUMP,
+  K_ELSE = K.ELSE,
+  K_ENDS_WITH = K.ENDS_WITH,
+  K_EQ = K.EQ,
+  K_EVAL = K.EVAL,
+  K_EXEC = K.EXEC,
+  K_EXIT = K.EXIT,
+  K_EXP = K.EXP,
+  K_EXT = K.EXT,
+  K_FALSE = K.FALSE,
+  K_FILE = K.FILE,
+  K_FILL = K.FILL,
+  K_FILL_OVAL = K.FILL_OVAL,
+  K_FILL_RECT = K.FILL_RECT,
+  K_FIT = K.FIT,
+  K_FLOOD_FILL = K.FLOOD_FILL,
+  K_FLOOR = K.FLOOR,
+  K_FOR = K.FOR,
+  K_FROM_CHAR_CODE = K.FROM_CHAR_CODE,
+  K_FUNCTION = K.FUNCTION,
+  K_GET_ARGUMENT = K.GET_ARGUMENT,
+  K_GET_BOOLEAN = K.GET_BOOLEAN,
+  K_GET_BOUNDING_RECT = K.GET_BOUNDING_RECT,
+  K_GET_BOUNDS = K.GET_BOUNDS,
+  K_GET_COORDINATES = K.GET_COORDINATES,
+  K_GET_COUNT = K.GET_COUNT,
+  K_GET_CURSOR_LOC = K.GET_CURSOR_LOC,
+  K_GET_DATE_AND_TIME = K.GET_DATE_AND_TIME,
+  K_GET_DIMENSIONS = K.GET_DIMENSIONS,
+  K_GET_DIR = K.GET_DIR,
+  K_GET_DIRECTORY = K.GET_DIRECTORY,
+  K_GET_DISPLAYED_AREA = K.GET_DISPLAYED_AREA,
+  K_GET_FILE_LIST = K.GET_FILE_LIST,
+  K_GET_FONT_LIST = K.GET_FONT_LIST,
+  K_GET_HEIGHT = K.GET_HEIGHT,
+  K_GET_HISTOGRAM = K.GET_HISTOGRAM,
+  K_GET_ID = K.GET_ID,
+  K_GET_IMAGE_INFO = K.GET_IMAGE_INFO,
+  K_GET_INFO = K.GET_INFO,
+  K_GET_LINE = K.GET_LINE,
+  K_GET_LIST = K.GET_LIST,
+  K_GET_LOCATION_AND_SIZE = K.GET_LOCATION_AND_SIZE,
+  K_GET_LUT = K.GET_LUT,
+  K_GET_METADATA = K.GET_METADATA,
+  K_GET_MIN_AND_MAX = K.GET_MIN_AND_MAX,
+  K_GET_NUMBER = K.GET_NUMBER,
+  K_GET_PIXEL = K.GET_PIXEL,
+  K_GET_PIXEL_SIZE = K.GET_PIXEL_SIZE,
+  K_GET_PROFILE = K.GET_PROFILE,
+  K_GET_RAW_STATISTICS = K.GET_RAW_STATISTICS,
+  K_GET_RESULT = K.GET_RESULT,
+  K_GET_RESULT_LABEL = K.GET_RESULT_LABEL,
+  K_GET_RESULT_STRING = K.GET_RESULT_STRING,
+  K_GET_SLICE_NUMBER = K.GET_SLICE_NUMBER,
+  K_GET_STATISTICS = K.GET_STATISTICS,
+  K_GET_STRING = K.GET_STRING,
+  K_GET_STRING_WIDTH = K.GET_STRING_WIDTH,
+  K_GET_THRESHOLD = K.GET_THRESHOLD,
+  K_GET_TIME = K.GET_TIME,
+  K_GET_TITLE = K.GET_TITLE,
+  K_GET_VALUE = K.GET_VALUE,
+  K_GET_VERSION = K.GET_VERSION,
+  K_GET_VOXEL_SIZE = K.GET_VOXEL_SIZE,
+  K_GET_WIDTH = K.GET_WIDTH,
+  K_GET_ZOOM = K.GET_ZOOM,
+  K_GT = K.GT,
+  K_GTE = K.GTE,
+  K_IF = K.IF,
+  K_IJ_CALL = K.IJ_CALL,
+  K_IMAGE = K.IMAGE,
+  K_INDEX_OF = K.INDEX_OF,
+  K_INVERT = K.INVERT,
+  K_IS = K.IS,
+  K_IS_ACTIVE = K.IS_ACTIVE,
+  K_IS_KEY_DOWN = K.IS_KEY_DOWN,
+  K_IS_NAN = K.IS_NAN,
+  K_IS_OPEN = K.IS_OPEN,
+  K_LAST_INDEX_OF = K.LAST_INDEX_OF,
+  K_LENGTH_OF = K.LENGTH_OF,
+  K_LINE_TO = K.LINE_TO,
+  K_LIST = K.LIST,
+  K_LOG = K.LOG,
+  K_LOGICAL_AND = K.LOGICAL_AND,
+  K_LOGICAL_OR = K.LOGICAL_OR,
+  K_LT = K.LT,
+  K_LTE = K.LTE,
+  K_MACRO = K.MACRO,
+  K_MAKE_ARROW = K.MAKE_ARROW,
+  K_MAKE_ELLIPSE = K.MAKE_ELLIPSE,
+  K_MAKE_LINE = K.MAKE_LINE,
+  K_MAKE_OVAL = K.MAKE_OVAL,
+  K_MAKE_POINT = K.MAKE_POINT,
+  K_MAKE_POLYGON = K.MAKE_POLYGON,
+  K_MAKE_RECTANGLE = K.MAKE_RECTANGLE,
+  K_MAKE_ROTATED_RECT = K.MAKE_ROTATED_RECT,
+  K_MAKE_SELECTION = K.MAKE_SELECTION,
+  K_MAKE_TEXT = K.MAKE_TEXT,
+  K_MATCHES = K.MATCHES,
+  K_MATH = K.MATH,
+  K_MAX_OF = K.MAX_OF,
+  K_MINUS_EQUAL = K.MINUS_EQUAL,
+  K_MINUS_MINUS = K.MINUS_MINUS,
+  K_MIN_OF = K.MIN_OF,
+  K_MOVE_TO = K.MOVE_TO,
+  K_MUL_EQUAL = K.MUL_EQUAL,
+  K_NEQ = K.NEQ,
+  K_NEW_ARRAY = K.NEW_ARRAY,
+  K_NEW_IMAGE = K.NEW_IMAGE,
+  K_NEW_MENU = K.NEW_MENU,
+  K_NIMAGES = K.NIMAGES,
+  K_NRESULTS = K.NRESULTS,
+  K_NSLICES = K.NSLICES,
+  K_NaN = K.NaN,
+  K_OPEN = K.OPEN,
+  K_OVERLAY = K.OVERLAY,
+  K_PARSE_FLOAT = K.PARSE_FLOAT,
+  K_PARSE_INT = K.PARSE_INT,
+  K_PI = K.PI,
+  K_PLOT = K.PLOT,
+  K_PLUS_EQUAL = K.PLUS_EQUAL,
+  K_PLUS_PLUS = K.PLUS_PLUS,
+  K_POW = K.POW,
+  K_PRINT = K.PRINT,
+  K_PROPERTY = K.PROPERTY,
+  K_PUT_PIXEL = K.PUT_PIXEL,
+  K_RANDOM = K.RANDOM,
+  K_RENAME = K.RENAME,
+  K_REPLACE = K.REPLACE,
+  K_REQUIRES = K.REQUIRES,
+  K_RESET = K.RESET,
+  K_RESET_MIN_MAX = K.RESET_MIN_MAX,
+  K_RESET_THRESHOLD = K.RESET_THRESHOLD,
+  K_RESTORE_PREVIOUS_TOOL = K.RESTORE_PREVIOUS_TOOL,
+  K_RESTORE_SETTINGS = K.RESTORE_SETTINGS,
+  K_RETURN = K.RETURN,
+  K_ROI = K.ROI,
+  K_ROI_MANAGER = K.ROI_MANAGER,
+  K_ROI_MANAGER2 = K.ROI_MANAGER2,
+  K_ROUND = K.ROUND,
+  K_RUN = K.RUN,
+  K_RUN_MACRO = K.RUN_MACRO,
+  K_SAVE = K.SAVE,
+  K_SAVE_AS = K.SAVE_AS,
+  K_SAVE_SETTINGS = K.SAVE_SETTINGS,
+  K_SCREEN_HEIGHT = K.SCREEN_HEIGHT,
+  K_SCREEN_WIDTH = K.SCREEN_WIDTH,
+  K_SELECT = K.SELECT,
+  K_SELECTION_CONTAINS = K.SELECTION_CONTAINS,
+  K_SELECTION_NAME = K.SELECTION_NAME,
+  K_SELECTION_TYPE = K.SELECTION_TYPE,
+  K_SELECT_IMAGE = K.SELECT_IMAGE,
+  K_SETUP_UNDO = K.SETUP_UNDO,
+  K_SET_AUTO_THRESHOLD = K.SET_AUTO_THRESHOLD,
+  K_SET_BACKGROUND = K.SET_BACKGROUND,
+  K_SET_BATCH_MODE = K.SET_BATCH_MODE,
+  K_SET_COLOR = K.SET_COLOR,
+  K_SET_FONT = K.SET_FONT,
+  K_SET_FOREGROUND = K.SET_FOREGROUND,
+  K_SET_JUSTIFICATION = K.SET_JUSTIFICATION,
+  K_SET_KEY_DOWN = K.SET_KEY_DOWN,
+  K_SET_LINE_WIDTH = K.SET_LINE_WIDTH,
+  K_SET_LOCATION = K.SET_LOCATION,
+  K_SET_LUT = K.SET_LUT,
+  K_SET_METADATA = K.SET_METADATA,
+  K_SET_MIN_MAX = K.SET_MIN_MAX,
+  K_SET_OPTION = K.SET_OPTION,
+  K_SET_PASTE_MODE = K.SET_PASTE_MODE,
+  K_SET_PIXEL = K.SET_PIXEL,
+  K_SET_RESULT = K.SET_RESULT,
+  K_SET_RGB_WEIGHTS = K.SET_RGB_WEIGHTS,
+  K_SET_SELECTION_LOC = K.SET_SELECTION_LOC,
+  K_SET_SELECTION_NAME = K.SET_SELECTION_NAME,
+  K_SET_SLICE = K.SET_SLICE,
+  K_SET_THRESHOLD = K.SET_THRESHOLD,
+  K_SET_TOOL = K.SET_TOOL,
+  K_SET_VOXEL_SIZE = K.SET_VOXEL_SIZE,
+  K_SET_Z_COORDINATE = K.SET_Z_COORDINATE,
+  K_SHIFT_LEFT = K.SHIFT_LEFT,
+  K_SHIFT_RIGHT = K.SHIFT_RIGHT,
+  K_SHOW_MESSAGE = K.SHOW_MESSAGE,
+  K_SHOW_MESSAGE_WITH_CANCEL = K.SHOW_MESSAGE_WITH_CANCEL,
+  K_SHOW_PROGRESS = K.SHOW_PROGRESS,
+  K_SHOW_STATUS = K.SHOW_STATUS,
+  K_SHOW_TEXT = K.SHOW_TEXT,
+  K_SIN = K.SIN,
+  K_SNAPSHOT = K.SNAPSHOT,
+  K_SPLIT = K.SPLIT,
+  K_SQRT = K.SQRT,
+  K_STACK = K.STACK,
+  K_STARTS_WITH = K.STARTS_WITH,
+  K_STRING = K.STRING,
+  K_SUBSTRING = K.SUBSTRING,
+  K_TABLE = K.TABLE,
+  K_TAN = K.TAN,
+  K_TOK_MASK = K.TOK_MASK,
+  K_TOK_SHIFT = K.TOK_SHIFT,
+  K_TOOL_ID = K.TOOL_ID,
+  K_TO_BINARY = K.TO_BINARY,
+  K_TO_HEX = K.TO_HEX,
+  K_TO_LOWER_CASE = K.TO_LOWER_CASE,
+  K_TO_SCALED = K.TO_SCALED,
+  K_TO_STRING = K.TO_STRING,
+  K_TO_UNSCALED = K.TO_UNSCALED,
+  K_TO_UPPER_CASE = K.TO_UPPER_CASE,
+  K_TRIM = K.TRIM,
+  K_TRUE = K.TRUE,
+  K_UPDATE_DISPLAY = K.UPDATE_DISPLAY,
+  K_UPDATE_RESULTS = K.UPDATE_RESULTS,
+  K_VAR = K.VAR,
+  K_WAIT = K.WAIT,
+  K_WAIT_FOR_USER = K.WAIT_FOR_USER,
+  K_WHILE = K.WHILE,
+  K_WRITE = K.WRITE;
+const SYS_KEYWORDS = [["macro", K_MACRO], ["var", K_VAR], ["if", K_IF], ["else", K_ELSE], ["while", K_WHILE], ["do", K_DO], ["for", K_FOR], ["function", K_FUNCTION], ["return", K_RETURN], ["true", K_TRUE], ["false", K_FALSE], ["PI", K_PI], ["NaN", K_NaN], ["break", K_BREAK], ["continue", K_CONTINUE]];
+const SYS_FUNCTIONS = [["run", K_RUN], ["invert", K_INVERT], ["selectWindow", K_SELECT], ["wait", K_WAIT], ["beep", K_BEEP], ["resetMinAndMax", K_RESET_MIN_MAX], ["resetThreshold", K_RESET_THRESHOLD], ["print", K_PRINT], ["write", K_WRITE], ["doWand", K_DO_WAND], ["setMinAndMax", K_SET_MIN_MAX], ["setThreshold", K_SET_THRESHOLD], ["setTool", K_SET_TOOL], ["setForegroundColor", K_SET_FOREGROUND], ["setBackgroundColor", K_SET_BACKGROUND], ["makeLine", K_MAKE_LINE], ["makeOval", K_MAKE_OVAL], ["makeRectangle", K_MAKE_RECTANGLE], ["dump", K_DUMP], ["moveTo", K_MOVE_TO], ["lineTo", K_LINE_TO], ["drawLine", K_DRAW_LINE], ["requires", K_REQUIRES], ["autoUpdate", K_AUTO_UPDATE], ["updateDisplay", K_UPDATE_DISPLAY], ["drawString", K_DRAW_STRING], ["setPasteMode", K_SET_PASTE_MODE], ["doCommand", K_DO_COMMAND], ["showStatus", K_SHOW_STATUS], ["showProgress", K_SHOW_PROGRESS], ["showMessage", K_SHOW_MESSAGE], ["putPixel", K_PUT_PIXEL], ["setPixel", K_SET_PIXEL], ["snapshot", K_SNAPSHOT], ["reset", K_RESET], ["fill", K_FILL], ["setColor", K_SET_COLOR], ["setLineWidth", K_SET_LINE_WIDTH], ["changeValues", K_CHANGE_VALUES], ["selectImage", K_SELECT_IMAGE], ["exit", K_EXIT], ["setLocation", K_SET_LOCATION], ["getCursorLoc", K_GET_CURSOR_LOC], ["getLine", K_GET_LINE], ["getVoxelSize", K_GET_VOXEL_SIZE], ["getHistogram", K_GET_HISTOGRAM], ["getStatistics", K_GET_STATISTICS], ["getBoundingRect", K_GET_BOUNDING_RECT], ["getLut", K_GET_LUT], ["setLut", K_SET_LUT], ["getSelectionCoordinates", K_GET_COORDINATES], ["showMessageWithCancel", K_SHOW_MESSAGE_WITH_CANCEL], ["makeSelection", K_MAKE_SELECTION], ["setResult", K_SET_RESULT], ["updateResults", K_UPDATE_RESULTS], ["setBatchMode", K_SET_BATCH_MODE], ["setJustification", K_SET_JUSTIFICATION], ["setZCoordinate", K_SET_Z_COORDINATE], ["getThreshold", K_GET_THRESHOLD], ["getPixelSize", K_GET_PIXEL_SIZE], ["setupUndo", K_SETUP_UNDO], ["saveSettings", K_SAVE_SETTINGS], ["restoreSettings", K_RESTORE_SETTINGS], ["setKeyDown", K_SET_KEY_DOWN], ["open", K_OPEN], ["setFont", K_SET_FONT], ["getMinAndMax", K_GET_MIN_AND_MAX], ["close", K_CLOSE], ["setSlice", K_SET_SLICE], ["newImage", K_NEW_IMAGE], ["saveAs", K_SAVE_AS], ["save", K_SAVE], ["setAutoThreshold", K_SET_AUTO_THRESHOLD], ["rename", K_RENAME], ["getSelectionBounds", K_GET_BOUNDS], ["fillRect", K_FILL_RECT], ["getRawStatistics", K_GET_RAW_STATISTICS], ["floodFill", K_FLOOD_FILL], ["restorePreviousTool", K_RESTORE_PREVIOUS_TOOL], ["setVoxelSize", K_SET_VOXEL_SIZE], ["getLocationAndSize", K_GET_LOCATION_AND_SIZE], ["getDateAndTime", K_GET_DATE_AND_TIME], ["setMetadata", K_SET_METADATA], ["imageCalculator", K_CALCULATOR], ["setRGBWeights", K_SET_RGB_WEIGHTS], ["makePolygon", K_MAKE_POLYGON], ["setSelectionName", K_SET_SELECTION_NAME], ["drawRect", K_DRAW_RECT], ["drawOval", K_DRAW_OVAL], ["fillOval", K_FILL_OVAL], ["setOption", K_SET_OPTION], ["showText", K_SHOW_TEXT], ["setSelectionLocation", K_SET_SELECTION_LOC], ["getDimensions", K_GET_DIMENSIONS], ["waitForUser", K_WAIT_FOR_USER], ["makePoint", K_MAKE_POINT], ["makeText", K_MAKE_TEXT], ["makeEllipse", K_MAKE_ELLIPSE], ["getDisplayedArea", K_GET_DISPLAYED_AREA], ["toScaled", K_TO_SCALED], ["toUnscaled", K_TO_UNSCALED], ["makeArrow", K_MAKE_ARROW], ["makeRotatedRectangle", K_MAKE_ROTATED_RECT]];
+const SYS_NUMERICFUNCTIONS = [["getPixel", K_GET_PIXEL], ["abs", K_ABS], ["cos", K_COS], ["exp", K_EXP], ["floor", K_FLOOR], ["log", K_LOG], ["maxOf", K_MAX_OF], ["minOf", K_MIN_OF], ["pow", K_POW], ["round", K_ROUND], ["sin", K_SIN], ["sqrt", K_SQRT], ["tan", K_TAN], ["getTime", K_GET_TIME], ["getWidth", K_GET_WIDTH], ["getHeight", K_GET_HEIGHT], ["random", K_RANDOM], ["getResult", K_GET_RESULT], ["getResultsCount", K_GET_COUNT], ["getNumber", K_GET_NUMBER], ["nImages", K_NIMAGES], ["nSlices", K_NSLICES], ["lengthOf", K_LENGTH_OF], ["nResults", K_NRESULTS], ["getImageID", K_GET_ID], ["bitDepth", K_BIT_DEPTH], ["selectionType", K_SELECTION_TYPE], ["atan", K_ATAN], ["isOpen", K_IS_OPEN], ["isActive", K_IS_ACTIVE], ["indexOf", K_INDEX_OF], ["lastIndexOf", K_LAST_INDEX_OF], ["charCodeAt", K_CHAR_CODE_AT], ["getBoolean", K_GET_BOOLEAN], ["startsWith", K_STARTS_WITH], ["endsWith", K_ENDS_WITH], ["atan2", K_ATAN2], ["isNaN", K_IS_NAN], ["getZoom", K_GET_ZOOM], ["parseInt", K_PARSE_INT], ["parseFloat", K_PARSE_FLOAT], ["isKeyDown", K_IS_KEY_DOWN], ["getSliceNumber", K_GET_SLICE_NUMBER], ["screenWidth", K_SCREEN_WIDTH], ["screenHeight", K_SCREEN_HEIGHT], ["calibrate", K_CALIBRATE], ["asin", K_ASIN], ["acos", K_ACOS], ["roiManager", K_ROI_MANAGER], ["toolID", K_TOOL_ID], ["is", K_IS], ["getValue", K_GET_VALUE], ["Stack", K_STACK], ["matches", K_MATCHES], ["getStringWidth", K_GET_STRING_WIDTH], ["Fit", K_FIT], ["Overlay", K_OVERLAY], ["selectionContains", K_SELECTION_CONTAINS], ["Plot", K_PLOT], ["Math", K_MATH]];
+const SYS_STRINGFUNCTIONS = [["d2s", K_D2S], ["toHex", K_TO_HEX], ["toBinary", K_TO_BINARY], ["getTitle", K_GET_TITLE], ["getString", K_GET_STRING], ["substring", K_SUBSTRING], ["fromCharCode", K_FROM_CHAR_CODE], ["getInfo", K_GET_INFO], ["getDirectory", K_GET_DIRECTORY], ["getArgument", K_GET_ARGUMENT], ["getImageInfo", K_GET_IMAGE_INFO], ["toLowerCase", K_TO_LOWER_CASE], ["toUpperCase", K_TO_UPPER_CASE], ["runMacro", K_RUN_MACRO], ["eval", K_EVAL], ["toString", K_TO_STRING], ["replace", K_REPLACE], ["Dialog", K_DIALOG], ["getMetadata", K_GET_METADATA], ["File", K_FILE], ["selectionName", K_SELECTION_NAME], ["getVersion", K_GET_VERSION], ["getResultLabel", K_GET_RESULT_LABEL], ["call", K_CALL], ["String", K_STRING], ["Ext", K_EXT], ["exec", K_EXEC], ["List", K_LIST], ["debug", K_DEBUG], ["IJ", K_IJ_CALL], ["getResultString", K_GET_RESULT_STRING], ["getDir", K_GET_DIR], ["trim", K_TRIM], ["charAt", K_CHARAT]];
+const SYS_ARRAYFUNCTIONS = [["getProfile", K_GET_PROFILE], ["newArray", K_NEW_ARRAY], ["split", K_SPLIT], ["getFileList", K_GET_FILE_LIST], ["getFontList", K_GET_FONT_LIST], ["newMenu", K_NEW_MENU], ["getList", K_GET_LIST], ["Array", K_ARRAY_FUNC]];
+const SYS_VARIABLEFUNCTIONS = [["Table", K_TABLE], ["Roi", K_ROI], ["RoiManager", K_ROI_MANAGER2], ["Property", K_PROPERTY], ["Image", K_IMAGE], ["Color", K_COLOR]];
 
-K.TOK_MASK = 0xfff;
-const TOK_SHIFT = K.TOK_SHIFT, TOK_MASK = K.TOK_MASK;
+const TOK_SHIFT = K_TOK_SHIFT, TOK_MASK = K_TOK_MASK;
 const STACK_SIZE = 1000, MAX_ARGS = 20;
 const IMAGEJ_VERSION = '1.54p';
 const MACRO_CANCELED = 'Macro canceled';
@@ -578,20 +834,20 @@ class Program {
       default:
         if (token < 32) {
           switch (token) {
-            case K.PLUS_PLUS: str = '++'; break;
-            case K.MINUS_MINUS: str = '--'; break;
-            case K.PLUS_EQUAL: str = '+='; break;
-            case K.MINUS_EQUAL: str = '-='; break;
-            case K.MUL_EQUAL: str = '*='; break;
-            case K.DIV_EQUAL: str = '/='; break;
-            case K.LOGICAL_AND: str = '&&'; break;
-            case K.LOGICAL_OR: str = '||'; break;
-            case K.EQ: str = '=='; break;
-            case K.NEQ: str = '!='; break;
-            case K.GT: str = '>'; break;
-            case K.GTE: str = '>='; break;
-            case K.LT: str = '<'; break;
-            case K.LTE: str = '<='; break;
+            case K_PLUS_PLUS: str = '++'; break;
+            case K_MINUS_MINUS: str = '--'; break;
+            case K_PLUS_EQUAL: str = '+='; break;
+            case K_MINUS_EQUAL: str = '-='; break;
+            case K_MUL_EQUAL: str = '*='; break;
+            case K_DIV_EQUAL: str = '/='; break;
+            case K_LOGICAL_AND: str = '&&'; break;
+            case K_LOGICAL_OR: str = '||'; break;
+            case K_EQ: str = '=='; break;
+            case K_NEQ: str = '!='; break;
+            case K_GT: str = '>'; break;
+            case K_GTE: str = '>='; break;
+            case K_LT: str = '<'; break;
+            case K_LTE: str = '<='; break;
             default: str = '';
           }
         } else if (token >= 200) str = this.table[address].str;
@@ -660,51 +916,51 @@ function tokenize(program) {
       case 34: case 39: ret = '' + st.sval; token = STRING_CONSTANT; break;
       case 43:
         nextToken = st.nextToken();
-        if (nextToken === 43) token = K.PLUS_PLUS;
-        else if (nextToken === 61) token = K.PLUS_EQUAL;
+        if (nextToken === 43) token = K_PLUS_PLUS;
+        else if (nextToken === 61) token = K_PLUS_EQUAL;
         else st.pushBack();
         break;
       case 45:
         nextToken = st.nextToken();
-        if (nextToken === 45) token = K.MINUS_MINUS;
-        else if (nextToken === 61) token = K.MINUS_EQUAL;
+        if (nextToken === 45) token = K_MINUS_MINUS;
+        else if (nextToken === 61) token = K_MINUS_EQUAL;
         else st.pushBack();
         break;
       case 42:
         nextToken = st.nextToken();
-        if (nextToken === 61) token = K.MUL_EQUAL; else st.pushBack();
+        if (nextToken === 61) token = K_MUL_EQUAL; else st.pushBack();
         break;
       case 47:
         nextToken = st.nextToken();
-        if (nextToken === 61) token = K.DIV_EQUAL; else st.pushBack();
+        if (nextToken === 61) token = K_DIV_EQUAL; else st.pushBack();
         break;
       case 61:
         nextToken = st.nextToken();
-        if (nextToken === 61) token = K.EQ; else st.pushBack();
+        if (nextToken === 61) token = K_EQ; else st.pushBack();
         break;
       case 33:
         nextToken = st.nextToken();
-        if (nextToken === 61) token = K.NEQ; else st.pushBack();
+        if (nextToken === 61) token = K_NEQ; else st.pushBack();
         break;
       case 62:
         nextToken = st.nextToken();
-        if (nextToken === 61) token = K.GTE;
-        else if (nextToken === 62) token = K.SHIFT_RIGHT;
-        else { st.pushBack(); token = K.GT; }
+        if (nextToken === 61) token = K_GTE;
+        else if (nextToken === 62) token = K_SHIFT_RIGHT;
+        else { st.pushBack(); token = K_GT; }
         break;
       case 60:
         nextToken = st.nextToken();
-        if (nextToken === 61) token = K.LTE;
-        else if (nextToken === 60) token = K.SHIFT_LEFT;
-        else { st.pushBack(); token = K.LT; }
+        if (nextToken === 61) token = K_LTE;
+        else if (nextToken === 60) token = K_SHIFT_LEFT;
+        else { st.pushBack(); token = K_LT; }
         break;
       case 38:
         nextToken = st.nextToken();
-        if (nextToken === 38) token = K.LOGICAL_AND; else st.pushBack();
+        if (nextToken === 38) token = K_LOGICAL_AND; else st.pushBack();
         break;
       case 124:
         nextToken = st.nextToken();
-        if (nextToken === 124) token = K.LOGICAL_OR; else st.pushBack();
+        if (nextToken === 124) token = K_LOGICAL_OR; else st.pushBack();
         break;
       default:
     }
@@ -721,9 +977,9 @@ function tokenize(program) {
           if (type === 0) {
             tok = symbol.type;
             switch (tok) {
-              case K.FUNCTION: pgm.hasFunctions = true; break;
-              case K.VAR: pgm.hasVars = true; break;
-              case K.MACRO: pgm.macroCount++; break;
+              case K_FUNCTION: pgm.hasFunctions = true; break;
+              case K_VAR: pgm.hasVars = true; break;
+              case K_MACRO: pgm.macroCount++; break;
               default:
             }
           } else tok = type;
@@ -761,7 +1017,7 @@ function addUserFunctions(pgm) {
   const code = pgm.code;
   for (let i = 0; i < code.length; i++) {
     let token = code[i] & TOK_MASK;
-    if (token === K.FUNCTION) {
+    if (token === K_FUNCTION) {
       const nextToken = code[i + 1] & TOK_MASK;
       if (nextToken === WORD || (nextToken >= PREDEFINED_FUNCTION && nextToken <= ARRAY_FUNCTION)) {
         const address = code[i + 1] >> TOK_SHIFT;
@@ -777,7 +1033,7 @@ function addUserFunctions(pgm) {
         for (let j = 0; j < code.length; j++) {
           token = code[j] & TOK_MASK;
           if ((token === WORD || (token >= PREDEFINED_FUNCTION && token <= ARRAY_FUNCTION)) &&
-              (code[j] >> TOK_SHIFT) === address && (j === 0 || (code[j - 1] & 0xfff) !== K.FUNCTION)) {
+              (code[j] >> TOK_SHIFT) === address && (j === 0 || (code[j - 1] & 0xfff) !== K_FUNCTION)) {
             code[j] = USER_FUNCTION;
             code[j] += address2 << TOK_SHIFT;
           } else if (token === EOF) break;
@@ -862,6 +1118,9 @@ const TICK_MASK = 15;
  * stack at about 550, so every FN_NEST_STEP levels the driver takes over the nesting. */
 class Sub { constructor(gen) { this.gen = gen; } }
 const FN_NEST_STEP = 32;
+/* Synchronous fast path: dispatch class of a statement, and how often a stretch that cannot yield looks at the abort flag. */
+const SYNC_TWIN = 1, SYNC_LOOP = 2, SYNC_GEN = 3, SYNC_HDR = 4;
+const SYNC_TICK_MASK = 1023;
 
 class Interpreter {
   constructor(ctx) {
@@ -903,6 +1162,42 @@ class Interpreter {
     this.errorSilent = false;
     this.errorStack = [];
     this.ticks = 0;
+    this.syncMemo = null;   // per token index: the dispatch class of the statement that starts there (null = fast path off)
+    this.syncInfo = null;   // SyncAnalysis of the current program
+  }
+
+  /* ---- synchronous fast path (see "Synchronous fast path") ---- */
+
+  syncReset() {
+    this.syncInfo = null;
+    this.syncMemo = null;
+    if (this.ctx.fastPath !== false) {
+      this.syncMemo = new Uint8Array(this.pgm.code.length + 2);
+      this.syncInfo = new SyncAnalysis(this.pgm, this.ctx);
+    }
+  }
+  /* Dispatch class of the statement starting at token index i: SYNC_TWIN (run it with the plain twin), SYNC_LOOP (cannot
+   * suspend but contains a loop: the generator keeps the loop control, its parts run in the twin), SYNC_HDR (it may
+   * suspend somewhere, but its header / condition cannot: the generator evaluates that in the twin) or SYNC_GEN. */
+  syncState(i) {
+    const m = this.syncMemo;
+    if (m === null || i < 0 || i >= m.length) return SYNC_GEN;
+    const s = m[i];
+    return s !== 0 ? s : (m[i] = this.syncInfo.classify(i));
+  }
+  /* May the header / condition of the control statement at token index i run in the twin? (its parts cannot suspend) */
+  syncFast(i) {
+    const m = this.syncMemo;
+    if (m === null) return false;
+    const c = m[i];
+    return c === SYNC_LOOP || c === SYNC_HDR;
+  }
+  /* The cooperative check of a stretch that cannot yield: a shared abort flag (Int32Array on a SharedArrayBuffer,
+   * written by the page) or an already-aborted signal. */
+  syncCheck() {
+    const c = this.ctx;
+    if (c.abortFlag !== null && c.abortFlag !== undefined && Atomics.load(c.abortFlag, 0) !== 0) throw new MacroCancel('abort');
+    if (c.signal && c.signal.aborted) throw new MacroCancel('abort');
   }
 
   /* ---- entry points ---- */
@@ -918,6 +1213,7 @@ class Interpreter {
     this.pgm = pgm;
     this.pc = -1;
     this.callDepth = 0;
+    this.syncReset();
     this.pushGlobals();
     if (this.func === null) this.func = new Functions(this, pgm); else this.func.pgm = pgm;
     this.done = false;
@@ -934,9 +1230,9 @@ class Interpreter {
     while (!this.done) {
       this.getToken();
       switch (this.token) {
-        case K.VAR: yield* this.doVar(); break;
-        case K.MACRO: this.skipMacro(); break;
-        case K.FUNCTION: this.skipFunction(); break;
+        case K_VAR: yield* this.doVar(); break;
+        case K_MACRO: this.skipMacro(); break;
+        case K_FUNCTION: this.skipFunction(); break;
         default:
       }
     }
@@ -980,9 +1276,10 @@ class Interpreter {
   }
 
   *doStatement() {
+    if (this.syncMemo !== null && this.syncState(this.pc + 1) === SYNC_TWIN) { this.doStatement$s(); return; }   /*gen-only*/
     this.getToken();
     switch (this.token) {
-      case K.VAR:
+      case K_VAR:
         yield* this.doVar();
         break;
       case PREDEFINED_FUNCTION:
@@ -991,38 +1288,38 @@ class Interpreter {
       case USER_FUNCTION:
         yield* this.runUserFunction();
         break;
-      case K.RETURN:
+      case K_RETURN:
         yield* this.doReturn();
         break;
-      case K.BREAK:
-        if (this.inLoop) throw new MacroException(K.BREAK);
+      case K_BREAK:
+        if (this.inLoop) throw new MacroException(K_BREAK);
         break;
-      case K.CONTINUE:
-        if (this.inLoop) throw new MacroException(K.CONTINUE);
+      case K_CONTINUE:
+        if (this.inLoop) throw new MacroException(K_CONTINUE);
         break;
       case WORD:
         if (this.pgm.code[this.pc + 1] === DOT) yield* this.doStringFunction();
         else yield* this.doAssignment();
         break;
-      case K.IF:
+      case K_IF:
         yield* this.doIf();
         return;
-      case K.ELSE:
+      case K_ELSE:
         this.error('Else without if');
         return;
-      case K.FOR:
+      case K_FOR:
         yield* this.doFor();
         return;
-      case K.WHILE:
+      case K_WHILE:
         yield* this.doWhile();
         return;
-      case K.DO:
+      case K_DO:
         yield* this.doDo();
         return;
-      case K.MACRO:
+      case K_MACRO:
         yield* this.runFirstMacro();
         return;
-      case K.FUNCTION:
+      case K_FUNCTION:
         this.skipFunction();
         return;
       case SEMI:
@@ -1046,7 +1343,7 @@ class Interpreter {
       case EOF:
         break;
       default:
-        if (this.evaluating && this.token === K.PI) {
+        if (this.evaluating && this.token === K_PI) {
           this.putTokenBack();
           this.log('' + javaDouble(yield* this.getExpression()));
         } else
@@ -1095,7 +1392,9 @@ class Interpreter {
     this.setupArgs(nArgs);
     const saveInFunction = this.inFunction;
     this.inFunction = true;
+    const syncBody = this.syncMemo !== null && this.syncState(this.pc + 1) === SYNC_TWIN;   /*gen-only*/
     try {
+      if (syncBody) { ++this.fnNest; this.doBlock$s(); } else   /*gen-only*/
       if ((++this.fnNest % FN_NEST_STEP) === 0) yield new Sub(this.doBlock());
       else yield* this.doBlock();
     } catch (e) {
@@ -1259,6 +1558,8 @@ class Interpreter {
   /* ---- loops and blocks ---- */
 
   *doFor() {
+    const fast = this.syncFast(this.pc);   /*gen-only*/
+    //@twin const fast = true;
     const saveLooseSyntax = this.looseSyntax;
     this.looseSyntax = false;
     this.loopDepth++;
@@ -1266,9 +1567,9 @@ class Interpreter {
     this.getToken();
     if (this.token !== LP) this.error("'(' expected");
     this.getToken();   // skip 'var'
-    if (this.token !== K.VAR) this.putTokenBack();
+    if (this.token !== K_VAR) this.putTokenBack();
     do {
-      if (this.nextToken() !== SEMI) yield* this.getAssignmentExpression();
+      if (this.nextToken() !== SEMI) { if (fast) this.getAssignmentExpression$s(); else yield* this.getAssignmentExpression(); }
       this.getToken();
     } while (this.token === COMMA);
     if (this.token !== SEMI) this.error("';' expected");
@@ -1277,7 +1578,7 @@ class Interpreter {
     let cond = 1;
     const code = this.pgm.code;
     for (;;) {
-      if (code[this.pc + 1] !== SEMI) cond = yield* this.getLogicalExpression();
+      if (code[this.pc + 1] !== SEMI) cond = fast ? this.getLogicalExpression$s() : yield* this.getLogicalExpression();
       if (startPC === 0) this.checkBoolean(cond);
       this.getToken();
       if (this.token !== SEMI) this.error("';' expected");
@@ -1293,10 +1594,11 @@ class Interpreter {
       startPC = this.pc;
       if (cond === 1) {
         try {
+          if (this.syncState(this.pc + 1) === SYNC_TWIN) this.doStatement$s(); else   /*gen-only*/
           yield* this.doStatement();
         } catch (e) {
           if (!(e instanceof MacroException)) throw e;
-          if (e.type === K.BREAK) {
+          if (e.type === K_BREAK) {
             this.pc = startPC;
             this.skipStatement();
             break;
@@ -1309,7 +1611,7 @@ class Interpreter {
       if ((++this.ticks & TICK_MASK) === 0) yield SLICE;
       this.pc = incPC;   // do increment
       do {
-        if (this.nextToken() !== RP) yield* this.getAssignmentExpression();
+        if (this.nextToken() !== RP) { if (fast) this.getAssignmentExpression$s(); else yield* this.getAssignmentExpression(); }
         this.getToken();
       } while (this.token === COMMA);
       this.pc = condPC;
@@ -1320,6 +1622,8 @@ class Interpreter {
   }
 
   *doWhile() {
+    const fast = this.syncFast(this.pc);   /*gen-only*/
+    //@twin const fast = true;
     this.looseSyntax = false;
     this.loopDepth++;
     this.inLoop = true;
@@ -1327,13 +1631,14 @@ class Interpreter {
     let isTrue;
     do {
       this.pc = savePC;
-      isTrue = yield* this.getBoolean();
+      isTrue = fast ? this.getBoolean$s() : yield* this.getBoolean();
       if (isTrue) {
         try {
+          if (this.syncState(this.pc + 1) === SYNC_TWIN) this.doStatement$s(); else   /*gen-only*/
           yield* this.doStatement();
         } catch (e) {
           if (!(e instanceof MacroException)) throw e;
-          if (e.type === K.BREAK) {
+          if (e.type === K_BREAK) {
             this.pc = savePC;
             yield* this.getBoolean();
             this.skipStatement();
@@ -1349,14 +1654,17 @@ class Interpreter {
   }
 
   *doDo() {
+    const fast = this.syncFast(this.pc);   /*gen-only*/
+    //@twin const fast = true;
     this.looseSyntax = false;
     const savePC = this.pc;
     let isTrue;
     do {
+      if (this.syncState(this.pc + 1) === SYNC_TWIN) this.doStatement$s(); else   /*gen-only*/
       yield* this.doStatement();
       this.getToken();
-      if (this.token !== K.WHILE) this.error("'while' expected");
-      isTrue = yield* this.getBoolean();
+      if (this.token !== K_WHILE) this.error("'while' expected");
+      isTrue = fast ? this.getBoolean$s() : yield* this.getBoolean();
       if (isTrue) this.pc = savePC;
       if ((++this.ticks & TICK_MASK) === 0) yield SLICE;
     } while (isTrue && !this.done);
@@ -1369,6 +1677,7 @@ class Interpreter {
       this.getToken();
       if (this.token === RBRACE) break;
       this.putTokenBack();
+      if (this.syncState(this.pc + 1) === SYNC_TWIN) this.doStatement$s(); else   /*gen-only*/
       yield* this.doStatement();
     }
     if (this.token !== RBRACE) this.error("'}' expected");
@@ -1378,32 +1687,32 @@ class Interpreter {
     if (this.done) return;
     this.getToken();
     switch (this.token) {
-      case PREDEFINED_FUNCTION: case USER_FUNCTION: case K.VAR:
-      case WORD: case LP: case K.PLUS_PLUS: case K.RETURN: case ARRAY_FUNCTION:
+      case PREDEFINED_FUNCTION: case USER_FUNCTION: case K_VAR:
+      case WORD: case LP: case K_PLUS_PLUS: case K_RETURN: case ARRAY_FUNCTION:
       case NUMERIC_FUNCTION: case STRING_FUNCTION: case VARIABLE_FUNCTION:
         this.skipSimpleStatement();
         break;
-      case K.IF:
+      case K_IF:
         this.skipParens();
         this.skipStatement();
         this.getToken();
-        if (this.token === K.ELSE) this.skipStatement();
+        if (this.token === K_ELSE) this.skipStatement();
         else this.putTokenBack();
         break;
-      case K.FOR:
+      case K_FOR:
         this.skipParens();
         this.skipStatement();
         break;
-      case K.WHILE:
+      case K_WHILE:
         this.skipParens();
         this.skipStatement();
         break;
-      case K.DO:
+      case K_DO:
         this.skipStatement();
         this.getToken();   // skip 'while'
         this.skipParens();
         break;
-      case K.BREAK: case K.CONTINUE: case SEMI:
+      case K_BREAK: case K_CONTINUE: case SEMI:
         break;
       case LBRACE:
         this.putTokenBack();
@@ -1439,7 +1748,7 @@ class Interpreter {
     this.getToken();
     while (!finished && !this.done) {
       if (this.token === SEMI) finished = true;
-      else if (this.token === K.ELSE || (this.token === PREDEFINED_FUNCTION && this.pgm.code[this.pc - 1] !== DOT))
+      else if (this.token === K_ELSE || (this.token === PREDEFINED_FUNCTION && this.pgm.code[this.pc - 1] !== DOT))
         this.error("';' expected");
       else this.getToken();
     }
@@ -1490,16 +1799,16 @@ class Interpreter {
     if (tok === STRING_FUNCTION) {
       const address = rightSideToken >> TOK_SHIFT;
       const type = this.pgm.table[address].type;
-      if (type === K.DIALOG) {
+      if (type === K_DIALOG) {
         const token2 = code[this.pc + 4];
         const name = this.pgm.table[token2 >> TOK_SHIFT].str;
         if (name === 'getNumber' || name === 'getCheckbox') return STRING_FUNCTION;
-      } else if (type === K.FILE) {
+      } else if (type === K_FILE) {
         const token2 = code[this.pc + 4];
         const name = this.pgm.table[token2 >> TOK_SHIFT].str;
         if (name === 'exists' || name === 'isDirectory' || name === 'length' ||
             name === 'getLength' || name === 'rename' || name === 'delete') return STRING_FUNCTION;
-      } else if (type === K.LIST) {
+      } else if (type === K_LIST) {
         const token2 = code[this.pc + 4];
         const name = this.pgm.table[token2 >> TOK_SHIFT].str;
         if (name === 'getValue') return STRING_FUNCTION;
@@ -1554,7 +1863,7 @@ class Interpreter {
     const code = this.pgm.code;
     const v = this.lookupLocalVariable(this.tokenAddress);
     if (v === null) this.error('Undefined identifier');
-    if (code[this.pc + 5] === SEMI && (code[this.pc + 4] === K.PLUS_PLUS || code[this.pc + 4] === K.MINUS_MINUS)) {
+    if (code[this.pc + 5] === SEMI && (code[this.pc + 4] === K_PLUS_PLUS || code[this.pc + 4] === K_MINUS_MINUS)) {
       this.putTokenBack();
       yield* this.getFactor();
       return;
@@ -1564,7 +1873,7 @@ class Interpreter {
     if (expressionType === V_ARRAY) this.error('Arrays of arrays not supported');
     this.getToken();
     const op = this.token;
-    if (!(op === EQUALS || op === K.PLUS_EQUAL || op === K.MINUS_EQUAL || op === K.MUL_EQUAL || op === K.DIV_EQUAL)) {
+    if (!(op === EQUALS || op === K_PLUS_EQUAL || op === K_MINUS_EQUAL || op === K_MUL_EQUAL || op === K_DIV_EQUAL)) {
       this.error("'=', '+=', '-=', '*=' or '/=' expected");
       return;
     }
@@ -1623,10 +1932,10 @@ class Interpreter {
       default:
         switch (op) {
           case EQUALS: array[index].setValue(yield* this.getExpression()); break;
-          case K.PLUS_EQUAL: array[index].setValue(array[index].getValue() + (yield* this.getExpression())); break;
-          case K.MINUS_EQUAL: array[index].setValue(array[index].getValue() - (yield* this.getExpression())); break;
-          case K.MUL_EQUAL: array[index].setValue(array[index].getValue() * (yield* this.getExpression())); break;
-          case K.DIV_EQUAL: array[index].setValue(array[index].getValue() / (yield* this.getExpression())); break;
+          case K_PLUS_EQUAL: array[index].setValue(array[index].getValue() + (yield* this.getExpression())); break;
+          case K_MINUS_EQUAL: array[index].setValue(array[index].getValue() - (yield* this.getExpression())); break;
+          case K_MUL_EQUAL: array[index].setValue(array[index].getValue() * (yield* this.getExpression())); break;
+          case K_DIV_EQUAL: array[index].setValue(array[index].getValue() / (yield* this.getExpression())); break;
           default:
         }
     }
@@ -1679,7 +1988,7 @@ class Interpreter {
     }
     this.getToken();
     if (this.token === EQUALS) v.setString(yield* this.getString());
-    else if (this.token === K.PLUS_EQUAL) v.setString(v.getString() + (yield* this.getString()));
+    else if (this.token === K_PLUS_EQUAL) v.setString(v.getString() + (yield* this.getString()));
     else this.error("'=' or '+=' expected");
   }
 
@@ -1708,19 +2017,26 @@ class Interpreter {
   }
 
   *doIf() {
+    const fast = this.syncFast(this.pc);   /*gen-only*/
+    //@twin const fast = true;
     this.looseSyntax = false;
-    const b = yield* this.getBoolean();
-    if (b) yield* this.doStatement();
-    else this.skipStatement();
+    const b = fast ? this.getBoolean$s() : yield* this.getBoolean();
+    if (b) {
+      if (this.syncState(this.pc + 1) === SYNC_TWIN) this.doStatement$s(); else   /*gen-only*/
+      yield* this.doStatement();
+    } else this.skipStatement();
     let next = this.nextToken();
     if (next === SEMI) {
       this.getToken();
       next = this.nextToken();
     }
-    if (next === K.ELSE) {
+    if (next === K_ELSE) {
       this.getToken();
       if (b) this.skipStatement();
-      else yield* this.doStatement();
+      else {
+        if (this.syncState(this.pc + 1) === SYNC_TWIN) this.doStatement$s(); else   /*gen-only*/
+        yield* this.doStatement();
+      }
     }
   }
 
@@ -1735,14 +2051,14 @@ class Interpreter {
   *getLogicalExpression() {
     const v1 = yield* this.getBooleanExpression();
     const next = this.nextToken();
-    if (!(next === K.LOGICAL_AND || next === K.LOGICAL_OR)) return v1;
+    if (!(next === K_LOGICAL_AND || next === K_LOGICAL_OR)) return v1;
     this.checkBoolean(v1);
     this.getToken();
     const op = this.token;
     const v2 = yield* this.getLogicalExpression();
     this.checkBoolean(v2);
-    if (op === K.LOGICAL_AND) return toInt(v1) & toInt(v2);
-    else if (op === K.LOGICAL_OR) return toInt(v1) | toInt(v2);
+    if (op === K_LOGICAL_AND) return toInt(v1) & toInt(v2);
+    else if (op === K_LOGICAL_OR) return toInt(v1) | toInt(v2);
     return v1;
   }
 
@@ -1756,18 +2072,18 @@ class Interpreter {
     } else
       v1 = yield* this.getExpression();
     next = this.nextToken();
-    if (next >= K.EQ && next <= K.LTE) {
+    if (next >= K_EQ && next <= K_LTE) {
       this.getToken();
       const op = this.token;
       if (s1 !== null) return this.compareStrings(s1, yield* this.getString(), op);
       const v2 = yield* this.getExpression();
       switch (op) {
-        case K.EQ: v1 = v1 === v2 ? 1.0 : 0.0; break;
-        case K.NEQ: v1 = v1 !== v2 ? 1.0 : 0.0; break;
-        case K.GT: v1 = v1 > v2 ? 1.0 : 0.0; break;
-        case K.GTE: v1 = v1 >= v2 ? 1.0 : 0.0; break;
-        case K.LT: v1 = v1 < v2 ? 1.0 : 0.0; break;
-        case K.LTE: v1 = v1 <= v2 ? 1.0 : 0.0; break;
+        case K_EQ: v1 = v1 === v2 ? 1.0 : 0.0; break;
+        case K_NEQ: v1 = v1 !== v2 ? 1.0 : 0.0; break;
+        case K_GT: v1 = v1 > v2 ? 1.0 : 0.0; break;
+        case K_GTE: v1 = v1 >= v2 ? 1.0 : 0.0; break;
+        case K_LT: v1 = v1 < v2 ? 1.0 : 0.0; break;
+        case K_LTE: v1 = v1 <= v2 ? 1.0 : 0.0; break;
         default:
       }
     } else if (s1 !== null) {
@@ -1783,8 +2099,8 @@ class Interpreter {
     if ((code[loc] & TOK_MASK) !== STRING_FUNCTION) return false;
     const address = code[loc] >> TOK_SHIFT;
     const type = this.pgm.table[address].type;
-    if (type === VARIABLE_FUNCTION || type === K.DIALOG || type === K.FILE || type === K.STRING ||
-        type === K.EXT || type === K.LIST || type === K.IJ_CALL) return false;
+    if (type === VARIABLE_FUNCTION || type === K_DIALOG || type === K_FILE || type === K_STRING ||
+        type === K_EXT || type === K_LIST || type === K_IJ_CALL) return false;
     if (code[loc + 1] === DOT && (code[loc + 2] & 0xff) !== STRING_FUNCTION) return true;
     if (code[loc + 1] === LP && code[loc + 2] === RP && code[loc + 3] === DOT && (code[loc + 4] & 0xff) !== STRING_FUNCTION) return true;
     return false;
@@ -1816,12 +2132,12 @@ class Interpreter {
   compareStrings(s1, s2, op) {
     const result = compareToIgnoreCase(s1, s2);
     switch (op) {
-      case K.EQ: return result === 0 ? 1.0 : 0.0;
-      case K.NEQ: return result !== 0 ? 1.0 : 0.0;
-      case K.GT: return result > 0 ? 1.0 : 0.0;
-      case K.GTE: return result >= 0 ? 1.0 : 0.0;
-      case K.LT: return result < 0 ? 1.0 : 0.0;
-      case K.LTE: return result <= 0 ? 1.0 : 0.0;
+      case K_EQ: return result === 0 ? 1.0 : 0.0;
+      case K_NEQ: return result !== 0 ? 1.0 : 0.0;
+      case K_GT: return result > 0 ? 1.0 : 0.0;
+      case K_GTE: return result >= 0 ? 1.0 : 0.0;
+      case K_LT: return result < 0 ? 1.0 : 0.0;
+      case K_LTE: return result <= 0 ? 1.0 : 0.0;
       default: return 0.0;
     }
   }
@@ -1829,8 +2145,8 @@ class Interpreter {
   *getAssignmentExpression() {
     const code = this.pgm.code;
     const tokPlus2 = code[this.pc + 2];
-    if ((code[this.pc + 1] & 0xff) === WORD && (tokPlus2 === EQUALS || tokPlus2 === K.PLUS_EQUAL ||
-        tokPlus2 === K.MINUS_EQUAL || tokPlus2 === K.MUL_EQUAL || tokPlus2 === K.DIV_EQUAL)) {
+    if ((code[this.pc + 1] & 0xff) === WORD && (tokPlus2 === EQUALS || tokPlus2 === K_PLUS_EQUAL ||
+        tokPlus2 === K_MINUS_EQUAL || tokPlus2 === K_MUL_EQUAL || tokPlus2 === K_DIV_EQUAL)) {
       this.getToken();
       let v = this.lookupLocalVariable(this.tokenAddress);
       const saveAddress = this.tokenAddress;
@@ -1840,10 +2156,10 @@ class Interpreter {
       else {
         value = v !== null ? v.getValue() : 0.0;
         switch (this.token) {
-          case K.PLUS_EQUAL: value += yield* this.getAssignmentExpression(); break;
-          case K.MINUS_EQUAL: value -= yield* this.getAssignmentExpression(); break;
-          case K.MUL_EQUAL: value *= yield* this.getAssignmentExpression(); break;
-          case K.DIV_EQUAL: value /= yield* this.getAssignmentExpression(); break;
+          case K_PLUS_EQUAL: value += yield* this.getAssignmentExpression(); break;
+          case K_MINUS_EQUAL: value -= yield* this.getAssignmentExpression(); break;
+          case K_MUL_EQUAL: value *= yield* this.getAssignmentExpression(); break;
+          case K_DIV_EQUAL: value /= yield* this.getAssignmentExpression(); break;
           default:
         }
       }
@@ -2018,8 +2334,8 @@ class Interpreter {
         case 38: this.getToken(); value = toInt(value) & toInt(yield* this.getFactor()); break;
         case 124: this.getToken(); value = toInt(value) | toInt(yield* this.getFactor()); break;
         case 94: this.getToken(); value = toInt(value) ^ toInt(yield* this.getFactor()); break;
-        case K.SHIFT_RIGHT: this.getToken(); value = toInt(value) >> toInt(yield* this.getFactor()); break;
-        case K.SHIFT_LEFT: this.getToken(); value = toInt(value) << toInt(yield* this.getFactor()); break;
+        case K_SHIFT_RIGHT: this.getToken(); value = toInt(value) >> toInt(yield* this.getFactor()); break;
+        case K_SHIFT_LEFT: this.getToken(); value = toInt(value) << toInt(yield* this.getFactor()); break;
         default: return value;
       }
     }
@@ -2065,10 +2381,10 @@ class Interpreter {
           else value = v.getValue();
         }
         break;
-      case K.TRUE: value = 1.0; break;
-      case K.FALSE: value = 0.0; break;
-      case K.PI: value = Math.PI; break;
-      case K.NaN: value = NaN; break;
+      case K_TRUE: value = 1.0; break;
+      case K_FALSE: value = 0.0; break;
+      case K_PI: value = Math.PI; break;
+      case K_NaN: value = NaN; break;
       case WORD: {
         v = this.lookupVariable();
         if (v === null) return 0.0;
@@ -2095,9 +2411,9 @@ class Interpreter {
           }
           value = v.getValue();
         }
-        if (!(next === K.PLUS_PLUS || next === K.MINUS_MINUS)) break;
+        if (!(next === K_PLUS_PLUS || next === K_MINUS_MINUS)) break;
         this.getToken();
-        if (this.token === K.PLUS_PLUS) v.setValue(v.getValue() + (this.checkingType ? 0 : 1));
+        if (this.token === K_PLUS_PLUS) v.setValue(v.getValue() + (this.checkingType ? 0 : 1));
         else v.setValue(v.getValue() - (this.checkingType ? 0 : 1));
         break;
       }
@@ -2105,11 +2421,11 @@ class Interpreter {
         value = yield* this.getLogicalExpression();
         this.getRightParen();
         break;
-      case K.PLUS_PLUS:
+      case K_PLUS_PLUS:
         this.prefixValue = 1;
         value = yield* this.getFactor();
         break;
-      case K.MINUS_MINUS:
+      case K_MINUS_MINUS:
         this.prefixValue = -1;
         value = yield* this.getFactor();
         break;
@@ -2143,11 +2459,11 @@ class Interpreter {
     } else if (this.token === NUMERIC_FUNCTION) {
       const type = this.pgm.table[this.tokenAddress].type;
       switch (type) {
-        case K.INDEX_OF: value = yield* this.func.indexOf(str); break;
-        case K.LAST_INDEX_OF: value = str.lastIndexOf(yield* this.func.getStringArg()); break;
-        case K.STARTS_WITH: value = str.startsWith(yield* this.func.getStringArg()) ? 1 : 0; break;
-        case K.ENDS_WITH: value = str.endsWith(yield* this.func.getStringArg()) ? 1 : 0; break;
-        case K.MATCHES: value = yield* this.func.matches(str); break;
+        case K_INDEX_OF: value = yield* this.func.indexOf(str); break;
+        case K_LAST_INDEX_OF: value = str.lastIndexOf(yield* this.func.getStringArg()); break;
+        case K_STARTS_WITH: value = str.startsWith(yield* this.func.getStringArg()) ? 1 : 0; break;
+        case K_ENDS_WITH: value = str.endsWith(yield* this.func.getStringArg()) ? 1 : 0; break;
+        case K_MATCHES: value = yield* this.func.matches(str); break;
         default:
       }
     } else
@@ -2317,22 +2633,22 @@ class Interpreter {
     } else if (this.token === NUMERIC_FUNCTION) {
       const type = this.pgm.table[this.tokenAddress].type;
       switch (type) {
-        case K.INDEX_OF: str = '' + (yield* this.func.indexOf(str)); break;
-        case K.LAST_INDEX_OF: str = '' + str.lastIndexOf(yield* this.func.getStringArg()); break;
-        case K.STARTS_WITH: str = '' + str.startsWith(yield* this.func.getStringArg()); break;
-        case K.ENDS_WITH: str = '' + str.endsWith(yield* this.func.getStringArg()); break;
-        case K.MATCHES: str = javaDouble(yield* this.func.matches(str)); break;
+        case K_INDEX_OF: str = '' + (yield* this.func.indexOf(str)); break;
+        case K_LAST_INDEX_OF: str = '' + str.lastIndexOf(yield* this.func.getStringArg()); break;
+        case K_STARTS_WITH: str = '' + str.startsWith(yield* this.func.getStringArg()); break;
+        case K_ENDS_WITH: str = '' + str.endsWith(yield* this.func.getStringArg()); break;
+        case K_MATCHES: str = javaDouble(yield* this.func.matches(str)); break;
         default: str = null;
       }
     } else if (this.token === STRING_FUNCTION) {
       const type = this.pgm.table[this.tokenAddress].type;
       switch (type) {
-        case K.SUBSTRING: str = yield* this.func.substring(str); break;
-        case K.TO_LOWER_CASE: this.getParens(); str = str.toLowerCase(); break;
-        case K.TO_UPPER_CASE: this.getParens(); str = str.toUpperCase(); break;
-        case K.REPLACE: str = yield* this.func.replace(str); break;
-        case K.TRIM: this.getParens(); str = javaTrim(str); break;
-        case K.CHARAT: {
+        case K_SUBSTRING: str = yield* this.func.substring(str); break;
+        case K_TO_LOWER_CASE: this.getParens(); str = str.toLowerCase(); break;
+        case K_TO_UPPER_CASE: this.getParens(); str = str.toUpperCase(); break;
+        case K_REPLACE: str = yield* this.func.replace(str); break;
+        case K_TRIM: this.getParens(); str = javaTrim(str); break;
+        case K_CHARAT: {
           const index = toInt(yield* this.func.getArg());
           this.func.checkIndex(index, 0, str.length - 1);
           str = str.charAt(index);
@@ -2391,19 +2707,19 @@ class Interpreter {
 /* Functions.isStringFunction(name, type): Table.getString(), Roi.getName() ... return strings. */
 function isStringFunctionName(name, type) {
   switch (type) {
-    case K.TABLE:
+    case K_TABLE:
       return name === 'getString' || name === 'title' || name === 'headings' || name === 'allHeadings';
-    case K.ROI:
+    case K_ROI:
       return name === 'getStrokeColor' || name === 'getDefaultColor' || name === 'getFillColor' || name === 'getName' ||
         name === 'getProperty' || name === 'getProperties' || name === 'getGroupNames' || name === 'getType';
-    case K.PROPERTY:
+    case K_PROPERTY:
       return name === 'getProperty' || name === 'getProperties' || name === 'get' || name === 'getInfo' ||
         name === 'getList' || name === 'getSliceLabel' || name === 'getDicomTag';
-    case K.ROI_MANAGER2:
+    case K_ROI_MANAGER2:
       return name === 'getName';
-    case K.IMAGE:
+    case K_IMAGE:
       return name === 'title' || name === 'name';
-    case K.COLOR:
+    case K_COLOR:
       return name === 'foreground' || name === 'background' || name === 'toString' || name === 'wavelengthToColor';
     default:
       return false;
@@ -2432,7 +2748,13 @@ const ID_OF_NAME = {};
 for (const tbl of [SYS_FUNCTIONS, SYS_NUMERICFUNCTIONS, SYS_STRINGFUNCTIONS, SYS_ARRAYFUNCTIONS, SYS_VARIABLEFUNCTIONS])
   for (const [n, id] of tbl) ID_OF_NAME[n] = id;
 
-function define(kind, id, fn) {
+/* Suspension registry of the synchronous fast path (see "Synchronous fast path" below): BUILTIN_INFO[kind] maps an id to
+ * { suspends }, the twin tables BUILTINS_S[kind] map an id to a plain function. The built-ins of this file register while
+ * `coreDefining` holds (default: never suspends); a later IJMacro.define() without an option defaults to 'host'. */
+const BUILTIN_INFO = { do: new Map(), num: new Map(), str: new Map(), arr: new Map(), variable: new Map() };
+let coreDefining = true;
+
+function define(kind, id, fn, opts) {
   const table = BUILTINS[kind];
   if (!table) throw new Error('IJMacro.define: unknown kind ' + kind);
   if (typeof id === 'string') {
@@ -2440,6 +2762,13 @@ function define(kind, id, fn) {
     id = ID_OF_NAME[id];
   }
   table.set(id, fn);
+  const hasSync = !!opts && typeof opts.sync === 'function';
+  const suspends = opts && opts.suspends !== undefined ? opts.suspends : (coreDefining ? false : hasSync ? false : 'host');
+  BUILTIN_INFO[kind].set(id, { suspends });
+  if (!coreDefining) {
+    BUILTINS_S[kind].delete(id);   // a replaced built-in loses its generated twin
+    if (hasSync) BUILTINS_S[kind].set(id, opts.sync);   // a plain-function body for the fast path (may use f.getArg$s() ...)
+  }
 }
 
 function isThenable(x) {
@@ -2519,7 +2848,7 @@ class Functions {
       if (isThenable(v)) v = (yield v);
       return v;
     } catch (e) {
-      if (e instanceof MacroCancel) throw e;
+      if (e instanceof MacroCancel || e instanceof SyncViolation) throw e;
       this.interp.error(String(e && e.message !== undefined ? e.message : e));
       return undefined;
     }
@@ -2604,11 +2933,11 @@ class Functions {
   *getArray() {
     const it = this.interp;
     it.getToken();
-    const newArray = it.token === ARRAY_FUNCTION && this.pgm.table[it.tokenAddress].type === K.NEW_ARRAY;
+    const newArray = it.token === ARRAY_FUNCTION && this.pgm.table[it.tokenAddress].type === K_NEW_ARRAY;
     const arrayFunction = it.token === ARRAY_FUNCTION;
     if (!(it.token === WORD || newArray || arrayFunction)) it.error('Array expected');
     let a = null;
-    if (newArray) a = yield* this.getArrayFunction(K.NEW_ARRAY);
+    if (newArray) a = yield* this.getArrayFunction(K_NEW_ARRAY);
     else if (arrayFunction) a = yield* this.getArrayFunction(this.pgm.table[it.tokenAddress].type);
     else {
       const v = it.lookupVariable();
@@ -2708,6 +3037,7 @@ class Functions {
     try {
       return javaReplaceAll(s1, s2, s3);
     } catch (e) {
+      if (isInternalFault(e)) throw e;
       this.interp.error('' + (e && e.javaMessage ? e.javaMessage : e));
       return null;
     }
@@ -2754,6 +3084,7 @@ class Functions {
     try {
       return javaRegex(regex, true).test(str) ? 1.0 : 0.0;
     } catch (e) {
+      if (isInternalFault(e)) throw e;
       this.interp.error('' + (e && e.javaMessage ? e.javaMessage : e));
       return 0.0;
     }
@@ -3441,22 +3772,31 @@ function* printFn(f) {
   it.log(s);
   it.inPrint = false;
 }
-define('do', K.PRINT, printFn);
-define('do', K.WRITE, printFn);
-define('do', K.DUMP, (f) => { f.interp.dump(); });
+define('do', K_PRINT, printFn, { suspends: printSuspends });
+define('do', K_WRITE, printFn, { suspends: printSuspends });
+define('do', K_DUMP, (f) => { f.interp.dump(); });
+
+/* ImageJ.VERSION as the host reports it (a host may answer with a Promise: the driver awaits it). */
+function* hostVersion(f, host) {
+  if (host && typeof host.getVersion === 'function') {
+    const v = yield* f.hostHook(() => host.getVersion());
+    if (v !== undefined && v !== null) return '' + v;
+  }
+  return IMAGEJ_VERSION;
+}
 
 /* IJ.versionLessThan: a plain String.compareTo against "1.54p". */
-define('do', K.REQUIRES, function* (f) {
+define('do', K_REQUIRES, function* (f) {
   const version = yield* f.getStringArg();
   const host = f.interp.ctx.host;
-  const current = host && typeof host.getVersion === 'function' ? host.getVersion() : IMAGEJ_VERSION;
+  const current = yield* hostVersion(f, host);
   if (compareTo(current, version) < 0) {
     yield* f.showMessage('ImageJ', 'This plugin or macro requires ImageJ ' + version + ' or later. Use\nHelp>Update ImageJ to upgrade to the latest version.');
     f.interp.done = true;
   }
-});
+}, { suspends: true });
 
-define('do', K.EXIT, function* (f) {
+define('do', K_EXIT, function* (f) {
   const it = f.interp;
   let msg = null;
   if (it.nextToken() === LP) {
@@ -3467,7 +3807,7 @@ define('do', K.EXIT, function* (f) {
   it.finishUp();
   if (msg !== null) yield* f.showMessage('Macro', msg);
   throw new MacroCancel('exit');
-});
+}, { suspends: exitSuspends });
 
 /* ---- math ---- */
 /* Math.round(double) widened to a double: NaN -> 0, saturating at Long range, exact for 0.49999999999999994. */
@@ -3481,22 +3821,22 @@ function javaRound(x) {
 function* mathFn(f, type) {
   const arg = yield* f.getArg();
   switch (type) {
-    case K.ABS: return Math.abs(arg);
-    case K.COS: return Math.cos(arg);
-    case K.EXP: return Math.exp(arg);
-    case K.FLOOR: return Math.floor(arg);
-    case K.LOG: return Math.log(arg);
-    case K.ROUND: return Math.floor(arg + 0.5);
-    case K.SIN: return Math.sin(arg);
-    case K.SQRT: return Math.sqrt(arg);
-    case K.TAN: return Math.tan(arg);
-    case K.ATAN: return Math.atan(arg);
-    case K.ASIN: return Math.asin(arg);
-    case K.ACOS: return Math.acos(arg);
+    case K_ABS: return Math.abs(arg);
+    case K_COS: return Math.cos(arg);
+    case K_EXP: return Math.exp(arg);
+    case K_FLOOR: return Math.floor(arg);
+    case K_LOG: return Math.log(arg);
+    case K_ROUND: return Math.floor(arg + 0.5);
+    case K_SIN: return Math.sin(arg);
+    case K_SQRT: return Math.sqrt(arg);
+    case K_TAN: return Math.tan(arg);
+    case K_ATAN: return Math.atan(arg);
+    case K_ASIN: return Math.asin(arg);
+    case K_ACOS: return Math.acos(arg);
     default: return 0.0;
   }
 }
-for (const id of [K.ABS, K.COS, K.EXP, K.FLOOR, K.LOG, K.ROUND, K.SIN, K.SQRT, K.TAN, K.ATAN, K.ASIN, K.ACOS])
+for (const id of [K_ABS, K_COS, K_EXP, K_FLOOR, K_LOG, K_ROUND, K_SIN, K_SQRT, K_TAN, K_ATAN, K_ASIN, K_ACOS])
   define('num', id, (f) => mathFn(f, id));
 
 /* Java's Math.pow differs from JS in two corner cases: pow(+-1, +-Infinity) and pow(x, NaN). */
@@ -3511,17 +3851,17 @@ function* math2Fn(f, type) {
   const a1 = yield* f.getFirstArg();
   const a2 = yield* f.getLastArg();
   switch (type) {
-    case K.MIN_OF: return javaMin(a1, a2);
-    case K.MAX_OF: return javaMax(a1, a2);
-    case K.POW: return javaPow(a1, a2);
-    case K.ATAN2: return Math.atan2(a1, a2);
+    case K_MIN_OF: return javaMin(a1, a2);
+    case K_MAX_OF: return javaMax(a1, a2);
+    case K_POW: return javaPow(a1, a2);
+    case K_ATAN2: return Math.atan2(a1, a2);
     default: return 0.0;
   }
 }
-for (const id of [K.MAX_OF, K.MIN_OF, K.POW, K.ATAN2]) define('num', id, (f) => math2Fn(f, id));
+for (const id of [K_MAX_OF, K_MIN_OF, K_POW, K_ATAN2]) define('num', id, (f) => math2Fn(f, id));
 
 /* Math.* namespace (Functions.doMath) */
-define('num', K.MATH, function* (f) {
+define('num', K_MATH, function* (f) {
   const it = f.interp;
   it.getToken();
   if (it.token !== DOT) it.error("'.' expected");
@@ -3588,8 +3928,8 @@ function erf(x) {
 function log10Java(x) { return x > 0 && x !== Infinity ? log10(x) : Math.log10(x); }
 
 /* ---- numbers and strings ---- */
-define('num', K.IS_NAN, function* (f) { const v = yield* f.getArg(); return v !== v ? 1 : 0; });
-define('num', K.GET_TIME, (f) => { f.interp.getParens(); return Date.now(); });
+define('num', K_IS_NAN, function* (f) { const v = yield* f.getArg(); return v !== v ? 1 : 0; });
+define('num', K_GET_TIME, (f) => { f.interp.getParens(); return Date.now(); });
 
 function parseDoubleFn(s) {
   if (s === null) return 0.0;
@@ -3597,8 +3937,8 @@ function parseDoubleFn(s) {
   if (s.indexOf(' ') !== -1) s = s.substring(0, s.indexOf(' '));
   return toolsParseDouble(s, NaN);
 }
-define('num', K.PARSE_FLOAT, function* (f) { return parseDoubleFn(yield* f.getStringArg()); });
-define('num', K.PARSE_INT, function* (f) {
+define('num', K_PARSE_FLOAT, function* (f) { return parseDoubleFn(yield* f.getStringArg()); });
+define('num', K_PARSE_INT, function* (f) {
   const it = f.interp;
   const s = yield* f.getFirstString();
   let radix = 10;
@@ -3627,7 +3967,7 @@ define('num', K.PARSE_INT, function* (f) {
   return n;
 });
 
-define('num', K.LENGTH_OF, function* (f) {
+define('num', K_LENGTH_OF, function* (f) {
   const it = f.interp, code = f.pgm.code;
   let length = 0;
   it.getLeftParen();
@@ -3656,33 +3996,33 @@ define('num', K.LENGTH_OF, function* (f) {
   return length;
 });
 
-define('num', K.INDEX_OF, (f) => f.indexOf(null));
-define('num', K.LAST_INDEX_OF, function* (f) { return (yield* f.getFirstString()).lastIndexOf(yield* f.getLastString()); });
-define('num', K.STARTS_WITH, function* (f) { const a = yield* f.getFirstString(); return a.startsWith(yield* f.getLastString()) ? 1 : 0; });
-define('num', K.ENDS_WITH, function* (f) { const a = yield* f.getFirstString(); return a.endsWith(yield* f.getLastString()) ? 1 : 0; });
-define('num', K.MATCHES, (f) => f.matches(null));
-define('num', K.CHAR_CODE_AT, function* (f) {
+define('num', K_INDEX_OF, (f) => f.indexOf(null));
+define('num', K_LAST_INDEX_OF, function* (f) { return (yield* f.getFirstString()).lastIndexOf(yield* f.getLastString()); });
+define('num', K_STARTS_WITH, function* (f) { const a = yield* f.getFirstString(); return a.startsWith(yield* f.getLastString()) ? 1 : 0; });
+define('num', K_ENDS_WITH, function* (f) { const a = yield* f.getFirstString(); return a.endsWith(yield* f.getLastString()) ? 1 : 0; });
+define('num', K_MATCHES, (f) => f.matches(null));
+define('num', K_CHAR_CODE_AT, function* (f) {
   const str = yield* f.getFirstString();
   const index = toInt(yield* f.getLastArg());
   f.checkIndex(index, 0, str.length - 1);
   return str.charCodeAt(index);
 });
 
-define('str', K.D2S, function* (f) {
+define('str', K_D2S, function* (f) {
   const x = yield* f.getFirstArg();
   return d2s(x, toInt(yield* f.getLastArg()));
 });
-define('str', K.TO_HEX, function* (f) { return (toInt(yield* f.getArg()) >>> 0).toString(16); });
-define('str', K.TO_BINARY, function* (f) { return (toInt(yield* f.getArg()) >>> 0).toString(2); });
-define('str', K.SUBSTRING, (f) => f.substring(null));
-define('str', K.REPLACE, (f) => f.replace(null));
-define('str', K.TO_LOWER_CASE, function* (f) { return (yield* f.getStringArg()).toLowerCase(); });
-define('str', K.TO_UPPER_CASE, function* (f) { return (yield* f.getStringArg()).toUpperCase(); });
-define('str', K.TRIM, function* (f) {
+define('str', K_TO_HEX, function* (f) { return (toInt(yield* f.getArg()) >>> 0).toString(16); });
+define('str', K_TO_BINARY, function* (f) { return (toInt(yield* f.getArg()) >>> 0).toString(2); });
+define('str', K_SUBSTRING, (f) => f.substring(null));
+define('str', K_REPLACE, (f) => f.replace(null));
+define('str', K_TO_LOWER_CASE, function* (f) { return (yield* f.getStringArg()).toLowerCase(); });
+define('str', K_TO_UPPER_CASE, function* (f) { return (yield* f.getStringArg()).toUpperCase(); });
+define('str', K_TRIM, function* (f) {
   if (f.interp.nextToken() === EQUALS) f.interp.error("'trim' is a reserved word");
   return javaTrim(yield* f.getStringArg());
 });
-define('str', K.FROM_CHAR_CODE, function* (f) {
+define('str', K_FROM_CHAR_CODE, function* (f) {
   const it = f.interp;
   let s = '', count = 0;
   it.getLeftParen();
@@ -3697,7 +4037,7 @@ define('str', K.FROM_CHAR_CODE, function* (f) {
   it.getRightParen();
   return s;
 });
-define('str', K.TO_STRING, function* (f) {
+define('str', K_TO_STRING, function* (f) {
   const it = f.interp;
   it.getLeftParen();
   if (it.nextNextToken() === COMMA) {   // toString(number, decimalPlaces)
@@ -3715,15 +4055,14 @@ define('str', K.TO_STRING, function* (f) {
   if (it.token !== RP) it.error("')' expected");
   return s;
 });
-define('str', K.GET_ARGUMENT, (f) => { f.interp.getParens(); return f.interp.argument !== null ? f.interp.argument : ''; });
-define('str', K.GET_VERSION, (f) => {
+define('str', K_GET_ARGUMENT, (f) => { f.interp.getParens(); return f.interp.argument !== null ? f.interp.argument : ''; });
+define('str', K_GET_VERSION, function* (f) {
   f.interp.getParens();
-  const host = f.interp.ctx.host;
-  return host && typeof host.getVersion === 'function' ? host.getVersion() : IMAGEJ_VERSION;
-});
+  return yield* hostVersion(f, f.interp.ctx.host);
+}, { suspends: 'host' });
 
 /* ---- arrays ---- */
-define('arr', K.NEW_ARRAY, function* (f) {
+define('arr', K_NEW_ARRAY, function* (f) {
   const it = f.interp;
   if (it.nextToken() !== LP || it.nextNextToken() === RP) {
     it.getParens();
@@ -3761,12 +4100,13 @@ function* runNestedMacro(f, code, arg) {
     return nested.returnValue;
   } catch (e) {
     if (e instanceof MacroCancel && e.kind === 'abort') throw e;
+    if (isInternalFault(e)) throw e;
     if (e instanceof MacroCancel && e.kind === 'error' && nested.wasError && !nested.errorSilent)
       yield* f.hostHook(() => outer.ctx.showError(nested.errorDialogText()));
     return '[aborted]';   // Macro_Runner.runMacro: a canceled or failed macro
   }
 }
-define('str', K.EVAL, function* (f) {
+define('str', K_EVAL, function* (f) {
   const it = f.interp;
   it.getLeftParen();
   const name = yield* f.getString();
@@ -3777,10 +4117,10 @@ define('str', K.EVAL, function* (f) {
     yield* f.showMessage('Macro', 'Could not find JavaScript engine');
     return '';
   }
-  if (arg !== null && (name === 'bsh' || name === 'python')) return f.notAvailable(K.EVAL, 'str');
+  if (arg !== null && (name === 'bsh' || name === 'python')) return f.notAvailable(K_EVAL, 'str');
   return yield* runNestedMacro(f, name, arg);
-});
-define('str', K.RUN_MACRO, function* (f) {
+}, { suspends: true });
+define('str', K_RUN_MACRO, function* (f) {
   const it = f.interp;
   it.getLeftParen();
   const name = yield* f.getString();
@@ -3795,7 +4135,7 @@ define('str', K.RUN_MACRO, function* (f) {
   }
   yield* f.showMessage('Macro Runner', 'Macro or script not found:\n \n' + name);
   return null;
-});
+}, { suspends: true });
 
 /* ======================================================================================
  * Pure built-ins, part 2: random, split, List.*, String.*, IJ.*, Array.* (ij.macro.Functions)
@@ -3865,7 +4205,7 @@ class JavaRandom {
 
 /* Functions.random(): random, random("seed", n), random("gaussian"). The seed also reseeds ImageProcessor's
  * noise generator (ctx.imageRandomSeed, NaN = unseeded) for the image built-ins that draw random numbers. */
-define('num', K.RANDOM, function* (f) {
+define('num', K_RANDOM, function* (f) {
   const it = f.interp;
   let dseed = NaN, gaussian = false;
   if (it.nextToken() === LP) {
@@ -3962,7 +4302,7 @@ function toolsSplit(str, delim) {
   const t = stringTokens(str, delim);
   return t;   // Tools.split: countTokens() > 0 ? tokens : new String[0]
 }
-define('arr', K.SPLIT, function* (f) {
+define('arr', K_SPLIT, function* (f) {
   const it = f.interp;
   const s1 = yield* f.getFirstString();
   let s2 = null;
@@ -3975,6 +4315,7 @@ define('arr', K.SPLIT, function* (f) {
       strings = javaSplit(s1, s2.substring(1, s2.length - 1));
     else strings = (s2 === null || s2 === '') ? toolsSplit(s1) : toolsSplit(s1, s2);
   } catch (e) {
+    if (isInternalFault(e)) throw e;
     it.error(errText(e));
     return [];
   }
@@ -4423,7 +4764,7 @@ function loadProperties(text) {
 }
 const sortedKeys = (props) => [...props.keys()].sort(compareTo);
 
-define('str', K.LIST, function* (f) {
+define('str', K_LIST, function* (f) {
   const it = f.interp;
   it.getToken();
   if (it.token !== DOT) it.error("'.' expected");
@@ -4451,7 +4792,7 @@ define('str', K.LIST, function* (f) {
     props.clear();
     try {
       for (const [k, v] of loadProperties(list)) props.set(k, v);
-    } catch (e) { it.error(errText(e)); }
+    } catch (e) { if (isInternalFault(e)) throw e; it.error(errText(e)); }
   } else if (name === 'getList') {
     it.getParens();
     value = sortedKeys(props).map((k) => k + '=' + props.get(k) + '\n').join('');
@@ -4494,10 +4835,10 @@ define('str', K.LIST, function* (f) {
     values.setArray(ks.map((k) => Variable.string(props.get(k))));
   } else it.error('Unrecognized List function');
   return value;
-});
+}, { suspends: { setMeasurements: 'host', setCommands: 'host' } });
 
 /* ---- String.* ---- */
-define('str', K.STRING, function* (f) {
+define('str', K_STRING, function* (f) {
   const it = f.interp;
   it.getToken();
   if (it.token !== DOT) it.error("'.' expected");
@@ -4544,10 +4885,10 @@ define('str', K.STRING, function* (f) {
     case 'setFontSize': { const size = toInt(yield* f.getArg()); yield* f.hostCall('String.setFontSize', [size]); return null; }
     default: it.error('Unrecognized String function'); return null;
   }
-});
+}, { suspends: { copy: 'host', paste: 'host', show: 'host', copyResults: 'host', getResultsHeadings: 'host', setFontSize: 'host' } });
 
 /* ---- IJ.* ---- */
-define('str', K.IJ_CALL, function* (f) {
+define('str', K_IJ_CALL, function* (f) {
   const it = f.interp;
   it.getToken();
   if (it.token !== DOT) it.error("'.' expected");
@@ -4578,7 +4919,10 @@ define('str', K.IJ_CALL, function* (f) {
     case 'getFullVersion': {
       it.getParens();
       const host = it.ctx.host;
-      if (host && typeof host.getFullVersion === 'function') return '' + host.getFullVersion();
+      if (host && typeof host.getFullVersion === 'function') {
+        const full = yield* f.hostHook(() => host.getFullVersion());
+        if (full !== undefined) return '' + full;
+      }
       return IMAGEJ_VERSION + '99';   // ImageJ.VERSION + ImageJ.BUILD ("99" marks a release)
     }
     case 'checksum': {
@@ -4595,7 +4939,7 @@ define('str', K.IJ_CALL, function* (f) {
     }
     default: it.error('Unrecognized IJ function name'); return null;
   }
-});
+}, { suspends: { deleteRows: 'host', freeMemory: 'host', currentMemory: 'host', maxMemory: 'host', getToolName: 'host', renameResults: 'host', checksum: 'host', getFullVersion: 'host' } });
 
 /* ---- Array.* ---- */
 /* ij.util.Tools.resampleArray: linear interpolation onto len2 points spanning the same interval. */
@@ -4707,7 +5051,7 @@ function* showArray(f) {
   return null;
 }
 
-define('arr', K.ARRAY_FUNC, function* (f) {
+define('arr', K_ARRAY_FUNC, function* (f) {
   const it = f.interp;
   it.getToken();
   if (it.token !== DOT) it.error("'.' expected");
@@ -4921,7 +5265,7 @@ define('arr', K.ARRAY_FUNC, function* (f) {
         let contains;
         if (filter.startsWith('(') && filter.endsWith(')')) {
           try { contains = javaRegex(filter.substring(1, filter.length - 1), false).test(str); }
-          catch (e) { it.error(errText(e)); return []; }
+          catch (e) { if (isInternalFault(e)) throw e; it.error(errText(e)); return []; }
         } else contains = str.indexOf(filter) >= 0;
         if (contains) out.push(v);
       }
@@ -4931,11 +5275,11 @@ define('arr', K.ARRAY_FUNC, function* (f) {
       it.error('Unrecognized Array function');
       return null;
   }
-});
+}, { suspends: { show: 'host' } });
 
 /* ---- statements that need no image ---- */
 /* Functions.setOption: ExpandableArrays is the interpreter's own; every other option is the host's. */
-define('do', K.SET_OPTION, function* (f) {
+define('do', K_SET_OPTION, function* (f) {
   const it = f.interp;
   const arg1 = yield* f.getFirstString();
   let state = true;
@@ -4948,9 +5292,9 @@ define('do', K.SET_OPTION, function* (f) {
   it.getRightParen();
   if (arg1.toLowerCase().startsWith('expandablearrays')) f.expandableArrays = state;
   else yield* f.hostCall('setOption', [arg1, state]);
-});
+}, { suspends: 'host' });
 /* Functions.wait: Thread.sleep, as a timer the driver awaits (the slice loop keeps the page responsive). */
-define('do', K.WAIT, function* (f) {
+define('do', K_WAIT, function* (f) {
   const n = toInt(yield* f.getArg());
   if (n > 0) {
     const sig = f.interp.ctx.signal;
@@ -4960,9 +5304,9 @@ define('do', K.WAIT, function* (f) {
       if (sig) sig.addEventListener('abort', done, { once: true });
     });
   }
-});
+}, { suspends: true });
 /* Functions.showMessage: IJ.showMessage(title, message) through the host's dialog hook. */
-define('do', K.SHOW_MESSAGE, function* (f) {
+define('do', K_SHOW_MESSAGE, function* (f) {
   const it = f.interp;
   it.getLeftParen();
   let title = yield* f.getString();
@@ -4971,7 +5315,2571 @@ define('do', K.SHOW_MESSAGE, function* (f) {
   else { message = title; title = ''; }
   it.getRightParen();
   yield* f.showMessage(title, message);
+}, { suspends: true });
+
+/* ======================================================================================
+ * Synchronous fast path
+ *
+ * The interpreter above is a set of generators so that a host built-in may return a Promise (the driver awaits it).
+ * A generator costs about 3x a plain function; most statements of a macro never wait. So every generator method of
+ * Interpreter / Functions has a generated plain-function twin (suffix $s, installed on the SAME prototypes: both paths
+ * read and write the same state objects, the same tokens are consumed, the same errors and lines come out).
+ * tools/gen_ijm_sync.mjs writes the twin between the markers below; this file's generators stay the only source.
+ *
+ * Dispatch (Interpreter.doStatement, the loop bodies, doBlock, doIf, user-function bodies): a statement that CANNOT
+ * SUSPEND runs in the twin as a whole. "Cannot suspend" is decided from the tokens, once per statement start
+ * (SyncAnalysis.classify, memoised in Interpreter.syncMemo):
+ *   - a built-in may suspend when it is registered { suspends: true }, or 'host' (a built-in that reaches the host: it
+ *     may suspend unless ctx.host.syncFunctions, a Set of names such as 'getPixel' or 'List.setMeasurements', declares
+ *     it synchronous), or a { sub: ... } map for a namespace (Array.show), or a predicate (pgm, tokenIndex, host);
+ *     a built-in defined later through IJMacro.define() without an option defaults to 'host';
+ *   - a user function may suspend when its body does, transitively (fixed point over the call graph), or calls a name
+ *     that is not a known function;
+ *   - eval() / runMacro() / wait() / showMessage() / requires() / exit("msg") / print("[Window]", ..) are registered so.
+ * A statement with a loop in it (or a call to a function that has one) that cannot suspend is class SYNC_LOOP: the
+ * generator keeps the loop CONTROL (so the event loop is released and an abort is honoured every TICK_MASK+1
+ * iterations, exactly as before) while the loop header and every body statement run in the twin, with no generator
+ * allocated per iteration. Everything else is SYNC_GEN: executed by the generators, which dispatch their own inner
+ * statements the same way.
+ *
+ * A user function on a cycle of the call graph (recursion, direct or through others) counts like a loop: a statement that
+ * calls into it is SYNC_LOOP, so the call runs on the generators, which slice every TICK_MASK+1 calls (an abort is
+ * honoured within sliceMs) and hop to a fresh native stack every FN_NEST_STEP levels (ImageJ's 1000 levels fit). Only the
+ * statements of the body that do not call into the cycle stay in the twin. A page is not cross-origin isolated here, so a
+ * SharedArrayBuffer abort flag cannot exist, and a timer cannot fire while the twin holds the thread: letting a recursion
+ * run whole in the twin (option syncRecursion) therefore means it cannot be stopped short of terminating the worker.
+ *
+ * Policy for a stretch that runs in the twin and cannot yield (a loop-free, recursion-free statement: a long pure
+ * built-in): it keeps the thread until it ends. Every SYNC_TICK_MASK+1 (1024) user-function calls it looks at
+ * ctx.abortFlag (an Int32Array on a SharedArrayBuffer the host sets to non-zero; Atomics.load) and at signal.aborted,
+ * and throws the "Macro canceled" path; that only helps where a SharedArrayBuffer exists or when the signal was aborted
+ * before the stretch. ctx.syncLoops / ctx.syncRecursion (options) let loops / recursions run whole in the twin
+ * (fastest, same limit); ctx.fastPath === false (option fastPath) turns the whole mechanism off.
+ * ==================================================================================== */
+class SyncViolation { constructor(m) { this.message = m || 'a built-in that may suspend ran in the synchronous fast path'; } }
+/* What a catch that turns a library failure into a macro error must let through: a defect of the host wiring and a native
+ * stack overflow are not the macro's error (the latter is reported as ImageJ's "Stack overflow" by run()). */
+function isInternalFault(e) {
+  return e instanceof SyncViolation || (e instanceof RangeError && /call stack/i.test(e.message));
+}
+/* The result of a built-in in the twin: an iterator means a generator was returned instead of driven. */
+function syncResult(r) {
+  if (r !== null && typeof r === 'object' && typeof r.next === 'function') throw new SyncViolation('a built-in of the fast path returned a generator');
+  return r;
+}
+function syncAwait(v) {
+  if (isThenable(v)) throw new SyncViolation();
+  return v;
+}
+/* A built-in written as a generator (an external IJMacro.define) run to completion without a driver. */
+function runSyncGen(r) {
+  if (!isIterator(r)) return r;
+  let s = r.next();
+  while (!s.done) {
+    const y = s.value;
+    if (y instanceof Sub) {
+      let v;
+      try { v = runSyncGen(y.gen); } catch (e) { s = r.throw(e); continue; }
+      s = r.next(v);
+    } else if (y === SLICE) s = r.next();
+    else throw new SyncViolation();
+  }
+  return s.value;
+}
+const BUILTINS_S = {};
+for (const kind of Object.keys(BUILTINS)) {
+  const twin = new Map(), wrapped = new Map();
+  BUILTINS_S[kind] = {
+    set(id, fn) { twin.set(id, fn); },
+    delete(id) { twin.delete(id); wrapped.delete(id); },
+    get(id) {
+      const t = twin.get(id);
+      if (t !== undefined) return t;
+      const gen = BUILTINS[kind].get(id);
+      if (gen === undefined) return undefined;
+      let w = wrapped.get(id);
+      if (w === undefined) { w = (f) => runSyncGen(gen(f)); wrapped.set(id, w); }
+      return w;
+    },
+  };
+}
+const defineS = (kind, id, fn) => { BUILTINS_S[kind].set(id, fn); };
+
+/* host.syncFunctions: is `full` ('getPixel', 'List.get') declared synchronous? 'List.*' and 'List' cover a namespace. */
+function hostDeclaresSync(host, full) {
+  const set = host && host.syncFunctions;
+  if (!set || typeof set.has !== 'function') return false;
+  if (set.has(full)) return true;
+  const dot = full.indexOf('.');
+  return dot > 0 && (set.has(full.slice(0, dot) + '.*') || set.has(full.slice(0, dot)));
+}
+function suspendsNow(spec, name, sub, host, pgm, j) {
+  if (spec === false || spec === undefined || spec === null) return false;
+  if (spec === true) return true;
+  if (spec === 'host') return !hostDeclaresSync(host, sub === null ? name : name + '.' + sub);
+  if (typeof spec === 'function') return !!spec(pgm, j, host);
+  if (sub === null) return false;
+  const one = spec[sub];
+  return one === undefined ? false : suspendsNow(one, name, sub, host, pgm, j);
+}
+/* print(a, b): the window form print("[Title]", text) is the only way print reaches the host; it needs a comma, and a
+ * first argument that is not a literal that cannot be "[...]". */
+function printSuspends(pgm, j, host) {
+  const code = pgm.code;
+  if ((code[j + 1] & TOK_MASK) !== LP) return false;
+  let depth = 0;
+  for (let k = j + 1; k < code.length; k++) {
+    const t = code[k] & TOK_MASK;
+    if (t === LP || t === LSQ) depth++;
+    else if (t === RP || t === RSQ) { if (--depth <= 0) return false; }
+    else if (t === EOF || t === SEMI) return false;
+    else if (t === COMMA && depth === 1) {
+      const first = code[j + 2], ft = first & TOK_MASK;
+      /* sound only while a literal is followed by `,` or `+`: a method on a literal ("[Log]".substring(0)) could build a window title */
+      const after = code[j + 3] & TOK_MASK, plain = after === COMMA || after === C('+');
+      if (ft === NUMBER && plain) return false;
+      if (ft === STRING_CONSTANT && plain) { const str = pgm.table[first >> TOK_SHIFT].str; if (str.length > 0 && str.charAt(0) !== '[') return false; }
+      return !hostDeclaresSync(host, 'printToWindow');
+    }
+  }
+  return false;
+}
+/* exit("message") shows a dialog; a bare exit does not. */
+function exitSuspends(pgm, j) {
+  const code = pgm.code;
+  return (code[j + 1] & TOK_MASK) === LP && (code[j + 2] & TOK_MASK) !== RP;
+}
+
+class SyncAnalysis {
+  constructor(pgm, ctx) {
+    this.pgm = pgm;
+    this.host = ctx.host || null;
+    this.syncLoops = ctx.syncLoops === true;
+    this.syncRecursion = ctx.syncRecursion === true;
+    this.fns = null;   // symbol address -> { susp, loopy, rec, from, to, calls }
+  }
+
+  /* Index just after the parenthesised group that opens at k, or -1. */
+  parensEnd(k) {
+    const code = this.pgm.code, n = code.length;
+    if (k >= n || (code[k] & TOK_MASK) !== LP) return -1;
+    let depth = 0;
+    for (; k < n; k++) {
+      const t = code[k] & TOK_MASK;
+      if (t === LP) depth++;
+      else if (t === RP) { if (--depth === 0) return k + 1; }
+      else if (t === EOF) return -1;
+    }
+    return -1;
+  }
+  blockEnd(k) {
+    const code = this.pgm.code, n = code.length;
+    if (k >= n || (code[k] & TOK_MASK) !== LBRACE) return -1;
+    let depth = 0;
+    for (; k < n; k++) {
+      const t = code[k] & TOK_MASK;
+      if (t === LBRACE) depth++;
+      else if (t === RBRACE) { if (--depth === 0) return k + 1; }
+      else if (t === EOF) return -1;
+    }
+    return -1;
+  }
+  /* Index just after the statement that starts at i (an upper bound: a simple statement runs to its `;`), or -1 for
+   * something that is not a statement of the dispatcher (macro, function, else, EOF ...). */
+  stmtEnd(i) {
+    const code = this.pgm.code, n = code.length;
+    if (i >= n) return -1;
+    const t = code[i] & TOK_MASK;
+    switch (t) {
+      case K_IF: {
+        const p = this.parensEnd(i + 1);
+        if (p < 0) return -1;
+        let e = this.stmtEnd(p);
+        if (e < 0) return -1;
+        let k = e;
+        if (k < n && (code[k] & TOK_MASK) === SEMI) k++;
+        if (k < n && (code[k] & TOK_MASK) === K_ELSE) e = this.stmtEnd(k + 1);
+        return e;
+      }
+      case K_FOR: case K_WHILE: {
+        const p = this.parensEnd(i + 1);
+        return p < 0 ? -1 : this.stmtEnd(p);
+      }
+      case K_DO: {
+        const e = this.stmtEnd(i + 1);
+        if (e < 0 || e >= n || (code[e] & TOK_MASK) !== K_WHILE) return -1;
+        return this.parensEnd(e + 1);
+      }
+      case LBRACE: return this.blockEnd(i);
+      case SEMI: case K_BREAK: case K_CONTINUE: return i + 1;
+      case K_VAR: case PREDEFINED_FUNCTION: case USER_FUNCTION: case WORD: case LP: case K_PLUS_PLUS: case K_RETURN:
+      case ARRAY_FUNCTION: case NUMERIC_FUNCTION: case STRING_FUNCTION: case VARIABLE_FUNCTION: case NUMBER: case STRING_CONSTANT: {
+        for (let j = i; j < n; j++) {
+          const tj = code[j] & TOK_MASK;
+          if (tj === SEMI) return j + 1;
+          if (tj === RBRACE || tj === EOF) return j;
+        }
+        return n;
+      }
+      default: return -1;
+    }
+  }
+
+  tokenSuspends(j, t) {
+    const code = this.pgm.code;
+    const kind = t === PREDEFINED_FUNCTION ? 'do' : t === NUMERIC_FUNCTION ? 'num' : t === STRING_FUNCTION ? 'str' : t === ARRAY_FUNCTION ? 'arr' : 'variable';
+    const id = this.pgm.table[code[j] >> TOK_SHIFT].type;
+    const info = BUILTIN_INFO[kind].get(id);
+    if (info === undefined) return false;
+    let sub = null;
+    if (code[j + 1] === DOT && code[j + 2] > 127) { const s2 = this.pgm.table[code[j + 2] >> TOK_SHIFT]; if (s2 && typeof s2.str === 'string') sub = s2.str; }
+    return suspendsNow(info.suspends, NAME_OF[id] || '', sub, this.host, this.pgm, j);
+  }
+
+  /* All user functions: may it suspend, does it loop (itself or through a callee). */
+  functions() {
+    if (this.fns !== null) return this.fns;
+    const { code, table } = this.pgm;
+    const fns = new Map();
+    for (let a = SYSTEM_TABLE.length; a < table.length; a++) {
+      const sym = table[a];
+      if (!sym || sym.type !== USER_FUNCTION) continue;
+      const from = sym.value;
+      const p = this.parensEnd(from + 1);
+      const to = p < 0 ? -1 : this.blockEnd(p);
+      const f = { susp: to < 0, loopy: false, rec: false, from, to, calls: [] };
+      if (to >= 0)
+        for (let j = from; j < to; j++) {
+          const t = code[j] & TOK_MASK;
+          if (t === K_FOR || t === K_WHILE || t === K_DO) f.loopy = true;
+          else if (t === USER_FUNCTION) f.calls.push(code[j] >> TOK_SHIFT);
+          else if ((t >= PREDEFINED_FUNCTION && t <= ARRAY_FUNCTION) || t === VARIABLE_FUNCTION) { if (this.tokenSuspends(j, t)) f.susp = true; }
+        }
+      fns.set(a, f);
+    }
+    /* A function on a cycle of the call graph (itself or through others) is recursive: like a loop it must not run whole in
+     * the twin, which cannot yield and cannot hop to a fresh native stack (ImageJ's 1000 levels do not fit a worker's). */
+    for (const [a, f] of fns) {
+      const seen = new Set(), todo = f.calls.slice();
+      while (todo.length > 0) {
+        const b = todo.pop();
+        if (b === a) { f.rec = true; break; }
+        if (seen.has(b)) continue;
+        seen.add(b);
+        const c = fns.get(b);
+        if (c !== undefined) for (const x of c.calls) todo.push(x);
+      }
+    }
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const f of fns.values())
+        for (const a of f.calls) {
+          const c = fns.get(a);
+          if (c === undefined) { if (!f.susp) { f.susp = true; changed = true; } continue; }
+          if (c.susp && !f.susp) { f.susp = true; changed = true; }
+          if (c.loopy && !f.loopy) { f.loopy = true; changed = true; }
+          if (c.rec && !f.rec) { f.rec = true; changed = true; }
+        }
+    }
+    return (this.fns = fns);
+  }
+
+  classify(i) {
+    const code = this.pgm.code;
+    const end = this.stmtEnd(i);
+    if (end < 0) return SYNC_GEN;
+    let loopy = false, rec = false;
+    for (let j = i; j < end; j++) {
+      const t = code[j] & TOK_MASK;
+      if (t === K_FOR || t === K_WHILE || t === K_DO) loopy = true;
+      else if (t === K_MACRO || t === K_FUNCTION) return SYNC_GEN;
+      else if (t === USER_FUNCTION) {
+        const f = this.functions().get(code[j] >> TOK_SHIFT);
+        if (f === undefined || f.susp) return this.classifyGen(i);
+        if (f.loopy) loopy = true;
+        if (f.rec) rec = true;
+      } else if ((t >= PREDEFINED_FUNCTION && t <= ARRAY_FUNCTION) || t === VARIABLE_FUNCTION) {
+        if (this.tokenSuspends(j, t)) return this.classifyGen(i);
+      }
+    }
+    return (loopy && !this.syncLoops) || (rec && !this.syncRecursion) ? SYNC_LOOP : SYNC_TWIN;
+  }
+
+  /* classify() for a statement that may suspend: SYNC_HDR when the parenthesised header of an if / for / while cannot. */
+  classifyGen(i) {
+    const code = this.pgm.code;
+    const t = code[i] & TOK_MASK;
+    if (t !== K_IF && t !== K_FOR && t !== K_WHILE) return SYNC_GEN;
+    const p = this.parensEnd(i + 1);
+    if (p < 0) return SYNC_GEN;
+    for (let j = i; j < p; j++) {
+      const tj = code[j] & TOK_MASK;
+      if (tj === USER_FUNCTION) {
+        const f = this.functions().get(code[j] >> TOK_SHIFT);
+        if (f === undefined || f.susp || f.loopy || (f.rec && !this.syncRecursion)) return SYNC_GEN;
+      } else if ((tj >= PREDEFINED_FUNCTION && tj <= ARRAY_FUNCTION) || tj === VARIABLE_FUNCTION) {
+        if (this.tokenSuspends(j, tj)) return SYNC_GEN;
+      }
+    }
+    return SYNC_HDR;
+  }
+}
+
+/* BEGIN GENERATED SYNC TWIN: written by tools/gen_ijm_sync.mjs from the generator code of this file. GENERATED, DO NOT EDIT.
+ * Plain-function twin of class Interpreter / class Functions and of the built-ins, installed on the same prototypes
+ * (suffix $s) so both paths share every state object. Run `node tools/gen_ijm_sync.mjs` after any edit above;
+ * tests/js/test_ijm_sync_twin.mjs fails when this region is stale. */
+Object.assign(Interpreter.prototype, {
+  run$s(macro) {
+    const pgm = tokenize(macro);
+    if (pgm.hasVars && pgm.hasFunctions) this.saveGlobals2$s(pgm);
+    this.runProgram$s(pgm);
+  },
+  runProgram$s(pgm) {
+    this.pgm = pgm;
+    this.pc = -1;
+    this.callDepth = 0;
+    this.syncReset();
+    this.pushGlobals();
+    if (this.func === null) this.func = new Functions(this, pgm); else this.func.pgm = pgm;
+    this.done = false;
+    this.errorMessage = null;
+    this.doStatements$s();
+    this.finishUp();
+  },
+  saveGlobals2$s(pgm) {
+    this.pgm = pgm;
+    this.pc = -1;
+    this.func = new Functions(this, pgm);
+    while (!this.done) {
+      this.getToken();
+      switch (this.token) {
+        case K_VAR: this.doVar$s(); break;
+        case K_MACRO: this.skipMacro(); break;
+        case K_FUNCTION: this.skipFunction(); break;
+        default:
+      }
+    }
+    if (this.topOfStack !== -1) {
+      const n = this.topOfStack + 1;
+      pgm.globals = new Array(n);
+      for (let i = 0; i < n; i++) pgm.globals[i] = this.stack[i];
+    }
+    this.pc = -1;
+    this.topOfStack = -1;
+    this.done = false;
+  },
+  doStatements$s() {
+    while (!this.done) this.doStatement$s();
+  },
+  doStatement$s() {
+    this.getToken();
+    switch (this.token) {
+      case K_VAR:
+        this.doVar$s();
+        break;
+      case PREDEFINED_FUNCTION:
+        this.func.doFunction$s(this.pgm.table[this.tokenAddress].type);
+        break;
+      case USER_FUNCTION:
+        this.runUserFunction$s();
+        break;
+      case K_RETURN:
+        this.doReturn$s();
+        break;
+      case K_BREAK:
+        if (this.inLoop) throw new MacroException(K_BREAK);
+        break;
+      case K_CONTINUE:
+        if (this.inLoop) throw new MacroException(K_CONTINUE);
+        break;
+      case WORD:
+        if (this.pgm.code[this.pc + 1] === DOT) this.doStringFunction$s();
+        else this.doAssignment$s();
+        break;
+      case K_IF:
+        this.doIf$s();
+        return;
+      case K_ELSE:
+        this.error('Else without if');
+        return;
+      case K_FOR:
+        this.doFor$s();
+        return;
+      case K_WHILE:
+        this.doWhile$s();
+        return;
+      case K_DO:
+        this.doDo$s();
+        return;
+      case K_MACRO:
+        this.runFirstMacro$s();
+        return;
+      case K_FUNCTION:
+        this.skipFunction();
+        return;
+      case SEMI:
+        return;
+      case LBRACE:
+        this.putTokenBack();
+        this.doBlock$s();
+        return;
+      case NUMBER: case NUMERIC_FUNCTION: case STRING_FUNCTION: case STRING_CONSTANT:
+      case VARIABLE_FUNCTION: case LP: {
+        this.putTokenBack();
+        this.inPrint = true;
+        const s = this.getString$s();
+        this.inPrint = false;
+        if (s !== null && s.length > 0 && s !== 'NaN' && s !== '[aborted]') this.log(s);
+        return;
+      }
+      case ARRAY_FUNCTION:
+        this.func.getArrayFunction$s(this.pgm.table[this.tokenAddress].type);
+        break;
+      case EOF:
+        break;
+      default:
+        if (this.evaluating && this.token === K_PI) {
+          this.putTokenBack();
+          this.log('' + javaDouble(this.getExpression$s()));
+        } else
+          this.error("Statement cannot begin with '" + this.pgm.decodeToken(this.token, this.tokenAddress) + "'");
+    }
+    if (!this.looseSyntax) {
+      this.getToken();
+      if (this.token !== SEMI && !this.done) this.error("';' expected");
+    }
+  },
+  doStringFunction$s() {
+    const stringFunction = (this.pgm.code[this.pc + 2] & 0xff) === STRING_FUNCTION;
+    this.putTokenBack();
+    let s = stringFunction ? this.getString$s() : javaDouble(this.getExpression$s());
+    if (s.endsWith('.0')) s = s.substring(0, s.length - 2);
+    this.ctx.log(s);
+  },
+  runUserFunction$s() {
+    this.growCallStack(1);
+    if ((++this.ticks & SYNC_TICK_MASK) === 0) this.syncCheck();
+    const newPC = toInt(this.tokenValue);
+    const saveStartOfLocals = this.startOfLocals;
+    this.startOfLocals = this.topOfStack + 1;
+    const saveTOS = this.topOfStack;
+    const nArgs = this.pushArgs$s();
+    const savePC = this.pc;
+    let value = null;
+    this.pc = newPC;
+    this.setupArgs(nArgs);
+    const saveInFunction = this.inFunction;
+    this.inFunction = true;
+    try {
+      if ((++this.fnNest % FN_NEST_STEP) === 0) this.doBlock$s();
+      else this.doBlock$s();
+    } catch (e) {
+      if (!(e instanceof ReturnException)) throw e;
+      value = new Variable(0, e.value, e.str, e.array);
+      if (value.getArray() !== null && e.arraySize !== 0) value.setArraySize(e.arraySize);
+    }
+    this.fnNest--;
+    this.inFunction = saveInFunction;
+    this.pc = savePC;
+    this.trimStack(saveTOS, saveStartOfLocals);
+    this.growCallStack(-1);
+    return value;
+  },
+  pushArgs$s() {
+    this.getLeftParen();
+    let count = 0;
+    const args = new Array(MAX_ARGS);
+    const code = this.pgm.code;
+    if (this.nextToken() !== RP) {
+      do {
+        if (count === MAX_ARGS) this.error('Too many arguments');
+        const next = this.nextToken();
+        const nextPlus = code[this.pc + 2] & 0xff;
+        if (next === STRING_CONSTANT || next === STRING_FUNCTION)
+          args[count] = new Variable(0, 0.0, this.getString$s());
+        else if (next === USER_FUNCTION) {
+          const savePC = this.pc;
+          this.getToken();   // the function
+          const simpleFunctionCall = this.isSimpleFunctionCall(false);
+          this.pc = savePC;
+          if (simpleFunctionCall) {
+            this.getToken();   // the function
+            const v2 = this.runUserFunction$s();
+            if (v2 === null) this.error('No return value');
+            args[count] = v2;
+          } else
+            args[count] = new Variable(0, this.getExpression$s(), null);
+        } else if (next === WORD && (nextPlus === COMMA || nextPlus === RP)) {
+          let value = 0.0, array = null, arraySize = 0, str = null;
+          this.getToken();
+          const v = this.lookupVariable();
+          if (v !== null) {
+            const type = v.getType();
+            if (type === V_VALUE) value = v.getValue();
+            else if (type === V_ARRAY) { array = v.getArray(); arraySize = v.getArraySize(); }
+            else str = v.getString();
+          }
+          args[count] = new Variable(0, value, str, array);
+          if (array !== null) args[count].setArraySize(arraySize);
+        } else if (next === WORD && nextPlus === LSQ) {
+          const savePC = this.pc;
+          this.getToken();
+          let v = this.lookupVariable();
+          v = this.getArrayElement$s(v);
+          if (v.getString() !== null) args[count] = new Variable(0, 0.0, v.getString(), null);
+          else {
+            this.pc = savePC;
+            args[count] = new Variable(0, this.getExpression$s(), null);
+          }
+        } else if (next === WORD && nextPlus === DOT) {   // s.length, s.substring(), etc.
+          const stringFunction = (code[this.pc + 3] & 0xff) === 136;
+          if (stringFunction) args[count] = new Variable(0, 0.0, this.func.getString$s(), null);
+          else args[count] = new Variable(0, this.getExpression$s(), null);
+        } else if (nextPlus === C('+') && next === WORD) {
+          const savePC = this.pc;
+          this.getToken();
+          const v = this.lookupVariable();
+          const isString = v !== null && v.getType() === V_STRING;
+          this.pc = savePC;
+          if (isString) args[count] = new Variable(0, 0.0, this.getString$s());
+          else args[count] = new Variable(0, this.getExpression$s(), null);
+        } else if (next === ARRAY_FUNCTION) {
+          this.getToken();
+          const array = this.func.getArrayFunction$s(this.pgm.table[this.tokenAddress].type);
+          args[count] = new Variable(0, 0, null, array);
+        } else
+          args[count] = new Variable(0, this.getExpression$s(), null);
+        count++;
+        this.getToken();
+      } while (this.token === COMMA);
+      this.putTokenBack();
+    }
+    const nArgs = count;
+    while (count > 0) this.push(args[--count], this);
+    this.getRightParen();
+    return nArgs;
+  },
+  doReturn$s() {
+    let value = 0.0, str = null, array = null, arraySize = 0;
+    this.getToken();
+    if (this.token === LP) {
+      const next = this.pgm.code[this.pc + 1];
+      if ((next & TOK_MASK) === STRING_CONSTANT || (next & TOK_MASK) === STRING_FUNCTION || this.isString(this.pc + 1))
+        this.error('String enclosed in parens');
+    }
+    if (this.token !== SEMI) {
+      let isString = this.token === STRING_CONSTANT || this.token === STRING_FUNCTION;
+      const isArrayFunction = this.token === ARRAY_FUNCTION;
+      if (this.token === WORD) {
+        const v = this.lookupLocalVariable(this.tokenAddress);
+        if (v !== null && this.nextToken() === SEMI) {
+          array = v.getArray();
+          if (array !== null) arraySize = v.getArraySize();
+          isString = v.getString() !== null;
+        } else if (v !== null && this.nextToken() === C('+'))
+          isString = v.getType() === V_STRING;
+      }
+      this.putTokenBack();
+      if (isString) str = this.getString$s();
+      else if (isArrayFunction) {
+        this.getToken();
+        array = this.func.getArrayFunction$s(this.pgm.table[this.tokenAddress].type);
+      } else if (array === null) {
+        if ((this.pgm.code[this.pc + 2] & 0xff) === LSQ && this.nextToken() === WORD) {
+          const savePC = this.pc;
+          this.getToken();
+          let v = this.lookupVariable();
+          v = this.getArrayElement$s(v);
+          this.pc = savePC;
+          if (v.getString() !== null) str = this.getString$s();
+          else value = this.getExpression$s();
+        } else
+          value = this.getExpression$s();
+      }
+    }
+    if (this.inFunction) {
+      if (this.returnException === null) this.returnException = new ReturnException();
+      const r = this.returnException;
+      r.value = value; r.str = str; r.array = array; r.arraySize = arraySize;
+      throw r;
+    } else {
+      this.finishUp();
+      if (value !== 0.0 || array !== null) this.error('Macros can only return strings');
+      this.returnValue = str;
+      this.done = true;
+    }
+  },
+  doFor$s() {
+    const fast = true;
+    const saveLooseSyntax = this.looseSyntax;
+    this.looseSyntax = false;
+    this.loopDepth++;
+    this.inLoop = true;
+    this.getToken();
+    if (this.token !== LP) this.error("'(' expected");
+    this.getToken();   // skip 'var'
+    if (this.token !== K_VAR) this.putTokenBack();
+    do {
+      if (this.nextToken() !== SEMI) { if (fast) this.getAssignmentExpression$s(); else this.getAssignmentExpression$s(); }
+      this.getToken();
+    } while (this.token === COMMA);
+    if (this.token !== SEMI) this.error("';' expected");
+    const condPC = this.pc;
+    let startPC = 0;
+    let cond = 1;
+    const code = this.pgm.code;
+    for (;;) {
+      if (code[this.pc + 1] !== SEMI) cond = fast ? this.getLogicalExpression$s() : this.getLogicalExpression$s();
+      if (startPC === 0) this.checkBoolean(cond);
+      this.getToken();
+      if (this.token !== SEMI) this.error("';' expected");
+      const incPC = this.pc;
+      // skip to start of code
+      if (startPC !== 0) this.pc = startPC;
+      else {
+        while (this.token !== RP) {
+          this.getToken();
+          if (this.token === LBRACE || this.token === SEMI || this.token === LP || this.done) this.error("')' expected");
+        }
+      }
+      startPC = this.pc;
+      if (cond === 1) {
+        try {
+          this.doStatement$s();
+        } catch (e) {
+          if (!(e instanceof MacroException)) throw e;
+          if (e.type === K_BREAK) {
+            this.pc = startPC;
+            this.skipStatement();
+            break;
+          }
+        }
+      } else {
+        this.skipStatement();
+        break;
+      }
+      if ((++this.ticks & SYNC_TICK_MASK) === 0) this.syncCheck();
+      this.pc = incPC;   // do increment
+      do {
+        if (this.nextToken() !== RP) { if (fast) this.getAssignmentExpression$s(); else this.getAssignmentExpression$s(); }
+        this.getToken();
+      } while (this.token === COMMA);
+      this.pc = condPC;
+    }
+    this.looseSyntax = saveLooseSyntax;
+    this.loopDepth--;
+    if (this.loopDepth === 0) this.inLoop = false;
+  },
+  doWhile$s() {
+    const fast = true;
+    this.looseSyntax = false;
+    this.loopDepth++;
+    this.inLoop = true;
+    const savePC = this.pc;
+    let isTrue;
+    do {
+      this.pc = savePC;
+      isTrue = fast ? this.getBoolean$s() : this.getBoolean$s();
+      if (isTrue) {
+        try {
+          this.doStatement$s();
+        } catch (e) {
+          if (!(e instanceof MacroException)) throw e;
+          if (e.type === K_BREAK) {
+            this.pc = savePC;
+            this.getBoolean$s();
+            this.skipStatement();
+            break;
+          }
+        }
+      } else
+        this.skipStatement();
+      if ((++this.ticks & SYNC_TICK_MASK) === 0) this.syncCheck();
+    } while (isTrue && !this.done);
+    this.loopDepth--;
+    if (this.loopDepth === 0) this.inLoop = false;
+  },
+  doDo$s() {
+    const fast = true;
+    this.looseSyntax = false;
+    const savePC = this.pc;
+    let isTrue;
+    do {
+      this.doStatement$s();
+      this.getToken();
+      if (this.token !== K_WHILE) this.error("'while' expected");
+      isTrue = fast ? this.getBoolean$s() : this.getBoolean$s();
+      if (isTrue) this.pc = savePC;
+      if ((++this.ticks & SYNC_TICK_MASK) === 0) this.syncCheck();
+    } while (isTrue && !this.done);
+  },
+  doBlock$s() {
+    this.getToken();
+    if (this.token !== LBRACE) this.error("'{' expected");
+    while (!this.done) {
+      this.getToken();
+      if (this.token === RBRACE) break;
+      this.putTokenBack();
+      this.doStatement$s();
+    }
+    if (this.token !== RBRACE) this.error("'}' expected");
+  },
+  runFirstMacro$s() {
+    this.getToken();   // skip macro label
+    this.doBlock$s();
+    this.done = true;
+    this.finishUp();
+  },
+  doAssignment$s() {
+    const next = this.pgm.code[this.pc + 1] & 0xff;
+    if (next === LSQ) { this.doArrayElementAssignment$s(); return; }
+    const type = this.getExpressionType$s();
+    switch (type) {
+      case V_STRING: this.doStringAssignment$s(); break;
+      case V_ARRAY: this.doArrayAssignment$s(); break;
+      case USER_FUNCTION: this.doUserFunctionAssignment$s(); break;
+      case STRING_FUNCTION: this.doNumericStringAssignment$s(); break;
+      default: {
+        this.putTokenBack();
+        const value = this.getAssignmentExpression$s();
+        if (this.evaluating) this.log('' + javaDouble(value));
+      }
+    }
+  },
+  getExpressionType$s() {
+    const code = this.pgm.code;
+    const rightSideToken = code[this.pc + 2];
+    const tok = rightSideToken & 0xff;
+    if (tok === STRING_CONSTANT) return V_STRING;
+    if (tok === STRING_FUNCTION) {
+      const address = rightSideToken >> TOK_SHIFT;
+      const type = this.pgm.table[address].type;
+      if (type === K_DIALOG) {
+        const token2 = code[this.pc + 4];
+        const name = this.pgm.table[token2 >> TOK_SHIFT].str;
+        if (name === 'getNumber' || name === 'getCheckbox') return STRING_FUNCTION;
+      } else if (type === K_FILE) {
+        const token2 = code[this.pc + 4];
+        const name = this.pgm.table[token2 >> TOK_SHIFT].str;
+        if (name === 'exists' || name === 'isDirectory' || name === 'length' ||
+            name === 'getLength' || name === 'rename' || name === 'delete') return STRING_FUNCTION;
+      } else if (type === K_LIST) {
+        const token2 = code[this.pc + 4];
+        const name = this.pgm.table[token2 >> TOK_SHIFT].str;
+        if (name === 'getValue') return STRING_FUNCTION;
+      } else if (this.numericStringFunction(this.pc + 2))
+        return V_VALUE;
+      return V_STRING;
+    }
+    if (tok === ARRAY_FUNCTION) return V_ARRAY;
+    if (tok === USER_FUNCTION) return USER_FUNCTION;
+    if (tok === VARIABLE_FUNCTION) {
+      if (this.isString(this.pc + 2)) return V_STRING;
+      const token2 = code[this.pc + 4];
+      const name = this.pgm.table[token2 >> TOK_SHIFT].str;
+      if (name === 'getColumn' || name === 'toArray') return V_ARRAY;
+    }
+    if (tok !== WORD) return V_VALUE;
+    const v = this.lookupVariableAt(rightSideToken >> TOK_SHIFT);
+    if (v === null) return V_VALUE;
+    const type = v.getType();
+    if (type === V_VALUE) return V_VALUE;
+    else if (type === V_STRING) {
+      if (this.isString(this.pc + 2)) return V_STRING;
+      return V_VALUE;
+    }
+    if (code[this.pc + 3] === DOT) return V_VALUE;
+    if (code[this.pc + 3] !== LSQ) return V_ARRAY;
+    const savePC = this.pc;
+    this.getToken();   // "="
+    this.getToken();   // the variable
+    this.checkingType = true;
+    const index = this.getIndex$s();
+    this.checkingType = false;
+    this.pc = savePC - 1;
+    this.getToken();
+    const array = v.getArray();
+    if (index < 0 || index >= array.length) return V_VALUE;
+    return array[index].getType();
+  },
+  doNumericStringAssignment$s() {
+    this.putTokenBack();
+    this.getToken();
+    let v = this.lookupLocalVariable(this.tokenAddress);
+    if (v === null) v = this.pushNew(this.tokenAddress, 0.0, null, this);
+    this.getToken();
+    if (this.token !== EQUALS) this.error("'=' expected");
+    v.setValue(this.getExpression$s());
+  },
+  doArrayElementAssignment$s() {
+    const code = this.pgm.code;
+    const v = this.lookupLocalVariable(this.tokenAddress);
+    if (v === null) this.error('Undefined identifier');
+    if (code[this.pc + 5] === SEMI && (code[this.pc + 4] === K_PLUS_PLUS || code[this.pc + 4] === K_MINUS_MINUS)) {
+      this.putTokenBack();
+      this.getFactor$s();
+      return;
+    }
+    const index = this.getIndex$s();
+    const expressionType = this.getExpressionType$s();
+    if (expressionType === V_ARRAY) this.error('Arrays of arrays not supported');
+    this.getToken();
+    const op = this.token;
+    if (!(op === EQUALS || op === K_PLUS_EQUAL || op === K_MINUS_EQUAL || op === K_MUL_EQUAL || op === K_DIV_EQUAL)) {
+      this.error("'=', '+=', '-=', '*=' or '/=' expected");
+      return;
+    }
+    if (op !== EQUALS && (expressionType === V_STRING || expressionType === V_ARRAY)) {
+      this.error("'=' expected");
+      return;
+    }
+    let array = v.getArray();
+    if (array === null) this.error('Array expected');
+    if (index < 0) this.error('Negative index');
+    if (index >= array.length) {   // expand array
+      if (!this.func.expandableArrays) this.error('Index (' + index + ') out of range');
+      const len2 = index + Math.floor(array.length / 2) + 1;
+      checkArraySize(this, len2);
+      const array2 = new Array(len2);
+      const strings = array.length > 0 && array[0].getString() !== null;
+      for (let i = 0; i < len2; i++) {
+        if (i < array.length) array2[i] = array[i];
+        else {
+          array2[i] = Variable.num(NaN);
+          if (strings) array2[i].setString('undefined');
+        }
+      }
+      v.setArray(array2);
+      v.setArraySize(index + 1);
+      array = v.getArray();
+    }
+    const size = v.getArraySize();
+    if (index + 1 > size) v.setArraySize(index + 1);
+    switch (expressionType) {
+      case V_STRING:
+        array[index].setString(this.getString$s());
+        break;
+      case V_ARRAY:
+        this.getToken();
+        if (this.token === ARRAY_FUNCTION)
+          array[index].setArray(this.func.getArrayFunction$s(this.pgm.table[this.tokenAddress].type));
+        break;
+      case USER_FUNCTION: {
+        const savePC = this.pc;
+        this.getToken();   // the function
+        const simpleFunctionCall = this.isSimpleFunctionCall(true);
+        this.pc = savePC;
+        if (simpleFunctionCall) {
+          this.getToken();   // the function
+          const v2 = this.runUserFunction$s();
+          if (v2 === null) this.error('No return value');
+          if (this.done) return;
+          const type = v2.getType();
+          if (type === V_VALUE) array[index].setValue(v2.getValue());
+          else array[index].setString(v2.getString());
+        } else
+          array[index].setValue(this.getExpression$s());
+        break;
+      }
+      default:
+        switch (op) {
+          case EQUALS: array[index].setValue(this.getExpression$s()); break;
+          case K_PLUS_EQUAL: array[index].setValue(array[index].getValue() + (this.getExpression$s())); break;
+          case K_MINUS_EQUAL: array[index].setValue(array[index].getValue() - (this.getExpression$s())); break;
+          case K_MUL_EQUAL: array[index].setValue(array[index].getValue() * (this.getExpression$s())); break;
+          case K_DIV_EQUAL: array[index].setValue(array[index].getValue() / (this.getExpression$s())); break;
+          default:
+        }
+    }
+  },
+  doUserFunctionAssignment$s() {
+    this.putTokenBack();
+    const savePC = this.pc;
+    this.getToken();   // the variable
+    this.getToken();   // '='
+    this.getToken();   // the function
+    const simpleAssignment = this.isSimpleFunctionCall(true);
+    this.pc = savePC;
+    if (!simpleAssignment) this.getAssignmentExpression$s();
+    else {
+      this.getToken();
+      let v1 = this.lookupLocalVariable(this.tokenAddress);
+      if (v1 === null) v1 = this.pushNew(this.tokenAddress, 0.0, null, this);
+      this.getToken();
+      if (this.token !== EQUALS) this.error("'=' expected");
+      this.getToken();   // the function
+      const v2 = this.runUserFunction$s();
+      if (v2 === null) this.error('No return value');
+      if (this.done) return;
+      const type = v2.getType();
+      if (type === V_VALUE) v1.setValue(v2.getValue());
+      else if (type === V_ARRAY) { v1.setArray(v2.getArray()); v1.setArraySize(v2.getArraySize()); }
+      else v1.setString(v2.getString());
+    }
+  },
+  doStringAssignment$s() {
+    let v = this.lookupLocalVariable(this.tokenAddress);
+    if (v === null) {
+      if (this.nextToken() === EQUALS) v = this.pushNew(this.tokenAddress, 0.0, null, this);
+      else this.error('Undefined identifier');
+    }
+    this.getToken();
+    if (this.token === EQUALS) v.setString(this.getString$s());
+    else if (this.token === K_PLUS_EQUAL) v.setString(v.getString() + (this.getString$s()));
+    else this.error("'=' or '+=' expected");
+  },
+  doArrayAssignment$s() {
+    let v = this.lookupLocalVariable(this.tokenAddress);
+    if (v === null) {
+      if (this.nextToken() === EQUALS) v = this.pushNew(this.tokenAddress, 0.0, null, this);
+      else this.error('Undefined identifier');
+    }
+    this.getToken();
+    if (this.token !== EQUALS) { this.error("'=' expected"); return; }
+    this.getToken();
+    if (this.token === ARRAY_FUNCTION)
+      v.setArray(this.func.getArrayFunction$s(this.pgm.table[this.tokenAddress].type));
+    else if (this.token === WORD) {
+      const v2 = this.lookupVariable();
+      v.setArray(v2.getArray());
+      v.setArraySize(v2.getArraySize());
+    } else if (this.token === VARIABLE_FUNCTION) {
+      const v2 = this.func.getVariableFunction$s(this.pgm.table[this.tokenAddress].type);
+      const array = v2.getArray();
+      if (array === null) this.error('Array expected');
+      v.setArray(array);
+    } else
+      this.error('Array expected');
+  },
+  doIf$s() {
+    const fast = true;
+    this.looseSyntax = false;
+    const b = fast ? this.getBoolean$s() : this.getBoolean$s();
+    if (b) {
+      this.doStatement$s();
+    } else this.skipStatement();
+    let next = this.nextToken();
+    if (next === SEMI) {
+      this.getToken();
+      next = this.nextToken();
+    }
+    if (next === K_ELSE) {
+      this.getToken();
+      if (b) this.skipStatement();
+      else {
+        this.doStatement$s();
+      }
+    }
+  },
+  getBoolean$s() {
+    this.getLeftParen();
+    const value = this.getLogicalExpression$s();
+    this.checkBoolean(value);
+    this.getRightParen();
+    return value === 0.0 ? false : true;
+  },
+  getLogicalExpression$s() {
+    const v1 = this.getBooleanExpression$s();
+    const next = this.nextToken();
+    if (!(next === K_LOGICAL_AND || next === K_LOGICAL_OR)) return v1;
+    this.checkBoolean(v1);
+    this.getToken();
+    const op = this.token;
+    const v2 = this.getLogicalExpression$s();
+    this.checkBoolean(v2);
+    if (op === K_LOGICAL_AND) return toInt(v1) & toInt(v2);
+    else if (op === K_LOGICAL_OR) return toInt(v1) | toInt(v2);
+    return v1;
+  },
+  getBooleanExpression$s() {
+    let v1 = 0.0, s1 = null;
+    let next = this.pgm.code[this.pc + 1];
+    const tok = next & TOK_MASK;
+    if (tok === STRING_CONSTANT || tok === STRING_FUNCTION || this.isString(this.pc + 1)) {
+      if (this.numericStringFunction(this.pc + 1)) v1 = this.getExpression$s();
+      else s1 = this.getString$s();
+    } else
+      v1 = this.getExpression$s();
+    next = this.nextToken();
+    if (next >= K_EQ && next <= K_LTE) {
+      this.getToken();
+      const op = this.token;
+      if (s1 !== null) return this.compareStrings(s1, this.getString$s(), op);
+      const v2 = this.getExpression$s();
+      switch (op) {
+        case K_EQ: v1 = v1 === v2 ? 1.0 : 0.0; break;
+        case K_NEQ: v1 = v1 !== v2 ? 1.0 : 0.0; break;
+        case K_GT: v1 = v1 > v2 ? 1.0 : 0.0; break;
+        case K_GTE: v1 = v1 >= v2 ? 1.0 : 0.0; break;
+        case K_LT: v1 = v1 < v2 ? 1.0 : 0.0; break;
+        case K_LTE: v1 = v1 <= v2 ? 1.0 : 0.0; break;
+        default:
+      }
+    } else if (s1 !== null) {
+      if (s1 === 'true') v1 = 1.0;
+      else if (s1 === 'false') v1 = 0.0;
+      else v1 = toolsParseDouble(s1, NaN);
+    }
+    return v1;
+  },
+  getAssignmentExpression$s() {
+    const code = this.pgm.code;
+    const tokPlus2 = code[this.pc + 2];
+    if ((code[this.pc + 1] & 0xff) === WORD && (tokPlus2 === EQUALS || tokPlus2 === K_PLUS_EQUAL ||
+        tokPlus2 === K_MINUS_EQUAL || tokPlus2 === K_MUL_EQUAL || tokPlus2 === K_DIV_EQUAL)) {
+      this.getToken();
+      let v = this.lookupLocalVariable(this.tokenAddress);
+      const saveAddress = this.tokenAddress;
+      this.getToken();
+      let value = 0.0;
+      if (this.token === EQUALS) value = this.getAssignmentExpression$s();
+      else {
+        value = v !== null ? v.getValue() : 0.0;
+        switch (this.token) {
+          case K_PLUS_EQUAL: value += this.getAssignmentExpression$s(); break;
+          case K_MINUS_EQUAL: value -= this.getAssignmentExpression$s(); break;
+          case K_MUL_EQUAL: value *= this.getAssignmentExpression$s(); break;
+          case K_DIV_EQUAL: value /= this.getAssignmentExpression$s(); break;
+          default:
+        }
+      }
+      if (v === null) v = this.pushNew(saveAddress, 0.0, null, this);
+      v.setValue(value);
+      return value;
+    }
+    return this.getLogicalExpression$s();
+  },
+  doVar$s() {
+    this.getToken();
+    while (this.token === WORD) {
+      if (this.nextToken() === EQUALS) this.doAssignment$s();
+      else {
+        const v = this.lookupVariableAt(this.tokenAddress);
+        if (v === null) this.pushNew(this.tokenAddress, 0.0, null, this);
+      }
+      this.getToken();
+      if (this.token === COMMA) this.getToken();
+      else { this.putTokenBack(); break; }
+    }
+  },
+  getString$s() {
+    let str = this.getStringTerm$s();
+    for (;;) {
+      this.getToken();
+      if (this.token === C('+')) str += this.getStringTerm$s();
+      else { this.putTokenBack(); break; }
+    }
+    return str;
+  },
+  getStringTerm$s() {
+    let str, v;
+    this.getToken();
+    switch (this.token) {
+      case STRING_CONSTANT:
+        str = this.tokenString;
+        break;
+      case STRING_FUNCTION:
+        str = this.func.getStringFunction$s(this.pgm.table[this.tokenAddress].type);
+        break;
+      case VARIABLE_FUNCTION:
+        if (!this.isString(this.pc)) {
+          this.putTokenBack();
+          str = this.numToString(this.getStringExpression$s());
+          break;
+        }
+        v = this.func.getVariableFunction$s(this.pgm.table[this.tokenAddress].type);
+        str = v.getString();
+        if (str === null) {
+          const value = v.getValue();
+          str = toInt(value) === value ? d2s(value, 0) : javaDouble(value);
+        }
+        break;
+      case USER_FUNCTION:
+        v = this.runUserFunction$s();
+        if (v === null) this.error('No return value');
+        str = v.getString();
+        if (str === null) {
+          const value = v.getValue();
+          str = toInt(value) === value ? d2s(value, 0) : javaDouble(value);
+        }
+        break;
+      case WORD:
+        str = this.lookupStringVariable$s();
+        if (str !== null) break;
+        // falls through
+      default:
+        this.putTokenBack();
+        str = this.numToString(this.getStringExpression$s());
+    }
+    return str;
+  },
+  getExpression$s() {
+    let value = this.getTerm$s();
+    for (;;) {
+      const next = this.nextToken();
+      if (next === 43) { this.getToken(); value += this.getTerm$s(); }
+      else if (next === 45) { this.getToken(); value -= this.getTerm$s(); }
+      else break;
+    }
+    return value;
+  },
+  getTerm$s() {
+    let value = this.getFactor$s();
+    for (;;) {
+      const next = this.nextToken();
+      switch (next) {
+        case 42: this.getToken(); value *= this.getFactor$s(); break;
+        case 47: this.getToken(); value /= this.getFactor$s(); break;
+        case 37: this.getToken(); value %= this.getFactor$s(); break;
+        case 38: this.getToken(); value = toInt(value) & toInt(this.getFactor$s()); break;
+        case 124: this.getToken(); value = toInt(value) | toInt(this.getFactor$s()); break;
+        case 94: this.getToken(); value = toInt(value) ^ toInt(this.getFactor$s()); break;
+        case K_SHIFT_RIGHT: this.getToken(); value = toInt(value) >> toInt(this.getFactor$s()); break;
+        case K_SHIFT_LEFT: this.getToken(); value = toInt(value) << toInt(this.getFactor$s()); break;
+        default: return value;
+      }
+    }
+  },
+  getFactor$s() {
+    let value = 0.0, v = null;
+    this.getToken();
+    switch (this.token) {
+      case NUMBER:
+        value = this.tokenValue;
+        break;
+      case STRING_CONSTANT:
+        value = toolsParseDouble(this.tokenString, NaN);
+        break;
+      case NUMERIC_FUNCTION:
+        value = this.func.getFunctionValue$s(this.pgm.table[this.tokenAddress].type);
+        break;
+      case STRING_FUNCTION: {
+        const str = this.func.getStringFunction$s(this.pgm.table[this.tokenAddress].type);
+        if (this.nextToken() === DOT) {
+          this.getToken();   // '.'
+          this.getToken();   // numericFunction
+          value = this.getNumericStringFunction$s(str);
+        } else
+          value = toolsParseDouble(str, NaN);
+        if ('NaN' === str) value = NaN;
+        else if (value !== value) this.error('Numeric value expected');
+        break;
+      }
+      case VARIABLE_FUNCTION:
+        v = this.func.getVariableFunction$s(this.pgm.table[this.tokenAddress].type);
+        if (v === null) this.error('No return value');
+        if (v.getString() !== null) this.error('Numeric return value expected');
+        else value = v.getValue();
+        break;
+      case USER_FUNCTION:
+        v = this.runUserFunction$s();
+        if (v === null) this.error('No return value');
+        if (this.done) value = 0;
+        else {
+          if (v.getString() !== null) this.error('Numeric return value expected');
+          else value = v.getValue();
+        }
+        break;
+      case K_TRUE: value = 1.0; break;
+      case K_FALSE: value = 0.0; break;
+      case K_PI: value = Math.PI; break;
+      case K_NaN: value = NaN; break;
+      case WORD: {
+        v = this.lookupVariable();
+        if (v === null) return 0.0;
+        let next = this.nextToken();
+        if (next === LSQ) {
+          v = this.getArrayElement$s(v);
+          value = v.getValue();
+          next = this.nextToken();
+          if (next === DOT) {
+            value = this.runNumericFunction$s(v);
+            next = this.nextToken();
+          }
+        } else if (next === DOT) {
+          value = this.runNumericFunction$s(v);
+          next = this.nextToken();
+        } else {
+          if (v.getArray() !== null) {
+            this.getToken();
+            this.error("'[' or '.' expected");
+          }
+          if (this.prefixValue !== 0 && !this.checkingType) {
+            v.setValue(v.getValue() + this.prefixValue);
+            this.prefixValue = 0;
+          }
+          value = v.getValue();
+        }
+        if (!(next === K_PLUS_PLUS || next === K_MINUS_MINUS)) break;
+        this.getToken();
+        if (this.token === K_PLUS_PLUS) v.setValue(v.getValue() + (this.checkingType ? 0 : 1));
+        else v.setValue(v.getValue() - (this.checkingType ? 0 : 1));
+        break;
+      }
+      case LP:
+        value = this.getLogicalExpression$s();
+        this.getRightParen();
+        break;
+      case K_PLUS_PLUS:
+        this.prefixValue = 1;
+        value = this.getFactor$s();
+        break;
+      case K_MINUS_MINUS:
+        this.prefixValue = -1;
+        value = this.getFactor$s();
+        break;
+      case 33:
+        value = this.getFactor$s();
+        if (value === 0.0 || value === 1.0) value = value === 0.0 ? 1.0 : 0.0;
+        else this.error('Boolean expected');
+        break;
+      case 45:
+        value = -(this.getFactor$s());
+        break;
+      case 126:
+        value = ~toInt(this.getFactor$s());
+        break;
+      default:
+        this.error('Number or numeric function expected');
+    }
+    return value;
+  },
+  getNumericStringFunction$s(str) {
+    let value = NaN;
+    if (this.token === WORD) {
+      if (this.tokenString === 'length') { this.getParens(); value = str.length; }
+      else if (this.tokenString === 'contains') value = str.indexOf(this.func.getStringArg$s()) >= 0 ? 1 : 0;
+      else if (this.tokenString === 'charAt') {
+        const i = toInt(this.func.getArg$s());
+        if (i < 0 || i >= str.length) throw new JavaException('java.lang.StringIndexOutOfBoundsException: index ' + i + ', length ' + str.length);
+        value = str.charCodeAt(i);
+      }
+    } else if (this.token === NUMERIC_FUNCTION) {
+      const type = this.pgm.table[this.tokenAddress].type;
+      switch (type) {
+        case K_INDEX_OF: value = this.func.indexOf$s(str); break;
+        case K_LAST_INDEX_OF: value = str.lastIndexOf(this.func.getStringArg$s()); break;
+        case K_STARTS_WITH: value = str.startsWith(this.func.getStringArg$s()) ? 1 : 0; break;
+        case K_ENDS_WITH: value = str.endsWith(this.func.getStringArg$s()) ? 1 : 0; break;
+        case K_MATCHES: value = this.func.matches$s(str); break;
+        default:
+      }
+    } else
+      this.error('Numeric function expected');
+    return value;
+  },
+  getArrayElement$s(v) {
+    const index = this.getIndex$s();
+    const array = v.getArray();
+    if (array === null) this.error('Array expected');
+    if (index < 0 || index >= array.length) {
+      if (array.length === 0) this.error('Empty array');
+      else this.error('Index (' + index + ') out of 0-' + (array.length - 1) + ' range');
+    }
+    return array[index];
+  },
+  runNumericFunction$s(v) {
+    this.getToken();   // '.'
+    this.getToken();
+    if (this.token === WORD && v.getArray() !== null && this.tokenString === 'length') return v.getArraySize();
+    const str = v.getString();
+    if (str === null) this.error('Array or string expected');
+    return this.getNumericStringFunction$s(str);
+  },
+  getStringExpression$s() {
+    let value = this.getTerm$s();
+    for (;;) {
+      this.getToken();
+      if (this.token === 43) {
+        this.getToken();
+        if (this.token === STRING_CONSTANT || this.token === STRING_FUNCTION) {
+          this.putTokenBack();
+          this.putTokenBack();
+          break;
+        }
+        if (this.token === WORD) {
+          const v = this.lookupVariableAt(this.tokenAddress);
+          if (v !== null && v.getString() !== null) {
+            this.putTokenBack();
+            this.putTokenBack();
+            break;
+          }
+        }
+        this.putTokenBack();
+        value += this.getTerm$s();
+      } else if (this.token === 45)
+        value -= this.getTerm$s();
+      else {
+        this.putTokenBack();
+        break;
+      }
+    }
+    return value;
+  },
+  lookupStringVariable$s() {
+    if (this.stack === null) { this.undefined_(); return ''; }
+    let found = false, str = null;
+    for (let i = this.topOfStack; i >= 0; i--) {
+      if (this.stack[i].symTabIndex === this.tokenAddress) {
+        const v = this.stack[i];
+        found = true;
+        const next = this.nextToken();
+        if (next === LSQ) {
+          const savePC = this.pc;
+          const index = this.getIndex$s();
+          const array = v.getArray();
+          if (array === null) this.error('Array expected');
+          if (index < 0 || index >= array.length) this.error('Index (' + index + ') out of 0-' + (array.length - 1) + ' range');
+          str = array[index].getString();
+          const next2 = this.nextToken();
+          if (str !== null) {
+            if (next2 === DOT) str = this.runStringFunction$s(str);
+          } else {
+            if (next2 === RP || next2 === SEMI) str = this.numToString(array[index].getValue());
+            else {
+              this.pc = savePC - 1;
+              this.getToken();
+            }
+          }
+        } else if (next === DOT) {
+          if (v.getString() !== null) str = this.runStringFunction$s(v.getString());
+        } else {
+          if (v.getArray() !== null) { this.getToken(); this.error("'[' or '.' expected"); }
+          str = v.getString();
+        }
+        break;
+      }
+    }
+    if (!found) this.undefined_();
+    return str;
+  },
+  runStringFunction$s(str) {
+    this.getToken();   // '.'
+    this.getToken();
+    if (this.token === WORD) {
+      if (this.tokenString === 'length') { this.getParens(); str = '' + str.length; }
+      else if (this.tokenString === 'contains') str = '' + (str.indexOf(this.func.getStringArg$s()) >= 0);
+      else if (this.tokenString === 'replaceAll') str = this.func.replace$s(str);
+      else str = null;
+    } else if (this.token === NUMERIC_FUNCTION) {
+      const type = this.pgm.table[this.tokenAddress].type;
+      switch (type) {
+        case K_INDEX_OF: str = '' + (this.func.indexOf$s(str)); break;
+        case K_LAST_INDEX_OF: str = '' + str.lastIndexOf(this.func.getStringArg$s()); break;
+        case K_STARTS_WITH: str = '' + str.startsWith(this.func.getStringArg$s()); break;
+        case K_ENDS_WITH: str = '' + str.endsWith(this.func.getStringArg$s()); break;
+        case K_MATCHES: str = javaDouble(this.func.matches$s(str)); break;
+        default: str = null;
+      }
+    } else if (this.token === STRING_FUNCTION) {
+      const type = this.pgm.table[this.tokenAddress].type;
+      switch (type) {
+        case K_SUBSTRING: str = this.func.substring$s(str); break;
+        case K_TO_LOWER_CASE: this.getParens(); str = str.toLowerCase(); break;
+        case K_TO_UPPER_CASE: this.getParens(); str = str.toUpperCase(); break;
+        case K_REPLACE: str = this.func.replace$s(str); break;
+        case K_TRIM: this.getParens(); str = javaTrim(str); break;
+        case K_CHARAT: {
+          const index = toInt(this.func.getArg$s());
+          this.func.checkIndex(index, 0, str.length - 1);
+          str = str.charAt(index);
+          break;
+        }
+        default: str = null;
+      }
+    } else
+      str = null;
+    if (str === null) this.error('String function expected');
+    return str;
+  },
+  getIndex$s() {
+    this.getToken();
+    if (this.token !== LSQ) this.error("'['expected");
+    const index = toInt(this.getExpression$s());
+    this.getToken();
+    if (this.token !== RSQ) this.error("']' expected");
+    return index;
+  },
 });
+Object.assign(Functions.prototype, {
+  doFunction$s(type) {
+    const fn = BUILTINS_S.do.get(type);
+    if (fn === undefined) { this.notAvailable(type, 'do'); return; }
+    const r = fn(this);
+    syncResult(r);
+  },
+  getFunctionValue$s(type) {
+    const fn = BUILTINS_S.num.get(type);
+    if (fn === undefined) return this.notAvailable(type, 'num');
+    const r = fn(this);
+    return syncResult(r);
+  },
+  getStringFunction$s(type) {
+    const fn = BUILTINS_S.str.get(type);
+    if (fn === undefined) return this.notAvailable(type, 'str');
+    const r = fn(this);
+    return syncResult(r);
+  },
+  getArrayFunction$s(type) {
+    const fn = BUILTINS_S.arr.get(type);
+    if (fn === undefined) return this.notAvailable(type, 'arr');
+    const r = fn(this);
+    return syncResult(r);
+  },
+  getVariableFunction$s(type) {
+    const fn = BUILTINS_S.variable.get(type);
+    if (fn === undefined) { this.notAvailable(type, 'variable'); return Variable.num(NaN); }
+    const r = fn(this);
+    let v = syncResult(r);
+    if (v === null || v === undefined) v = Variable.num(NaN);
+    return v;
+  },
+  hostCall$s(name, args) {
+    const host = this.interp.ctx.host;
+    if (!host || typeof host.call !== 'function') {
+      this.interp.error('Function not available in the browser: ' + name);
+      return null;
+    }
+    const v = this.hostHook$s(() => host.call(name, args || [], this.interp.ctx));
+    return v === undefined ? null : v;
+  },
+  hostHook$s(fn) {
+    try {
+      let v = fn();
+      if (isThenable(v)) v = (syncAwait(v));
+      return v;
+    } catch (e) {
+      if (e instanceof MacroCancel || e instanceof SyncViolation) throw e;
+      this.interp.error(String(e && e.message !== undefined ? e.message : e));
+      return undefined;
+    }
+  },
+  showMessage$s(title, text) { this.hostHook$s(() => this.interp.ctx.showMessage(title, text)); },
+  getArg$s() {
+    const it = this.interp;
+    it.getLeftParen();
+    const arg = it.getExpression$s();
+    it.getRightParen();
+    return arg;
+  },
+  getFirstArg$s() { this.interp.getLeftParen(); return this.interp.getExpression$s(); },
+  getNextArg$s() { this.interp.getComma(); return this.interp.getExpression$s(); },
+  getLastArg$s() {
+    this.interp.getComma();
+    const arg = this.interp.getExpression$s();
+    this.interp.getRightParen();
+    return arg;
+  },
+  getString$s() {
+    let str = this.interp.getStringTerm$s();
+    for (;;) {
+      this.interp.getToken();
+      if (this.interp.token === 43) str += this.interp.getStringTerm$s();
+      else { this.interp.putTokenBack(); break; }
+    }
+    return str;
+  },
+  getStringArg$s() {
+    this.interp.getLeftParen();
+    const arg = this.getString$s();
+    this.interp.getRightParen();
+    return arg;
+  },
+  getFirstString$s() { this.interp.getLeftParen(); return this.getString$s(); },
+  getNextString$s() { this.interp.getComma(); return this.getString$s(); },
+  getLastString$s() {
+    this.interp.getComma();
+    const arg = this.getString$s();
+    this.interp.getRightParen();
+    return arg;
+  },
+  getBooleanArg$s() {
+    const it = this.interp;
+    it.getLeftParen();
+    const arg = it.getBooleanExpression$s();
+    it.checkBoolean(arg);
+    it.getRightParen();
+    return arg === 0 ? false : true;
+  },
+  getVariable$s() {
+    const it = this.interp;
+    it.getToken();
+    if (it.token !== WORD) it.error('Variable expected');
+    let v = it.lookupLocalVariable(it.tokenAddress);
+    if (v === null) v = it.pushNew(it.tokenAddress, 0.0, null, it);
+    const array = v.getArray();
+    if (array !== null) {
+      const index = it.getIndex$s();
+      this.checkIndex(index, 0, v.getArraySize() - 1);
+      v = array[index];
+    }
+    return v;
+  },
+  getFirstVariable$s() { this.interp.getLeftParen(); return this.getVariable$s(); },
+  getNextVariable$s() { this.interp.getComma(); return this.getVariable$s(); },
+  getLastVariable$s() {
+    this.interp.getComma();
+    const v = this.getVariable$s();
+    this.interp.getRightParen();
+    return v;
+  },
+  getArray$s() {
+    const it = this.interp;
+    it.getToken();
+    const newArray = it.token === ARRAY_FUNCTION && this.pgm.table[it.tokenAddress].type === K_NEW_ARRAY;
+    const arrayFunction = it.token === ARRAY_FUNCTION;
+    if (!(it.token === WORD || newArray || arrayFunction)) it.error('Array expected');
+    let a = null;
+    if (newArray) a = this.getArrayFunction$s(K_NEW_ARRAY);
+    else if (arrayFunction) a = this.getArrayFunction$s(this.pgm.table[it.tokenAddress].type);
+    else {
+      const v = it.lookupVariable();
+      a = v.getArray();
+      const size = v.getArraySize();
+      if (a !== null && a.length !== size) {
+        v.setArray(a.slice(0, size));
+        a = v.getArray();
+      }
+    }
+    if (a === null) it.error('Array expected');
+    return a;
+  },
+  getNumericArray$s() { return (this.getArray$s()).map((v) => v.getValue()); },
+  getFirstArray$s() { this.interp.getLeftParen(); return this.getNumericArray$s(); },
+  getNextArray$s() { this.interp.getComma(); return this.getNumericArray$s(); },
+  getLastArray$s() {
+    this.interp.getComma();
+    const a = this.getNumericArray$s();
+    this.interp.getRightParen();
+    return a;
+  },
+  getStringFunctionArg$s(s) {
+    if (s === null) {
+      s = this.getFirstString$s();
+      this.interp.getComma();
+    } else
+      this.interp.getLeftParen();
+    return s;
+  },
+  substring$s(s) {
+    const it = this.interp;
+    s = this.getStringFunctionArg$s(s);
+    const index1 = toInt(it.getExpression$s());
+    let index2 = s.length;
+    if (it.nextToken() === COMMA) index2 = toInt(this.getLastArg$s());
+    else it.getRightParen();
+    if (index1 > index2) it.error('beginIndex>endIndex');
+    this.checkIndex(index1, 0, s.length);
+    this.checkIndex(index2, 0, s.length);
+    return s.substring(index1, index2);
+  },
+  indexOf$s(s1) {
+    const it = this.interp;
+    s1 = this.getStringFunctionArg$s(s1);
+    const s2 = this.getString$s();
+    let fromIndex = 0;
+    if (it.nextToken() === COMMA) {
+      fromIndex = toInt(this.getLastArg$s());
+      this.checkIndex(fromIndex, 0, s1.length - 1);
+    } else
+      it.getRightParen();
+    return fromIndex === 0 ? s1.indexOf(s2) : s1.indexOf(s2, fromIndex);
+  },
+  replace$s(s1) {
+    s1 = this.getStringFunctionArg$s(s1);
+    const s2 = this.getString$s();
+    const s3 = this.getLastString$s();
+    if (s2.length === 1) {
+      let sb = '';
+      for (let i = 0; i < s1.length; i++) {
+        const c = s1.charAt(i);
+        sb += c === s2.charAt(0) ? s3 : c;
+      }
+      return sb;
+    }
+    try {
+      return javaReplaceAll(s1, s2, s3);
+    } catch (e) {
+      if (isInternalFault(e)) throw e;
+      this.interp.error('' + (e && e.javaMessage ? e.javaMessage : e));
+      return null;
+    }
+  },
+  getStringArray$s() {
+    return (this.getArray$s()).map((v) => {
+      const s = v.getString();
+      return s === null ? javaDouble(v.getValue()) : s;
+    });
+  },
+  matches$s(str) {
+    str = this.getStringFunctionArg$s(str);
+    const regex = this.getString$s();
+    this.interp.getRightParen();
+    try {
+      return javaRegex(regex, true).test(str) ? 1.0 : 0.0;
+    } catch (e) {
+      if (isInternalFault(e)) throw e;
+      this.interp.error('' + (e && e.javaMessage ? e.javaMessage : e));
+      return 0.0;
+    }
+  },
+});
+function printFn$s(f) {
+  const it = f.interp;
+  it.inPrint = true;
+  let s = f.getFirstString$s();
+  if (it.nextToken() === COMMA) {
+    if (s.startsWith('[') && s.endsWith(']')) {
+      const title = s.substring(1, s.length - 1);
+      const s2 = f.getLastString$s();
+      const host = it.ctx.host;
+      if (host && typeof host.printToWindow === 'function') f.hostHook$s(() => host.printToWindow(title, s2));
+      else it.error('Window not found');
+      return;
+    } else if (s === '~0~') {
+      if (f.writer === null) it.error('File not open');
+      f.getLastString$s();
+      it.inPrint = false;
+      return;
+    }
+    let sb = s;
+    do {
+      sb += ' ' + (f.getNextString$s());
+    } while (it.nextToken() === COMMA);
+    s = sb;
+  }
+  it.getRightParen();
+  it.log(s);
+  it.inPrint = false;
+}
+defineS('do', K_PRINT, printFn$s, { suspends: printSuspends });
+defineS('do', K_WRITE, printFn$s, { suspends: printSuspends });
+defineS('do', K_DUMP, (f) => { f.interp.dump(); });
+function hostVersion$s(f, host) {
+  if (host && typeof host.getVersion === 'function') {
+    const v = f.hostHook$s(() => host.getVersion());
+    if (v !== undefined && v !== null) return '' + v;
+  }
+  return IMAGEJ_VERSION;
+}
+defineS('do', K_REQUIRES, function (f) {
+  const version = f.getStringArg$s();
+  const host = f.interp.ctx.host;
+  const current = hostVersion$s(f, host);
+  if (compareTo(current, version) < 0) {
+    f.showMessage$s('ImageJ', 'This plugin or macro requires ImageJ ' + version + ' or later. Use\nHelp>Update ImageJ to upgrade to the latest version.');
+    f.interp.done = true;
+  }
+}, { suspends: true });
+defineS('do', K_EXIT, function (f) {
+  const it = f.interp;
+  let msg = null;
+  if (it.nextToken() === LP) {
+    it.getLeftParen();
+    if (it.nextToken() !== RP) msg = f.getString$s();
+    it.getRightParen();
+  }
+  it.finishUp();
+  if (msg !== null) f.showMessage$s('Macro', msg);
+  throw new MacroCancel('exit');
+}, { suspends: exitSuspends });
+function mathFn$s(f, type) {
+  const arg = f.getArg$s();
+  switch (type) {
+    case K_ABS: return Math.abs(arg);
+    case K_COS: return Math.cos(arg);
+    case K_EXP: return Math.exp(arg);
+    case K_FLOOR: return Math.floor(arg);
+    case K_LOG: return Math.log(arg);
+    case K_ROUND: return Math.floor(arg + 0.5);
+    case K_SIN: return Math.sin(arg);
+    case K_SQRT: return Math.sqrt(arg);
+    case K_TAN: return Math.tan(arg);
+    case K_ATAN: return Math.atan(arg);
+    case K_ASIN: return Math.asin(arg);
+    case K_ACOS: return Math.acos(arg);
+    default: return 0.0;
+  }
+}
+for (const id of [K_ABS, K_COS, K_EXP, K_FLOOR, K_LOG, K_ROUND, K_SIN, K_SQRT, K_TAN, K_ATAN, K_ASIN, K_ACOS])
+  defineS('num', id, (f) => mathFn$s(f, id));
+function math2Fn$s(f, type) {
+  const a1 = f.getFirstArg$s();
+  const a2 = f.getLastArg$s();
+  switch (type) {
+    case K_MIN_OF: return javaMin(a1, a2);
+    case K_MAX_OF: return javaMax(a1, a2);
+    case K_POW: return javaPow(a1, a2);
+    case K_ATAN2: return Math.atan2(a1, a2);
+    default: return 0.0;
+  }
+}
+for (const id of [K_MAX_OF, K_MIN_OF, K_POW, K_ATAN2]) defineS('num', id, (f) => math2Fn$s(f, id));
+defineS('num', K_MATH, function (f) {
+  const it = f.interp;
+  it.getToken();
+  if (it.token !== DOT) it.error("'.' expected");
+  it.getToken();
+  if (!(it.token === WORD || it.token === NUMERIC_FUNCTION)) it.error('Function name expected: ');
+  const name = it.tokenString;
+  if (name === 'min') return javaMin(f.getFirstArg$s(), f.getLastArg$s());
+  if (name === 'max') return javaMax(f.getFirstArg$s(), f.getLastArg$s());
+  if (name === 'pow') return javaPow(f.getFirstArg$s(), f.getLastArg$s());
+  if (name === 'atan2') return Math.atan2(f.getFirstArg$s(), f.getLastArg$s());
+  if (name === 'constrain') {
+    const a = f.getFirstArg$s(), b = f.getNextArg$s(), c = f.getLastArg$s();
+    return javaMin(javaMax(a, b), c);
+  }
+  if (name === 'map') {
+    const value = f.getFirstArg$s();
+    const fromLow = f.getNextArg$s();
+    const fromHigh = f.getNextArg$s();
+    const toLow = f.getNextArg$s();
+    const toHigh = f.getLastArg$s();
+    return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow;
+  }
+  const arg = f.getArg$s();
+  switch (name) {
+    case 'ceil': return Math.ceil(arg);
+    case 'abs': return Math.abs(arg);
+    case 'cos': return Math.cos(arg);
+    case 'exp': return Math.exp(arg);
+    case 'floor': return Math.floor(arg);
+    case 'log': return Math.log(arg);
+    case 'log10': return log10Java(arg);
+    case 'round': return javaRound(arg);
+    case 'sin': return Math.sin(arg);
+    case 'sqr': return arg * arg;
+    case 'sqrt': return Math.sqrt(arg);
+    case 'tan': return Math.tan(arg);
+    case 'atan': return Math.atan(arg);
+    case 'asin': return Math.asin(arg);
+    case 'acos': return Math.acos(arg);
+    case 'erf': return erf(arg);
+    case 'toRadians': return arg * 0.017453292519943295;
+    case 'toDegrees': return arg * 57.29577951308232;
+    default:
+      it.error('Unrecognized function name');
+      return NaN;
+  }
+});
+defineS('num', K_IS_NAN, function (f) { const v = f.getArg$s(); return v !== v ? 1 : 0; });
+defineS('num', K_GET_TIME, (f) => { f.interp.getParens(); return Date.now(); });
+defineS('num', K_PARSE_FLOAT, function (f) { return parseDoubleFn(f.getStringArg$s()); });
+defineS('num', K_PARSE_INT, function (f) {
+  const it = f.interp;
+  const s = f.getFirstString$s();
+  let radix = 10;
+  if (it.nextToken() === COMMA) {
+    it.getComma();
+    radix = toInt(it.getExpression$s());
+    if (radix < 2 || radix > 36) radix = 10;
+  }
+  it.getRightParen();
+  let n;
+  if (radix === 10) {
+    n = parseDoubleFn(s);
+    if (n === n) n = javaRound(n);
+  } else {
+    // Integer.parseInt(s, radix): optional sign, digits of the radix, fits an int
+    const digits = '0123456789abcdefghijklmnopqrstuvwxyz'.slice(0, radix);
+    const m = /^([+-]?)(.+)$/.exec(s);
+    n = NaN;
+    if (m && [...m[2].toLowerCase()].every((c) => digits.indexOf(c) >= 0)) {
+      let v = 0n;
+      for (const c of m[2].toLowerCase()) v = v * BigInt(radix) + BigInt(digits.indexOf(c));
+      if (m[1] === '-') v = -v;
+      if (v >= -2147483648n && v <= 2147483647n) n = Number(v);
+    }
+  }
+  return n;
+});
+defineS('num', K_LENGTH_OF, function (f) {
+  const it = f.interp, code = f.pgm.code;
+  let length = 0;
+  it.getLeftParen();
+  switch (it.nextToken()) {
+    case STRING_CONSTANT: case STRING_FUNCTION: case USER_FUNCTION:
+      length = (f.getString$s()).length;
+      break;
+    case WORD: {
+      if (code[it.pc + 2] === LSQ) { length = (f.getString$s()).length; break; }
+      it.getToken();
+      const v = it.lookupVariable();
+      if (v === null) return 0.0;
+      const s = v.getString();
+      if (s !== null) length = s.length;
+      else {
+        const array = v.getArray();
+        if (array !== null) length = v.getArraySize();
+        else it.error('String or array expected');
+      }
+      break;
+    }
+    default:
+      it.error('String or array expected');
+  }
+  it.getRightParen();
+  return length;
+});
+defineS('num', K_INDEX_OF, (f) => f.indexOf$s(null));
+defineS('num', K_LAST_INDEX_OF, function (f) { return (f.getFirstString$s()).lastIndexOf(f.getLastString$s()); });
+defineS('num', K_STARTS_WITH, function (f) { const a = f.getFirstString$s(); return a.startsWith(f.getLastString$s()) ? 1 : 0; });
+defineS('num', K_ENDS_WITH, function (f) { const a = f.getFirstString$s(); return a.endsWith(f.getLastString$s()) ? 1 : 0; });
+defineS('num', K_MATCHES, (f) => f.matches$s(null));
+defineS('num', K_CHAR_CODE_AT, function (f) {
+  const str = f.getFirstString$s();
+  const index = toInt(f.getLastArg$s());
+  f.checkIndex(index, 0, str.length - 1);
+  return str.charCodeAt(index);
+});
+defineS('str', K_D2S, function (f) {
+  const x = f.getFirstArg$s();
+  return d2s(x, toInt(f.getLastArg$s()));
+});
+defineS('str', K_TO_HEX, function (f) { return (toInt(f.getArg$s()) >>> 0).toString(16); });
+defineS('str', K_TO_BINARY, function (f) { return (toInt(f.getArg$s()) >>> 0).toString(2); });
+defineS('str', K_SUBSTRING, (f) => f.substring$s(null));
+defineS('str', K_REPLACE, (f) => f.replace$s(null));
+defineS('str', K_TO_LOWER_CASE, function (f) { return (f.getStringArg$s()).toLowerCase(); });
+defineS('str', K_TO_UPPER_CASE, function (f) { return (f.getStringArg$s()).toUpperCase(); });
+defineS('str', K_TRIM, function (f) {
+  if (f.interp.nextToken() === EQUALS) f.interp.error("'trim' is a reserved word");
+  return javaTrim(f.getStringArg$s());
+});
+defineS('str', K_FROM_CHAR_CODE, function (f) {
+  const it = f.interp;
+  let s = '', count = 0;
+  it.getLeftParen();
+  while (it.nextToken() !== RP) {
+    const value = toInt(it.getExpression$s());
+    if (value < 0 || value > 65535) it.error('Value (' + value + ') out of 0-65535 range');
+    if (count === 100) throw new JavaException('java.lang.ArrayIndexOutOfBoundsException: Index 100 out of bounds for length 100');   // Functions.fromCharCode: char[100]
+    count++;
+    s += String.fromCharCode(value);
+    if (it.nextToken() === COMMA) it.getToken();
+  }
+  it.getRightParen();
+  return s;
+});
+defineS('str', K_TO_STRING, function (f) {
+  const it = f.interp;
+  it.getLeftParen();
+  if (it.nextNextToken() === COMMA) {   // toString(number, decimalPlaces)
+    const n = it.getExpression$s();
+    const digits = toInt(f.getLastArg$s());
+    return d2s(n, digits);
+  }
+  let s = f.getString$s();
+  it.getToken();
+  if (it.token === COMMA) {
+    const value = toolsParseDouble(s, NaN);
+    s = d2s(value, toInt(it.getExpression$s()));
+    it.getToken();
+  }
+  if (it.token !== RP) it.error("')' expected");
+  return s;
+});
+defineS('str', K_GET_ARGUMENT, (f) => { f.interp.getParens(); return f.interp.argument !== null ? f.interp.argument : ''; });
+defineS('str', K_GET_VERSION, function (f) {
+  f.interp.getParens();
+  return hostVersion$s(f, f.interp.ctx.host);
+}, { suspends: 'host' });
+defineS('arr', K_NEW_ARRAY, function (f) {
+  const it = f.interp;
+  if (it.nextToken() !== LP || it.nextNextToken() === RP) {
+    it.getParens();
+    return [];
+  }
+  it.getLeftParen();
+  const vector = [];
+  do {
+    const v = new Variable();
+    if (f.isStringArg()) v.setString(f.getString$s());
+    else v.setValue(it.getExpression$s());
+    vector.push(v);
+    it.getToken();
+  } while (it.token === COMMA);
+  if (it.token !== RP) it.error("';' expected");
+  if (vector.length === 1 && vector[0].getString() === null) {
+    const size = toInt(vector[0].getValue());
+    if (size < 0) it.error('Negative array size');
+    checkArraySize(it, size);
+    const array2 = new Array(size);
+    for (let i = 0; i < size; i++) array2[i] = new Variable();
+    return array2;
+  }
+  return vector;
+});
+function runNestedMacro$s(f, code, arg) {
+  const outer = f.interp;
+  const nested = new Interpreter(outer.ctx);
+  nested.argument = arg;
+  nested.calledMacro = true;
+  try {
+    nested.run$s(code);
+    return nested.returnValue;
+  } catch (e) {
+    if (e instanceof MacroCancel && e.kind === 'abort') throw e;
+    if (isInternalFault(e)) throw e;
+    if (e instanceof MacroCancel && e.kind === 'error' && nested.wasError && !nested.errorSilent)
+      f.hostHook$s(() => outer.ctx.showError(nested.errorDialogText()));
+    return '[aborted]';   // Macro_Runner.runMacro: a canceled or failed macro
+  }
+}
+defineS('str', K_EVAL, function (f) {
+  const it = f.interp;
+  it.getLeftParen();
+  const name = f.getString$s();
+  let arg = null;
+  if (it.nextToken() === COMMA) { it.getComma(); arg = f.getString$s(); }
+  it.getRightParen();
+  if (arg !== null && (name === 'script' || name === 'js')) {
+    f.showMessage$s('Macro', 'Could not find JavaScript engine');
+    return '';
+  }
+  if (arg !== null && (name === 'bsh' || name === 'python')) return f.notAvailable(K_EVAL, 'str');
+  return runNestedMacro$s(f, name, arg);
+}, { suspends: true });
+defineS('str', K_RUN_MACRO, function (f) {
+  const it = f.interp;
+  it.getLeftParen();
+  const name = f.getString$s();
+  let arg = null;
+  if (it.nextToken() === COMMA) { it.getComma(); arg = f.getString$s(); }
+  it.getRightParen();
+  const host = it.ctx.host;
+  if (host && typeof host.runMacroFile === 'function') {
+    const src = f.hostHook$s(() => host.runMacroFile(name, arg));
+    if (src === null || src === undefined) return null;
+    return runNestedMacro$s(f, String(src), arg);
+  }
+  f.showMessage$s('Macro Runner', 'Macro or script not found:\n \n' + name);
+  return null;
+}, { suspends: true });
+defineS('num', K_RANDOM, function (f) {
+  const it = f.interp;
+  let dseed = NaN, gaussian = false;
+  if (it.nextToken() === LP) {
+    it.getLeftParen();
+    if (f.isStringArg()) {
+      const arg = (f.getString$s()).toLowerCase();
+      if (arg === 'seed') {
+        it.getComma();
+        dseed = it.getExpression$s();
+        let seed;
+        if (dseed !== dseed) seed = 0n;
+        else if (dseed >= 9223372036854775807) seed = 9223372036854775807n;
+        else if (dseed <= -9223372036854775808) seed = -9223372036854775808n;
+        else seed = BigInt(Math.trunc(dseed));
+        if (Number(seed) !== dseed) it.error('Seed not integer');
+        f.ran = new JavaRandom(seed);
+        it.ctx.imageRandomSeed = Number(seed);
+      } else if (arg === 'gaussian') gaussian = true;
+      else it.error("'seed' or ''gaussian' expected");
+    }
+    it.getRightParen();
+    if (dseed === dseed) return NaN;
+  }
+  it.ctx.imageRandomSeed = NaN;
+  it.getParens();
+  if (f.ran === null || f.ran === undefined) f.ran = new JavaRandom();
+  return gaussian ? f.ran.nextGaussian() : f.ran.nextDouble();
+});
+defineS('arr', K_SPLIT, function (f) {
+  const it = f.interp;
+  const s1 = f.getFirstString$s();
+  let s2 = null;
+  if (it.nextToken() === RP) it.getRightParen();
+  else s2 = f.getLastString$s();
+  let strings;
+  try {
+    if (s1.length > 0 && s2 !== null && (s2 === ',' || s2 === ';')) strings = javaSplit(s1, s2);
+    else if (s1.length > 0 && s2 !== null && s2.length >= 3 && s2.startsWith('(') && s2.endsWith(')'))
+      strings = javaSplit(s1, s2.substring(1, s2.length - 1));
+    else strings = (s2 === null || s2 === '') ? toolsSplit(s1) : toolsSplit(s1, s2);
+  } catch (e) {
+    if (isInternalFault(e)) throw e;
+    it.error(errText(e));
+    return [];
+  }
+  return strings.map((x) => Variable.string(x));
+});
+function padFn$s(f) {
+  const it = f.interp;
+  let stringArg = null, intArg = 0;
+  it.getLeftParen();
+  if (f.isStringArg()) stringArg = f.getString$s();
+  else intArg = toInt(it.getExpression$s());
+  const digits = toInt(f.getLastArg$s());
+  checkStringSize(it, digits);
+  return stringArg !== null ? ijPad(stringArg, digits) : ijPad('' + intArg, digits);
+}
+defineS('str', K_LIST, function (f) {
+  const it = f.interp;
+  it.getToken();
+  if (it.token !== DOT) it.error("'.' expected");
+  it.getToken();
+  if (!(it.token === WORD || it.token === ARRAY_FUNCTION || it.token === NUMERIC_FUNCTION)) it.error('Function name expected: ');
+  if (f.props === null) f.props = new Map();
+  const props = f.props;
+  let value = null;
+  const name = it.tokenString;
+  if (name === 'get') {
+    const v = props.get(f.getStringArg$s());
+    value = v !== undefined ? v : '';
+  } else if (name === 'getValue') {
+    const v = props.get(f.getStringArg$s());
+    if (v === undefined) it.error('Value not found');
+    value = v === undefined ? null : v;
+  } else if (name === 'set' || name === 'add' || name === 'put') {
+    const key = f.getFirstString$s();
+    props.set(key, f.getLastString$s());
+  } else if (name === 'clear' || name === 'reset') {
+    it.getParens();
+    props.clear();
+  } else if (name === 'setList') {
+    const list = f.getStringArg$s();
+    props.clear();
+    try {
+      for (const [k, v] of loadProperties(list)) props.set(k, v);
+    } catch (e) { if (isInternalFault(e)) throw e; it.error(errText(e)); }
+  } else if (name === 'getList') {
+    it.getParens();
+    value = sortedKeys(props).map((k) => k + '=' + props.get(k) + '\n').join('');
+  } else if (name === 'size' || name === 'getSize') {
+    it.getParens();
+    value = '' + props.size;
+  } else if (name === 'setMeasurements' || name === 'setCommands') {
+    let arg = null;
+    if (name === 'setMeasurements') {
+      arg = '';
+      if (it.nextToken() === LP) {
+        it.getLeftParen();
+        if (it.nextToken() !== RP) arg = (f.getString$s()).toLowerCase();
+        it.getRightParen();
+      }
+    } else it.getParens();
+    const r = f.hostCall$s('List.' + name, arg === null ? [] : [arg]);
+    props.clear();
+    if (r && typeof r === 'object') for (const k of Object.keys(r)) props.set(k, String(r[k]));
+  } else if (name === 'indexOf') {
+    const key = f.getStringArg$s();
+    value = '' + sortedKeys(props).indexOf(key);
+  } else if (name === 'fromArrays') {
+    it.getLeftParen();
+    const keys = f.getStringArray$s();
+    it.getComma();
+    const values = f.getStringArray$s();
+    if (values.length !== keys.length) it.error('Arrays must have same length');
+    props.clear();
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i] === '') it.error('Key cannot be an empty string');
+      props.set(keys[i], values[i]);
+    }
+    it.getRightParen();
+  } else if (name === 'toArrays') {
+    const keys = f.getFirstArrayVariable();
+    const values = f.getLastArrayVariable();
+    const ks = sortedKeys(props);
+    keys.setArray(ks.map((k) => Variable.string(k)));
+    values.setArray(ks.map((k) => Variable.string(props.get(k))));
+  } else it.error('Unrecognized List function');
+  return value;
+}, { suspends: { setMeasurements: 'host', setCommands: 'host' } });
+defineS('str', K_STRING, function (f) {
+  const it = f.interp;
+  it.getToken();
+  if (it.token !== DOT) it.error("'.' expected");
+  it.getToken();
+  if (!(it.token === WORD || it.token === STRING_FUNCTION)) it.error('Function name expected: ');
+  const name = it.tokenString;
+  switch (name) {
+    case 'append': {
+      const text = f.getStringArg$s();
+      f.buffer = (f.buffer === null ? '' : f.buffer) + text;
+      return null;
+    }
+    case 'resetBuffer': it.getParens(); f.buffer = ''; return null;
+    case 'buffer': it.getParens(); if (f.buffer === null) f.buffer = ''; return f.buffer;
+    case 'join': {
+      it.getLeftParen();
+      const arr = f.getArray$s();
+      let delimiter = ', ';
+      if (it.nextToken() === COMMA) delimiter = f.getNextString$s();
+      it.getRightParen();
+      return joinArray(arr, delimiter);
+    }
+    case 'trim': return javaTrim(f.getStringArg$s());
+    case 'pad': return padFn$s(f);
+    case 'format': {
+      let result = null;
+      try {
+        const command = f.getFirstString$s();
+        const params = [];
+        while (it.nextToken() === COMMA) params.push(f.getNextArg$s());
+        it.getRightParen();
+        result = javaFormat(command, params);
+      } catch (e) {
+        if (e instanceof JavaEx) it.error('' + e);
+        else throw e;
+      }
+      return result;
+    }
+    case 'copy': { const text = f.getStringArg$s(); f.hostCall$s('String.copy', [text]); return null; }
+    case 'paste': it.getParens(); return f.hostCall$s('String.paste', []);
+    case 'show': { const text = f.getStringArg$s(); f.hostCall$s('String.show', [text]); return null; }
+    case 'copyResults': it.getParens(); f.hostCall$s('String.copyResults', []); return null;
+    case 'getResultsHeadings': it.getParens(); return f.hostCall$s('String.getResultsHeadings', []);
+    case 'setFontSize': { const size = toInt(f.getArg$s()); f.hostCall$s('String.setFontSize', [size]); return null; }
+    default: it.error('Unrecognized String function'); return null;
+  }
+}, { suspends: { copy: 'host', paste: 'host', show: 'host', copyResults: 'host', getResultsHeadings: 'host', setFontSize: 'host' } });
+defineS('str', K_IJ_CALL, function (f) {
+  const it = f.interp;
+  it.getToken();
+  if (it.token !== DOT) it.error("'.' expected");
+  it.getToken();
+  if (!(it.token === WORD || it.token === NUMERIC_FUNCTION)) it.error('Function name expected: ');
+  const name = it.tokenString;
+  switch (name) {
+    case 'pad': return padFn$s(f);
+    case 'deleteRows': {
+      const first = toInt(f.getFirstArg$s()), last = toInt(f.getLastArg$s());
+      f.hostCall$s('IJ.deleteRows', [first, last]);
+      return null;
+    }
+    case 'log': it.log(f.getStringArg$s()); return null;
+    case 'freeMemory': case 'currentMemory': case 'maxMemory': case 'getToolName': {
+      it.getParens();
+      const r = f.hostCall$s('IJ.' + name, []);
+      return r === null || r === undefined ? null : '' + r;
+    }
+    case 'redirectErrorMessages': it.getParens(); return null;
+    case 'renameResults': {
+      const arg1 = f.getFirstString$s();
+      let arg2 = null;
+      if (it.nextToken() === RP) it.getRightParen(); else arg2 = f.getLastString$s();
+      f.hostCall$s('IJ.renameResults', arg2 !== null ? [arg1, arg2] : [arg1]);
+      return null;
+    }
+    case 'getFullVersion': {
+      it.getParens();
+      const host = it.ctx.host;
+      if (host && typeof host.getFullVersion === 'function') {
+        const full = f.hostHook$s(() => host.getFullVersion());
+        if (full !== undefined) return '' + full;
+      }
+      return IMAGEJ_VERSION + '99';   // ImageJ.VERSION + ImageJ.BUILD ("99" marks a release)
+    }
+    case 'checksum': {
+      let method = f.getFirstString$s();
+      const src = f.getLastString$s();
+      method = method.toUpperCase();
+      const file = method.indexOf('FILE') >= 0, str = method.indexOf('STRING') >= 0;
+      const md = method.indexOf('MD5') >= 0, sha = method.indexOf('SHA-256') >= 0;
+      if (str && md) return hex2(md5(utf8Bytes(src)));
+      if (str && sha) return hex2(sha256(utf8Bytes(src)));
+      if (file && (md || sha)) return f.hostCall$s('IJ.checksum', [md ? 'MD5' : 'SHA-256', src]);
+      it.error("must contain 'file' or 'string' and 'MD5' or 'SHA-256'");
+      return '0';
+    }
+    default: it.error('Unrecognized IJ function name'); return null;
+  }
+}, { suspends: { deleteRows: 'host', freeMemory: 'host', currentMemory: 'host', maxMemory: 'host', getToolName: 'host', renameResults: 'host', checksum: 'host', getFullVersion: 'host' } });
+function sortArray$s(f) {
+  const it = f.interp;
+  it.getLeftParen();
+  const a = f.getArray$s();
+  const multipleArrays = it.nextToken() === COMMA;
+  let indexes = null;
+  const len = a.length;
+  let nNumbers = 0;
+  for (let i = 0; i < len; i++) if (a[i].getString() === null) nNumbers++;
+  if (nNumbers === len) {
+    const d = a.map((v) => v.getValue());
+    if (multipleArrays) indexes = rankNumbers(d);
+    d.sort(javaDoubleCompare);
+    for (let i = 0; i < len; i++) a[i].setValue(d[i]);
+  } else if (nNumbers === 0) {
+    const s = a.map((v) => v.getString());
+    if (multipleArrays) indexes = rankStrings(s);
+    s.sort(compareToIgnoreCase);
+    for (let i = 0; i < len; i++) a[i].setString(s[i]);
+  } else {
+    it.error('Mixed strings and numbers');
+    return a;
+  }
+  while (it.nextToken() === COMMA) {
+    it.getComma();
+    const b = f.getArray$s();
+    if (b.length !== len) { it.error('Arrays must have same length'); return a; }
+    const c = new Array(len);
+    for (let j = 0; j < len; j++) c[j] = b[indexes[j]];
+    for (let j = 0; j < len; j++) b[j] = c[j];
+  }
+  it.getRightParen();
+  return a;
+}
+function arrayStatistics$s(f) {
+  const it = f.interp;
+  it.getLeftParen();
+  const a = f.getArray$s();
+  const minv = f.getNextVariable$s();
+  let maxv = null, mean = null, std = null;
+  it.getToken();
+  let arg = 1;
+  while (it.token === COMMA) {
+    arg++;
+    switch (arg) {
+      case 2: maxv = f.getVariable$s(); break;
+      case 3: mean = f.getVariable$s(); break;
+      case 4: std = f.getVariable$s(); break;
+      default: it.error("')' expected");
+    }
+    it.getToken();
+  }
+  if (it.token !== RP) it.error("')' expected");
+  const n = a.length;
+  let sum = 0.0, sum2 = 0.0, min = Infinity, max = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const value = a[i].getValue();
+    sum += value; sum2 += value * value;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  minv.setValue(min);
+  if (maxv !== null) maxv.setValue(max);
+  if (mean !== null) mean.setValue(sum / n);
+  if (std !== null) {
+    let stdDev = (n * sum2 - sum * sum) / n;
+    stdDev = Math.sqrt(stdDev / (n - 1.0));
+    std.setValue(stdDev);
+  }
+  return a;
+}
+function showArray$s(f) {
+  const it = f.interp;
+  let title = 'Arrays';
+  const arrays = [], names = [];
+  it.getLeftParen();
+  do {
+    if (f.isStringArg() && !f.isArrayArg()) title = f.getString$s();
+    else {
+      const addr = f.pgm.code[it.pc + 1] >> TOK_SHIFT;
+      names.push(f.pgm.table[addr].str);
+      arrays.push(f.getArray$s());
+    }
+    it.getToken();
+  } while (it.token === COMMA);
+  if (it.token !== RP) it.error("')' expected");
+  if (arrays.length === 1 && title === 'Arrays') title = names[0];
+  const cols = arrays.map((a) => a.map((v) => (v.getString() !== null ? v.getString() : v.getValue())));
+  f.hostCall$s('Array.show', [title, arrays.length === 1 ? ['Value'] : names, cols]);
+  return null;
+}
+defineS('arr', K_ARRAY_FUNC, function (f) {
+  const it = f.interp;
+  it.getToken();
+  if (it.token !== DOT) it.error("'.' expected");
+  it.getToken();
+  if (!(it.token === WORD || it.token === PREDEFINED_FUNCTION || it.token === STRING_FUNCTION)) it.error('Function name expected: ');
+  const name = it.tokenString;
+  switch (name) {
+    case 'copy': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      it.getRightParen();
+      return duplicate(a);
+    }
+    case 'trim': {
+      it.getLeftParen();
+      const a1 = f.getArray$s();
+      let size = toInt(f.getLastArg$s());
+      if (size < 0) size = 0;
+      if (size > a1.length) size = a1.length;
+      return duplicate(a1.slice(0, size));
+    }
+    case 'sort': return sortArray$s(f);
+    case 'rankPositions': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      it.getRightParen();
+      const len = a.length;
+      let nNumbers = 0;
+      for (let i = 0; i < len; i++) if (a[i].getString() === null) nNumbers++;
+      if (nNumbers !== len && nNumbers !== 0) { it.error('Mixed strings and numbers'); return a; }
+      const indexes = nNumbers === len ? rankNumbers(a.map((v) => v.getValue())) : rankStrings(a.map((v) => v.getString()));
+      return indexes.map((x) => Variable.num(x));
+    }
+    case 'getStatistics': return arrayStatistics$s(f);
+    case 'sequence': case 'getSequence': {
+      const n = toInt(f.getArg$s());
+      if (n < 0) { it.error('Negative array size'); return []; }
+      const a = new Array(n);
+      for (let i = 0; i < n; i++) a[i] = Variable.num(i);
+      return a;
+    }
+    case 'fill': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      const v = f.getLastArg$s();
+      for (let i = 0; i < a.length; i++) a[i].setValue(v);
+      return a;
+    }
+    case 'reverse': case 'invert': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      it.getRightParen();
+      const n = a.length;
+      for (let i = 0; i < Math.floor(n / 2); i++) { const t = a[i]; a[i] = a[n - i - 1]; a[n - i - 1] = t; }
+      return a;
+    }
+    case 'concat': {
+      it.getLeftParen();
+      const list = [];
+      do {
+        if (f.isArrayArg()) { for (const v of f.getArray$s()) list.push(v.clone()); }
+        else if (f.isStringArg()) list.push(Variable.string(f.getString$s()));
+        else list.push(Variable.num(it.getExpression$s()));
+        it.getToken();
+      } while (it.token === COMMA);
+      return list;
+    }
+    case 'slice': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      const len = a.length;
+      let i1 = toInt(f.getNextArg$s());
+      let i2 = len;
+      if (it.nextToken() === COMMA) { it.getComma(); i2 = toInt(it.getExpression$s()); }
+      if (i1 < 0) it.error('Invalid argument');
+      if (i2 > len) i2 = len;
+      let len2 = i2 - i1;
+      if (len2 < 0) len2 = 0;
+      if (len2 > len) len2 = len;
+      it.getRightParen();
+      const a2 = new Array(len2);
+      for (let i = 0; i < len2; i++) a2[i] = a[i1++].clone();
+      return a2;
+    }
+    case 'print': {
+      let prefix = null;
+      it.getLeftParen();
+      if (!f.isArrayArg() && f.isStringArg()) { prefix = f.getString$s(); it.getComma(); }
+      const a = f.getArray$s();
+      it.getRightParen();
+      let str = joinArray(a, ', ');
+      if (prefix !== null) str = prefix + ' ' + str;
+      it.log(str);
+      return null;
+    }
+    case 'resample': {
+      it.getLeftParen();
+      const a1 = f.getArray$s();
+      const len1 = a1.length;
+      const len2 = toInt(f.getLastArg$s());
+      if (len1 === 0 || len2 <= 0) { it.error('Cannot resample from or to zero-length'); return []; }
+      return resampleArray(a1.map((v) => v.getValue()), len2).map((x) => Variable.num(x));
+    }
+    case 'findMaxima': case 'findMinima': {
+      let edgeMode = 0;
+      it.getLeftParen();
+      const a = f.getArray$s();
+      const tolerance = f.getNextArg$s();
+      if (it.nextToken() === COMMA) { it.getComma(); edgeMode = toInt(it.getExpression$s()); }
+      it.getRightParen();
+      const d = a.map((v) => v.getValue());
+      const res = name === 'findMinima' ? findMaxima1D(d.map((x) => -x), tolerance, edgeMode) : findMaxima1D(d, tolerance, edgeMode);
+      return res.map((x) => Variable.num(x));
+    }
+    case 'show': return showArray$s(f);
+    case 'fourier': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      let windowType = 'none';
+      if (it.nextToken() === COMMA) {
+        it.getComma();
+        const w = (f.getString$s()).toLowerCase();
+        if (w === 'hamming') windowType = 'hamming';
+        else if (w.startsWith('hann')) windowType = 'hann';
+        else if (w.startsWith('flat')) windowType = 'flat';
+        else if (!w.startsWith('no')) it.error("Invalid Fourier window '0'");
+      }
+      it.getRightParen();
+      const n = a.length;
+      if (windowType !== 'none' || n < 2 || (n & (n - 1)) !== 0) {
+        it.error('Function not available in the browser: Array.fourier (only the "none" window on a power-of-two length is reproduced)');
+        return [];
+      }
+      return fourierAmplitudes(a.map((v) => Math.fround(v.getValue()))).map((x) => Variable.num(x));
+    }
+    case 'getVertexAngles': {
+      it.getLeftParen();
+      const xx = f.getArray$s();
+      it.getComma();
+      const yy = f.getArray$s();
+      it.getComma();
+      const arm = toInt(it.getExpression$s());
+      const len = xx.length;
+      if (yy.length !== len) it.error('Same size expected');
+      it.getRightParen();
+      const x = xx.map((v) => v.getValue()), y = yy.map((v) => v.getValue());
+      const out = new Array(len);
+      for (let mid = 0; mid < len; mid++) {
+        const left = (mid + 10 * len - arm) % len, right = (mid + arm) % len;
+        const dot = (x[right] - x[mid]) * (x[left] - x[mid]) + (y[right] - y[mid]) * (y[left] - y[mid]);
+        const cross = (x[right] - x[mid]) * (y[left] - y[mid]) - (y[right] - y[mid]) * (x[left] - x[mid]);
+        let phi = 180.0 - 180.0 / Math.PI * Math.atan2(cross, dot);
+        while (phi >= 180.0) phi -= 360.0;
+        out[mid] = Variable.num(phi);
+      }
+      return out;
+    }
+    case 'rotate': {
+      it.getLeftParen();
+      const a = f.getArray$s();
+      it.getComma();
+      let rot = toInt(it.getExpression$s());
+      it.getRightParen();
+      const len = a.length;
+      if (len === 0) return a;
+      while (rot < 0) rot += len;
+      const b = new Array(len);
+      for (let i = 0; i < len; i++) b[(i + rot) % len] = a[i];
+      for (let i = 0; i < len; i++) a[i] = b[i];
+      return a;
+    }
+    case 'deleteValue': case 'delete': {
+      it.getLeftParen();
+      const arr1 = f.getArray$s();
+      let value = Number.MAX_VALUE, stringValue = null;
+      it.getComma();
+      if (f.isStringArg()) stringValue = f.getString$s();
+      else value = it.getExpression$s();
+      it.getRightParen();
+      const out = [];
+      for (const v of arr1) {
+        const type = v.getType();
+        let remove = false;
+        if (stringValue !== null) {
+          if (type === V_STRING) remove = stringValue === v.getString();
+        } else if (type === V_VALUE) {
+          const val = v.getValue();
+          remove = val === value || (val !== val && value !== value);
+        }
+        if (!remove) out.push(v.clone());
+      }
+      return out;
+    }
+    case 'deleteIndex': {
+      it.getLeftParen();
+      const arr1 = f.getArray$s();
+      const index = toInt(f.getLastArg$s());
+      f.checkIndex(index, 0, arr1.length - 1);
+      const out = [];
+      for (let i = 0; i < arr1.length; i++) if (i !== index) out.push(arr1[i].clone());
+      return out;
+    }
+    case 'filter': {
+      it.getLeftParen();
+      const a1 = f.getArray$s();
+      const filter = f.getLastString$s();
+      const out = [];
+      for (const v of a1) {
+        const str = v.getString();
+        if (str === null) continue;
+        let contains;
+        if (filter.startsWith('(') && filter.endsWith(')')) {
+          try { contains = javaRegex(filter.substring(1, filter.length - 1), false).test(str); }
+          catch (e) { if (isInternalFault(e)) throw e; it.error(errText(e)); return []; }
+        } else contains = str.indexOf(filter) >= 0;
+        if (contains) out.push(v);
+      }
+      return out;
+    }
+    default:
+      it.error('Unrecognized Array function');
+      return null;
+  }
+}, { suspends: { show: 'host' } });
+defineS('do', K_SET_OPTION, function (f) {
+  const it = f.interp;
+  const arg1 = f.getFirstString$s();
+  let state = true;
+  if (it.nextToken() === COMMA) {
+    it.getComma();
+    const arg2 = it.getBooleanExpression$s();
+    it.checkBoolean(arg2);
+    state = arg2 !== 0;
+  }
+  it.getRightParen();
+  if (arg1.toLowerCase().startsWith('expandablearrays')) f.expandableArrays = state;
+  else f.hostCall$s('setOption', [arg1, state]);
+}, { suspends: 'host' });
+defineS('do', K_WAIT, function (f) {
+  const n = toInt(f.getArg$s());
+  if (n > 0) {
+    const sig = f.interp.ctx.signal;
+    syncAwait(new Promise((resolve) => {
+      const done = () => { clearTimeout(t); if (sig) sig.removeEventListener('abort', done); resolve(); };
+      const t = setTimeout(done, n);
+      if (sig) sig.addEventListener('abort', done, { once: true });
+    }));
+  }
+}, { suspends: true });
+defineS('do', K_SHOW_MESSAGE, function (f) {
+  const it = f.interp;
+  it.getLeftParen();
+  let title = f.getString$s();
+  let message;
+  if (it.nextToken() === COMMA) { it.getComma(); message = f.getString$s(); }
+  else { message = title; title = ''; }
+  it.getRightParen();
+  f.showMessage$s(title, message);
+}, { suspends: true });
+/* ======================================================================================
+ * Synchronous fast path
+ *
+ * The interpreter above is a set of generators so that a host built-in may return a Promise (the driver awaits it).
+ * A generator costs about 3x a plain function; most statements of a macro never wait. So every generator method of
+ * Interpreter / Functions has a generated plain-function twin (suffix $s, installed on the SAME prototypes: both paths
+ * read and write the same state objects, the same tokens are consumed, the same errors and lines come out).
+ * tools/gen_ijm_sync.mjs writes the twin between the markers below; this file's generators stay the only source.
+ *
+ * Dispatch (Interpreter.doStatement, the loop bodies, doBlock, doIf, user-function bodies): a statement that CANNOT
+ * SUSPEND runs in the twin as a whole. "Cannot suspend" is decided from the tokens, once per statement start
+ * (SyncAnalysis.classify, memoised in Interpreter.syncMemo):
+ *   - a built-in may suspend when it is registered { suspends: true }, or 'host' (a built-in that reaches the host: it
+ *     may suspend unless ctx.host.syncFunctions, a Set of names such as 'getPixel' or 'List.setMeasurements', declares
+ *     it synchronous), or a { sub: ... } map for a namespace (Array.show), or a predicate (pgm, tokenIndex, host);
+ *     a built-in defined later through IJMacro.defineS() without an option defaults to 'host';
+ *   - a user function may suspend when its body does, transitively (fixed point over the call graph), or calls a name
+ *     that is not a known function;
+ *   - eval() / runMacro() / wait() / showMessage() / requires() / exit("msg") / print("[Window]", ..) are registered so.
+ * A statement with a loop in it (or a call to a function that has one) that cannot suspend is class SYNC_LOOP: the
+ * generator keeps the loop CONTROL (so the event loop is released and an abort is honoured every TICK_MASK+1
+ * iterations, exactly as before) while the loop header and every body statement run in the twin, with no generator
+ * allocated per iteration. Everything else is SYNC_GEN: executed by the generators, which dispatch their own inner
+ * statements the same way.
+ *
+ * A user function on a cycle of the call graph (recursion, direct or through others) counts like a loop: a statement that
+ * calls into it is SYNC_LOOP, so the call runs on the generators, which slice every TICK_MASK+1 calls (an abort is
+ * honoured within sliceMs) and hop to a fresh native stack every FN_NEST_STEP levels (ImageJ's 1000 levels fit). Only the
+ * statements of the body that do not call into the cycle stay in the twin. A page is not cross-origin isolated here, so a
+ * SharedArrayBuffer abort flag cannot exist, and a timer cannot fire while the twin holds the thread: letting a recursion
+ * run whole in the twin (option syncRecursion) therefore means it cannot be stopped short of terminating the worker.
+ *
+ * Policy for a stretch that runs in the twin and cannot syncAwait((a loop-free, recursion-free statement: a long pure
+ * built-in): it keeps the thread until it ends. Every SYNC_TICK_MASK+1 (1024) user-function calls it looks at
+ * ctx.abortFlag (an Int32Array on a SharedArrayBuffer the host sets to non-zero; Atomics.load) and at signal.aborted,
+ * and throws the "Macro canceled" path); that only helps where a SharedArrayBuffer exists or when the signal was aborted
+ * before the stretch. ctx.syncLoops / ctx.syncRecursion (options) let loops / recursions run whole in the twin
+ * (fastest, same limit); ctx.fastPath === false (option fastPath) turns the whole mechanism off.
+ * ==================================================================================== */
+/* END GENERATED SYNC TWIN */
+coreDefining = false;
 
 /* ======================================================================================
  * The driver
@@ -5002,7 +7910,8 @@ async function drive(gen, ctx) {
     }
   };
   let sliceStart = Date.now();
-  const aborted = () => !!(ctx.signal && ctx.signal.aborted);
+  const flag = ctx.abortFlag || null;
+  const aborted = () => !!(ctx.signal && ctx.signal.aborted) || (flag !== null && Atomics.load(flag, 0) !== 0);
   let step = aborted() ? resume('throw', new MacroCancel('abort')) : resume('next');
   for (;;) {
     if (step.done) return step.value;
@@ -5043,6 +7952,10 @@ async function run(source, opts) {
       else { onAbort = () => resolve(ABORTED); signal.addEventListener('abort', onAbort, { once: true }); }
     }) : null,
     sliceMs: typeof opts.sliceMs === 'number' ? opts.sliceMs : 50,
+    fastPath: opts.fastPath !== false,
+    syncLoops: opts.syncLoops === true,
+    syncRecursion: opts.syncRecursion === true,
+    abortFlag: opts.abortFlag || null,
     log(s) { if (s === null || s === undefined) return; if (onLog) onLog(String(s)); },
     showMessage(title, text) {
       if (host && typeof host.showMessage === 'function') return host.showMessage(title, text);
@@ -5063,7 +7976,12 @@ async function run(source, opts) {
       if (e.kind === 'abort') aborted = true;
       else if (e.kind === 'exit') exited = true;
     } else if (e instanceof JavaException) internal = e.message;
-    else if (e instanceof RangeError && /call stack/i.test(e.message)) internal = 'Stack overflow';
+    else if (e instanceof RangeError && /call stack/i.test(e.message)) {
+      /* The native stack ran out before ImageJ's own 1000-slot limit (a small worker stack, a deep recursion in the plain
+       * twin): report it the way Interpreter.push does, with the line of the statement that was running. */
+      try { interp.errorCount = 0; interp.ignoreErrors = false; interp.done = false; interp.error('Stack overflow'); } catch (e2) { /* the error is recorded */ }
+      if (!interp.wasError) internal = 'Stack overflow';
+    }
     else if (e instanceof RangeError && /Invalid (string|array) length/.test(e.message)) internal = 'Out of memory';
     else internal = 'Internal error: ' + (e && e.message ? e.message : String(e));
   }
@@ -5086,13 +8004,45 @@ function compile(source) {
   for (let i = 0; i < code.length; i++) {
     const t = code[i] & TOK_MASK;
     tokens.push({ index: i, line: program.lineNumbers[i], token: t, text: program.decodeToken(code[i]) });
-    if (t === K.MACRO && (code[i + 1] & TOK_MASK) === STRING_CONSTANT)
+    if (t === K_MACRO && (code[i + 1] & TOK_MASK) === STRING_CONSTANT)
       macros.push(program.table[code[i + 1] >> TOK_SHIFT].str);
-    else if (t === K.FUNCTION && (code[i + 1] & TOK_MASK) === WORD)
+    else if (t === K_FUNCTION && (code[i + 1] & TOK_MASK) === WORD)
       functions.push(program.table[code[i + 1] >> TOK_SHIFT].str);
     if (t === EOF) break;
   }
   return { program, macros, functions, tokens };
+}
+
+/* IJMacro.analyze: how the fast path would dispatch each top-level statement of `source` ('twin' = plain twin,
+ * 'loop' = loop control on the generators, parts in the twin, 'gen' = generators) and which user functions may
+ * suspend / loop. opts: { host, syncLoops }. For tests and for a host that wants to know why a macro is slow. */
+function analyze(source, opts) {
+  opts = opts || {};
+  const pgm = tokenize(String(source));
+  const an = new SyncAnalysis(pgm, { host: opts.host || null, syncLoops: opts.syncLoops === true, syncRecursion: opts.syncRecursion === true });
+  const code = pgm.code;
+  const statements = [];
+  let i = 0;
+  while (i < code.length && (code[i] & TOK_MASK) !== EOF) {
+    const t = code[i] & TOK_MASK;
+    if (t === K_FUNCTION || t === K_MACRO) {
+      let j = i;
+      while (j < code.length && (code[j] & TOK_MASK) !== LBRACE && (code[j] & TOK_MASK) !== EOF) j++;
+      const e = an.blockEnd(j);
+      i = e < 0 ? code.length : e;
+      continue;
+    }
+    const e = an.stmtEnd(i);
+    if (e < 0) { i++; continue; }
+    if (!(t === SEMI)) {
+      const cls = an.classify(i);
+      statements.push({ line: pgm.lineNumbers[i], class: cls === SYNC_TWIN ? 'twin' : cls === SYNC_LOOP ? 'loop' : 'gen' });
+    }
+    i = e;
+  }
+  const functions = {};
+  for (const [a, f] of an.functions()) functions[pgm.table[a].str] = { suspends: f.susp, loops: f.loopy, recursive: f.rec };
+  return { statements, functions };
 }
 
 /* Which MacroConstants ids have a built-in and which wait for a later stage. */
@@ -5105,6 +8055,6 @@ function coverage() {
   return out;
 }
 
-return { run, tokenize, compile, define, coverage, BUILTINS, K, NAME_OF, d2s, d2s3, numToString, javaDouble, parseJavaDouble,
+return { run, tokenize, compile, define, coverage, analyze, BUILTINS, K, NAME_OF, d2s, d2s3, numToString, javaDouble, parseJavaDouble,
   Interpreter, Functions, Variable, Program, MacroCancel, SLICE };
 })();

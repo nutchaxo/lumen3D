@@ -19,6 +19,7 @@ The PHP twins are held to the same answers by tests/test_backend2_twins_parity.p
 import http.client
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -254,10 +255,28 @@ class CachePolicyAndGuards(unittest.TestCase):
         self.assertEqual(p("js/core/utils.js", ""), "no-cache")
         self.assertEqual(p("lang/en.json", "v=1"), "no-cache")
         self.assertEqual(p("data_web/3d/x/bricks/manifest.json", ""), "no-cache")
+        # A plugin's files are stamped by js/core/plugin-trust.js with the head of its
+        # content hash: every type of file below js/modules/ is immutable with ?v=.
+        for rel in ("js/modules/studio/advanced-studio/ij-core.js", "js/modules/tools/x/plugin.json",
+                    "js/modules/tools/x/lang/fr.json", "js/modules/tools/x/ij-style.css",
+                    "js/modules/tools/x/worker.wasm", "/js/modules/tools/x/lang/en.json"):
+            self.assertEqual(p(rel, "v=0123456789abcdef"), week, rel)
+            self.assertEqual(p(rel, ""), "no-cache", rel + " without a stamp is revalidated")
+        self.assertEqual(p("js/modules/tools/x/../../../../api/stats.json", "v=0123456789abcdef"), "no-cache",
+                         "a path that climbs out of js/modules/ gets no plugin rule")
+        self.assertEqual(p("js/modules.json", "v=1"), "no-cache", "only the js/modules/ tree")
+        self.assertEqual(p("config/pages/home.json", "v=1"), "no-cache", "nothing else with a stamp changes")
         ht = Path(ROOT, ".htaccess").read_text(encoding="utf-8")
+        self.assertIn("RewriteRule ^js/modules/. - [E=LUMEN_VERSIONED:1]", ht)
+        json_block = ht[ht.index('<FilesMatch "\.json$">'):]
+        json_block = json_block[:json_block.index("</FilesMatch>")]
+        self.assertIn('Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED', json_block,
+                      "plugin.json / lang/*.json of a stamped plugin are immutable too")
         self.assertIn("E=LUMEN_VERSIONED_PACK:1", ht)
         self.assertIn('Header set Cache-Control "public, max-age=31536000, immutable" env=LUMEN_VERSIONED_PACK', ht)
-        self.assertIn('Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED', ht)
+        outside = re.sub(r"<FilesMatch\b.*?</FilesMatch>", "", ht, flags=re.S)
+        self.assertRegex(outside, r'(?m)^\s*Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED$',
+                         "a stamped file no FilesMatch names (.wasm, .txt…) is immutable outside any FilesMatch")
         self.assertNotIn("<If ", ht, "no Apache 2.4-only container: a 2.2 core would answer 500")
 
     def test_guard_written_only_when_the_marker_is_missing(self):

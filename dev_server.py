@@ -7205,12 +7205,16 @@ _GZIP_CACHE_BYTES = [0]
 #   brick pack without ?v=                → revalidated;
 #   script/style WITH ?v= (release stamp) → immutable for a week (a host that rate-
 #       limits per address answers 429 when ~25 scripts revalidate on every page);
+#   any file under js/modules/ WITH ?v= → immutable for a week: js/core/plugin-trust.js
+#       stamps every file of a plugin with the head of the plugin's content hash (its
+#       plugin.json and lang/*.json included), so a changed plugin lives at new URLs;
 #   everything else (unversioned scripts, JSON, manifests…) → revalidated.
 _CACHE_REVALIDATE = "no-cache"
 _CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 _CACHE_VERSIONED_ASSET = "public, max-age=604800, immutable"
 _PACK_EXT = (".bin", ".rgba", ".gz")
 _ASSET_EXT = (".js", ".mjs", ".css")
+_PLUGIN_TREE = "js/modules/"
 
 # A document served from the dataset tree or the media library is someone's upload,
 # never one of our pages: whatever a browser makes of it, it runs nothing and reaches
@@ -7222,6 +7226,8 @@ def _static_cache_policy(rel_lower: str, query: str) -> str:
     """Cache-Control for a static file (see the table above _CACHE_REVALIDATE). A
     `v` parameter counts with an empty value too, as the .htaccess `(^|&)v=` does."""
     versioned = "v" in urllib.parse.parse_qs(query or "", keep_blank_values=True)
+    if versioned and posixpath.normpath("/" + rel_lower).lstrip("/").startswith(_PLUGIN_TREE):
+        return _CACHE_VERSIONED_ASSET
     if rel_lower.endswith(_PACK_EXT):
         return _CACHE_IMMUTABLE if versioned else _CACHE_REVALIDATE
     if rel_lower.endswith(_ASSET_EXT):

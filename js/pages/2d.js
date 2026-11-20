@@ -97,6 +97,14 @@ const App2D = (() => {
     if (typeof PluginRegistry !== 'undefined') {
       await PluginRegistry.initAll(_moduleCtx);
       PluginRegistry.bindToolbarButtons();
+      // The Studio's own plugins (placement 'studio') are not part of the boot: they are
+      // fetched, verified and initialised the first time the Studio needs them.
+      if (typeof StudioEditor !== 'undefined' && StudioEditor.setModeLoader) {
+        StudioEditor.setModeLoader({
+          pending: () => PluginRegistry.hasDeferred('studio'),
+          load: () => PluginRegistry.loadLazy('studio', _moduleCtx)
+        });
+      }
       $('measure-section').hidden = !PluginRegistry.getModule('measure-distance');
     }
     ToolManager.init({
@@ -143,7 +151,7 @@ const App2D = (() => {
       // Embedded chrome-less (a Compare panel, a split-view pane, the admin
       // preview), the page keeps only the plugins that declared they can be
       // driven from outside — no nested split view inside a panel.
-      await PluginRegistry.loadModules('js/modules', paths, { dataType: TYPE, context: _headless ? 'panel' : 'page' });
+      await PluginRegistry.loadModules('js/modules', paths, { dataType: TYPE, context: _headless ? 'panel' : 'page', deferPlacements: ['studio'] });
       PluginRegistry.buildToolbarButtons({
         dataset: meta,
         groups: [

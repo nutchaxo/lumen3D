@@ -68,6 +68,7 @@
   },
   "toast": {
     "studioModeFailed": "This view could not be opened.",
+    "studioModesUnavailable": "The other Studio views could not be loaded.",
     "figureUnavailable": "Figure export is not available on this page",
     "graphUnavailable": "Graph export is not available on this page",
     "workspaceSaved": "Workspace saved",
@@ -705,6 +706,7 @@
   },
   "studio": {
     "modeSimple": "Simple",
+    "modeLoading": "Loading…",
     "modeSwitch": "Studio view",
     "importOtherFigure": "This Studio file was saved for another figure: its annotations were imported, but its channel settings were applied only where the figure matches.",
     "importChannelsKept": "The annotations were imported. This picture has no raw channel values to recolour, so it keeps its channel settings.",

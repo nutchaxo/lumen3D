@@ -42,29 +42,61 @@ const PluginTrust = (() => {
     return _hex(await _subtle.digest('SHA-256', new TextEncoder().encode(doc)));
   }
 
+  // At most this many plugin-file requests are in flight at once across every plugin
+  // of the page: a cold cache would otherwise open one request per file of every
+  // plugin together, which a host that bans an address on a burst takes for an attack.
+  const MAX_IN_FLIGHT = 6;
+  let _inFlight = 0;
+  const _waiting = [];
+
+  function _acquire() {
+    if (_inFlight < MAX_IN_FLIGHT) { _inFlight++; return Promise.resolve(); }
+    return new Promise(resolve => _waiting.push(resolve));
+  }
+
+  function _release() {
+    const next = _waiting.shift();
+    if (next) next();   // the slot passes to the next request without being freed
+    else _inFlight--;
+  }
+
+  /** Hex stamp a plugin's URLs carry: the head of a (sha256) hash. Null when unusable. */
+  function stampOf(hash) {
+    return typeof hash === 'string' && /^[0-9a-f]{16,}$/i.test(hash) ? hash.slice(0, 16).toLowerCase() : null;
+  }
+
   /** Fetch the raw bytes of every file and (when WebCrypto is available) hash them.
       Always returns the bytes (keyed by relpath — the SAME bytes that get executed,
       INV-2); `hash`/`fileHashes` are null on an insecure origin (no crypto.subtle),
       where the client cannot re-verify and falls back to the server vouch. Returns
-      null only on a fetch failure. */
-  async function hashPluginFiles(basePath, modPath, relFiles) {
-    // Every file of a plugin is fetched concurrently (they were fetched one after the
-    // other, which stretched the viewer boot by the sum of the round-trips).
-    //
-    // Every file is read with 'no-cache': the browser revalidates with the origin
-    // (If-None-Match / If-Modified-Since) and reuses its stored body only on a 304, so
-    // an unchanged plugin costs a round-trip, not a re-download, on every boot and in
-    // every Compare panel. INV-2 does not rest on bypassing the cache: the bytes hashed
-    // here are the bytes executed, and their hash must match the server vouch, so a
-    // stale or tampered body (e.g. an edit within a Last-Modified second) is refused.
+      null only on a fetch failure.
+
+      `options.stamp` — a string, or (rel) → string|null — appends `?v=<stamp>` to each
+      URL and lets the browser answer from its HTTP cache (the host sends such a URL
+      immutable). The stamp is the head of the very hash the bytes must produce, so a
+      changed file lives at a new URL and nothing is ever revalidated. Without a stamp
+      every file is read with 'no-cache': the browser revalidates with the origin and
+      reuses its stored body only on a 304.
+      `options.cache` forces a fetch cache mode (the one retry after a mismatch uses
+      'reload'). INV-2 never rests on the cache: the bytes hashed here are the bytes
+      executed, and their hash must match the server vouch, so a stale or poisoned
+      body is refused or re-fetched, never run. */
+  async function hashPluginFiles(basePath, modPath, relFiles, options) {
+    const opts = options || {};
+    const stampFor = typeof opts.stamp === 'function' ? opts.stamp : () => opts.stamp || null;
     const entries = await Promise.all(relFiles.map(async rel => {
+      await _acquire();
       try {
-        const resp = await fetch(`${basePath}/${modPath}/${rel}`, { cache: 'no-cache' });
+        const stamp = stampFor(rel);
+        const url = `${basePath}/${modPath}/${rel}${stamp ? `?v=${stamp}` : ''}`;
+        const resp = await fetch(url, { cache: opts.cache || (stamp ? 'default' : 'no-cache') });
         if (!resp.ok) return null;
         const b = new Uint8Array(await resp.arrayBuffer());
         return { rel, b, h: _subtle ? await fileHash(b) : null };
       } catch (_) {
         return null;
+      } finally {
+        _release();
       }
     }));
     const fileHashes = {};
@@ -105,17 +137,33 @@ const PluginTrust = (() => {
       const prefix = `${basePath}/${modPath}/`;
       const relFiles = Object.keys(releaseManifest).filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length));
       if (!relFiles.includes('index.js')) return { tier: 'untrusted', reason: 'index.js not in manifest' };
-      const h = await hashPluginFiles(basePath, modPath, relFiles);
+      // Each file is stamped with the head of the hash the manifest pins for it.
+      const manifestStamp = rel => (_subtle ? stampOf(releaseManifest[prefix + rel]) : null);
+      const matches = h => relFiles.every(rel => releaseManifest[prefix + rel] === h.fileHashes[rel]);
+      let h = await hashPluginFiles(basePath, modPath, relFiles, { stamp: manifestStamp });
+      // A body served from the HTTP cache may be stale or poisoned: one more read that
+      // bypasses it before the files are declared different from the manifest.
+      if (h && h.hash && !matches(h)) {
+        h = await hashPluginFiles(basePath, modPath, relFiles, { stamp: manifestStamp, cache: 'reload' });
+      }
       if (!h || !h.hash) return { tier: 'untrusted', reason: 'hash-unavailable' };
-      const ok = relFiles.every(rel => releaseManifest[prefix + rel] === h.fileHashes[rel]);
-      return ok ? { tier: 'bundled', hash: h.hash, bytes: h.bytes['index.js'], files: h.bytes, reason: 'manifest match' }
-                : { tier: 'untrusted', reason: 'manifest mismatch' };
+      return matches(h) ? { tier: 'bundled', hash: h.hash, bytes: h.bytes['index.js'], files: h.bytes, reason: 'manifest match' }
+                        : { tier: 'untrusted', reason: 'manifest mismatch' };
     }
 
     if (!TRUSTED.includes(vouch.tier)) return { tier: 'untrusted', reason: 'server vouch not trusted' };
 
     const relFiles = Array.isArray(vouch.files) && vouch.files.length ? vouch.files : ['index.js', 'plugin.json'];
-    const h = await hashPluginFiles(basePath, modPath, relFiles);
+    // The composite hash changes whenever any file of the plugin does, so its head is a
+    // version stamp for every file: a plugin that did not change is never requested again.
+    const stamp = _subtle ? stampOf(vouch.hash) : null;
+    let h = await hashPluginFiles(basePath, modPath, relFiles, { stamp });
+    // Bytes that may have come from the HTTP cache and do not match the vouch get one
+    // read that bypasses it, so a stale entry cannot quarantine a good plugin; a file
+    // that still differs is refused below as it always was.
+    if (h && h.hash && stamp && h.hash !== vouch.hash) {
+      h = await hashPluginFiles(basePath, modPath, relFiles, { stamp, cache: 'reload' });
+    }
     if (!h) return { tier: 'untrusted', reason: 'fetch failed' };
 
     if (!_subtle) {
@@ -136,7 +184,7 @@ const PluginTrust = (() => {
              bytes: h.bytes['index.js'], files: h.bytes, reason: vouch.tier };
   }
 
-  return { SCHEME, fileHash, pluginHash, hashPluginFiles, evaluate,
+  return { SCHEME, MAX_IN_FLIGHT, fileHash, pluginHash, hashPluginFiles, stampOf, evaluate,
            available: () => !!_subtle };
 })();
 

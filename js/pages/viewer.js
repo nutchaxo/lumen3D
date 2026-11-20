@@ -371,7 +371,8 @@ const ViewerApp = (() => {
         await PluginRegistry.loadModules('js/modules', modulePaths, {
           dataType: datasetMeta.type,
           allowUndeclaredDataTypes: true,
-          context: _isIframe ? 'panel' : 'page'
+          context: _isIframe ? 'panel' : 'page',
+          deferPlacements: ['studio']
         });
         // Generate toolbar buttons from the loaded plugins' metadata. Runs before
         // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
@@ -745,6 +746,14 @@ const ViewerApp = (() => {
         }
         await PluginRegistry.initAll(moduleCtx);
         PluginRegistry.bindToolbarButtons();
+        // The Studio's own plugins (placement 'studio') are not part of the boot: they are
+        // fetched, verified and initialised the first time the Studio needs them.
+        if (typeof StudioEditor !== 'undefined' && StudioEditor.setModeLoader) {
+          StudioEditor.setModeLoader({
+            pending: () => PluginRegistry.hasDeferred('studio'),
+            load: () => PluginRegistry.loadLazy('studio', moduleCtx)
+          });
+        }
         // Live trust revocation: tear down a sandboxed plugin if the operator revokes
         // its approval while this viewer is open (polls the server trustEpoch).
         if (PluginRegistry.startTrustWatch) PluginRegistry.startTrustWatch();

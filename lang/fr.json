@@ -68,6 +68,7 @@
   },
   "toast": {
     "studioModeFailed": "Cette vue n’a pas pu être ouverte.",
+    "studioModesUnavailable": "Les autres vues du Studio n’ont pas pu être chargées.",
     "figureUnavailable": "L’export de figure n’est pas disponible sur cette page",
     "graphUnavailable": "L’export de graphique n’est pas disponible sur cette page",
     "workspaceSaved": "Espace de travail sauvegardé",
@@ -705,6 +706,7 @@
   },
   "studio": {
     "modeSimple": "Simple",
+    "modeLoading": "Chargement…",
     "modeSwitch": "Vue du Studio",
     "importOtherFigure": "Ce fichier Studio a été enregistré pour une autre figure : ses annotations ont été importées, mais ses réglages de canaux n’ont été appliqués que là où la figure correspond.",
     "importChannelsKept": "Les annotations ont été importées. Cette image n’a pas de valeurs brutes de canaux à recolorer : elle garde ses réglages de canaux.",

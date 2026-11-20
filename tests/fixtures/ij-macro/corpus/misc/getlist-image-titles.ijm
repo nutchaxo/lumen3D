@@ -1,0 +1,1 @@
+a=getList("image.titles");print(a.length);

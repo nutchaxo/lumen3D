@@ -1,0 +1,1 @@
+print(String.format("[%8.3f]", -1.5));print(String.format("%03.0f", 7));

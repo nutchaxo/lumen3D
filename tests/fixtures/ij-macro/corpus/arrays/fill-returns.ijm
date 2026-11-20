@@ -1,0 +1,1 @@
+a=newArray(3);b=Array.fill(a,7);Array.print(b);Array.print(a);

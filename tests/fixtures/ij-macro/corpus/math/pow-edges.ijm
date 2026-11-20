@@ -1,0 +1,1 @@
+print(pow(0,0));print(pow(-8,1/3));print(pow(2,-1));print(sqrt(-1));print(log(0));print(log(-1));print(exp(1000));

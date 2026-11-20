@@ -1,0 +1,1 @@
+call("ij.gui.ImageWindow.setNextLocation","a","b");

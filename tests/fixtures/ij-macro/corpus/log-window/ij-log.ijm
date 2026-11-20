@@ -1,0 +1,1 @@
+IJ.log("a");IJ.log("\\Clear");IJ.log("b");

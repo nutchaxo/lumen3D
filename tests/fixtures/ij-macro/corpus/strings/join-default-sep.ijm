@@ -1,0 +1,1 @@
+print(String.join(newArray("a","b","c")));

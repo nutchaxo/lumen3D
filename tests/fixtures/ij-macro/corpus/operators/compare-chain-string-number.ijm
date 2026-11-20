@@ -1,0 +1,1 @@
+if("10"<"9") print("str"); else print("num");if("10"<9) print("a"); else print("b");

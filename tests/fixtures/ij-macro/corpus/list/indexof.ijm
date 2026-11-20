@@ -1,0 +1,1 @@
+List.clear();List.set("a",1);List.set("b",2);print(List.indexOf("b"));print(List.indexOf("z"));

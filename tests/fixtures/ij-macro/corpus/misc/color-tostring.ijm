@@ -1,0 +1,1 @@
+print(Color.toString(255,0,0));print(Color.toString(1,2,3));

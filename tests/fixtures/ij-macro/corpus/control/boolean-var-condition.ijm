@@ -1,0 +1,1 @@
+b=(3>2); if(b) print("y"); c=false; if(!c) print("n");

@@ -1,0 +1,1 @@
+print("a\tb\tc");print("d");

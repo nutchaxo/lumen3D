@@ -1,0 +1,1 @@
+a=newArray(1,2);a=5;print(a);

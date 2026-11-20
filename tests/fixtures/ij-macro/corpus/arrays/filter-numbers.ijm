@@ -1,0 +1,1 @@
+a=newArray(1,12,3);b=Array.filter(a,"1");Array.print(b);

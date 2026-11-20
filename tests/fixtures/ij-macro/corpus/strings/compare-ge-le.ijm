@@ -1,0 +1,1 @@
+if("b">="a") print(1);if("A"<="a") print(2);if("abc">"abd") print(3); else print(4);

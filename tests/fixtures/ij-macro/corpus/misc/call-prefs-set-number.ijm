@@ -1,0 +1,1 @@
+call("ij.Prefs.set","my.n",5);print(call("ij.Prefs.get","my.n","d"));

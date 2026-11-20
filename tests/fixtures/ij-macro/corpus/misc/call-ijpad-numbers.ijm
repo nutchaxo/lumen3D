@@ -1,0 +1,1 @@
+print(call("ij.IJ.pad",5,3));print(call("ij.IJ.pad","7","3"));print(call("ij.IJ.pad","abc","5"));print(call("ij.IJ.pad",12345,3));

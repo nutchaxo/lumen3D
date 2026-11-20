@@ -1,0 +1,1 @@
+print(Math.log10(1000));print(Math.log10(2));print(Math.log10(0));

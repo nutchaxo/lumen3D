@@ -1,0 +1,1 @@
+a=Color.toArray("red");Array.print(a);b=Color.toArray("#ff0080");Array.print(b);c=Color.toArray("nope");Array.print(c);

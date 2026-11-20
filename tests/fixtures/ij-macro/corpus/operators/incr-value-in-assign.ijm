@@ -1,0 +1,1 @@
+i=1;j=i++;print(i,j);k=++i;print(i,k);

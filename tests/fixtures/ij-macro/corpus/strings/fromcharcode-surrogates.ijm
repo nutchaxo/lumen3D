@@ -1,0 +1,1 @@
+s=fromCharCode(0xD83D,0xDE00);print(lengthOf(s));print(charCodeAt(s,0));

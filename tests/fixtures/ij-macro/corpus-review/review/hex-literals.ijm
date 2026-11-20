@@ -1,0 +1,1 @@
+print(0x10); print(0xFFFFFFFF); print(0x7fffffffffffffff); print(0x1F+1);

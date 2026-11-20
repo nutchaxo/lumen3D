@@ -1,0 +1,1 @@
+print(parseInt("12abc")); print(parseInt(" 12 34")); print(parseInt("ff",16)); print(parseInt("-80000000",16)); print(parseInt("+7f",16)); print(parseInt("0x10")); print(parseInt("2.5")); print(parseInt("-2.5"));

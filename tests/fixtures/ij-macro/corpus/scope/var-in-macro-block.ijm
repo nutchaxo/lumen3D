@@ -1,0 +1,1 @@
+var g=0;macro "A" { g++; print(g); f(); }function f(){ g++; print(g); }

@@ -1,0 +1,1 @@
+a=newArray("a1","b2","a3","c");Array.print(Array.filter(a,"(a\\d)"));

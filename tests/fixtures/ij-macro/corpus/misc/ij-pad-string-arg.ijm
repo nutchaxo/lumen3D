@@ -1,0 +1,1 @@
+print(IJ.pad("7",3));print(IJ.pad("-7",3));

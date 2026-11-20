@@ -1,0 +1,1 @@
+Array.print(Array.delete(newArray("a","b","a"),"a"));

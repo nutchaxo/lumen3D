@@ -1,0 +1,1 @@
+function mk(){return newArray(1,2,3);}a=mk();a[1]=7;Array.print(a);Array.print(mk());

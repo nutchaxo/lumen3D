@@ -1,0 +1,1 @@
+print(isNaN(parseFloat("x")));print(isNaN(1/0));

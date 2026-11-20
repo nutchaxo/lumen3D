@@ -1,0 +1,1 @@
+a=newArray(1,2,3);a[0]*=5;a[1]-=1;a[2]/=2;Array.print(a);

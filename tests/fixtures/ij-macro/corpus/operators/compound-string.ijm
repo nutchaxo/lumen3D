@@ -1,0 +1,1 @@
+s="x";s+=1;print(s);s+="y";print(s);s+=1/3;print(s);

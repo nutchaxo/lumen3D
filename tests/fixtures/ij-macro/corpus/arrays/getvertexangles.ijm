@@ -1,0 +1,1 @@
+x=newArray(0,1,1,0);y=newArray(0,0,1,1);Array.print(Array.getVertexAngles(x,y,1));

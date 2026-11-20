@@ -1,0 +1,1 @@
+Array.print(Array.rankPositions(newArray("b","a","c")));

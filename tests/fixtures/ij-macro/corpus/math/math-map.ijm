@@ -1,0 +1,1 @@
+print(Math.map(5,0,10,0,100));print(Math.map(-1,0,10,0,100));print(Math.map(5,10,0,0,1));

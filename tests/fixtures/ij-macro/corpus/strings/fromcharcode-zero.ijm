@@ -1,0 +1,1 @@
+print("["+fromCharCode(0)+"]");

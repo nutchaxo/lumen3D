@@ -1,0 +1,1 @@
+print(parseInt("ff",16));print(parseInt("FF",16));print(parseInt("101",2));print(parseInt("-12"));print(parseInt("1e3"));print(parseInt("z",36));

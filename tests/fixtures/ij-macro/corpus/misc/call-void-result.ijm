@@ -1,0 +1,1 @@
+r=call("ij.Prefs.set","a.b","c");print(r=="");print(lengthOf(r));

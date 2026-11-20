@@ -1,0 +1,1 @@
+print("["+getInfo("no.such.key.xyz")+"]");

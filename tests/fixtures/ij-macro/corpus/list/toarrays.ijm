@@ -1,0 +1,1 @@
+List.clear();List.set("b","2");List.set("a","x");List.toArrays(k,v);Array.print(k);Array.print(v);

@@ -1,0 +1,1 @@
+print(call("ij.plugin.frame.RoiManager.getName","0"));

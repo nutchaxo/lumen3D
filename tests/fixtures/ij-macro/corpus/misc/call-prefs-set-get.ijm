@@ -1,0 +1,1 @@
+call("ij.Prefs.set","macro.test.k","v1");print(call("ij.Prefs.get","macro.test.k","d"));

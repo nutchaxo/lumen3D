@@ -1,0 +1,1 @@
+setOption("ExpandableArrays", true);a=newArray(2);for(i=0;i<20;i++) a[i]=i;print(a.length);print(a[19]);

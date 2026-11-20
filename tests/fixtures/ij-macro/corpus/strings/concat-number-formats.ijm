@@ -1,0 +1,1 @@
+print("x"+1e10);print("x"+(-0));print("x"+1/3);print("x"+NaN);print("x"+1/0);print("x"+2147483648);print("x"+1e-5);

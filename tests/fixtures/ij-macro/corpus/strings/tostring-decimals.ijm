@@ -1,0 +1,1 @@
+print(toString(3.14159,2));print(toString(5));print(toString(1/3));print(toString(1e-5,3));print(toString(2,0));

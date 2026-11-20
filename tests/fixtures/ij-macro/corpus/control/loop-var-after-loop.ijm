@@ -1,0 +1,1 @@
+for(i=0;i<3;i++){} print(i); j=10; while(j>7) j--; print(j);

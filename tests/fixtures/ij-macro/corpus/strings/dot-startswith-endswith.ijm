@@ -1,0 +1,1 @@
+s="file.tif";print(s.startsWith("fi"));print(s.endsWith(".tif"));print(s.charAt(0));

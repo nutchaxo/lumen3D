@@ -1,0 +1,1 @@
+print(Math.atan2(1,1));print(atan2(1,-1));print(Math.atan2(0,-1));

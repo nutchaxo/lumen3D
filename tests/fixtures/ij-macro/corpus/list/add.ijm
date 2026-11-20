@@ -1,0 +1,1 @@
+List.clear();List.add("b",2);print(List.size);

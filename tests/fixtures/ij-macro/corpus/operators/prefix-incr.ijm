@@ -1,0 +1,1 @@
+i=1;++i;print(i);--i;print(i);

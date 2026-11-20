@@ -1,0 +1,1 @@
+print("start");for(i=0;i<=4;i++) print("\\Update:"+i*25+"%");print("done");

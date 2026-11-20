@@ -1,0 +1,1 @@
+s="abcabc";print(s.replace("b","X"));print(s.substring(2));print(s.substring(1,3));print(s.indexOf("c"));print(s.lastIndexOf("c"));

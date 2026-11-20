@@ -1,0 +1,1 @@
+print(parseInt("42"));print(parseInt("-7"));print(parseInt("ff",16));print(parseInt("101",2));print(parseInt("3.7"));print(parseInt("abc"));print(parseInt(""));print(parseInt(" 5"));print(parseInt("5 "));print(parseInt("12abc"));print(parseInt("+4"));print(parseInt("0x10"));print(parseInt("099"));

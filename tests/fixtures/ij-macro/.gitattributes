@@ -1,0 +1,2 @@
+# byte-exact: the corpus holds CRLF, lone CR, a BOM and non-ASCII on purpose
+* -text

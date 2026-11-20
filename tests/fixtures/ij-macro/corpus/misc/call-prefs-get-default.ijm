@@ -1,0 +1,1 @@
+print(call("ij.Prefs.get","macro.test.key","dflt"));

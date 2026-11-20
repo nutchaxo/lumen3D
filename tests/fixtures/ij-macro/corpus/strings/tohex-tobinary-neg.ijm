@@ -1,0 +1,1 @@
+print(toHex(-1));print(toBinary(-1));print(toHex(255.7));print(toBinary(5.9));

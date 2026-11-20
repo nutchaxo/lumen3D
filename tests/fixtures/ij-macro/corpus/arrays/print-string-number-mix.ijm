@@ -1,0 +1,1 @@
+Array.print(newArray("a",1,1.5,"b"));

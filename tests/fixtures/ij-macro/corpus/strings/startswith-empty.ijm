@@ -1,0 +1,1 @@
+print(startsWith("abc",""));print(endsWith("abc",""));print(indexOf("abc",""));

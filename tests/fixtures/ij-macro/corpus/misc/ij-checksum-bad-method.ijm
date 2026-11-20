@@ -1,0 +1,1 @@
+print(IJ.checksum("CRC string","abc"));

@@ -1,0 +1,1 @@
+s="a,b,c";print(s.matches(".*b.*"));a=s.split(",");print(a.length);

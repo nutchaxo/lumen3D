@@ -1,0 +1,1 @@
+a=newArray("apple","banana","cherry","grape");Array.print(Array.filter(a,"an"));

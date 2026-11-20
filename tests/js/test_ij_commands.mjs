@@ -77,8 +77,9 @@ same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js',
   'the worker loads the mandatory scripts, then every package file');
 assert.deepEqual(pj.styles, ['ij-style.css']);
 assert.deepEqual(pj.contexts, ['page']);
-// ctx.studio.library (File › Open from Library) and api/tiff-index arrived with the core 1.86.0
-assert.ok(pj.platformCompat.includes('1.86.0'));
+// ctx.studio.library and api/tiff-index arrived with the core 1.86.0; the deferred, stamped plugin loading of 1.87.1 keeps a
+// host's page boot under its burst limit with this plugin's file count
+assert.ok(pj.platformCompat.includes('1.87.1'));
 
 // ── lang parity ──
 const enKeys = leafKeys(lang.en);

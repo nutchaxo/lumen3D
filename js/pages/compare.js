@@ -1969,8 +1969,16 @@ const CompareApp = (() => {
     if (typeof PluginRegistry === 'undefined' || typeof PluginRegistry.loadModules !== 'function') return;
     try {
       const paths = await PluginRegistry.discover('js/modules');
-      await PluginRegistry.loadModules('js/modules', paths, { context: 'compare' });
-      await PluginRegistry.initAll(_hostPluginCtx());
+      await PluginRegistry.loadModules('js/modules', paths, { context: 'compare', deferPlacements: ['studio'] });
+      const hostCtx = _hostPluginCtx();
+      await PluginRegistry.initAll(hostCtx);
+      // Plugins of the Studio's placement load when the Studio first needs them.
+      if (typeof StudioEditor !== 'undefined' && StudioEditor.setModeLoader) {
+        StudioEditor.setModeLoader({
+          pending: () => PluginRegistry.hasDeferred('studio'),
+          load: () => PluginRegistry.loadLazy('studio', hostCtx)
+        });
+      }
       _hostPluginsReady = true;
       _applyHostPlugins();
     } catch (err) {

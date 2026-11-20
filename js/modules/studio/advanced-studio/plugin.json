@@ -2,7 +2,7 @@
   "id": "advanced-studio",
   "name": "Advanced Studio",
   "version": "1.2.0",
-  "platformCompat": ">=1.86.0",
+  "platformCompat": ">=1.87.1",
   "dataTypes": [
     "3d",
     "live"

@@ -83,6 +83,11 @@
     # dev_server.py applies the same table (_static_cache_policy).
     RewriteCond %{QUERY_STRING} (^|&)v=
     RewriteRule \.(js|mjs|css)$ - [E=LUMEN_VERSIONED:1]
+    # Every file of a plugin (plugin.json and lang/*.json too): js/core/plugin-trust.js
+    # stamps each one with the head of the plugin's content hash, so a changed plugin
+    # lives at new URLs. Only below js/modules/ — nothing else with a ?v= changes.
+    RewriteCond %{QUERY_STRING} (^|&)v=
+    RewriteRule ^js/modules/. - [E=LUMEN_VERSIONED:1]
     RewriteCond %{QUERY_STRING} (^|&)v=
     RewriteRule \.(bin|rgba|gz)$ - [E=LUMEN_VERSIONED_PACK:1]
 </IfModule>
@@ -113,6 +118,7 @@
     </FilesMatch>
     <FilesMatch "\.json$">
         Header set Cache-Control "no-cache"
+        Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED
     </FilesMatch>
     # Brick packs ARE the volume. The loader stamps each pack URL with a hash of the
     # manifest's pack list, so a dataset re-processed under the same name is fetched
@@ -123,6 +129,8 @@
         Header set Cache-Control "no-cache"
         Header set Cache-Control "public, max-age=31536000, immutable" env=LUMEN_VERSIONED_PACK
     </FilesMatch>
+    # Any other type of file of a stamped plugin (no FilesMatch above names it).
+    Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED
     Header set X-Content-Type-Options "nosniff"
 </IfModule>
 <IfModule mod_expires.c>

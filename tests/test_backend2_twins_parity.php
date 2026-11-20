@@ -126,6 +126,17 @@ check('the repository copy of DATA_WEB/.htaccess is the text both backends write
     $norm((string)file_get_contents("$repo/DATA_WEB/.htaccess")) === $php['guards'][0]);
 $js = $norm((string)file_get_contents("$repo/js/.htaccess"));
 check('js/.htaccess carries the execution ban', strpos($js, lumen_exec_ban_rules()) !== false && strpos($js, LUMEN_GUARD_MARKER) !== false);
+// The cache table of dev_server.py (_static_cache_policy) as the root .htaccess spells it:
+// a stamped file below js/modules/ — a plugin's plugin.json and lang/*.json included — is
+// immutable for a week (js/core/plugin-trust.js stamps every plugin file with ?v=<hash head>).
+$rootHt = $norm((string)file_get_contents("$repo/.htaccess"));
+check('root .htaccess flags a stamped js/modules/ file as versioned',
+    preg_match('/RewriteCond %\{QUERY_STRING\} \(\^\|&\)v=
+\s*RewriteRule \^js\/modules\/\. - \[E=LUMEN_VERSIONED:1\]/', $rootHt) === 1);
+check('root .htaccess makes a flagged .json and any other flagged file immutable',
+    preg_match('/<FilesMatch "\\\\\.json\$">[^<]*env=LUMEN_VERSIONED[^<]*<\/FilesMatch>/', $rootHt) === 1
+    && preg_match('/^\s*Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED$/m',
+        preg_replace('/<FilesMatch\b.*?<\/FilesMatch>/s', '', $rootHt)) === 1);
 check('no unguarded Options in any guard', !preg_match('/^\s*Options\b/m', implode("\n", $php['guards']) . $js));
 check('a range past the end is 416, a suffix range the last bytes',
     $php['ranges'][5] === false && $php['ranges'][2] === [70, 99] && $php['ranges'][9] === null);

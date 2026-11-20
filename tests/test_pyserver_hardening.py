@@ -304,6 +304,23 @@ class LiveServer(unittest.TestCase):
         st, h3, _ = self.req("GET", "/js/core/plugin-registry.js?v=1.2.3")
         self.assertIn("immutable", h3.get("cache-control", ""))
 
+    def test_a_stamped_plugin_file_is_immutable_on_the_wire(self):
+        # js/core/plugin-trust.js asks for <plugin>/<file>?v=<16 hex>: whatever the file
+        # type (the plugin's plugin.json and lang/*.json too), the host answers it
+        # cacheable for a week; the same file unstamped keeps being revalidated.
+        for rel in ("js/modules/tools/toggle-grid/plugin.json", "js/modules/tools/toggle-grid/index.js",
+                    "js/modules/tools/toggle-grid/lang/en.json"):
+            if not (ROOT / rel).is_file():
+                continue
+            st, h, _ = self.req("GET", f"/{rel}?v=0123456789abcdef")
+            self.assertEqual(st, 200, rel)
+            self.assertEqual(h.get("cache-control"), "public, max-age=604800, immutable", rel)
+            st, h, _ = self.req("GET", f"/{rel}")
+            self.assertEqual(h.get("cache-control"), "no-cache", rel)
+        self.assertTrue((ROOT / "js/modules/tools/toggle-grid/lang/en.json").is_file()
+                        or (ROOT / "js/modules/tools/toggle-grid/plugin.json").is_file(),
+                        "the fixture plugin this test reads is gone: pick another one")
+
     def test_catalog_is_revalidated(self):
         st, h, body = self.req("GET", "/DATA_WEB/catalog.json", {"Accept-Encoding": "gzip"})
         self.assertEqual(st, 200)

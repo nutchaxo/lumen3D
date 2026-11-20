@@ -206,6 +206,7 @@ const StudioEditor = (() => {
     _pushHistory('Open Studio');
     _renderAll();
     _refreshModeSwitch();
+    _ensureModes();
     return _docToken;
   }
 
@@ -444,8 +445,46 @@ const StudioEditor = (() => {
   const _modes = new Map();
   let _activeMode = null;
   let _modeBusy = false;
+  // The page that hosts the Studio loads the studio-placement plugins on first use, not
+  // at boot: { pending() → boolean, load() → Promise }. _modesLoading is the load in
+  // flight (the switch shows a placeholder meanwhile), null otherwise.
+  let _modeLoader = null;
+  let _modesLoading = null;
   let _closeRequest = null;
   let _modeSwitchSignature = '';
+
+  /**
+   * Hands the Studio the way to load the plugins that register modes: pending() says
+   * some still wait, load() loads them (their init() calls registerMode). The load
+   * starts when a document opens, or when a mode that is not registered yet is asked
+   * for; a failure keeps the Simple view fully usable and is reported once per try.
+   */
+  function setModeLoader(loader) {
+    const valid = loader && typeof loader.pending === 'function' && typeof loader.load === 'function';
+    _modeLoader = valid ? loader : null;
+  }
+
+  function _ensureModes() {
+    if (_modesLoading) return _modesLoading;
+    const loader = _modeLoader;
+    let wanted = false;
+    try { wanted = Boolean(loader && loader.pending()); } catch (err) { console.error('[StudioEditor] the mode loader failed:', err); }
+    if (!wanted) return Promise.resolve();
+    const run = (async () => {
+      try {
+        await loader.load();
+      } catch (err) {
+        console.error('[StudioEditor] the Studio views could not be loaded:', err);
+        _toast(_t('toast.studioModesUnavailable', 'The other Studio views could not be loaded.'));
+      } finally {
+        if (_modesLoading === run) _modesLoading = null;
+        _refreshModeSwitch();
+      }
+    })();
+    _modesLoading = run;
+    _refreshModeSwitch();
+    return run;
+  }
 
   /**
    * mode = { id, label: string | () => string, icon, mount(rootEl, api) → void | Promise,
@@ -527,7 +566,7 @@ const StudioEditor = (() => {
   function _refreshModeSwitch() {
     const el = document.getElementById('studio-mode-switch');
     if (!el) return;
-    const visible = _modes.size > 0 && _isOpen;
+    const visible = (_modes.size > 0 || Boolean(_modesLoading)) && _isOpen;
     el.classList.toggle('hidden', !visible);
     if (!visible) { _modeSwitchSignature = ''; return; }
     const entries = [{ id: 'simple', label: _t('studio.modeSimple', 'Simple'), icon: null, ok: true, reason: '' }];
@@ -540,6 +579,9 @@ const StudioEditor = (() => {
         ok: eligibility.ok,
         reason: !eligibility.ok && eligibility.reasonKey ? _t(eligibility.reasonKey, '') : ''
       });
+    }
+    if (_modesLoading) {
+      entries.push({ id: '__loading', label: _t('studio.modeLoading', 'Loading…'), icon: null, ok: false, reason: '' });
     }
     const active = getMode();
     const signature = JSON.stringify([active, entries]);
@@ -660,6 +702,8 @@ const StudioEditor = (() => {
    * → Promise<boolean>: whether the requested view is now the one shown.
    */
   async function setMode(id) {
+    // A mode of a plugin the page has not loaded yet: it is loaded first.
+    if (id !== undefined && id !== null && id !== 'simple' && !_modes.has(id)) await _ensureModes();
     if (_modeBusy) return false;
     const target = id === undefined || id === null || id === 'simple' ? null : _registeredMode(id);
     if (target === undefined) return false;
@@ -4736,6 +4780,7 @@ const StudioEditor = (() => {
     close,
     requestClose,
     registerMode,
+    setModeLoader,
     getMode,
     setMode,
     getDocument,

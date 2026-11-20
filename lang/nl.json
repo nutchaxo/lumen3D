@@ -68,6 +68,7 @@
   },
   "toast": {
     "studioModeFailed": "Deze weergave kon niet worden geopend.",
+    "studioModesUnavailable": "De andere Studio-weergaven konden niet worden geladen.",
     "figureUnavailable": "Figuren exporteren kan niet op deze pagina",
     "graphUnavailable": "Grafieken exporteren kan niet op deze pagina",
     "workspaceSaved": "Werkomgeving opgeslagen",
@@ -705,6 +706,7 @@
   },
   "studio": {
     "modeSimple": "Eenvoudig",
+    "modeLoading": "Laden…",
     "modeSwitch": "Studio-weergave",
     "importOtherFigure": "Dit Studio-bestand is opgeslagen voor een andere figuur: de annotaties zijn geïmporteerd, maar de kanaalinstellingen zijn alleen toegepast waar de figuur overeenkomt.",
     "importChannelsKept": "De annotaties zijn geïmporteerd. Deze afbeelding heeft geen ruwe kanaalwaarden om opnieuw in te kleuren, dus ze behoudt haar kanaalinstellingen.",

@@ -26,6 +26,9 @@
      4. viewer.js calls PluginRegistry.prepareAll(ctx) once the renderer exists but
         BEFORE the volume streams, for modules that set the scene's initial state
      5. viewer.js calls PluginRegistry.initAll(ctx) after the volume has loaded
+     6. A placement named in loadModules `deferPlacements` ('studio') is not touched at
+        boot: hasDeferred(placement) says plugins wait, loadLazy(placement, ctx) loads,
+        verifies and initialises them on first use (the Studio opening).
 
    ============================================================ */
 
@@ -85,6 +88,12 @@ const PluginRegistry = (() => {
   // Surfaced to the admin panel (and the console) via getQuarantined().
   // Keyed by module path ('<placement>/<id>') — reset on each discover().
   const _quarantined = new Map();
+
+  // Plugins of a placement the page loads on first use (loadModules `deferPlacements`):
+  // placement → { basePath, paths: string[], opts, promise }. Nothing of theirs — not a
+  // plugin.json, not a script — is requested until loadLazy(placement) runs, so a page
+  // that never needs them (the Studio never opened) pays no request for them at all.
+  const _deferred = new Map();
 
   function _quarantine(modPath, reason, detail) {
     _quarantined.set(modPath, { path: modPath, reason, detail, at: Date.now() });
@@ -212,6 +221,7 @@ const PluginRegistry = (() => {
     _discoveredMeta.clear(); // drop any inline meta from a previous discover()
     _discoveredVouch.clear();
     _quarantined.clear();
+    _deferred.clear();
     // `authoritative` marks the sources that speak for the SERVER's trust store. The
     // static manifest is a generated file sitting in the web root — it can carry the
     // plugin list, never the trust verdict.
@@ -270,8 +280,10 @@ const PluginRegistry = (() => {
     let releaseManifestPromise = null;
     const releaseManifest = () => (releaseManifestPromise ||= _releaseManifest());
 
+    const deferred = new Set(Array.isArray(opts.deferPlacements) ? opts.deferPlacements : []);
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
+        if (deferred.has(modPath.split('/')[0]) && _defer(basePath, modPath, opts)) return;
         // Prefer rich metadata captured during discover() (live endpoint) to skip
         // a redundant plugin.json round-trip; otherwise fetch it (static manifest
         // / PHP / embedded-default hosts, or a direct loadModules(paths) call).
@@ -455,6 +467,88 @@ const PluginRegistry = (() => {
       }
     });
     await Promise.all(loadPromises);
+  }
+
+  /**
+   * Set a path of a deferred placement aside for loadLazy(). The data-type and context
+   * gates are applied here when discovery already carried the plugin's metadata, so
+   * hasDeferred() does not announce a plugin no gate would let in; without that
+   * metadata (a static host) they run at load time like any other plugin's.
+   * @returns {boolean} true when the path was taken (deferred or gated out)
+   */
+  function _defer(basePath, modPath, opts) {
+    const placement = modPath.split('/')[0];
+    const known = _discoveredMeta.get(modPath);
+    if (known && typeof known === 'object') {
+      if (opts.dataType && !_acceptsDataType(known, opts.dataType, opts.allowUndeclaredDataTypes)) return true;
+      if (opts.context && !_acceptsContext(known, opts.context)) return true;
+    }
+    let slot = _deferred.get(placement);
+    if (!slot) {
+      const lazyOpts = Object.assign({}, opts);
+      delete lazyOpts.deferPlacements;
+      slot = { basePath, paths: [], opts: lazyOpts, promise: null };
+      _deferred.set(placement, slot);
+    }
+    if (!slot.paths.includes(modPath)) slot.paths.push(modPath);
+    return true;
+  }
+
+  /** A quarantine caused by a request that did not get through, not by the plugin. */
+  function _isTransientQuarantine(q) {
+    if (q.reason === 'meta-unreachable' || q.reason === 'load-error') return true;
+    return q.reason === 'untrusted' && (q.detail === 'fetch failed' || q.detail === 'hash-unavailable');
+  }
+
+  /** @returns {boolean} true while plugins of this placement wait for loadLazy() */
+  function hasDeferred(placement) {
+    const slot = _deferred.get(placement);
+    return Boolean(slot && slot.paths.length && !slot.promise);
+  }
+
+  /**
+   * Load, verify and initialise the plugins a page set aside for `placement`, once:
+   * the same loadModules() options as the page used, then init() of just those
+   * plugins with `ctx` (the page's own context when omitted). Every caller gets the
+   * same promise; one that failed is dropped so the next call tries again.
+   * Plugin-level failures are quarantined as at boot; a rejection means the loading
+   * itself broke.
+   * @param {string} placement  e.g. 'studio'
+   * @param {object} [ctx]
+   * @returns {Promise<{placement: string, ids: string[]}>} the ids now registered
+   */
+  function loadLazy(placement, ctx) {
+    const slot = _deferred.get(placement);
+    if (!slot) return Promise.resolve({ placement, ids: [] });
+    if (slot.promise) return slot.promise;
+    const promise = (async () => {
+      const before = new Set(_modules.keys());
+      const attempted = slot.paths.slice();
+      attempted.forEach(p => _quarantined.delete(p));
+      await loadModules(slot.basePath, attempted, slot.opts);
+      const fresh = [..._modules.keys()].filter(id => !before.has(id));
+      await _initEntries(ctx || _ctx, fresh);
+      // loadModules quarantines a plugin instead of throwing, which would leave the caller
+      // with a resolved promise and no plugin. A refusal is reported to the caller once; a
+      // path that failed only for want of the network (a dropped request, a 429) is also
+      // put back in the slot with its quarantine entry lifted, so the next call retries it.
+      const failed = attempted.map(p => _quarantined.get(p)).filter(Boolean);
+      if (failed.length) {
+        const retry = new Set(failed.filter(_isTransientQuarantine).map(q => q.path));
+        retry.forEach(p => _quarantined.delete(p));
+        slot.paths = slot.paths.filter(p => retry.has(p));
+        const err = new Error(`Plugins of placement "${placement}" could not be loaded: `
+          + failed.map(q => `${q.path} (${q.reason}: ${q.detail})`).join('; '));
+        err.code = 'PLUGIN_LOAD_FAILED';
+        err.failed = failed;
+        throw err;
+      }
+      _emit('lazy-loaded', { placement, ids: fresh });
+      return { placement, ids: fresh };
+    })();
+    slot.promise = promise;
+    promise.catch(() => { if (slot.promise === promise) slot.promise = null; });
+    return promise;
   }
 
   // ─── Plugin scripts / styles (plugin.json `scripts`, `styles`) ──────
@@ -810,7 +904,20 @@ const PluginRegistry = (() => {
    */
   async function initAll(ctx) {
     _ctx = ctx;
+    await _initEntries(ctx, null);
+    _emit('modules-initialized');
+  }
+
+  /**
+   * init() of the registered modules `ids` (all of them when null) that no earlier pass
+   * has initialised: a module is initialised exactly once, whichever of initAll() and
+   * loadLazy() reaches it first.
+   */
+  async function _initEntries(ctx, ids) {
     for (const [id, entry] of _modules) {
+      if (ids && !ids.includes(id)) continue;
+      if (entry.initStarted) continue;
+      entry.initStarted = true;
       if (!entry.impl) {
         entry.state = 'quarantined';
         _quarantine(entry.meta._modPath || id, 'no-impl',
@@ -829,7 +936,6 @@ const PluginRegistry = (() => {
       }
     }
     _bindLanguageChange();
-    _emit('modules-initialized');
   }
 
   // Re-render plugin-owned dynamic content on a language switch. Static
@@ -1403,6 +1509,8 @@ const PluginRegistry = (() => {
   return {
     discover,
     loadModules,
+    hasDeferred,
+    loadLazy,
     implement,
     prepareAll,
     initAll,

@@ -269,7 +269,7 @@ await test('compressed TIFFs: deflate (8) and 32946, predictor 1 and 2, strips, 
   for (const bd of [8, 16, 32]) for (const compression of ['deflate', 'adobe']) for (const predictor of bd === 32 ? [1, 2] : [1, 2]) for (const bigEndian of [false, true]) {
     const W = 37, H = 29;
     const planes = [gradient(W, H, bd, 1), gradient(W, H, bd, 2)];
-    const bytes = buildTiff({ width: W, height: H, bitDepth: bd, planes: planes.map((p) => p.slice()), compression, predictor, rowsPerStrip: 8, bigEndian });
+    const bytes = buildTiff({ width: W, height: H, bitDepth: bd, planes: planes.map((p) => p.slice()), compression, predictor, rowsPerStrip: 8, bigEndian, description: 'ImageJ=1.54f\nimages=2\nchannels=2\n' });
     assert.equal(T.needsDecoder(bytes), true);
     const img = await T.read(bytes, 'bundle', { inflate });
     assert.equal(img.name, 'bundle'); assert.equal(img.width, W); assert.equal(img.height, H); assert.equal(img.bitDepth, bd);
@@ -314,14 +314,17 @@ await test('compressed TIFFs: what is not read is refused with IJ_TIFF_UNSUPPORT
   assert.throws(() => T.needsDecoder(new Uint8Array(4)), unsupported);
   assert.throws(() => T.needsDecoder(Uint8Array.from([0x49, 0x49, 43, 0, 8, 0, 0, 0])), unsupported, 'BigTIFF');
   assert.throws(() => T.needsDecoder(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8])), unsupported, 'not a TIFF');
-  // LZW (5), a z / t stack described by ImageJ, a different plane size
+  // LZW (5)
   const lzw = buildTiff({ width: W, height: H, bitDepth: 8, planes: [plane], compression: 'deflate' });
   const idx = (() => { for (let i = 8; i < lzw.length - 12; i++) if (lzw[i] === 3 && lzw[i + 1] === 1 && lzw[i + 2] === 3 && lzw[i + 3] === 0 && lzw[i + 4] === 1) return i; return -1; })();
   assert.ok(idx > 0, 'found the compression tag');
   const lz = lzw.slice(); lz[idx + 8] = 5;
   await assert.rejects(T.read(lz, 'x', { inflate }), unsupported);
-  await assert.rejects(T.read(buildTiff({ width: W, height: H, bitDepth: 8, planes: [plane, plane], compression: 'deflate', description: 'ImageJ=1.54f\nslices=2\n' }), 'x', { inflate }), (e) => e.code === 'IJ_IO_STACK', 'a z stack: its own code, not the format sentence');
-  await assert.rejects(T.read(buildTiff({ width: W, height: H, bitDepth: 8, planes: [plane, plane, plane], compression: 'deflate', description: 'ImageJ=1.54f\nimages=3\nslices=3\n' }), 'x', { inflate }), (e) => e.code === 'IJ_IO_STACK');
+  // a z stack described by ImageJ is read as a stack (the compressed reader shares assemble() with IJTiff.read)
+  const zs = await T.read(buildTiff({ width: W, height: H, bitDepth: 8, planes: [plane, plane], compression: 'deflate', description: 'ImageJ=1.54f\nimages=2\nslices=2\n' }), 'x', { inflate });
+  assert.equal(zs.nZ, 2); assert.equal(zs.nT, 1); assert.equal(zs.channels.length, 1); assert.equal(zs.channels[0].planes.length, 2);
+  const z3 = await T.read(buildTiff({ width: W, height: H, bitDepth: 8, planes: [plane, plane, plane], compression: 'deflate', description: 'ImageJ=1.54f\nimages=3\nslices=3\n' }), 'x', { inflate });
+  assert.equal(z3.nZ, 3);
   // a truncated strip: the data is cut off
   const cut = buildTiff({ width: W, height: H, bitDepth: 8, planes: [plane], compression: 'deflate' }).slice(0, 60);
   await assert.rejects(T.read(cut, 'x', { inflate }), unsupported);
@@ -353,7 +356,7 @@ await test('File > Open: the kind of a file by name then by magic bytes; a decod
   const grey = K.imageFromRgba(Uint8ClampedArray.from([5, 5, 5, 255, 9, 9, 9, 0]), 2, 1, 'g');
   assert.equal(grey.channels.length, 1); assert.deepEqual(asArray(grey.channels[0].data), [5, 9]); assert.equal(grey.bitDepth, 8); assert.equal(grey.name, 'g');
   const col = K.imageFromRgba(Uint8ClampedArray.from([1, 2, 3, 255, 4, 5, 6, 255]), 2, 1, 'c');
-  assert.equal(col.channels.length, 3);
+  assert.equal(col.channels.length, 3); assert.equal(col.rgb, true); assert.equal(grey.rgb, undefined);
   assert.deepEqual(asArray(col.channels.map((c) => c.name)), ['Red', 'Green', 'Blue']);
   assert.deepEqual(asArray(col.channels.map((c) => c.color)), ['#ff0000', '#00ff00', '#0000ff']);
   assert.deepEqual(asArray(col.channels[1].data), [2, 5]);

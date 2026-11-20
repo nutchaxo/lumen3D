@@ -397,7 +397,7 @@ await test('call(): only a command of the calling package, busy / Cancel like ap
   const { t, sh, api, id } = await start();
   const r = await api.call('doc.fiji.echo', { v: 41 });
   assert.equal(r.v, 41); assert.equal(r.hasBudget, true);
-  assert.deepEqual(arr(r.members).sort(), ['budgetBytes', 'check', 'createDoc', 'done', 'fetch', 'ijError', 'lockDocs', 'postEvent', 'readDoc', 'release', 'reserve', 'tick', 'transfer'].sort(), 'the services of E');
+  assert.deepEqual(arr(r.members).sort(), ['budgetBytes', 'check', 'commitPlanes', 'createDoc', 'dims', 'done', 'fetch', 'getLabel', 'getPosition', 'ijError', 'labels', 'lockDocs', 'plane', 'planes', 'postEvent', 'readDoc', 'release', 'reserve', 'runOp', 'setPosition', 'tick', 'transfer'].sort(), 'the services of E (stack members: DOCS/studio-advanced/stacks/API.md §6)');
   // not the package's own: refused; not a command at all: refused
   await reject(api.call('doc.enh.half', {}), 'IJ_EXT_FORBIDDEN', 'a command of another package');
   await reject(api.call('doc.fiji.nothing', {}), 'IJ_EXT_FORBIDDEN', 'an unregistered name');

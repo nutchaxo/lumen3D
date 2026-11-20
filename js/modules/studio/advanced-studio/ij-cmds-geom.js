@@ -129,6 +129,8 @@
       fields: [
         { type: 'number', id: 'xshrink', labelKey: 'dlg.geom.xShrink', value: 2, min: 1, max: 4096, integer: true, decimals: 0 },
         { type: 'number', id: 'yshrink', labelKey: 'dlg.geom.yShrink', value: 2, min: 1, max: 4096, integer: true, decimals: 0 },
+        // Binner.showDialog: "Z shrink factor" for a stack
+        ...((doc.nZ || 1) > 1 ? [{ type: 'number', id: 'zshrink', labelKey: 'dlg.geom.zShrink', value: 1, min: 1, max: 4096, integer: true, decimals: 0 }] : []),
         { type: 'choice', id: 'method', labelKey: 'dlg.geom.binMethod', value: 'average', options: ['average', 'median', 'min', 'max', 'sum'].map((m) => ({ value: m, labelKey: 'dlg.geom.bin.' + m })) },
         { type: 'message', id: 'note', labelKey: 'dlg.geom.binNote' }
       ],
@@ -136,11 +138,12 @@
         const out = {};
         if (Math.floor(doc.width / vals.xshrink) < 1) out.xshrink = 'err.geomBinTooLarge';
         if (Math.floor(doc.height / vals.yshrink) < 1) out.yshrink = 'err.geomBinTooLarge';
+        if ((doc.nZ || 1) > 1 && Math.floor(doc.nZ / vals.zshrink) < 1) out.zshrink = 'err.geomBinTooLarge';
         return Object.keys(out).length ? out : null;
       }
     });
     if (!v) return;
-    await api.run('bin', { xshrink: v.xshrink, yshrink: v.yshrink, method: v.method }, { noRoi: true, labelKey: 'cmd.transformBin' });
+    await api.run('bin', Object.assign({ xshrink: v.xshrink, yshrink: v.yshrink, method: v.method }, (doc.nZ || 1) > 1 ? { zshrink: v.zshrink } : {}), { noRoi: true, labelKey: 'cmd.transformBin' });
   }
 
   // ── Image > Adjust > Size... ───────────────────────────────────────────────────────────────────
@@ -157,11 +160,24 @@
     const w0 = Math.max(1, Math.floor(ow / 2));
     const h0 = Math.max(1, Math.trunc(w0 * (oh / ow)));
     let sizeToHeight = false;
+    // Resizer.run, a stack: "Depth (images):" (a hyperstack: "Depth (slices):" and "Time (frames):"), left as it is = no z scaling. A stack of frames only
+    // (no slices) is scaled along t.
+    const nZ = doc.nZ || 1, nT = doc.nT || 1, nSl = doc.nSlices || 1;
+    const dimAware = !!doc.hyperstack || (doc.nC || 1) > 1;
+    const depthFields = [];
+    if (nSl > 1) {
+      if (dimAware) {
+        if (nZ > 1) depthFields.push({ type: 'number', id: 'depth', labelKey: 'dlg.geom.depthSlices', value: nZ, min: 1, max: 100000, integer: true, decimals: 0 });
+        if (nT > 1) depthFields.push({ type: 'number', id: 'time', labelKey: 'dlg.geom.timeFrames', value: nT, min: 1, max: 100000, integer: true, decimals: 0 });
+      } else if (nZ > 1) depthFields.push({ type: 'number', id: 'depth', labelKey: 'dlg.geom.depthImages', value: nZ, min: 1, max: 100000, integer: true, decimals: 0 });
+      else depthFields.push({ type: 'number', id: 'time', labelKey: 'dlg.geom.depthImages', value: nT, min: 1, max: 100000, integer: true, decimals: 0 });
+    }
     const v = await api.dialog({
       title: api.tr('cmd.adjustSize'), okLabel: api.tr('dlg.ok'),
       fields: [
         { type: 'number', id: 'width', labelKey: 'dlg.geom.widthPx', value: w0, min: 1, max: 100000, integer: true, decimals: 0 },
         { type: 'number', id: 'height', labelKey: 'dlg.geom.heightPx', value: h0, min: 1, max: 100000, integer: true, decimals: 0 },
+        ...depthFields,
         { type: 'check', id: 'constrain', labelKey: 'dlg.geom.constrain', value: true },
         { type: 'check', id: 'average', labelKey: 'dlg.geom.average', value: true },
         { type: 'choice', id: 'interpolation', labelKey: 'dlg.geom.interpolation', value: 'bilinear', options: interpOptions() }
@@ -179,7 +195,18 @@
     let width = v.width, height = v.height;
     // Resizer: if (!crop && constrain) { if (sizeToHeight) newWidth = round(newHeight*(origWidth/origHeight)); else newHeight = round(newWidth*(origHeight/origWidth)); }
     if (v.constrain) { if (sizeToHeight) width = Math.max(1, jround(height * (ow / oh))); else height = Math.max(1, jround(width * (oh / ow))); }
-    await api.run('resize', { width, height, interpolation: v.interpolation, averageWhenDownsizing: !!v.average }, { labelKey: 'cmd.adjustSize' });
+    // Resizer: the stack is resized in X and Y in place, a new Depth / Time opens the z-scaled stack as a NEW image (Resizer.zScale on the resized one)
+    const newDepth = v.depth !== undefined ? v.depth : nZ, newTime = v.time !== undefined ? v.time : nT;
+    const zChange = newDepth !== nZ || newTime !== nT;
+    const xyChange = !(width === doc.width && height === doc.height && isWhole(r, doc.width, doc.height) && !isArea(st.roi));
+    if (xyChange || !zChange) await api.run('resize', { width, height, interpolation: v.interpolation, averageWhenDownsizing: !!v.average }, { labelKey: 'cmd.adjustSize' });
+    if (zChange) {
+      const now = api.state();
+      if (now.doc && now.doc.docId === doc.docId) {
+        await api.run('resizeDepth', Object.assign({ interpolation: v.interpolation, averageWhenDownsizing: !!v.average }, newDepth !== nZ ? { depth: newDepth } : {}, newTime !== nT ? { time: newTime } : {}),
+          { docId: doc.docId, noRoi: true, labelKey: 'cmd.adjustSize' });
+      }
+    }
   }
 
   // ── Image > Adjust > Canvas Size... ────────────────────────────────────────────────────────────
@@ -220,15 +247,20 @@
     const W = doc.width, H = doc.height;
     const rect = selRect(st.roi, W, H);
     const r = rect || { x: 0, y: 0, w: W, h: H };
+    // Scaler.showDialog on a stack: "Z Scale", "Depth (images)" (z only: the slices of a stack, a z-scaled stack is a new window) and "Process entire stack"
+    const nZ = doc.nZ || 1, nSl = doc.nSlices || 1, stackish = nSl > 1;
     const v = await api.dialog({
       title: api.tr('cmd.imageScale'), okLabel: api.tr('dlg.ok'),
       fields: [
         { type: 'number', id: 'xscale', labelKey: 'dlg.geom.xScale', value: 0.5, min: 0.0001, max: 1000 },
         { type: 'number', id: 'yscale', labelKey: 'dlg.geom.yScale', value: 0.5, min: 0.0001, max: 1000 },
+        ...(nZ > 1 ? [{ type: 'number', id: 'zscale', labelKey: 'dlg.geom.zScale', value: 1, min: 0.0001, max: 1000 }] : []),
         { type: 'number', id: 'width', labelKey: 'dlg.geom.widthPx', value: Math.max(1, jround(r.w * 0.5)), min: 1, max: 100000, integer: true, decimals: 0 },
         { type: 'number', id: 'height', labelKey: 'dlg.geom.heightPx', value: Math.max(1, jround(r.h * 0.5)), min: 1, max: 100000, integer: true, decimals: 0 },
+        ...(nZ > 1 ? [{ type: 'number', id: 'depth', labelKey: 'dlg.geom.depthImages', value: nZ, min: 1, max: 100000, integer: true, decimals: 0 }] : []),
         { type: 'choice', id: 'interpolation', labelKey: 'dlg.geom.interpolation', value: 'bilinear', options: interpOptions() },
         { type: 'check', id: 'average', labelKey: 'dlg.geom.average', value: true },
+        ...(stackish ? [{ type: 'check', id: 'process', labelKey: 'dlg.geom.processStack', value: true }] : []),
         { type: 'check', id: 'newWindow', labelKey: 'dlg.geom.newWindow', value: true },
         { type: 'string', id: 'title', labelKey: 'dlg.geom.title', value: uniqueName(api, doc.name), enabledIf: (vals) => !!vals.newWindow }
       ],
@@ -239,19 +271,28 @@
           const h = Math.max(1, jround(vals.width * r.h / r.w));
           set({ height: h, xscale: vals.width / r.w, yscale: h / r.h });
         } else if (changed === 'height') set({ yscale: vals.height / r.h });
+        else if (changed === 'zscale') set({ depth: Math.max(1, jround(vals.zscale * nZ)) });
+        else if (changed === 'depth') set({ zscale: vals.depth / nZ });
       }
     });
     if (!v) return;
     let width = v.width, height = v.height;
     if (v.xscale > 0 && v.yscale > 0) { width = Math.max(1, jround(r.w * v.xscale)); height = Math.max(1, jround(r.h * v.yscale)); }
+    // "Process entire stack" ticked (the default): every slice, else the one on screen; the depth is scaled only with the whole stack in a new window
+    const process = stackish && v.process !== false;
     if (v.newWindow) {
-      await api.run('scaleNew', { xscale: v.xscale, yscale: v.yscale, interpolation: v.interpolation, averageWhenDownsizing: !!v.average, width, height, name: v.title || uniqueName(api, doc.name) },
-        { labelKey: 'cmd.imageScale' });
+      const params = { xscale: v.xscale, yscale: v.yscale, interpolation: v.interpolation, averageWhenDownsizing: !!v.average, width, height, name: v.title || uniqueName(api, doc.name) };
+      if (stackish) {
+        params.stack = process;
+        const depth = nZ > 1 ? (v.zscale > 0 ? Math.max(1, jround(nZ * v.zscale)) : v.depth) : nZ;
+        if (process && depth !== nZ) params.depth = depth;
+      }
+      await api.run('scaleNew', params, { labelKey: 'cmd.imageScale' });
       return;
     }
     // Scaler.run: `if ((ip.getWidth()>1 && ip.getHeight()>1) || newWindow) ip.setInterpolationMethod(m) else NONE`
     const interpolation = W > 1 && H > 1 ? v.interpolation : 'none';
-    const res = await api.run('scaleInPlace', { xscale: v.xscale, yscale: v.yscale, interpolation, rect }, { channel: 'all', labelKey: 'cmd.imageScale' });
+    const res = await api.run('scaleInPlace', { xscale: v.xscale, yscale: v.yscale, interpolation, rect }, Object.assign({ channel: 'all', labelKey: 'cmd.imageScale' }, stackish ? { planes: process ? 'all' : 'current' } : {}));
     if (res) api.setRoi(null);           // Scaler.scale: imp.deleteRoi()
   }
 

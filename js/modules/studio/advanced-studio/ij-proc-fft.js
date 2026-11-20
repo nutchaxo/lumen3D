@@ -989,7 +989,7 @@
 
   // ---- fft ------------------------------------------------------------------------------------------------
   defineOp('fft', {
-    kind: 'newdoc', version: 1, channels: 'one', roi: 'bounds', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'bounds', preview: false,
     validate(p) {
       for (const k of ['fftWindow', 'rawPs']) if (p[k] !== undefined && typeof p[k] !== 'boolean') throw ijError('IJ_BAD_ARGS', k);
       if (p.sourceRev !== undefined && p.sourceRev !== null && !isNum(p.sourceRev)) throw ijError('IJ_BAD_ARGS', 'sourceRev');
@@ -1048,7 +1048,7 @@
   const sourceChanged = () => ijError('IJ_FFT_SOURCE_CHANGED', 'the image the spectrum came from is gone or changed');
 
   defineOp('inverseFft', {
-    kind: 'newdoc', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: false, channels: 'one', roi: 'ignore', preview: false,
     validate(p, info) {
       if (info && Array.isArray(info.docs) && info.docs.length !== 1) throw ijError('IJ_FFT_SOURCE_CHANGED', 'the source image must be named');
     },
@@ -1136,7 +1136,7 @@
   }
 
   defineOp('bandpass', {
-    kind: 'pixel', version: 1, channels: 'each', roi: 'bounds', preview: false, display: true,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', channels: 'each', roi: 'bounds', preview: false, display: true,
     validate: validateBandpass,
     scratchBytes(info) {
       const r = info.region || { w: info.width, h: info.height };
@@ -1159,7 +1159,7 @@
 
   // The image "Display filter" shows (FFTFilter.java:400-404): the multiplier of filterLargeSmall as a 32-bit image, quadrants swapped.
   defineOp('bandpassFilter', {
-    kind: 'newdoc', version: 1, channels: 'one', roi: 'bounds', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: 'each', channels: 'one', roi: 'bounds', preview: false,
     validate: validateBandpass,
     scratchBytes(info) {
       let rect;
@@ -1191,7 +1191,7 @@
 
   // ---- swapQuadrants -----------------------------------------------------------------------------------------
   defineOp('swapQuadrants', {
-    kind: 'pixel', version: 1, channels: 'each', roi: 'ignore', preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', channels: 'each', roi: 'ignore', preview: false,
     validate(p, info) { if (info && info.width !== info.height) throw ijError('IJ_FFT_NOT_SQUARE', 'image must be square'); },
     scratchBytes: () => 0,
     prepare() {
@@ -1202,7 +1202,7 @@
 
   // ---- directionality ----------------------------------------------------------------------------------------
   defineOp('directionality', {
-    kind: 'compute', version: 1, channels: 'one',
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one',
     validate(p) {
       if (p.method !== 'fourier' && p.method !== 'gradient') throw ijError('IJ_BAD_ARGS', 'method');
       if (!Number.isInteger(p.nbins) || p.nbins < 5 || p.nbins > 720) throw ijError('IJ_BAD_ARGS', 'nbins');

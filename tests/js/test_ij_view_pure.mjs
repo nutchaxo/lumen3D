@@ -342,10 +342,10 @@ const near = (a, b, e = 1e-9) => assert.ok(Math.abs(a - b) <= e, `${a} !~ ${b}`)
   assert.equal(P.formatSize(1.5 * 1024 * 1024), '1.5MB');
   assert.equal(P.formatSize(94 * 1024 * 1024), '94MB');
   assert.equal(P.formatSize(3 * 1024 ** 3), '3.00GB');
-  assert.equal(P.formatSubtitle({ width: 512, height: 512, bitDepth: 8, channels: [{}, {}, {}] }), '512×512 pixels; 8-bit; 768K');
+  assert.equal(P.formatSubtitle({ width: 512, height: 512, bitDepth: 8, channels: [{}, {}, {}] }), 'c:1/3; 512x512 pixels; 8-bit; 768K');
   assert.equal(
     P.formatSubtitle({ width: 512, height: 256, bitDepth: 16, channels: 1, calibration: { pixelWidth: 0.5, pixelHeight: 0.5, unit: 'µm' } }),
-    '256×128 µm (512×256); 16-bit; 256K'
+    '256x128 µm (512x256); 16-bit; 256K'
   );
   assert.equal(P.formatStatus({ x: 3, y: 4, values: [12, 0], bitDepth: 8 }), 'x=3, y=4, value=12,0');
   assert.equal(
@@ -468,6 +468,59 @@ function makeGl() {
     channels: Array.from({ length: nch }, (_, i) => ({ name: 'c' + i, color: '#fff', display: { min: 0, max: bits === 8 ? 255 : 65535, lut: 'Grays', invert: false } })),
     calibration: null
   });
+
+  // 0. stacks: tiles are kept per plane, the requests name the plane, a late plane stays out of the others, invalidate takes planes
+  {
+    const { host } = makeEnv();
+    const disp = D.create(host, {});
+    const calls = [];
+    let hold = null;                               // a promise the tiles of the plane "2,1" wait for
+    const prov = async (c, L, tx, ty, pos) => {
+      calls.push([c, L, tx, ty, pos ? pos.z + ',' + pos.t : null]);
+      if (pos && pos.z === 2 && pos.t === 1 && hold) await hold;
+      const t = P.tileTexels(L, tx, ty, 300, 200);
+      return mkTile(8, t.w, t.h, pos ? 10 + pos.z * 10 + pos.t : 7);
+    };
+    disp.setImage(Object.assign(info(300, 200, 8, 1), { nZ: 4, nT: 2, z: 0, t: 0 }));
+    disp.setTileProvider(prov);
+    await flush(6);
+    assert.ok(calls.length > 0 && calls.every((c) => c[4] === '0,0'), 'every request of the first plane names it');
+    const keys0 = disp.renderer.residentKeys();
+    assert.ok(keys0.length > 0 && keys0.every((k) => k.endsWith('|0')), 'a resident tile ends with its plane index: ' + keys0[0]);
+    // moving to another plane asks for ITS tiles; the first plane's stay resident
+    let release; hold = new Promise((r) => { release = r; });
+    disp.setPosition({ z: 2, t: 1 });
+    await flush(4);
+    assert.ok(calls.some((c) => c[4] === '2,1'), 'the new plane is requested');
+    assert.equal(disp.getStats().loading, true, 'its tiles are still on the way: the picture of the plane just left stays');
+    release(); hold = null;
+    await flush(6);
+    assert.equal(disp.getStats().loading, false);
+    const keys1 = disp.renderer.residentKeys();
+    assert.ok(keys1.some((k) => k.endsWith('|6')) && keys1.some((k) => k.endsWith('|0')), 'both planes resident (t*nZ+z = 6)');
+    // back to the first plane: nothing to fetch
+    const n0 = calls.length;
+    disp.setPosition({ z: 0, t: 0 });
+    await flush(4);
+    assert.equal(calls.length, n0, 'a plane already resident is not fetched again');
+    // invalidate names planes: the others keep their tiles; only that plane is fetched again when it is shown
+    disp.invalidate([0], [6]);
+    await flush(3);
+    assert.equal(calls.length, n0, 'plane 6 is not on screen: nothing is requested');
+    disp.setPosition({ z: 2, t: 1 });
+    await flush(6);
+    assert.ok(calls.length > n0 && calls.slice(n0).every((c) => c[4] === '2,1'), 'only the changed plane was fetched again');
+    const n1 = calls.length;
+    disp.invalidate([0]);
+    await flush(6);
+    assert.ok(calls.length > n1, 'no planes given: the plane on screen is fetched again');
+    // a stack that changes its plane count starts at its first plane; a single image is asked as before (no pos)
+    disp.setImage(info(300, 200, 8, 1));
+    const n2 = calls.length;
+    await flush(6);
+    assert.ok(calls.slice(n2).every((c) => c[4] === null), 'a single image: the provider is called with four arguments');
+    disp.destroy();
+  }
 
   // 1. fit view: coarsest tile first, then the displayed level; fallback while loading
   {
@@ -725,7 +778,7 @@ function makeGl() {
   root.clientWidth = 1000; root.clientHeight = 700;
   doc.body.appendChild(root);
 
-  const ran = [], rois = [], tools = [], heldKeys = [];
+  const ran = [], rois = [], tools = [], heldKeys = [], stackEvents = [];
   const commands = [
     { id: 'file.open', menu: ['File'], label: 'Open...', shortcut: 'Ctrl+O' },
     { id: 'edit.undo', menu: ['Edit'], label: 'Undo', shortcut: 'Ctrl+Z', enabled: () => false },
@@ -739,7 +792,11 @@ function makeGl() {
     onCommand: (c, o) => { ran.push([c.id, o.source]); heldKeys.push([o.alt, o.shift]); },
     onRoi: (r, o) => rois.push([r, o]),
     onTool: (id) => tools.push(id),
-    readPixel: async (x, y) => [x + y],
+    readPixel: async (x, y, d) => (d === 3 ? [10, 20, 30] : [x + y]),
+    onChannel: (c, d, m) => stackEvents.push(['chan', c, d, m]),
+    onPosition: (p, d) => stackEvents.push(['pos', p, d]),
+    onAnimate: (d, a) => stackEvents.push(['anim', d, a]),
+    sliceLabel: (d, p) => (p.z === 2 ? 'two.tif' : null),
     display: {}
   });
   shell.el.clientWidth = 1000; shell.el.clientHeight = 700;
@@ -815,13 +872,133 @@ function makeGl() {
   await flush2(4);
   assert.equal(byClass(shell.el, 'ij-tab-name')[0].textContent, 'embryo.tif');
   assert.equal(byClass(shell.el, 'ij-tab-zoom')[0].textContent, ' 100%');
-  assert.equal(byClass(shell.el, 'ij-subtitle')[0].textContent, '50×50 µm (100×100); 8-bit; 29.3K'.replace('29.3K', '29K'));
+  assert.equal(byClass(shell.el, 'ij-subtitle')[0].textContent, 'c:1/3; 50x50 µm (100x100); 8-bit; 29.3K'.replace('29.3K', '29K'));
   const chBar = byClass(shell.el, 'ij-channel-bar')[0];
   assert.equal(chBar.hidden, false);
-  assert.equal(byClass(shell.el, 'ij-channel-label')[0].textContent, 'c: 1/3');
+  // the channel bar has positions 0..nC: 0 = every channel (Composite, the default display mode), k = channel k alone
+  assert.equal(byClass(shell.el, 'ij-channel-label')[0].textContent, 'c: all');
   const chSlider = byClass(shell.el, 'ij-channel-slider')[0];
+  assert.equal(chSlider.min, '0'); assert.equal(chSlider.max, '3');
   chSlider.value = '3'; chSlider.fire('input');
-  assert.equal(byClass(shell.el, 'ij-channel-label')[0].textContent, 'c: 3/3');
+  assert.equal(byClass(shell.el, 'ij-channel-label')[0].textContent, 'c: 3/3 (c2)');
+
+  // a stack (StackWindow): one row per dimension > 1 with a play button on the animated one, the keys and the wheel move the plane
+  {
+    const k1 = [{ name: 'a', color: '#fff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }];
+    shell.layout.add(2, {});
+    shell.view(2).element.clientWidth = 800; shell.view(2).element.clientHeight = 600; shell.view(2).resize();
+    shell.setImage({ docId: 2, name: 'stk.tif', width: 100, height: 100, bitDepth: 8, channels: k1, nZ: 5, nT: 3, z: 1, t: 2, hyperstack: true });
+    shell.layout.activate(2);
+    const rows = () => byClass(shell.el, 'ij-stack-row');
+    assert.deepEqual(rows().map((r) => r.dataset.dim), ['z', 't'], 'z and t, no channel row');
+    const sliders = () => byClass(shell.el, 'ij-stack-slider');
+    assert.equal(sliders()[0].value, '2'); assert.equal(sliders()[1].value, '3');
+    assert.equal(byClass(rows()[0], 'ij-stack-count')[0].textContent, '2/5');
+    assert.equal(byClass(shell.el, 'ij-stack-play').length, 1, 'the play button is on t only');
+    assert.equal(byClass(shell.el, 'ij-subtitle').pop().textContent, 'z:2/5 t:3/3; 100x100 pixels; 8-bit; 146K');
+    stackEvents.length = 0;
+    sliders()[0].value = '4'; sliders()[0].fire('input');
+    deq(stackEvents.pop(), ['pos', { c: 0, z: 3, t: 2 }, 2]);
+    assert.equal(byClass(shell.el, 'ij-stack-count')[0].textContent, '4/5');
+    deq(shell.view(2).getPosition(), { z: 3, t: 2 }, 'the view shows the plane at once');
+    // > / < (Animator.nextSlice), the Ctrl / Alt / wheel variants
+    const stage2 = shell.view(2).element;
+    doc.fire('keydown', { key: '>', target: stage2 });
+    deq(stackEvents.pop(), ['pos', { c: 0, z: 4, t: 2 }, 2]);
+    doc.fire('keydown', { key: ',', target: stage2 });
+    deq(stackEvents.pop(), ['pos', { c: 0, z: 3, t: 2 }, 2]);
+    stackEvents.length = 0;
+    doc.fire('keydown', { key: '>', target: stage2 }); doc.fire('keydown', { key: '>', target: stage2 });
+    assert.equal(stackEvents.length, 1, 'z is at its last slice: > does not move (no wrap, no event)');
+    stage2.fire('wheel', { deltaY: 100, deltaMode: 0, clientX: 400, clientY: 300, preventDefault() {} });
+    assert.equal(stackEvents.length, 1, 'the wheel at the last slice moves nothing');
+    stage2.fire('wheel', { deltaY: -100, deltaMode: 0, clientX: 400, clientY: 300, preventDefault() {} });
+    deq(stackEvents.pop(), ['pos', { c: 0, z: 3, t: 2 }, 2]);
+    const zoom2 = shell.view(2).getView().zoom;
+    stage2.fire('wheel', { deltaY: -100, deltaMode: 0, clientX: 400, clientY: 300, ctrlKey: true, preventDefault() {} });
+    assert.notEqual(shell.view(2).getView().zoom, zoom2, 'Ctrl + wheel keeps zooming');
+    // the animation: the play button and the \ key ask the app, setRunning shows it
+    stackEvents.length = 0;
+    byClass(shell.el, 'ij-stack-play')[0].fire('click');
+    deq(stackEvents.pop(), ['anim', 2, 'toggle']);
+    doc.fire('keydown', { key: '\\', target: stage2 });
+    deq(stackEvents.pop(), ['anim', 2, 'toggle']);
+    shell.setRunning(2, 7);
+    assert.equal(byClass(shell.el, 'ij-subtitle').pop().textContent, 'z:4/5 t:3/3', 'while it runs only the position is shown');
+    assert.equal(byClass(shell.el, 'ij-stack-play')[0].textContent, '❚❚');
+    shell.setRunning(2, null);
+    // the app moves the plane (a command, a macro, a restore): the rows follow and nothing is reported
+    stackEvents.length = 0;
+    shell.setPosition(2, { c: 0, z: 2, t: 0 });
+    assert.equal(stackEvents.length, 0);
+    assert.equal(byClass(shell.el, 'ij-stack-count')[0].textContent, '3/5');
+    assert.equal(byClass(shell.el, 'ij-subtitle').pop().textContent, 'z:3/5 t:1/3 (two); 100x100 pixels; 8-bit; 146K', 'the label of the plane (sliceLabel)');
+    // another stack shape rebuilds the rows: a plain stack has one slider and no letter
+    shell.setImage({ docId: 2, name: 'plain.tif', width: 100, height: 100, bitDepth: 8, channels: k1, nZ: 9, nT: 1, z: 0, t: 0 });
+    assert.deepEqual(rows().map((r) => r.dataset.dim), ['n']);
+    assert.equal(byClass(shell.el, 'ij-stack-letter')[0].textContent, '');
+    // a single image has none, an RGB image shows no channel slider
+    shell.setImage({ docId: 2, name: 'one.tif', width: 100, height: 100, bitDepth: 8, channels: k1 });
+    assert.equal(rows().length, 0);
+    assert.equal(byClass(shell.el, 'ij-stack-bar').pop().hidden, true);
+    shell.setImage({ docId: 2, name: 'rgb.tif', width: 100, height: 100, bitDepth: 8, bitDepthIJ: 24, rgb: true, channels: [k1[0], k1[0], k1[0]] });
+    assert.equal(byClass(shell.el, 'ij-channel-bar').pop().hidden, true, 'an RGB image has no channel slider');
+    assert.equal(byClass(shell.el, 'ij-subtitle').pop().textContent, '100x100 pixels; RGB; 39K');
+    shell.layout.activate(1);
+    shell.layout.remove(2);
+  }
+
+  // the channel bar (user request 2026-11-20): positions 0..nC, 0 = every channel (display mode Composite), k = channel k alone
+  {
+    const ch3 = [0, 1, 2].map((i) => ({ name: 'ch' + i, color: '#fff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }));
+    shell.layout.add(3, {});
+    shell.view(3).element.clientWidth = 800; shell.view(3).element.clientHeight = 600; shell.view(3).resize();
+    shell.setImage({ docId: 3, name: 'cb.tif', width: 100, height: 100, bitDepth: 8, channels: ch3, nZ: 4, nT: 1, hyperstack: true, display: { mode: 'composite', active: 1, visible: [true, true, true] } });
+    shell.layout.activate(3);
+    const label = () => byClass(shell.el, 'ij-channel-label').pop().textContent;
+    const slider = () => byClass(shell.el, 'ij-channel-slider').pop();
+    const stage3 = shell.view(3).element;
+    assert.equal(label(), 'c: all'); assert.equal(slider().value, '0'); assert.equal(slider().min, '0'); assert.equal(slider().max, '3');
+    stackEvents.length = 0;
+    slider().value = '2'; slider().fire('input');
+    deq(stackEvents.pop(), ['chan', 1, 3, 'color'], 'channel 2 alone: the active channel and the mode the page must set');
+    assert.equal(label(), 'c: 2/3 (ch1)');
+    slider().value = '0'; slider().fire('input');
+    deq(stackEvents.pop(), ['chan', 1, 3, 'composite'], 'back to "all": Composite, the active channel is kept');
+    assert.equal(label(), 'c: all');
+    // the bar follows a display-mode change made elsewhere (Channels tool, Image > Color)
+    shell.setDisplayState({ mode: 'gray', active: 2, visible: [true, true, true], channels: [] }, 3);
+    assert.equal(label(), 'c: 3/3 (ch2)'); assert.equal(slider().value, '3');
+    slider().value = '1'; slider().fire('input');
+    deq(stackEvents.pop(), ['chan', 0, 3, 'gray'], 'a move between channels keeps Grayscale when that is the mode');
+    shell.setDisplayState({ mode: 'composite', active: 0, visible: [true, true, true], channels: [] }, 3);
+    assert.equal(label(), 'c: all'); assert.equal(slider().value, '0');
+    // pixel read-out: value=a,b,c at "all", one value at k
+    const st3 = stagePtr;
+    const posText = () => byClass(shell.el, 'ij-status-pos')[0].textContent;
+    stage3.fire('pointermove', st3(360, 260)); await flush2(4);
+    assert.match(posText(), /value=10,20,30$/, 'at "all": one value per channel');
+    shell.setDisplayState({ mode: 'color', active: 1, visible: [true, true, true], channels: [] }, 3);
+    stage3.fire('pointermove', st3(361, 261)); await flush2(4);
+    assert.match(posText(), /value=20$/, 'at channel 2: that channel value only');
+    // keys > < move the channel only while the bar is on a channel; at "all" they move the slice. The wheel always moves the slice.
+    stackEvents.length = 0;
+    doc.fire('keydown', { key: '>', target: stage3 });
+    deq(stackEvents.filter((e) => e[0] === 'chan').pop(), ['chan', 2, 3, undefined], 'on a channel: the channel steps (Animator.nextSlice)');
+    assert.equal(stackEvents.filter((e) => e[0] === 'pos').length, 0, 'and the slice stays');
+    shell.setDisplayState({ mode: 'composite', active: 2, visible: [true, true, true], channels: [] }, 3);
+    stackEvents.length = 0;
+    doc.fire('keydown', { key: '>', target: stage3 });
+    assert.equal(stackEvents.filter((e) => e[0] === 'chan').length, 0, 'at "all" the channel does not move');
+    deq(stackEvents.filter((e) => e[0] === 'pos').pop(), ['pos', { c: 2, z: 1, t: 0 }, 3], 'the slice does');
+    shell.setDisplayState({ mode: 'color', active: 0, visible: [true, true, true], channels: [] }, 3);
+    stackEvents.length = 0;
+    stage3.fire('wheel', { deltaY: 100, deltaMode: 0, clientX: 400, clientY: 300, preventDefault() {} });
+    assert.equal(stackEvents.filter((e) => e[0] === 'chan').length, 0, 'the wheel never changes the channel');
+    assert.equal(stackEvents.filter((e) => e[0] === 'pos').length, 1, 'it moves the slice (a deliberate deviation, PLAN §2)');
+    shell.layout.activate(1);
+    shell.layout.remove(3);
+  }
 
   // ROI drawing / resizing / moving with the rectangle tool; image (100x100) is centred at (350, 250)
   const st = stageEl();

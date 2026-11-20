@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"zaxis_profile_rect","op":"dialog","command":"Plot Z-axis Profile","image":{"title":"stk","bitDepth":8,"dims":{"c":1,"z":4,"t":1},"hyperstack":false,"composite":false,"width":30,"height":18,"roi":{"type":"rect","x":4,"y":3,"w":16,"h":10}},"others":[],"menuClass":"ij.plugin.ZAxisProfiler","menuPath":"Image>Stacks","steps":[],"noDialog":true}

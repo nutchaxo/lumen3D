@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"reverse","op":"dialog","command":"Reverse","image":{"title":"stk","bitDepth":8,"dims":{"c":1,"z":4,"t":1},"hyperstack":false,"composite":false,"width":30,"height":18,"roi":null},"others":[],"menuClass":"ij.plugin.StackReverser","menuPath":"Image>Stacks>Tools ","steps":[],"noDialog":true}

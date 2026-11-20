@@ -1066,7 +1066,10 @@
     }
     const eff = limit ? limitMask(img, rect, mask, a.thr) : mask;        // the pixels the statistics see
     const box = eff ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h, data: eff } : (roi ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h, data: new Uint8Array(rect.w * rect.h).fill(1) } : null);
-    const st = IJOps.statistics(img, box, { calibration });
+    let st = IJOps.statistics(img, box, { calibration });
+    // An RGB image (img.lum = the unrounded luminance of ColorProcessor.getPixelValue): ColorStatistics.calculateMoments takes Skewness and
+    // Kurtosis from those floats around the histogram mean, and never calculates %Area (it stays 0).
+    if (img.lum) st = Object.assign({}, st, colorMoments(img.lum, W, rect, eff, st.mean, st.n));
     const row = {};
     const n = st.n;
     const fitNeeded = want.has('major') || want.has('minor') || want.has('angle') || want.has('aspectRatio') || want.has('roundness') || want.has('circularity') || want.has('solidity');
@@ -1115,7 +1118,7 @@
       set('feret', f ? f.feret : NaN); set('feretX', f ? f.x : NaN); set('feretY', f ? f.y : NaN);
       set('feretAngle', f ? f.angle : NaN); set('minFeret', f ? f.min : NaN);
     }
-    if (want.has('areaFraction')) row.areaFraction = areaFraction(img, rect, mask, a.thr);
+    if (want.has('areaFraction')) row.areaFraction = img.lum ? 0 : areaFraction(img, rect, mask, a.thr);
     // Analyzer.saveResults: "rt.addValue(MIN_THRESHOLD, stats.lowerThreshold)" and ImageStatistics: "public double
     // lowerThreshold = Double.NaN;" — only saveThreshold (limited AND thresholded) sets it.
     if (a.limit) { set('minThreshold', a.thr ? a.thr.lower : NaN); set('maxThreshold', a.thr ? a.thr.upper : NaN); }
@@ -1127,6 +1130,26 @@
    *   ShortStatistics / ByteStatistics: "int t1 = (int)Math.round(ip.getMinThreshold()); ... if (i>=t1 && i<=t2) sum += hist[i];"
    *   "if (t1==NO_THRESHOLD) { ... sum = total - hist[0]; }"  (total = every pixel of the selection)
    *   FloatStatistics: "float t1 = (float)ip.getMinThreshold(); ... if (noThresh) { if (v!=0f) sum++; } else if (v>=t1 && v<=t2) sum++;" */
+  /* ColorStatistics.calculateMoments: v = ip.getPixelValue(x, y) (a float), v2 = v*v, sums of v, v^2, v^3, v^4 over the mask, then
+   *   variance = sum2/n - mean^2;  skewness = ((sum3 - 3 mean sum2)/n + 2 mean mean^2) / (variance sd);
+   *   kurtosis = (((sum4 - 4 mean sum3 + 6 mean^2 sum2)/n - 3 mean^4) / variance^2) - 3     with the HISTOGRAM mean. */
+  function colorMoments(lum, W, rect, mask, mean, n) {
+    let sum2 = 0, sum3 = 0, sum4 = 0;
+    for (let y = 0; y < rect.h; y++) {
+      const row = (rect.y + y) * W + rect.x, mrow = y * rect.w;
+      for (let x = 0; x < rect.w; x++) {
+        if (mask && !mask[mrow + x]) continue;
+        const v = lum[row + x], v2 = v * v;
+        sum2 += v2; sum3 += v * v2; sum4 += v2 * v2;
+      }
+    }
+    const mean2 = mean * mean, variance = sum2 / n - mean2, sd = Math.sqrt(variance);
+    return {
+      skewness: ((sum3 - 3.0 * mean * sum2) / n + 2.0 * mean * mean2) / (variance * sd),
+      kurtosis: (((sum4 - 4.0 * mean * sum3 + 6.0 * mean2 * sum2) / n - 3.0 * mean2 * mean2) / (variance * variance) - 3.0)
+    };
+  }
+
   function areaFraction(img, rect, mask, thr) {
     const d = img.data, W = img.width, f32 = img.bitDepth === 32;
     let sum = 0, total = 0;
@@ -1321,7 +1344,7 @@
   }
 
   IJOpRegistry.define('wand', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p, info) {
       if (!Number.isInteger(p.x) || !Number.isInteger(p.y)) throw fail('IJ_BAD_ARGS', 'wand point');
       if (p.x < 0 || p.y < 0 || p.x >= info.width || p.y >= info.height) throw fail('IJ_BAD_ARGS', 'wand point outside');
@@ -1344,7 +1367,7 @@
    * Math.sin(angle)/2; new EllipseRoi(x1, y1, x2, y2, stats.minor/stats.major)" — statistics taken in pixels. The result
    * is a 72-vertex polygon that remembers its ellipse (perimeter = edge sum, Feret from the axes, as EllipseRoi). */
   IJOpRegistry.define('fitEllipse', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate() {},
     scratchBytes(info) { const r = info.roi, b = r && IJRoi.isArea(r) ? IJRoi.bounds(r) : { w: info.width, h: info.height }; return b.w * b.h * 2 + 65536; },
     async run(view, p, roi, io) {
@@ -1363,7 +1386,7 @@
 
   /* Edit > Selection > Convex Hull: "FloatPolygon p = roi.getFloatConvexHull(); … new PolygonRoi(p, Roi.POLYGON)". */
   IJOpRegistry.define('convexHull', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate() {},
     scratchBytes(info) { return Math.min(info.width * info.height, MAX_VERTS) * 32 + 65536; },
     async run(view, p, roi, io) {
@@ -1378,7 +1401,7 @@
   });
 
   IJOpRegistry.define('enlargeRoi', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p) { if (!finite(p.n) || Math.abs(p.n) > 100000) throw fail('IJ_BAD_ARGS', 'enlarge distance'); },
     scratchBytes(info, p) {
       const r = info.roi, b = r && IJRoi.isArea(r) ? IJRoi.bounds(r) : { w: info.width, h: info.height };
@@ -1397,7 +1420,7 @@
    *  int threshold = ip.isInvertedLut()?255:0; if (Prefs.blackBackground) threshold = (threshold==255)?0:255;"
    * so the 255 pixels of a mask on a normal LUT (the 0 pixels on an inverting one). */
   IJOpRegistry.define('createSelection', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p) {
       if (p.binary) return;
       if (!finite(p.lower) || !finite(p.upper) || p.lower > p.upper) throw fail('IJ_BAD_ARGS', 'threshold');
@@ -1424,7 +1447,7 @@
   /* Selection.createMask: "mask = imp.createRoiMask()" (255 inside the selection) or, without an area selection,
    * "imp.createThresholdMask()" (255 inside the threshold). The new image is "Mask" / "mask", calibrated as the source. */
   IJOpRegistry.define('createMask', {
-    kind: 'newdoc', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p) {
       if (p.source === 'threshold') { if (!finite(p.lower) || !finite(p.upper) || p.lower > p.upper) throw fail('IJ_BAD_ARGS', 'threshold'); } else if (p.source !== 'roi') throw fail('IJ_BAD_ARGS', 'source');
     },

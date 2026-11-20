@@ -1382,7 +1382,7 @@
   const px = (info) => info.width * info.height;
 
   IJOpRegistry.define('makeBand', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p) { if (!p || !Number.isInteger(p.n) || p.n < 0 || p.n > 255) throw fail('IJ_BAD_ARGS', 'band size'); },
     scratchBytes: (info) => px(info) * 9 + 65536, // mask 1 + float EDM 4 + byte EDM 1 + box mask ≤ 1 (peak), then mask + EDM + region ≤ 1 + dense ≤ 1
     async run(view, p, roi, io) {
@@ -1396,7 +1396,7 @@
    * the size of the selection box, so the work runs here and not on the page. The result box is limited to four times the image. */
   const TRANSFORMS = new Set(['scale', 'rotate', 'interpolate']);
   IJOpRegistry.define('selTransform', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p) {
       if (!p || !TRANSFORMS.has(p.op)) throw fail('IJ_BAD_ARGS', 'transform');
       const nums = p.op === 'scale' ? [p.xscale, p.yscale] : p.op === 'rotate' ? [p.angle] : [p.interval];
@@ -1427,7 +1427,7 @@
   });
 
   IJOpRegistry.define('lineToArea', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate() {},
     scratchBytes(info) {
       const r = info.roi;
@@ -1444,7 +1444,7 @@
   });
 
   IJOpRegistry.define('straighten', {
-    kind: 'newdoc', version: 1, channels: 'all', roi: 'ignore', preview: false,
+    kind: 'newdoc', version: 1, stack: 'each', rgb: 'each', channels: 'all', roi: 'ignore', preview: false,
     validate(p) {
       if (!p || !Number.isInteger(p.width) || p.width < 1 || p.width > 4096) throw fail('IJ_BAD_ARGS', 'line width');
       if (p.title !== undefined && (typeof p.title !== 'string' || p.title.length > 255)) throw fail('IJ_BAD_ARGS', 'title');

@@ -200,6 +200,40 @@
 }
 .ij-channel-label { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); }
 .ij-channel-slider { flex: 1 1 auto; accent-color: var(--ij-accent); }
+/* StackWindow: one row per dimension of a stack (z, t, or the one slider of a plain stack); the play button is on the animated row */
+.ij-stack-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--ij-chrome);
+  border-top: 1px solid var(--ij-border);
+}
+.ij-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px;
+  min-width: 0;
+}
+.ij-stack-letter { flex: 0 0 auto; min-width: 1ch; font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); text-align: center; }
+.ij-stack-slider { flex: 1 1 auto; min-width: 0; accent-color: var(--ij-accent); }
+.ij-stack-count { flex: 0 0 auto; min-width: 5ch; font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); text-align: right; }
+.ij-stack-play {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--ij-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ij-text);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ij-stack-play:hover { border-color: var(--ij-accent); }
+.ij-stack-play:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-stack-play.is-running { color: var(--ij-accent); border-color: var(--ij-accent); }
 
 .ij-empty {
   position: absolute;

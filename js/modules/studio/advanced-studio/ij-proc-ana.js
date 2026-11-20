@@ -508,9 +508,12 @@
   const R = root.IJOpRegistry;
   if (R && !R.get('particleImage')) {
     R.define('particleImage', {
-      kind: 'newdoc', version: 1, bitDepths: [8], channels: 'one', roi: 'mask',
+      // 'whole': the op sees every plane; `params.planes` (plane indices t*nZ+z) = the slices of a stack to draw ("Process all N images?"), absent = the
+      // plane on screen only, an image of one plane as before. RGB images are refused by ImageJ ("RGB images must be thresholded using Image>Adjust>Color Threshold").
+      kind: 'newdoc', version: 1, stack: 'whole', rgb: false, bitDepths: [8], channels: 'one', roi: 'mask',
       validate(params) {
         if (!params || SHOW_KINDS.indexOf(params.show) < 0) throw fail('IJ_BAD_ARGS', 'show');
+        if (params.planes !== undefined && !(Array.isArray(params.planes) && params.planes.length >= 1 && params.planes.every((p) => Number.isInteger(p) && p >= 0))) throw fail('IJ_BAD_ARGS', 'planes');
         if (params.opts !== undefined && (params.opts === null || typeof params.opts !== 'object')) throw fail('IJ_BAD_ARGS', 'opts');
         if (params.threshold !== undefined && params.threshold !== null && !(params.threshold && isFinite(params.threshold.lower) && isFinite(params.threshold.upper))) throw fail('IJ_BAD_ARGS', 'threshold');
         if (params.rowOffset !== undefined && !(Number.isInteger(params.rowOffset) && params.rowOffset >= 0)) throw fail('IJ_BAD_ARGS', 'rowOffset');
@@ -532,7 +535,13 @@
         const box = roi ? io.roiMask(roi) : null;
         const show = params.show;
         const counts = show === 'countMasks';
-        const offset = params.rowOffset || 0;
+        // the planes drawn: a stack's slices in order (the Count Masks level goes on counting, rt.size() grows across the slices), else the plane on screen
+        const planeList = Array.isArray(params.planes) ? params.planes : null;
+        const outs = [];
+        let offset = params.rowOffset || 0;
+        for (const pi of (planeList || [null])) {
+        const src = pi === null || pi === undefined ? ch.data : ch.planes[pi];
+        if (!src) throw fail('IJ_BAD_ARGS', 'planes');
         const out = counts ? new Uint16Array(W * H) : new Uint8Array(W * H);
         // ParticleAnalyzer.analyze: "drawIP.setColor(Color.white); drawIP.fill(); drawIP.setColor(Color.black);" for the drawings (a white page, black marks);
         // the Masks and Count Masks images start at 0 ("if (showChoice==ROI_MASKS || blackBackground) { drawIP.setColor(Color.black); drawIP.fill(); … }"
@@ -574,29 +583,153 @@
           };
         }
         // ParticleAnalyzer.setThresholdLevels: the analysed pixels are the threshold range when the image has one
-        let analysed = ch.data;
+        let analysed = src;
         if (params.threshold) {
           const lo = params.threshold.lower, hi = params.threshold.upper;
           analysed = new Uint8Array(W * H);
-          for (let i = 0; i < analysed.length; i++) { const v = ch.data[i]; if (v >= lo && v <= hi) analysed[i] = 1; }
+          for (let i = 0; i < analysed.length; i++) { const v = src[i]; if (v >= lo && v <= hi) analysed[i] = 1; }
         }
-        await IJParticles.analyzeAsync(analysed, W, H, o, (f) => io.tick(f, 'op.particles'));
+        await IJParticles.analyzeAsync(analysed, W, H, o, (f) => io.tick((outs.length + f) / (planeList ? planeList.length : 1), 'op.particles'));
+        outs.push(out);
+        offset += n;
+        }
         await io.tick(1, 'op.particles');
         // ImagePlus(prefix + title, outlines); setCalibration(imp.getCalibration())
         const display = counts ? undefined : { min: 0, max: 255, lut: 'Grays', invert: show === 'masks' };
-        const chOut = { name: '', color: '#ffffff', data: out };
+        const chOut = planeList ? { name: '', color: '#ffffff', planes: outs } : { name: '', color: '#ffffff', data: outs[0] };
         if (display) chOut.display = display;
-        return [{
+        const res = {
           name: SHOW_PREFIX[show] + view.name, width: W, height: H, bitDepth: counts ? 16 : 8,
           calibration: view.calibration ? Object.assign({}, view.calibration) : view.calibration,
           channels: [chOut]
-        }];
+        };
+        // the slices of the source keep their place (z, t) when every one was drawn; any other subset is a plain stack
+        if (planeList) {
+          const whole = outs.length === view.nZ * view.nT;
+          res.nZ = whole ? view.nZ : outs.length; res.nT = whole ? view.nT : 1; res.hyperstack = whole && !!view.hyperstack && res.nZ > 1 && res.nT > 1;
+        }
+        return [res];
       }
     });
   }
 
+  // ================================================================================================
+  // Histogram of a whole stack — ij.plugin.Histogram "Include all N images?" → ij.process.StackStatistics
+  // ================================================================================================
+
+  /**
+   * The histogram window numbers over every plane of a stack (one channel), as StackStatistics gives them:
+   *   8-bit   the 256 values of every plane summed (sum8BitHistograms), range 0..255, bin 1;
+   *   16-bit  one 65536-bin histogram of every plane; histMin / histMax = the stack's own min / max; "binSize = (histMax-histMin+1)/nBins";
+   *           a value i falls in bin (int)(i-histMin)/binSize (clamped to the last bin) (ShortStatistics, the same rule);
+   *   32-bit  histMin / histMax = the finite min / max of the stack, "binSize = (histMax-histMin)/nBins", bin (int)(scale*(v-histMin)).
+   * mean = sum/n, stdDev = ImageStatistics.calculateStdDev. `mask` = the selection's box { x, y, w, h, data } (the same pixels in every plane) or null.
+   * `get(i)` returns plane i (a typed array of width*height), `count` planes. → { counts, min, max, binWidth, stats } (the shape of doc.histogram).
+   */
+  function stackHistogram(count, get, width, height, bd, mask, bins) {
+    const nBins = bins > 0 ? bins : 256;
+    const mx0 = mask ? mask.x : 0, my0 = mask ? mask.y : 0, mw = mask ? mask.w : width, mh = mask ? mask.h : height;
+    const each = (d, fn) => {
+      for (let y = 0; y < mh; y++) {
+        const o = (my0 + y) * width + mx0, m = y * mw;
+        for (let x = 0; x < mw; x++) if (!mask || mask.data[m + x] !== 0) fn(d[o + x]);
+      }
+    };
+    let n = 0, sum = 0, sum2 = 0, min, max, dmode = 0, maxCount = 0, histMin, histMax, binSize;
+    let counts;
+    if (bd === 32) {
+      let lo = Infinity, hi = -Infinity;
+      for (let p = 0; p < count; p++) each(get(p), (v) => { if (v === v && v >= -3.4028234663852886e38 && v <= 3.4028234663852886e38) { if (v < lo) lo = v; if (v > hi) hi = v; } });
+      min = lo; max = hi; histMin = lo; histMax = hi;
+      binSize = (histMax - histMin) / nBins;
+      const scale = nBins / (histMax - histMin);
+      counts = new Float64Array(nBins);
+      for (let p = 0; p < count; p++) {
+        each(get(p), (v) => {
+          if (v === v && v >= histMin && v <= histMax) {
+            n++; sum += v; sum2 += v * v;
+            let i = jint(scale * (v - histMin));
+            if (i >= nBins) i = nBins - 1;
+            counts[i]++;
+          }
+        });
+      }
+      let mode = 0;
+      for (let i = 0; i < nBins; i++) if (counts[i] > maxCount) { maxCount = counts[i]; mode = i; }
+      dmode = histMin + mode * binSize;
+      if (binSize !== 1.0) dmode += binSize / 2.0;
+    } else if (bd === 16) {
+      const hist = new Float64Array(65536);
+      for (let p = 0; p < count; p++) each(get(p), (v) => { hist[v]++; });
+      let lo = 0; while (lo < 65535 && hist[lo] === 0) lo++;
+      let hi = 65535; while (hi > 0 && hist[hi] === 0) hi--;
+      min = lo; max = hi; histMin = lo; histMax = hi;
+      binSize = (histMax - histMin + 1) / nBins;
+      const scale = 1.0 / binSize;
+      counts = new Float64Array(nBins);
+      let valueCount = 0;
+      for (let i = min; i <= max; i++) {
+        const c = hist[i];
+        if (c > valueCount) { valueCount = c; dmode = i; }
+        n += c; sum += i * c; sum2 += (i * i) * c;
+        let idx = jint(scale * (i - histMin));
+        if (idx >= nBins) idx = nBins - 1;
+        counts[idx] += c;
+      }
+      for (let i = 0; i < nBins; i++) if (counts[i] > maxCount) maxCount = counts[i];
+    } else {
+      counts = new Float64Array(256);
+      for (let p = 0; p < count; p++) each(get(p), (v) => { counts[v]++; });
+      let lo = 0; while (lo < 255 && counts[lo] === 0) lo++;
+      let hi = 255; while (hi > 0 && counts[hi] === 0) hi--;
+      min = lo; max = hi; histMin = 0; histMax = 255; binSize = 1;
+      for (let i = 0; i < 256; i++) { const c = counts[i]; if (c > maxCount) { maxCount = c; dmode = i; } n += c; sum += i * c; sum2 += (i * i) * c; }
+    }
+    const mean = n > 0 ? sum / n : NaN;
+    let stdDev = 0;
+    if (n > 0) { const v = (n * sum2 - sum * sum) / n; stdDev = v > 0.0 ? Math.sqrt(v / (n - 1.0)) : 0.0; }
+    return { counts, min: histMin, max: histMax, binWidth: binSize, stats: { n, mean, stdDev, min, max, dmode, maxCount, histMin, histMax, binSize } };
+  }
+
+  // The worker command behind Analyze › Histogram when the operator answers "Include all N images?" with Yes. One channel of the document, the
+  // planes named by `planes` ('all' | { z:[a,b], t:[a,b] }), the selection `roi` (an area selection; the same pixels in every plane); an RGB image reads
+  // as its luminance (`rgbWeighted` = Edit › Options › Conversions › Weighted RGB conversions).
+  if (root.IJOpRegistry && typeof root.IJOpRegistry.defineCommand === 'function' && !root.IJOpRegistry.getCommand('doc.stackHistogram')) {
+    root.IJOpRegistry.defineCommand('doc.stackHistogram', { pkg: 'ana', long: true, async handler(a, E) {
+      if (!a || typeof a !== 'object') throw fail('IJ_BAD_ARGS', 'args');
+      const d = E.dims(a.docId);
+      // channel 'all' = every channel of the image (ImageJ's StackStatistics reads every slice of a hyperstack, channels included)
+      const chans = a.channel === 'all' && !d.rgb ? Array.from({ length: d.nC }, (_, i) => i) : [Number.isInteger(a.channel) && a.channel >= 0 && a.channel < (d.rgb ? 1 : d.nC) ? a.channel : 0];
+      const rng = (r, n) => (Array.isArray(r) ? [Math.max(0, r[0]), Math.min(n - 1, r[1])] : [0, n - 1]);
+      const pl = a.planes && typeof a.planes === 'object' ? a.planes : {};
+      const zr = rng(pl.z, d.nZ), tr = rng(pl.t, d.nT);
+      const list = [];
+      for (const c of chans) for (let t = tr[0]; t <= tr[1]; t++) for (let z = zr[0]; z <= zr[1]; z++) list.push([z, t, c]);
+      if (!list.length) throw fail('IJ_BAD_ARGS', 'planes');
+      let mask = null;
+      if (a.roi && root.IJRoi) {
+        root.IJRoi.validate(a.roi);
+        if (root.IJRoi.isArea(a.roi)) {
+          const box = root.IJRoi.mask(a.roi, d.width, d.height);
+          const x0 = Math.max(0, box.x), y0 = Math.max(0, box.y), x1 = Math.min(d.width, box.x + box.w), y1 = Math.min(d.height, box.y + box.h);
+          if (!(x1 > x0) || !(y1 > y0)) throw fail('IJ_EMPTY_ROI', 'the selection is outside the image');
+          const w = x1 - x0, h = y1 - y0, data = new Uint8Array(w * h);
+          for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data[y * w + x] = box.data[(y0 + y - box.y) * box.w + (x0 + x - box.x)];
+          mask = { x: x0, y: y0, w, h, data };
+        }
+      }
+      const bd = d.rgb ? 8 : d.bitDepth;
+      const get = (i) => {
+        const [z, t, c] = list[i];
+        if (!d.rgb) return E.plane(a.docId, c, z, t);
+        return root.IJStack.grayPlane(E.plane(a.docId, 0, z, t), E.plane(a.docId, 1, z, t), E.plane(a.docId, 2, z, t), !!a.rgbWeighted);
+      };
+      return stackHistogram(list.length, get, d.width, d.height, bd, mask, a.bins);
+    } });
+  }
+
   root.IJAna = {
-    d2s, d2sSig, histNumber, cellString, parseRange, parseDouble, particleSettings, sizeText, circText, invertY, INVERT_Y_KEYS, sortOrder, rankMatches, searchWords,
+    stackHistogram, d2s, d2sSig, histNumber, cellString, parseRange, parseDouble, particleSettings, sizeText, circText, invertY, INVERT_Y_KEYS, sortOrder, rankMatches, searchWords,
     profile, rectProfile, lineNearest, irregularProfile, histogramStats, drawEllipse, drawPolygon, lineTo, analysisOptions, SHOW_KINDS
   };
 })(typeof self !== 'undefined' ? self : globalThis);

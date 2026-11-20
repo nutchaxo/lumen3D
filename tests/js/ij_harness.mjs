@@ -64,7 +64,7 @@ export function langPart(pkg) {
   }
   return out;
 }
-export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'];
+export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk'];
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function until(fn, what, ms = 8000) {
   const t0 = Date.now();
@@ -141,7 +141,8 @@ export function makeShellStub({ fakeEl, answer, ask, status = [], previews = [],
       const v = {
         docId, images: [], provider: null, preview: null, overlay: null, thr: null, annotations: null, cursorMark: null, roi: null, rois: null,
         display: null, viewState: { zoom: 1, ox: 0, oy: 0 }, visible: true, fits: 0, invalidations: [], interpolate: false,
-        setTileProvider(f) { v.provider = f; }, invalidate(c) { calls.push(['invalidate', c, docId]); v.invalidations.push(c); },
+        setTileProvider(f) { v.provider = f; }, invalidate(c, planes) { calls.push(['invalidate', c, docId]); v.invalidations.push(c); (v.planeInvalidations = v.planeInvalidations || []).push(planes); },
+        positions: [], setPosition(p) { v.positions.push(p); },
         setPreview(p) { v.preview = p; previews.push(p); }, setThresholdOverlay(t) { v.thr = t; }, setOverlay(items) { v.overlay = items; overlays.push(items); },
         setAnnotations(items, vis) { v.annotations = { items, visible: vis !== false }; }, setCursorMark(x, y) { v.cursorMark = x === null || x === undefined ? null : { x, y }; },
         setDisplayState(s) { v.display = s; }, setDisplay(s) { v.display = s; }, setInterpolate(b) { v.interpolate = !!b; }, setVisible(b) { v.visible = !!b; }, _visible: () => v.visible,
@@ -221,6 +222,7 @@ export function makeShellStub({ fakeEl, answer, ask, status = [], previews = [],
       clearImage(docId) { if (docId === undefined || docId === null) { layout.clear(); shell.images.push(null); } else layout.remove(docId); },
       updateInfo(i) { shell.infoUpdates.push(i); },
       setDisplayState(s, docId) { const v = docId !== undefined && docId !== null ? views.get(docId) : activeView(); if (v) v.display = s; },
+      setPosition(docId, p) { (shell.positions = shell.positions || []).push({ docId, p }); }, setRunning(docId, fps) { (shell.running = shell.running || []).push({ docId, fps }); }, repaintSubtitle() {},
       setActiveRoi(r, docId) { const v = docId !== undefined && docId !== null ? views.get(docId) : activeView(); if (v) v.roi = r; },
       setRois(r, docId) { shell.rois.push(r); const v = docId !== undefined && docId !== null ? views.get(docId) : activeView(); if (v) v.rois = r; },
       setStatus(x) { status.push(x); },
@@ -316,6 +318,7 @@ export async function boot(opts = {}) {
   vm.runInContext(readSrc('ij-view.js', o.pageSources) + '\n;globalThis.__P = IJViewPure; globalThis.__PL = IJPlot;', viewCtx, { filename: 'ij-view.js' });
   const IJViewPure = viewCtx.__P;
   page.IJPlot = viewCtx.__PL;
+  page.IJViewPure = IJViewPure;   // the stack helpers of the page (ij-view.js is loaded before ij-app.js on the real page)
   // ij-layout.js: the pure layout model and the render scheduler (no DOM is touched at load either)
   vm.runInContext(readSrc('ij-layout.js', o.pageSources) + '\n;globalThis.__LP = IJLayoutPure; globalThis.__RS = IJRenderSched;', viewCtx, { filename: 'ij-layout.js' });
   page.IJLayoutPure = viewCtx.__LP;

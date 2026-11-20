@@ -853,16 +853,326 @@ const IJViewPure = (() => {
 
   function _fmtCal(v) { return String(Number(v.toPrecision(4))); }
 
-  /** ImageJ's second line: '5735x5735 pixels; 8-bit; 94MB' (calibrated: '1.2x1.2 µm (512x512); ...'). */
-  function formatSubtitle(info) {
+  // ---- ImageJ number formatting: ij.IJ.d2s, ij.util.Tools.getDecimalPlaces (ImageJ 1.54p, read with javap) ----
+  /**
+   * IJ.d2s(n, decimals) (ImageJ 1.54p, checked against the jar): java.text.DecimalFormat on the EXACT value of the double, HALF_UP with no decimals
+   * (df[0]), HALF_EVEN with 1..9; a negative number that rounds to zero keeps its sign ('-0', '-0.00').
+   */
+  function d2s(n, decimals) {
+    if (typeof n !== 'number' || Number.isNaN(n)) return 'NaN';
+    if (!Number.isFinite(n)) return n > 0 ? 'Infinity' : '-Infinity';
+    const d = Math.max(0, Math.min(9, decimals | 0));
+    const parts = Math.abs(n).toFixed(Math.min(100, d + 30)).split('.');
+    const keep = parts[1].slice(0, d), rest = parts[1].slice(d);
+    const tie = rest.charAt(0) === '5' && /^0*$/.test(rest.slice(1));
+    const odd = Number((parts[0] + keep).slice(-1)) % 2 === 1;
+    const up = rest.charAt(0) > '5' || (rest.charAt(0) === '5' && !tie) || (tie && (d === 0 || odd));
+    const digits = (BigInt(parts[0] + keep) + (up ? 1n : 0n)).toString().padStart(d + 1, '0');
+    return (n < 0 ? '-' : '') + (d ? digits.slice(0, -d) + '.' + digits.slice(-d) : digits);
+  }
+  /** Tools.getDecimalPlaces(n): digits after the point, at most 4; 0 for an integer or NaN; -2 for a number Java prints with an exponent. */
+  function decimalPlaces(n) {
+    if (Number.isNaN(n) || n === Math.trunc(n)) return 0;
+    const a = Math.abs(n);
+    if (a < 1e-3 || a >= 1e7) return -2;
+    const str = String(n), at = str.indexOf('.');
+    return at < 0 ? 0 : Math.min(4, str.length - at - 1);
+  }
+  /** Tools.getDecimalPlaces(n1, n2). */
+  function decimalPlaces2(n1, n2) {
+    if (n1 === Math.trunc(n1) && n2 === Math.trunc(n2)) return 0;
+    const a = decimalPlaces(n1), b = decimalPlaces(n2);
+    if (a === 0) return b;
+    if (b === 0) return a;
+    if (a < 0 || b < 0) return a;
+    return b > a ? b : a;
+  }
+  /** ImageWindow.d2s(double): d2s(n, min(2, getDecimalPlaces(n))). */
+  function d2sAuto(n) { return d2s(n, Math.min(2, decimalPlaces(n))); }
+  /** ImageWindow.getImageSize: '768K', '6.3MB', '75MB', '1.2GB' (a trailing '.0' is dropped). */
+  function imageSizeText(bytes) {
+    const k = bytes / 1024;
+    let s, u;
+    if (k < 1024) { s = d2s(k, 0); u = 'K'; }
+    else if (k < 10000) { s = d2s(k / 1024, 1); u = 'MB'; }
+    else if (k < 1048576) { s = d2s(Math.round(k / 1024), 0); u = 'MB'; }
+    else { s = d2s(k / 1048576, 1); u = 'GB'; }
+    if (s.endsWith('.0')) s = s.slice(0, -2);
+    return s + u;
+  }
+  /** Calibration.getUnits(): the plural form ImageJ prints in the subtitle. */
+  function pluralUnit(u) { return u === 'pixel' ? 'pixels' : u === 'micron' ? 'microns' : u === 'inch' ? 'inches' : u; }
+
+  // ---- stacks: ij.gui.StackWindow, ij.plugin.Animator, ij.ImagePlus.convertIndexToPosition ----
+  /** { nC, nZ, nT, n } of an image info; nC is 1 for an RGB image, a pre-stack info (no nZ / nT) is one plane. */
+  function stackDimsOf(info) {
+    const i = info || {};
+    const ch = i.channels;
+    const count = typeof i.nC === 'number' ? i.nC : (Array.isArray(ch) ? ch.length : (typeof ch === 'number' ? ch : 1));
+    const nC = i.rgb ? 1 : Math.max(1, count | 0);
+    const nZ = Math.max(1, (i.nZ | 0) || 1), nT = Math.max(1, (i.nT | 0) || 1);
+    return { nC, nZ, nT, n: nC * nZ * nT };
+  }
+  /** ImageJ's type of an info: 24 for RGB, else the storage depth. */
+  function ijBitDepth(info) {
+    if (!info) return 0;
+    if (typeof info.bitDepthIJ === 'number') return info.bitDepthIJ;
+    return info.rgb ? 24 : info.bitDepth;
+  }
+  /** The channel an info shows (composite: the active one for the stack index). */
+  function activeChannelOf(info) {
+    if (!info || info.rgb) return 0;
+    const a = info.display && Number.isInteger(info.display.active) ? info.display.active : (Number.isInteger(info.active) ? info.active : 0);
+    return Math.max(0, Math.min(stackDimsOf(info).nC - 1, a));
+  }
+  /** ImagePlus.getStackIndex: n = t*nC*nZ + z*nC + c + 1 (1-based). */
+  function stackIndexOf(d, c, z, t) { return t * d.nC * d.nZ + z * d.nC + c + 1; }
+  /** ImagePlus.convertIndexToPosition: the inverse of stackIndexOf (0-based c, z, t). */
+  function positionOfIndex(d, n) {
+    const i = n - 1;
+    return { c: i % d.nC, z: Math.floor(i / d.nC) % d.nZ, t: Math.floor(i / (d.nC * d.nZ)) };
+  }
+  /** A position clamped into the image: { c, z, t } (0-based; a missing or non-finite one is 0). */
+  function clampPosition(info, pos) {
+    const d = stackDimsOf(info), p = pos || {};
+    const cl = (v, hi) => { const x = Number.isFinite(v) ? Math.floor(v) : 0; return x < 0 ? 0 : (x > hi ? hi : x); };
+    return { c: cl(p.c, d.nC - 1), z: cl(p.z, d.nZ - 1), t: cl(p.t, d.nT - 1) };
+  }
+  /** ImagePlus.isHyperStack() || isComposite(): a hyperstack, or any image with more than one channel (a CompositeImage shows c / z / t). */
+  function isDimensionAware(info) {
+    return !!(info && info.hyperstack) || stackDimsOf(info).nC > 1;
+  }
+  /** ImageStack.getShortSliceLabel(n): up to the first newline, a 3-letter extension dropped, at most 60 characters; null = none. */
+  function shortSliceLabel(label) {
+    if (typeof label !== 'string') return null;
+    let s = label;
+    const nl = s.indexOf('\n');
+    if (nl === 0) return null;
+    if (nl > 0) s = s.slice(0, nl);
+    const len = s.length;
+    if (len > 4 && s.charAt(len - 4) === '.' && !/[0-9]/.test(s.charAt(len - 1))) s = s.slice(0, len - 4);
+    if (s.length > 60) s = s.slice(0, 60);
+    return s;
+  }
+  /**
+   * ImageWindow.createSubtitle / StackWindow.createSubtitle (ImageJ 1.54p):
+   *   plain stack   '5/25 (label); 512x512 pixels; 8-bit; 6.3MB'        one image   '512x512 pixels; 8-bit; 768K'
+   *   hyperstack    'c:1/3 z:5/25 t:2/10 (label); 512x512 pixels; 16-bit; 75MB'
+   * opts.label = the label of the current slice (stack.getSliceLabel), opts.running = an animation runs (only the position is shown).
+   */
+  function formatSubtitle(info, opts) {
     if (!info) return '';
-    const channels = info.channels ? (Array.isArray(info.channels) ? info.channels.length : info.channels) : 1;
-    const bytes = info.width * info.height * (info.bitDepth / 8) * channels;
+    const o = opts || {};
+    const d = stackDimsOf(info);
+    const aware = isDimensionAware(info);
+    const bd = ijBitDepth(info);
+    const c = activeChannelOf(info);
+    const z = Math.max(0, Math.min(d.nZ - 1, info.z | 0)), t = Math.max(0, Math.min(d.nT - 1, info.t | 0));
+    let s = '';
+    if (d.n > 1) {
+      s = stackIndexOf(d, c, z, t) + '/' + d.n;
+      let label = shortSliceLabel(o.label);
+      if (label !== null && label.length > 0) {
+        if (aware) label = label.replace(/;/g, ' ');
+        s += ' (' + label + ')';
+      }
+      if (o.running) return aware ? hyperPrefix(d, c, z, t) : s;
+      s += '; ';
+    } else {
+      let label = typeof o.label === 'string' ? o.label : '';
+      if (label.length > 0) {
+        const nl = label.indexOf('\n');
+        if (nl > 0) label = label.slice(0, nl);
+        const len = label.length;
+        if (len > 4 && label.charAt(len - 4) === '.' && !/[0-9]/.test(label.charAt(len - 1))) label = label.slice(0, len - 4);
+        if (label.length > 60) label = label.slice(0, 60) + '...';
+        s = '"' + label + '"; ';
+      }
+    }
     const cal = info.calibration;
-    const dim = cal && cal.unit && cal.pixelWidth > 0 && cal.pixelHeight > 0
-      ? `${_fmtCal(info.width * cal.pixelWidth)}×${_fmtCal(info.height * cal.pixelHeight)} ${cal.unit} (${info.width}×${info.height})`
-      : `${info.width}×${info.height} pixels`;
-    return `${dim}; ${info.bitDepth}-bit; ${formatSize(bytes)}`;
+    const unit = cal && cal.unit ? cal.unit : 'pixel';
+    const pw = cal && cal.pixelWidth > 0 ? cal.pixelWidth : 1, ph = cal && cal.pixelHeight > 0 ? cal.pixelHeight : 1, pd = cal && cal.pixelDepth > 0 ? cal.pixelDepth : 1;
+    if (pw !== 1 || ph !== 1 || pd !== 1 || unit !== 'pixel') {
+      const w = info.width * pw, h = info.height * ph;
+      const digits = Math.min(2, decimalPlaces2(w, h));
+      // the x and y units are the one unit of this plugin's calibration
+      s += `${d2s(w, digits)}x${d2s(h, digits)} ${pluralUnit(unit)} (${info.width}x${info.height}); `;
+    } else s += `${info.width}x${info.height} pixels; `;
+    s += bd === 24 ? 'RGB' : bd + '-bit';
+    if (!info.rgb && d.nC === 1 && info.channels && info.channels[0] && info.channels[0].display && info.channels[0].display.invert) s += ' (inverting LUT)';
+    const bpp = bd === 8 ? 1 : bd === 16 ? 2 : 4;
+    s += '; ' + imageSizeText(info.width * info.height * d.n * bpp);
+    if (!(d.n > 1 && aware)) return s;
+    // StackWindow: the prefix 'c:1/3 z:5/25 t:2/10', then what follows the label of the plain subtitle
+    let pre = hyperPrefix(d, c, z, t);
+    let sub = s;
+    let at = sub.indexOf(';');
+    if (at !== -1) {
+      const p = sub.indexOf('(');
+      if (p >= 0 && p < at && sub.length > p + 4 && sub.substring(p + 1, p + 4) !== 'ch:') { at = p; pre += ' '; }
+      sub = sub.substring(at);
+    } else sub = '';
+    return pre + sub;
+  }
+  function hyperPrefix(d, c, z, t) {
+    let s = '';
+    if (d.nC > 1) { s += 'c:' + (c + 1) + '/' + d.nC; if (d.nZ > 1 || d.nT > 1) s += ' '; }
+    if (d.nZ > 1) { s += 'z:' + (z + 1) + '/' + d.nZ; if (d.nT > 1) s += ' '; }
+    if (d.nT > 1) s += 't:' + (t + 1) + '/' + d.nT;
+    return s;
+  }
+
+  /**
+   * The slider rows under a view (StackWindow): hyperstack (and a composite) c / z / t, one row per dimension > 1; any other
+   * stack ONE slider over its planes (a composite plain stack: the channel row, then that slider). `animated` = the row the play
+   * button belongs to (t when there are frames, else z; the single slider of a plain stack).
+   * -> [{ dim: 'c'|'z'|'t'|'n', letter, max, value (1-based), animated }]
+   */
+  function stackRows(info, pos) {
+    const d = stackDimsOf(info);
+    if (d.n <= 1) return [];
+    const p = clampPosition(info, pos || { c: activeChannelOf(info), z: info && info.z, t: info && info.t });
+    const rows = [];
+    if (isDimensionAware(info)) {
+      if (d.nC > 1) rows.push({ dim: 'c', letter: 'c', max: d.nC, value: p.c + 1, animated: false });
+      if (d.nZ > 1) rows.push({ dim: 'z', letter: 'z', max: d.nZ, value: p.z + 1, animated: d.nT === 1 });
+      if (d.nT > 1) rows.push({ dim: 't', letter: 't', max: d.nT, value: p.t + 1, animated: true });
+    } else {
+      if (d.nC > 1) rows.push({ dim: 'c', letter: 'c', max: d.nC, value: p.c + 1, animated: false });
+      rows.push({ dim: 'n', letter: d.nC > 1 ? 'z' : '', max: d.nZ * d.nT, value: p.t * d.nZ + p.z + 1, animated: true });
+    }
+    return rows;
+  }
+  /** The position after the slider of `row` moved to `value` (1-based). */
+  function positionFromRow(info, pos, row, value) {
+    const d = stackDimsOf(info);
+    const cur = clampPosition(info, pos);
+    const v = Math.max(1, Math.min(row.max, Math.floor(Number.isFinite(value) ? value : 1))) - 1;
+    if (row.dim === 'c') return { c: v, z: cur.z, t: cur.t };
+    if (row.dim === 'z') return { c: cur.c, z: v, t: cur.t };
+    if (row.dim === 't') return { c: cur.c, z: cur.z, t: v };
+    return { c: cur.c, z: v % d.nZ, t: Math.floor(v / d.nZ) };
+  }
+  /**
+   * Animator.nextSlice / previousSlice: on a displayed hyperstack the channel moves first (unless Ctrl / Space / Alt is held and there
+   * is another dimension), then the slices (Alt with frames: the frames), then the frames; any other stack moves its slice (Alt: ±10).
+   * Never wraps. -> the new position, or null when nothing moves.
+   */
+  function stepPosition(info, pos, dir, mods) {
+    const d = stackDimsOf(info);
+    if (d.n <= 1) return null;
+    const m = mods || {};
+    const down = m.ctrl || m.space || m.alt;
+    const cur = clampPosition(info, pos);
+    const dlt = dir < 0 ? -1 : 1;
+    const mv = (v, hi, step) => Math.max(0, Math.min(hi, v + dlt * step));
+    let out;
+    // The channel bar has an "all channels" position (display mode COMPOSITE): there the keys move the slice (frame when there is one
+    // slice); the channel steps only while the bar stands on a single channel (display.mode 'color' | 'gray')
+    const single = !(info && info.display && info.display.mode === 'composite');
+    if (isDimensionAware(info) && d.nC > 1 && single && !((d.nZ > 1 || d.nT > 1) && down)) out = { c: mv(cur.c, d.nC - 1, 1), z: cur.z, t: cur.t };
+    else if (isDimensionAware(info) && d.nZ > 1 && !(d.nT > 1 && m.alt)) out = { c: cur.c, z: mv(cur.z, d.nZ - 1, 1), t: cur.t };
+    else if (isDimensionAware(info) && d.nT > 1) out = { c: cur.c, z: cur.z, t: mv(cur.t, d.nT - 1, 1) };
+    else {
+      const planes = d.nZ * d.nT, idx = mv(cur.t * d.nZ + cur.z, planes - 1, m.alt ? 10 : 1);
+      out = { c: cur.c, z: idx % d.nZ, t: Math.floor(idx / d.nZ) };
+    }
+    return out.c === cur.c && out.z === cur.z && out.t === cur.t ? null : out;
+  }
+  /**
+   * The wheel over a stack window moves one slice per notch (z, else t; a window that only has channels keeps zooming). A deliberate
+   * deviation from StackWindow.mouseWheelMoved, which runs "Next Slice [>]" and so moves the channel first: with the channel bar the
+   * wheel is the quick way through the slices and never changes the channel (the keys > < . , keep ImageJ's channel-first order).
+   */
+  function wheelPosition(info, pos, steps) {
+    const d = stackDimsOf(info);
+    if (d.nZ * d.nT <= 1 || !steps) return null;
+    const cur = clampPosition(info, pos);
+    const dim = isDimensionAware(info) ? (d.nZ > 1 ? 'z' : 't') : "n";
+    const planes = d.nZ * d.nT;
+    const mv = (v, hi) => Math.max(0, Math.min(hi, v + steps));
+    let out;
+    if (dim === 'c') out = { c: mv(cur.c, d.nC - 1), z: cur.z, t: cur.t };
+    else if (dim === 'z') out = { c: cur.c, z: mv(cur.z, d.nZ - 1), t: cur.t };
+    else if (dim === 't') out = { c: cur.c, z: cur.z, t: mv(cur.t, d.nT - 1) };
+    else { const idx = mv(cur.t * d.nZ + cur.z, planes - 1); out = { c: cur.c, z: idx % d.nZ, t: Math.floor(idx / d.nZ) }; }
+    return out.c === cur.c && out.z === cur.z && out.t === cur.t ? null : out;
+  }
+  /** The animated range and step of Animation Options (Calibration.fps default 7, first / last of the animated dimension, loop back and forth). */
+  function animationPlan(info, opts) {
+    const d = stackDimsOf(info);
+    const rows = stackRows(info);
+    const row = rows.find((r) => r.animated) || null;
+    const o = opts || {};
+    const max = row ? row.max : 1;
+    const first = Math.max(1, Math.min(max, Math.floor(o.first > 0 ? o.first : 1)));
+    const last = Math.max(first, Math.min(max, Math.floor(o.last > 0 ? o.last : max)));
+    const fps = o.fps > 0 ? o.fps : 7;
+    return { dim: row ? row.dim : null, row, first, last, fps, loop: o.loop !== false, backAndForth: !!o.backAndForth, n: d.n };
+  }
+  /** The next value (1-based) of an animation: [first, last], forward, or back and forth; `dir` is the direction it is going. */
+  function animationNext(plan, value, dir) {
+    if (plan.last <= plan.first) return { value: plan.first, dir: 1 };
+    let v = value + dir;
+    let d = dir;
+    if (plan.backAndForth) {
+      if (v > plan.last) { d = -1; v = plan.last - 1; }
+      else if (v < plan.first) { d = 1; v = plan.first + 1; }
+    } else if (v > plan.last) v = plan.first;
+    else if (v < plan.first) v = plan.last;
+    return { value: Math.max(plan.first, Math.min(plan.last, v)), dir: d };
+  }
+  /**
+   * An ROI / overlay item position against the current one, as ImageJ ties a selection to a plane: `n` (Roi.getPosition, the 1-based
+   * stack index of a plain stack) or { c, z, t } (Roi.setPosition(c, z, t), 1-based, 0 = any). Shown when every given field is the one on
+   * screen (ImageCanvas.showAllROIs "associate with slices").
+   */
+  function positionMatches(roiPos, info, pos) {
+    if (!roiPos) return true;
+    const d = stackDimsOf(info);
+    if (d.n <= 1) return true;
+    const cur = clampPosition(info, pos);
+    if (roiPos.n > 0 && roiPos.n !== stackIndexOf(d, cur.c, cur.z, cur.t)) return false;
+    return (!roiPos.c || roiPos.c === cur.c + 1) && (!roiPos.z || roiPos.z === cur.z + 1) && (!roiPos.t || roiPos.t === cur.t + 1);
+  }
+  /**
+   * The position a ROI added now takes, as Roi.setPosition(ImagePlus) (ImageJ 1.54p bytecode) does it: on a hyperstack or a composite
+   * { c, z, t } (1-based) with c = 0 ("every channel") while the display mode is COMPOSITE, else the active channel, and z / t the
+   * current slice / frame even when that dimension has one; any other stack { n } = the ImageJ stack index (Roi.setPosition(int), the
+   * number the .roi header carries). `mode` = the display mode ('composite' | 'color' | 'gray'); null on a single image.
+   */
+  function roiPositionFor(info, pos, mode) {
+    const d = stackDimsOf(info);
+    if (d.n <= 1) return null;
+    const cur = clampPosition(info, pos);
+    if (isDimensionAware(info)) {
+      const m = mode || (info && info.display && info.display.mode) || (info && info.mode) || 'composite';
+      return { c: d.nC > 1 && m === 'composite' ? 0 : cur.c + 1, z: cur.z + 1, t: cur.t + 1 };
+    }
+    return { n: stackIndexOf(d, 0, cur.z, cur.t) };
+  }
+  /** A request coalescer: at most one `send(value)` in flight, the LAST value requested while it runs is sent next (last wins). */
+  function createCoalescer(send) {
+    let pending, has = false, busy = false, idle = null;
+    async function pump() {
+      if (busy) return;
+      busy = true;
+      try {
+        while (has) {
+          const v = pending; has = false; pending = undefined;
+          try { await send(v); } catch (e) { console.error('IJ position', e); }
+        }
+      } finally {
+        busy = false;
+        if (idle) { const f = idle; idle = null; f(); }
+      }
+    }
+    return {
+      request(v) { pending = v; has = true; pump(); },
+      /** resolves once nothing is pending or in flight */
+      flush() { return busy || has ? new Promise((res) => { const prev = idle; idle = () => { if (prev) prev(); res(); }; }) : Promise.resolve(); },
+      get busy() { return busy || has; }
+    };
   }
 
   function _fmtValue(v, bitDepth) {
@@ -872,10 +1182,16 @@ const IJViewPure = (() => {
   }
 
   /** 'x=123, y=45 (12.3, 4.5 µm), value=12,45,0' */
-  function formatStatus({ x, y, calibration, values, bitDepth, labels = {} }) {
+  function formatStatus({ x, y, z, calibration, values, bitDepth, labels = {} }) {
     let s = `${labels.x || 'x'}=${x}, ${labels.y || 'y'}=${y}`;
     if (calibration && calibration.unit && calibration.pixelWidth > 0 && (calibration.pixelWidth !== 1 || calibration.pixelHeight !== 1)) {
       s += ` (${_fmtCal(x * calibration.pixelWidth)}, ${_fmtCal(y * calibration.pixelHeight)} ${calibration.unit})`;
+    }
+    // ImagePlus.getLocationAsString: ', z=' + the slice (0-based) on a stack, the calibrated depth then the index in brackets
+    if (Number.isInteger(z)) {
+      const pd = calibration && calibration.pixelDepth > 0 ? calibration.pixelDepth : 1;
+      const zc = (z - (calibration && Number.isFinite(calibration.zOrigin) ? calibration.zOrigin : 0)) * pd;
+      s += calibration && calibration.unit && zc !== z ? `, ${labels.z || 'z'}=${d2sAuto(zc)} (${z})` : `, ${labels.z || 'z'}=${z}`;
     }
     if (Array.isArray(values) && values.length) s += `, ${labels.value || 'value'}=${values.map((v) => _fmtValue(v, bitDepth)).join(',')}`;
     return s;
@@ -932,7 +1248,10 @@ const IJViewPure = (() => {
     parseNumber, formatNumber, collectFields, dialogEventDecision, clampWindowPos, FIELD_TYPES, fieldProblems, effectiveOptions,
     numberStep, clampPopupX, clampPopupY, submenuX, centreX,
     roiBounds, translateRoi, isAreaRoi, roiFromDrag, lineFromDrag, roiHandles, handleAt, hitRoi, moveHandle, handleCursor,
-    formatZoomPct, formatSize, formatSubtitle, formatStatus, describeRoi
+    formatZoomPct, formatSize, formatSubtitle, formatStatus, describeRoi,
+    d2s, decimalPlaces, decimalPlaces2, imageSizeText, shortSliceLabel,
+    stackDimsOf, ijBitDepth, stackIndexOf, positionOfIndex, clampPosition, isDimensionAware, stackRows, positionFromRow,
+    stepPosition, wheelPosition, animationPlan, animationNext, positionMatches, roiPositionFor, createCoalescer
   };
 })();
 
@@ -1919,7 +2238,8 @@ const IJShell = (() => {
    *   onCommand(cmd, { source: 'menu' | 'key', alt, shift })
    *   onTool(id)  onToolOptions(id)  (double-click on line / point)
    *   onRoi(roi | null, { final, source: 'draw' | 'move' | 'resize' | 'nudge' | 'clear' })
-   *   onChannel(index)    onCancel()
+   *   onChannel(index, docId, mode?)   the channel bar moved: index = the active channel, mode = 'composite' ("all", position 0) | 'color' | 'gray'
+   *   onCancel()
    *   readPixel(x, y) -> Promise<number[]>   coalesced, <= 1 in flight
    *   isActive()          false while the shell is hidden (shortcuts ignored)
    *   display             options for IJRenderer.create (onTileError, getLut, SVRManager, ...) + onViewChange(v, docId)
@@ -1927,6 +2247,8 @@ const IJShell = (() => {
    *   onToolPointer(docId, { type: 'down'|'move'|'up'|'cancel', x, y, button, shift, alt, ctrl })   image coordinates, while an `ext` tool is selected
    *   onMenuOpen(topName)   a top menu is about to open (the app refreshes its dynamic Window list)
    *   onCursor(docId, x, y, sx, sy)   the pointer over a view (image + stage pixel coordinates); onCursor(docId, null) when it leaves
+   *   onPosition({ c, z, t }, docId)   the operator moved a stack slider / pressed > < , . / used the wheel (0-based; the view already shows it)
+   *   onAnimate(docId, 'toggle')       the play button or the \ key   sliceLabel(docId, pos) → the label of that plane or null (subtitle)
    * shell: { el, workspace, layout (IJLayout), renderer, view(docId), activeView(), windows, setImage(info, {placement}), clearImage, setDisplayState, setTool, getTool,
    *   setActiveRoi, getActiveRoi, setRois, setStatus, setProgress, setWarning, setLineWidth,
    *   refreshMenus, closeMenus, setTitle, destroy }
@@ -2013,12 +2335,16 @@ const IJShell = (() => {
       channelBar.hidden = true;
       const channelLabel = el('span', 'ij-channel-label');
       const channelSlider = el('input', 'ij-channel-slider');
-      channelSlider.type = 'range'; channelSlider.min = '1'; channelSlider.max = '1'; channelSlider.step = '1'; channelSlider.value = '1';
+      // positions 0..nC: 0 = every channel (display mode Composite), k = channel k alone (Color, or Grayscale when that is the mode)
+      channelSlider.type = 'range'; channelSlider.min = '0'; channelSlider.max = '1'; channelSlider.step = '1'; channelSlider.value = '0';
       channelSlider.setAttribute('aria-label', t('view.channel', 'Channel'));
       channelBar.append(channelLabel, channelSlider);
-      pane.append(head, stage, channelBar);
+      // StackWindow: one row per dimension of a stack (z, t, or the one slider of a plain stack), built by the controller
+      const stackBar = el('div', 'ij-stack-bar');
+      stackBar.hidden = true;
+      pane.append(head, stage, channelBar, stackBar);
       const view = IJView.create(renderer, stage, { docId, onViewChange: (v) => onViewChange(docId, v), selectionColor: opts.selectionColor });
-      const ctl = makeController(docId, stage, view, { subtitle, badge, channelBar, channelLabel, channelSlider });
+      const ctl = makeController(docId, stage, view, { subtitle, badge, channelBar, channelLabel, channelSlider, stackBar });
       ctls.set(docId, ctl);
       return { el: pane, view, stage };
     }
@@ -2271,15 +2597,42 @@ const IJShell = (() => {
 
     let spaceDown = false;
     function makeController(docId, stage, view, parts) {
-      const { subtitle, badge, channelBar, channelLabel, channelSlider } = parts;
+      const { subtitle, badge, channelBar, channelLabel, channelSlider, stackBar } = parts;
       let info = null;
       const lst = [];
       const listen = (target, ev, fn, o) => { target.addEventListener(ev, fn, o); lst.push(() => target.removeEventListener(ev, fn, o)); };
+      // the position on screen { c, z, t } (0-based) and the animation (null | fps), see "stacks" below
+      let pos = { c: 0, z: 0, t: 0 };
+      let running = null;
+      // the display mode the channel bar follows, and the single-channel mode (Color / Grayscale) a move off "all" takes
+      let dmode = 'composite', lastSingle = 'color';
+      const noteMode = (m) => { if (m === 'composite' || m === 'color' || m === 'gray') { dmode = m; if (m !== 'composite') lastSingle = m; } };
+      const stepInfo = () => Object.assign({}, info, { display: Object.assign({}, info.display, { mode: dmode, active: pos.c }) });
+      function paintChannelBar() {
+        if (!info) return;
+        const n = info.channels ? info.channels.length : 1;
+        channelSlider.min = '0'; channelSlider.max = String(Math.max(1, n));
+        const v = dmode === 'composite' ? 0 : pos.c + 1;
+        channelSlider.value = String(v);
+        let text;
+        if (v === 0) text = 'c: ' + t('view.channelAll', 'all');
+        else { const nm = info.channels && info.channels[v - 1] && info.channels[v - 1].name; text = 'c: ' + v + '/' + n + (nm ? ' (' + nm + ')' : ''); }
+        channelLabel.textContent = text;
+        channelSlider.setAttribute('aria-valuetext', text);
+      }
+      const rowEls = [];     // [{ row, root, slider, count, play }]
+      let rowsSig = '';
       // ---- Pixel read-out (<= 1 request in flight) ------------------------------------------------------------------------
       let pxPending = null, pxBusy = false;
       function showPos(ix, iy, values) {
         if (!info) { statusPos.textContent = ''; return; }
-        statusPos.textContent = P.formatStatus({ x: ix, y: iy, calibration: info.calibration, values, bitDepth: info.bitDepth });
+        const d = P.stackDimsOf(info);
+        // ImagePlus.getLocationAsString: z = getSlice() - 1 on a displayed hyperstack, getCurrentSlice() - 1 otherwise
+        const z = d.nZ * d.nT > 1 ? (P.isDimensionAware(info) ? pos.z : P.stackIndexOf(d, pos.c, pos.z, pos.t) - 1) : undefined;
+        // the channel bar at a single channel shows that channel's value; at "all" every channel's (value=a,b,c)
+        let shown = values;
+        if (Array.isArray(values) && values.length > 1 && !info.rgb && d.nC > 1 && dmode !== 'composite' && values[pos.c] !== undefined) shown = [values[pos.c]];
+        statusPos.textContent = P.formatStatus({ x: ix, y: iy, z, calibration: info.calibration, values: shown, bitDepth: info.bitDepth });
       }
       async function pxFlush() {
         if (pxBusy) return;
@@ -2570,6 +2923,11 @@ const IJShell = (() => {
         e.preventDefault();
         const r = P.wheelSteps(wheelAcc, e.deltaY, e.deltaMode);
         wheelAcc = r.acc;
+        // StackWindow.mouseWheelMoved: the wheel changes the slice of a stack (down = next); Ctrl keeps the zoom
+        if (P.stackDimsOf(info).nZ * P.stackDimsOf(info).nT > 1 && !e.ctrlKey && !e.metaKey) {
+          if (r.steps) { const np = P.wheelPosition(info, pos, -r.steps); if (np) movePosition(np); }
+          return;
+        }
         const { sx, sy } = stagePoint(e);
         for (let i = 0; i < Math.abs(r.steps); i++) view.zoomAt(sx, sy, r.steps > 0 ? 1 : -1);
       }, { passive: false });
@@ -2588,6 +2946,19 @@ const IJShell = (() => {
           }
         }
         if (drag && e.key === 'Escape') { e.preventDefault(); endDrag(null, true); return true; }
+        // Animator: > or . = Next Slice, < or , = Previous Slice (Ctrl / Alt change which dimension a hyperstack moves, Alt = 10 slices
+        // of a plain stack), \ = Start / Stop Animation; only on a stack
+        if (info && P.stackDimsOf(info).n > 1 && !e.metaKey && !(e.ctrlKey && e.shiftKey)) {
+          const k = e.key;
+          const dir = k === '>' || k === '.' ? 1 : (k === '<' || k === ',' ? -1 : 0);
+          if (dir) {
+            const np = P.stepPosition(stepInfo(), pos, dir, { ctrl: e.ctrlKey, alt: e.altKey, space: spaceDown });
+            e.preventDefault();
+            if (np) movePosition(np);
+            return true;
+          }
+          if (k === '\\' && !e.ctrlKey && !e.altKey) { e.preventDefault(); if (opts.onAnimate) opts.onAnimate(docId, 'toggle'); return true; }
+        }
         if (activeRoi && stage.contains(e.target) && e.key.startsWith('Arrow') && !e.ctrlKey && !e.metaKey) {
           const step = e.shiftKey ? 10 : 1;
           const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
@@ -2597,38 +2968,135 @@ const IJShell = (() => {
         return false;
       }
 
+      // ---- stacks (ij.gui.StackWindow): rows under the image, the position on screen -------------------------------------
+      const sliceLabel = () => (opts.sliceLabel ? opts.sliceLabel(docId, pos) : null);
+      function paintSubtitle() {
+        if (!info) return;
+        // the position drawn is the one on screen, whatever the engine's info still says
+        subtitle.textContent = P.formatSubtitle(Object.assign({}, info, { z: pos.z, t: pos.t, display: Object.assign({}, info.display, { active: pos.c }) }),
+          { label: sliceLabel(), running: running !== null });
+      }
+      function paintRows() {
+        const rows = P.stackRows(info, pos);
+        const sig = rows.map((r) => r.dim + r.max + (r.animated ? 'a' : '')).join(',');
+        if (sig !== rowsSig) {
+          rowsSig = sig;
+          while (rowEls.length) { const r = rowEls.pop(); r.cleanup(); if (r.root.parentNode) r.root.parentNode.removeChild(r.root); }
+          for (const row of rows) if (row.dim !== 'c') buildRow(row);
+        }
+        for (const r of rowEls) {
+          const cur = rows.find((x) => x.dim === r.row.dim);
+          if (!cur) continue;
+          r.slider.value = String(cur.value);
+          r.count.textContent = `${cur.value}/${cur.max}`;
+          r.slider.setAttribute('aria-valuetext', `${cur.letter || 'slice'} ${cur.value}/${cur.max}`);
+          if (r.play) { r.play.classList.toggle('is-running', running !== null); r.play.setAttribute('aria-pressed', running !== null ? 'true' : 'false'); r.play.textContent = running !== null ? '❚❚' : '▶'; }
+        }
+        stackBar.hidden = rowEls.length === 0;
+      }
+      function buildRow(row) {
+        const root = el('div', 'ij-stack-row');
+        root.dataset.dim = row.dim;
+        const cl = [];
+        let play = null;
+        if (row.animated) {
+          play = el('button', 'ij-stack-play', '▶');
+          play.type = 'button';
+          play.setAttribute('aria-label', t('view.animate', 'Animation'));
+          play.title = t('view.animate', 'Animation');
+          const onPlay = () => { if (opts.onAnimate) opts.onAnimate(docId, 'toggle'); };
+          play.addEventListener('click', onPlay); cl.push(() => play.removeEventListener('click', onPlay));
+          root.appendChild(play);
+        }
+        const letter = el('span', 'ij-stack-letter', row.letter || '');
+        const slider = el('input', 'ij-stack-slider');
+        slider.type = 'range'; slider.min = '1'; slider.max = String(row.max); slider.step = '1'; slider.value = String(row.value);
+        slider.setAttribute('aria-label', row.letter ? t('view.dim.' + row.letter, row.letter) : t('view.slice', 'Slice'));
+        const count = el('span', 'ij-stack-count');
+        const onInput = () => movePosition(P.positionFromRow(info, pos, row, Number(slider.value)));
+        slider.addEventListener('input', onInput); cl.push(() => slider.removeEventListener('input', onInput));
+        root.append(letter, slider, count);
+        stackBar.appendChild(root);
+        rowEls.push({ row, root, slider, count, play, cleanup: () => { for (const f of cl) f(); } });
+      }
+      /** The operator moved: the view shows the plane at once (tile requests carry it), the app is told. */
+      function movePosition(np) {
+        if (!info) return;
+        const next = P.clampPosition(info, np);
+        if (next.c !== pos.c) {
+          pos = Object.assign({}, pos, { c: next.c });
+          view.setDisplay({ active: next.c });
+          paintChannelBar();
+          if (opts.onChannel) opts.onChannel(next.c, docId);
+        }
+        if (next.z !== pos.z || next.t !== pos.t) {
+          pos = Object.assign({}, pos, { z: next.z, t: next.t });
+          if (typeof view.setPosition === 'function') view.setPosition({ z: pos.z, t: pos.t });
+          if (opts.onPosition) opts.onPosition({ c: pos.c, z: pos.z, t: pos.t }, docId);
+        }
+        paintRows(); paintSubtitle();
+      }
+      /** The app moved it (a command, a macro, the engine, a restore): the rows and the view follow, nothing is sent back. */
+      function setPosition(np, o) {
+        if (!info) return;
+        const next = P.clampPosition(info, np);
+        const planeMoved = next.z !== pos.z || next.t !== pos.t;
+        pos = next;
+        if (planeMoved && typeof view.setPosition === 'function') view.setPosition({ z: pos.z, t: pos.t });
+        paintChannelBar();
+        paintRows(); paintSubtitle();
+        if (!o || o.keepStatus !== true) statusPos.textContent = '';
+      }
+      function setRunning(fps) { running = fps > 0 ? fps : null; paintRows(); paintSubtitle(); }
+
       // ---- the image of this view ----------------------------------------------------------------------------
       function setImage(imgInfo) {
         info = imgInfo || null;
-        if (!info) { activeRoi = null; polyDraft = null; view.setImage(null); return; }
-        subtitle.textContent = P.formatSubtitle(info);
+        if (!info) { activeRoi = null; polyDraft = null; running = null; view.setImage(null); return; }
         const n = info.channels ? info.channels.length : 1;
-        channelSlider.max = String(Math.max(1, n));
         const active = Math.min(n - 1, Math.max(0, (info.display && info.display.active) || 0));
-        channelSlider.value = String(active + 1);
-        channelBar.hidden = n < 2;
-        channelLabel.textContent = `c: ${active + 1}/${n}`;
+        pos = P.clampPosition(info, { c: active, z: info.z, t: info.t });
+        noteMode(info.display && info.display.mode);
+        channelBar.hidden = n < 2 || !!info.rgb;
+        paintChannelBar();
         view.setImage(info);
+        if (typeof view.setPosition === 'function') view.setPosition({ z: pos.z, t: pos.t });
+        paintRows(); paintSubtitle();
         statusPos.textContent = '';
       }
       function updateInfo(imgInfo) {
         if (!imgInfo || !info) return;
         info = imgInfo;
-        subtitle.textContent = P.formatSubtitle(info);
+        pos = P.clampPosition(info, pos);
+        paintRows(); paintSubtitle();
         view.updateInfo(imgInfo);
       }
       function setDisplayState(state) {
         view.setDisplay(state);
-        if (state && Number.isInteger(state.active) && info) {
-          channelSlider.value = String(state.active + 1);
-          channelLabel.textContent = `c: ${state.active + 1}/${info.channels.length}`;
+        if (state && info) {
+          // the bar follows a display-mode change made elsewhere (Channels Tool, Image > Color): Composite = "all", else the active channel
+          if (state.mode) noteMode(state.mode);
+          if (Number.isInteger(state.active) && pos.c !== state.active) pos = Object.assign({}, pos, { c: state.active });
+          paintChannelBar(); paintSubtitle();
         }
       }
       listen(channelSlider, 'input', () => {
-        const idx = Number(channelSlider.value) - 1;
-        channelLabel.textContent = `c: ${idx + 1}/${channelSlider.max}`;
-        view.setDisplay({ active: idx });
-        if (opts.onChannel) opts.onChannel(idx, docId);
+        const v = Number(channelSlider.value);
+        if (v <= 0) {
+          // "all": Composite mode, the active channel stays what it was
+          dmode = 'composite';
+          view.setDisplay({ mode: 'composite' });
+          paintChannelBar();
+          if (opts.onChannel) opts.onChannel(pos.c, docId, 'composite');
+        } else {
+          const mode = dmode === 'composite' ? lastSingle : dmode;
+          dmode = mode;
+          pos = Object.assign({}, pos, { c: v - 1 });
+          view.setDisplay({ active: v - 1, mode });
+          paintChannelBar();
+          if (opts.onChannel) opts.onChannel(v - 1, docId, mode);
+        }
+        paintSubtitle();
       });
       listen(stage, 'blur', () => { if (spaceDown) { spaceDown = false; stageCursor(); } });
       function destroy() {
@@ -2642,7 +3110,8 @@ const IJShell = (() => {
         get polyDraft() { return polyDraft; },
         get activeRoi() { return activeRoi; },
         get drag() { return drag; },
-        setImage, updateInfo, setDisplayState, keyDown, stageCursor, cancelPolygon, destroy,
+        setImage, updateInfo, setDisplayState, keyDown, stageCursor, cancelPolygon, destroy, setPosition, setRunning,
+        getPosition: () => Object.assign({}, pos), repaintSubtitle: paintSubtitle,
         setActiveRoi(roi) { activeRoi = roi || null; cancelPolygon(); pushRois(); setStatus(roi ? P.describeRoi(roi, info && info.calibration) : ''); },
         setRois(r) { rois = { all: (r && r.all) || [], showAll: !!(r && r.showAll) }; pushRois(); },
         commitRoi
@@ -2726,6 +3195,12 @@ const IJShell = (() => {
       setTitle(name, docId) { const c = ctlOf(docId); if (c) layout.setTabInfo(c.docId, { name: name || '' }); },
       setTabInfo: (docId, o) => layout.setTabInfo(docId, o),
       setDisplayState(state, docId) { const c = ctlOf(docId); if (c) c.setDisplayState(state); },
+      /** The plane on screen ({ c, z, t }, 0-based): the rows, the subtitle and the view follow; nothing is reported back (opts.onPosition is the operator's). */
+      setPosition(docId, p, o) { const c = ctlOf(docId); if (c) c.setPosition(p, o); },
+      getPosition(docId) { const c = ctlOf(docId); return c ? c.getPosition() : null; },
+      /** An animation runs (fps) or stopped (null): the play button and the subtitle follow. */
+      setRunning(docId, fps) { const c = ctlOf(docId); if (c) c.setRunning(fps); },
+      repaintSubtitle(docId) { const c = ctlOf(docId); if (c) c.repaintSubtitle(); },
       setTool: (id) => setTool(id, false), getTool: () => tool,
       setActiveRoi(roi, docId) { const c = ctlOf(docId); if (c) c.setActiveRoi(roi); },
       getActiveRoi: (docId) => { const c = ctlOf(docId); return c ? c.activeRoi : null; },

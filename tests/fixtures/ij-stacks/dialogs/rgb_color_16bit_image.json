@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"rgb_color_16bit_image","op":"dialog","command":"RGB Color","image":{"title":"g16","bitDepth":16,"dims":{"c":1,"z":1,"t":1},"hyperstack":false,"composite":false,"width":30,"height":18,"roi":null},"others":[],"menuClass":"ij.plugin.Converter(\"RGB Color\")","menuPath":"Image>Type","steps":[],"noDialog":true}

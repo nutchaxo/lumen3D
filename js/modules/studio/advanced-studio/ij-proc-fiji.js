@@ -954,7 +954,7 @@
 
   if (R && S) {
     R.define('curveFit', {
-      kind: 'compute', version: 1, docless: true, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
+      kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', docless: true, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
       validate(p) { checkCurveParams(p); },
       scratchBytes(info, p) { return 1048576 + 8 * 40 * ((p && p.x ? p.x.length : 0) + 1000); },
       async run(view, p, roi, io) {
@@ -965,7 +965,7 @@
 
     // Fitter.applyFunction: FloatProcessor(w, h, [cf.f(params, ip.getPixelValue(x, y))], colour model of the source) shown as "<title>-transformed".
     R.define('fitApply', {
-      kind: 'newdoc', version: 1, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
+      kind: 'newdoc', version: 1, stack: 'plane', rgb: 'gray', bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
       validate(p) {
         if (!p || typeof p !== 'object') throw ijError('IJ_BAD_ARGS', 'params');
         if (!Number.isInteger(p.fitType) || p.fitType < 0 || p.fitType >= FIT_LIST.length) throw ijError('IJ_BAD_ARGS', 'fitType');
@@ -1104,7 +1104,7 @@
 
   if (R && S) {
     R.define('fractalBoxCount', {
-      kind: 'compute', version: 1, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
+      kind: 'compute', version: 1, stack: 'plane', rgb: false, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
       validate(p) { checkBoxParams(p); },
       scratchBytes() { return 1048576; },
       async run(view, p, roi, io) {
@@ -1284,7 +1284,7 @@
 
   if (R && S) {
     R.define('localThickness', {
-      kind: 'newdoc', version: 1, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
+      kind: 'newdoc', version: 1, stack: 'plane', rgb: false, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
       validate(p) { checkThicknessParams(p); },
       // object mask (1 B) + squared distances (4 B) + painted radii (4 B) + row jump table (4 B) + the float output (4 B), + the centre lists
       scratchBytes(info) { return info.width * info.height * 17 + 4194304; },
@@ -1795,7 +1795,7 @@
 
   if (R && S) {
     R.define('analyzeSkeleton', {
-      kind: 'compute', version: 1, bitDepths: [8], channels: 'one', roi: 'mask', preview: false,
+      kind: 'compute', version: 1, stack: 'plane', rgb: false, bitDepths: [8], channels: 'one', roi: 'mask', preview: false,
       validate(p) { checkSkeletonParams(p); },
       // the voxel index map (4 B / px), the masks and images (1 B each, 2 B for the labels), the voxel lists (about 24 B per skeleton voxel,
       // reserved through io.reserve once the skeleton is counted)
@@ -1818,7 +1818,7 @@
 
     // The images of the same analysis: [Tagged skeleton, (Longest shortest paths), (Labeled skeletons), (<name>-pruned when something was pruned)]
     R.define('skeletonTagged', {
-      kind: 'newdoc', version: 1, bitDepths: [8], channels: 'one', roi: 'mask', preview: false,
+      kind: 'newdoc', version: 1, stack: 'plane', rgb: false, bitDepths: [8], channels: 'one', roi: 'mask', preview: false,
       validate(p) { checkSkeletonParams(p); },
       scratchBytes(info) { return info.width * info.height * 16 + 4194304; },
       async run(view, p, roi, io) {
@@ -1853,7 +1853,7 @@
   }
   if (R && S) {
     R.define('cellMarkerValues', {
-      kind: 'compute', version: 1, bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
+      kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', bitDepths: [8, 16, 32], channels: 'one', roi: 'ignore', preview: false,
       validate(p) { checkMarkerParams(p); },
       scratchBytes() { return 1048576; },
       run(view, p) {

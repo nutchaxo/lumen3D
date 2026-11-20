@@ -119,6 +119,17 @@
         const pick = (c, id) => (Number.isInteger(c) && c >= 0 && c < count(id) ? c : 0);
         const params = { op: v.op, float32: !!v.float32, all };
         if (!all) { params.channel1 = pick(v.channel1, id1); params.channel2 = pick(v.channel2, id2); }
+        // ImageCalculator.calculate on a stack: "Process all N images?" (Yes / No / Cancel, no sentence about Undo — the result is a new image). Image 2 is a single
+        // image or a stack of the same length; a hyperstack is processed whole, it asks nothing. A macro answers with the word `stack` (params.stack).
+        const a = byId.get(id1), b = byId.get(id2);
+        const planesOf = (d) => (d && d.nZ ? d.nZ * d.nT : 1);
+        if (a && planesOf(a) > 1) {
+          if (planesOf(b) > 1 && planesOf(b) !== planesOf(a)) { const err = new Error('stack depth'); err.code = 'IJ_CALC_STACKS'; throw err; }
+          const dimAware = !!a.hyperstack || nChan(a) > 1;
+          const answer = dimAware ? 'all' : await api.askStack({ docId: id1, stack: v.stack });
+          if (answer === null) return;
+          if (answer === 'all') params.slices = 'all';
+        }
         // Edit > Options > Misc. "Divide by zero value:" (FloatBlitter.divideByZeroValue): carried only when it is not the default, so
         // a journal written without it replays as before
         const dz = api.settings.get('misc.divZero');
@@ -149,7 +160,8 @@
         const initial = initialSources(docs);
         const options = [{ value: 'none', labelKey: 'dlg.multi.none' }].concat(docs.map((d) => ({ value: d.docId, label: d.name })));
         const fields = SLOT_LABEL_KEYS.map((labelKey, i) => ({ type: 'choice', id: 'c' + (i + 1), labelKey, options, value: initial[i] === null ? 'none' : initial[i] }));
-        fields.push({ type: 'check', id: 'ignoreLuts', labelKey: 'dlg.multi.ignoreLuts', value: false });
+        fields.push({ type: 'check', id: 'createComposite', ijKey: 'create', labelKey: 'dlg.multi.createComposite', value: true });
+        fields.push({ type: 'check', id: 'ignoreLuts', ijKey: 'ignore', labelKey: 'dlg.multi.ignoreLuts', value: false });
         fields.push({ type: 'message', id: 'mergeNote', labelKey: 'dlg.multi.mergeNote' });
         const chosen = (x) => { const out = []; SLOT_LABEL_KEYS.forEach((k, i) => { const id = x['c' + (i + 1)]; if (id !== undefined && id !== 'none') out.push({ docId: id, slot: i }); }); return out; };
         const v = await api.dialog({
@@ -161,7 +173,8 @@
             for (const s of src) {
               const d = byId.get(s.docId);
               if (d.width !== first.width || d.height !== first.height) return { ['c' + (s.slot + 1)]: 'dlg.multi.sizeMismatch' };
-              if (d.bitDepth !== first.bitDepth) return { ['c' + (s.slot + 1)]: 'dlg.multi.depthMismatch' };
+              // ImageJ: "The source images must have the same bit depth" only when a composite is made; an RGB merge converts each source
+              if (x.createComposite !== false && d.bitDepth !== first.bitDepth) return { ['c' + (s.slot + 1)]: 'dlg.multi.depthMismatch' };
             }
             return null;
           }
@@ -170,7 +183,7 @@
         const sources = chosen(v);
         const ids = [];
         for (const s of sources) if (ids.indexOf(s.docId) < 0) ids.push(s.docId);
-        await api.run('mergeChannels', { sources, ignoreLuts: !!v.ignoreLuts }, { docId: sources[0].docId, docIds: ids, noRoi: true, labelKey: 'op.mergeChannels', placement: 'splitRight' });
+        await api.run('mergeChannels', { sources, ignoreLuts: !!v.ignoreLuts, rgb: v.createComposite === false }, { docId: sources[0].docId, docIds: ids, noRoi: true, labelKey: 'op.mergeChannels', placement: 'splitRight' });
       }
     },
     {
@@ -234,6 +247,7 @@
       IJ_MULTI_SINGLE_CHANNEL: 'err.multiSingleChannel',
       IJ_MULTI_NOT_SINGLE: 'err.multiNotSingle',
       IJ_MULTI_DEPTH_MISMATCH: 'err.multiDepthMismatch',
+      IJ_CALC_STACKS: 'err.calcStacks',
       IJ_MULTI_NEED_TWO: 'err.multiNeedTwo',
       IJ_MULTI_TOO_MANY: 'err.multiTooMany'
     }

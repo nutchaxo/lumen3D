@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"lab_stack","op":"dialog","command":"Lab Stack","image":{"title":"rgb","bitDepth":24,"dims":{"c":1,"z":1,"t":1},"hyperstack":false,"composite":false,"width":30,"height":18,"roi":null},"others":[],"menuClass":"ij.plugin.Converter(\"Lab Stack\")","menuPath":"Image>Type","steps":[],"noDialog":true}

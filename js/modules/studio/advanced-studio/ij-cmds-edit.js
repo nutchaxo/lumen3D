@@ -536,12 +536,15 @@
       title: api.tr('dlg.edit.conversionsTitle'), okLabel: api.tr('dlg.ok'),
       fields: [
         { type: 'check', id: 'scale', labelKey: 'dlg.edit.scaleWhenConverting', value: api.settings.get('conv.scale') !== false },
+        { type: 'check', id: 'weighted', labelKey: 'dlg.edit.weightedRgb', value: api.settings.get('conv.weighted') === true },
         { type: 'check', id: 'fullRange16', labelKey: 'dlg.edit.fullRange16', value: !!api.settings.get('conv.fullRange16') }
       ]
     });
     if (!v) return;
-    // Options.conversions: "ImageConverter.setDoScaling(gd.getNextBoolean()); ... Prefs.fullRange16bitInversions = gd.getNextBoolean();"
+    // Options.conversions: "ImageConverter.setDoScaling(gd.getNextBoolean()); ... ColorProcessor.setWeightingFactors(0.299, 0.587, 0.114) when
+    // 'Weighted RGB conversions' is ticked; Prefs.fullRange16bitInversions = gd.getNextBoolean();"
     api.settings.set('conv.scale', !!v.scale);
+    api.settings.set('conv.weighted', !!v.weighted);
     api.settings.set('conv.fullRange16', !!v.fullRange16);
   }
 
@@ -566,6 +569,8 @@
     const st = api.state();
     const doc = st.doc;
     if (!doc) return;
+    // a real stack (z / t slices) goes to MontageMaker's stack path (package stk); a single plane of several channels keeps the channel montage below
+    if ((doc.nSlices || 1) > 1 && typeof IJStkCmds !== 'undefined' && IJStkCmds && typeof IJStkCmds.montage === 'function') return IJStkCmds.montage(api);
     const n = (doc.channels || []).length;
     if (n < 2) throw ijError('IJ_EDIT_STACK_REQUIRED');
     let d = E().montageDefaults(n, doc.width);
@@ -642,7 +647,7 @@
 
     mk('colorInvertLuts', ['Image', 'Color'], 35, { run: invertLuts }),
     mk('colorShowLut', ['Image', 'Color'], 60, { separatorBefore: true, run: showLut }),
-    mk('stackMontage', ['Image', 'Stacks'], 10, { long: true, enabled: (st) => idle(st) && (st.doc.channels || []).length > 1, run: montageCommand }),
+    mk('stackMontage', ['Image', 'Stacks'], 80, { long: true, enabled: (st) => idle(st) && ((st.doc.channels || []).length > 1 || (st.doc.nSlices || 1) > 1), run: montageCommand }),
     mk('lut332RGB', ['Image', 'LookupTables'], 70, { enabled: anyIdle, run: (api) => setNamedLut(api, '3-3-2 RGB') }),
     mk('lutRedGreen', ['Image', 'LookupTables'], 140, { enabled: anyIdle, run: (api) => setNamedLut(api, 'Red/Green') })
   ];

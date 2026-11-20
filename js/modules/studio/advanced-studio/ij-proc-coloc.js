@@ -836,7 +836,7 @@
   const reg = root.IJOpRegistry;
   if (reg) {
     reg.define('coloc', {
-      kind: 'compute', version: 1, bitDepths: [8, 16, 32], channels: 'one', roi: 'mask', preview: false,
+      kind: 'compute', version: 1, stack: 'plane', rgb: false, bitDepths: [8, 16, 32], channels: 'one', roi: 'mask', preview: false,
 
       // info.docs = the shape of the other document named in docIds (the second image, when it is not the first).
       validate(p, info) {

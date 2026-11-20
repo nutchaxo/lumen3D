@@ -1206,7 +1206,7 @@
 
   function defineBinaryOp(name, scratchPerPixel, make) {
     R.define(name, {
-      kind: 'pixel', version: 1, bitDepths: [8], roi: 'ignore', preview: false,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8], roi: 'ignore', preview: false,
       validate(params) { checkOverwrite(params); validateInvert(params); },
       resolve: resolveInvert,
       scratchBytes: (info) => px(info) * scratchPerPixel + 65536,
@@ -1228,7 +1228,7 @@
   /* Binary.run: `else if (arg.startsWith("skel")) { ip.resetRoi(); skeletonize(ip); }` — the selection is dropped, and the
    * foreground follows the LUT (`int fg = Prefs.blackBackground?255:0; if (ip.isInvertedLut()) fg = 255-fg;`). */
   R.define('skeletonize', {
-    kind: 'pixel', version: 1, bitDepths: [8], roi: 'ignore', preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8], roi: 'ignore', preview: false,
     validate(params) { checkOverwrite(params); validateInvert(params); },
     resolve: resolveInvert,
     scratchBytes: (info) => px(info) * 12 + 65536, // working image (padded when an object touches the edge, its mark bits inline) + the removal / adjacent-pixel lists (three lists of 4 B entries, R, A_{k-1}, A_{k-2}; each keeps the largest capacity it ever reached, possibly in different sub-passes, grown by 1.25 with the old buffer alive while copying: at most about 1.25 * 4 * (max|R| + 2 * max|A|) = 15 B/px in theory, 4.5 B/px measured at worst)
@@ -1246,7 +1246,7 @@
    * same picture is inverted, outlined, inverted back. The LUT is copied into the params (`resolve`) like the other
    * operations of this file, so a replay does not depend on the display. */
   R.define('segOutline', {
-    kind: 'pixel', version: 1, bitDepths: [8],
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8],
     validate: validateInvert,
     resolve: resolveInvert,
     scratchBytes: (info) => px(info) * 2 + 65536,
@@ -1282,7 +1282,7 @@
    * (`outImp = new ImagePlus(TITLE_PREFIX[processType]+imp.getShortTitle(), outIp)`), display range reset
    * (`ip.resetMinAndMax()`), calibration of the source. */
   R.define('edmOutput', {
-    kind: 'newdoc', version: 1, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
+    kind: 'newdoc', version: 1, stack: 'each', rgb: false, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
     validate(params) {
       if (!params || !Object.prototype.hasOwnProperty.call(EDM_KINDS, params.kind)) throw fail('IJ_BAD_ARGS', 'kind');
       if (!['byte', 'short', 'float'].includes(params.output)) throw fail('IJ_BAD_ARGS', 'output');
@@ -1319,7 +1319,7 @@
    * (8-bit: 0..255). The min / max here are those of the rounded 8-bit result, which the command reads once the run has
    * committed (the float map itself is gone by then). */
   R.define('segDisplayRange', {
-    kind: 'compute', version: 1, channels: 'one', bitDepths: [8], preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', bitDepths: [8], preview: false,
     scratchBytes: () => 4096,
     async run(view, params, roi, io) {
       const c = Number.isInteger(io.channel) ? io.channel : (view.active || 0);
@@ -1433,7 +1433,7 @@
   }
 
   R.define('findMaxima', {
-    kind: 'compute', version: 1, channels: 'one', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', preview: false,
     validate: (p) => validateMaxima(p),
     resolve: resolveMaxima,
     scratchBytes: (info, params) => maximaScratch(info, params, false),
@@ -1451,7 +1451,7 @@
   /* MaximumFinder.run: "if (outputType == SEGMENTED) resultName = " Segmented"; else resultName = " Maxima";" — a new 8-bit
    * image titled `<title> Segmented` / `<title> Maxima`, 255 on 0, the spatial calibration kept. */
   R.define('findMaximaImage', {
-    kind: 'newdoc', version: 1, channels: 'one', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', preview: false,
     resolve: resolveMaxima,
     validate(p) {
       validateMaxima(p);

@@ -132,7 +132,7 @@
       query: '', types: [], items: [], cursor: 0, selected: null,
       desc: null, descState: 'idle', descCode: null,
       tiffs: [],                         // [{ file, url, sizeBytes, state: 'loading' | 'ok' | 'bad', facts, reason, index }]
-      mode: 'z', first: 0, last: 0, method: String(settingsGet(api, 'lib.method', 'avg')), source: 'tiff', tiffFile: null, level: 0, timepoint: 0,
+      mode: 'z', first: 0, last: 0, asStack: false, method: String(settingsGet(api, 'lib.method', 'avg')), source: 'tiff', tiffFile: null, level: 0, timepoint: 0,
       spec: { yaw: 0, pitch: 0, roll: 0, depth: 0.5, thickness: 1, projection: 'single' },
       run: null, note: '', previewState: 'none',
       badges: {}
@@ -274,8 +274,10 @@
       const t = tiffNow();
       return t ? t.facts.slices : 1;
     }
-    // ZProjector's output depth for an 8-bit stack (doc.zproj.begin: inputBitDepth 8); one plane is no projection
-    const outBitsProcessed = (depth) => IJProject.outputBitDepth(depth > 1 ? st.method : 'avg', depth, 8);
+    /** "Stack" beside the projections: the slices of the range open as the slices of a z-stack (a single plane is no stack). */
+    const isStack = () => st.mode === 'z' && st.asStack && st.last > st.first;
+    // ZProjector's output depth for an 8-bit stack (doc.zproj.begin: inputBitDepth 8); one plane is no projection; a stack keeps the 8 bits
+    const outBitsProcessed = (depth) => (isStack() ? 8 : IJProject.outputBitDepth(depth > 1 ? st.method : 'avg', depth, 8));
     function levelRows() {
       const d = st.desc;
       if (!d || !d.levels) return [];
@@ -284,7 +286,10 @@
       const rows = d.levels.filter((l) => keep.includes(l.level)).map((l) => ({ level: l.level, width: l.width, height: l.height, indices: { length: l.dims.z } }));
       const depth = Math.max(1, Math.round(st.last - st.first + 1));
       const bits = st.mode === 'oblique' ? 8 : outBitsProcessed(depth);
-      return IJApp.planLevels({ channels: new Array(nCh).fill(null), levels: rows }, ATT.budget() || Infinity, bits);     // no budget known: no limit
+      // a stack holds every plane of the range: a level fits when `depth` planes (and the undo step beside them) fit
+      const stack = isStack();
+      const planned = IJApp.planLevels({ channels: new Array(nCh).fill(null), levels: rows }, (ATT.budget() || Infinity) / (stack ? depth : 1), bits);     // no budget known: no limit
+      return stack ? planned.map((r) => Object.assign({}, r, { bytes: r.bytes * depth, bytes8: r.bytes8 * depth, bytes32: r.bytes32 * depth })) : planned;
     }
     function applyDefaults(fromTiff) {
       const d = st.desc;
@@ -333,6 +338,12 @@
       applyDefaults(true);
       renderDerived();
       schedulePreview();
+    }
+    function setStack(on) {
+      if (st.run) return;
+      st.asStack = !!on;
+      applyDefaults(true);
+      renderDetail();
     }
     function setMethod(m) {
       if (!IJLibSource.METHODS.includes(m)) return;
@@ -385,6 +396,12 @@
       } catch (_) { return true; }
       return need <= budget;
     }
+    /** Bytes a stack read from a TIFF holds in memory: every plane of every channel at the TIFF's bit depth. */
+    function tiffStackBytes(t) {
+      const f = t.facts, r = tiffRangeFor(t);
+      return (r.jhi - r.jlo + 1) * f.names.length * f.width * f.height * (f.bitDepth / 8);
+    }
+    const stackTooLarge = (bytes) => ({ ok: false, reason: 'dlg.lib.stackTooLarge', params: { size: mb(bytes), budget: mb(ATT.budget() || 0) } });
     function plan() {
       const d = st.desc;
       if (!d || st.descState !== 'ready') return { ok: false, reason: st.descState === 'loading' ? 'dlg.lib.describing' : 'dlg.lib.pickOne' };
@@ -397,9 +414,16 @@
         if (!obliqueLevels().length) return { ok: false, reason: 'dlg.lib.obliqueNo' };
         return lv && lv.fits ? { ok: true, kind: 'oblique' } : { ok: false, reason: 'dlg.lib.noLevelFits' };
       }
+      if (st.source === 'tiff' && isStack()) {
+        const t = tiffNow();
+        if (!t) return { ok: false, reason: st.tiffs.some((x) => x.state === 'loading') ? 'dlg.lib.describing' : 'dlg.lib.noTiff' };
+        const need = tiffStackBytes(t);
+        return !ATT.budget() || need * 2 + 4 * MIB <= ATT.budget() ? { ok: true, kind: 'stackTiff' } : stackTooLarge(need);
+      }
       if (st.source === 'tiff') { const t = tiffNow(); return t ? (tiffFits(t, false) ? { ok: true, kind: 'zTiff' } : { ok: false, reason: 'dlg.lib.noLevelFits' }) : { ok: false, reason: st.tiffs.some((x) => x.state === 'loading') ? 'dlg.lib.describing' : 'dlg.lib.noTiff' }; }
       if (!zLevels().length) return { ok: false, reason: 'dlg.lib.zNo' };
       const lv = levelRows().find((r) => r.level === st.level);
+      if (isStack()) return lv && lv.fits ? { ok: true, kind: 'stackProcessed' } : (lv ? stackTooLarge(lv.bytes) : { ok: false, reason: 'dlg.lib.noLevelFits' });
       return lv && lv.fits ? { ok: true, kind: 'zProcessed' } : { ok: false, reason: 'dlg.lib.noLevelFits' };
     }
     /** The z range of the dataset's level 0 → the TIFF planes (µm mapping of PLAN-wave3 §4). */
@@ -418,6 +442,14 @@
         const bits = p.kind === 'photoTiff' ? f.bitDepth : IJProject.outputBitDepth(r.single ? 'avg' : st.method, depth, f.bitDepth);
         const read = IJLibSource.readBytes(f.plan, r.jlo, r.jhi, f.frame, f.names.map((_, i) => i));
         return tr('dlg.lib.resultTiff', { w: f.width, h: f.height, c: f.channels, bits, size: mb(f.width * f.height * f.channels * bytesPerPixel(bits)), planes: depth, read: mb(read) });
+      }
+      if (p.kind === 'stackTiff') {
+        const t = tiffNow(), f = t.facts, r = tiffRangeFor(t);
+        return tr('dlg.lib.resultStack', { w: f.width, h: f.height, c: f.channels, bits: f.bitDepth, planes: r.jhi - r.jlo + 1, size: mb(tiffStackBytes(t)) });
+      }
+      if (p.kind === 'stackProcessed') {
+        const lv = levelRows().find((r) => r.level === st.level);
+        return lv ? tr('dlg.lib.resultStack', { w: lv.width, h: lv.height, c: nCh, bits: 8, planes: st.last - st.first + 1, size: mb(lv.bytes) }) : '';
       }
       if (p.kind === 'photoWebp') return tr('dlg.lib.resultPhoto', { w: d.photo.width || '?', h: d.photo.height || '?' });
       const lv = levelRows().find((r) => r.level === st.level);
@@ -521,6 +553,72 @@
       }
     }
 
+    /** "Stack" of the processed volume: the planes of the range streamed band by band into doc.stack.*, channels kept as channels. */
+    async function openStackProcessed(signal) {
+      const lib = library(), d = st.desc;
+      const channels = d.channels || [];
+      const first = st.first, last = st.last, level = st.level;
+      const tp = d.type === 'live' ? st.timepoint : undefined;
+      const sessionKey = IJLibSource.sessionKey({ datasetId: d.id, treeKey: d.treeKey, timepoint: d.type === 'live' ? st.timepoint : null, mode: 'z', first, last, level, method: 'stack', input: 'processed', stamp: stampNow() });
+      const provenance = baseProvenance('processed', { mode: 'z', level, first, last, method: 'stack', sessionKey });
+      const session = await lib.openPlanes(d.id, { axis: 'z', first, last, level, timepoint: tp, signal });
+      let token = null, done = false;
+      try {
+        const depth = session.depth;
+        const lv = (d.levels || []).find((l) => l.level === level);
+        const calibration = Object.assign({}, session.calibration, lv && lv.voxelUm && lv.voxelUm.z > 0 ? { pixelDepth: lv.voxelUm.z } : {});
+        const name = tpName(tr('dlg.lib.nameStack', { dataset: d.name, a: first, b: last }));
+        const begin = await work(signal, 'doc.stack.begin', { width: session.width, height: session.height, depth,
+          channels: channels.map((c) => ({ name: c.name, color: c.color || undefined })), name, calibration, provenance, sessionKey });
+        token = begin.token;
+        const bandRows = Math.max(1, session.bandRows);
+        const zChunk = Math.max(1, session.zChunk || 1);
+        const chIdx = channels.map((c) => c.index);
+        const total = Math.ceil(session.height / bandRows) * depth;
+        let donePlanes = 0;
+        for (let y0 = 0; y0 < session.height; y0 += bandRows) {
+          const y1 = Math.min(session.height, y0 + bandRows);
+          for (let z0 = 0; z0 < depth; z0 += zChunk) {
+            const z1 = Math.min(depth, z0 + zChunk);
+            if (signal.aborted) throw abortError();
+            session.assertFrame();
+            const blk = await session.readBlock({ y0, y1, z0, z1, channels: chIdx, signal });
+            const data = blk.data.map((a) => (a.byteOffset === 0 && a.byteLength === a.buffer.byteLength ? a : a.slice()));
+            await work(signal, 'doc.stack.add', { token, y0, rows: blk.rows, z0, depth: z1 - z0, data }, data.map((a) => a.buffer), { long: true });
+            donePlanes += z1 - z0;
+            setProgress(donePlanes / total, tr('dlg.lib.progressZ', { pct: Math.round((100 * donePlanes) / total) }));
+          }
+        }
+        const fin = await work(signal, 'doc.stack.finish', { token });
+        done = true; token = null;
+        await api.adopt(fin.info, { placement: 'tab', provenance, sessionKey });
+      } finally {
+        if (token && !done) await dropToken('doc.stack.abort', token);
+        try { session.release(); } catch (_) { /* idempotent */ }
+      }
+    }
+
+    /** "Stack" of an original TIFF: the TIFF planes covering the range, read in the worker (doc.tiff.stack: batched Range requests). */
+    async function openStackTiff(signal) {
+      const d = st.desc, t = tiffNow(), f = t.facts;
+      const r = tiffRangeFor(t);
+      const etag = t.index.size + '-' + t.index.mtime;
+      const sessionKey = IJLibSource.sessionKey({ datasetId: d.id, treeKey: d.treeKey, timepoint: d.type === 'live' ? st.timepoint : null, mode: 'z',
+        first: st.first, last: st.last, level: f.level, method: 'stack', input: 'tiff', stamp: stampNow() });
+      const provenance = baseProvenance('tiff', { mode: 'z', level: f.level, first: st.first, last: st.last, method: 'stack', tiff: { file: t.file, etag }, sessionKey });
+      const px = f.pixelUm;
+      const zStep = f.vzT > 0 ? f.vzT : (f.plan.spacingUm > 0 ? f.plan.spacingUm : null);
+      const calibration = px ? Object.assign({ pixelWidth: px.x, pixelHeight: px.y, unit: 'µm' }, zStep ? { pixelDepth: zStep } : {}) : { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' };
+      const name = tpName(tr('dlg.lib.nameStack', { dataset: d.name, a: st.first, b: st.last }));
+      const args = { url: t.index.url, index: t.index, asChannels: false, z0: r.jlo, z1: r.jhi, frame: f.frame,
+        channels: f.names.map((n, i) => ({ c: i, name: n, color: f.colors[i] })), name, calibration, provenance, sessionKey };
+      setProgress(null, tr('dlg.lib.progressTiff'));
+      const off = api.on('ext:libTiffProgress', (ev) => { if (ev && ev.fraction >= 0) setProgress(ev.fraction, tr('dlg.lib.progressZ', { pct: Math.round(100 * ev.fraction) })); });
+      let res;
+      try { res = await work(signal, 'doc.tiff.stack', args, [], { labelKey: 'op.libTiff', long: true }); } finally { off(); }
+      await api.adopt(res.info, { placement: 'tab', provenance, sessionKey });
+    }
+
     async function openTiff(signal, asPhoto) {
       const d = st.desc, t = tiffNow(), f = t.facts;
       const r = asPhoto ? { jlo: 0, jhi: 0, single: true } : tiffRangeFor(t);
@@ -614,6 +712,8 @@
       settingsSet(api, 'lib.method', st.method);
       switch (p.kind) {
         case 'zProcessed': return guarded('z', (s) => openZProcessed(s));
+        case 'stackProcessed': return guarded('z', (s) => openStackProcessed(s));
+        case 'stackTiff': return guarded('tiff', (s) => openStackTiff(s));
         case 'zTiff': return guarded('tiff', (s) => openTiff(s, false));
         case 'photoTiff': return guarded('tiff', (s) => openTiff(s, true));
         case 'photoWebp': return guarded('photo', (s) => openPhotoWebp(s));
@@ -750,7 +850,7 @@
         if (st.run.kind === 'tiff') D.appendChild(h('p', { class: 'ij-note', text: tx('dlg.lib.cancelStatus') }));
       }
       D.appendChild(row);
-      if (!p.ok && !busyRun) D.appendChild(h('p', { class: 'ij-note', text: tx(p.reason) }));
+      if (!p.ok && !busyRun) D.appendChild(h('p', { class: 'ij-note', text: tx(p.reason, p.params) }));
       if (st.note) D.appendChild(h('p', { class: 'ij-note', role: 'status', text: st.note }));
       if (st.noteExtra) D.appendChild(h('p', { class: 'ij-note', role: 'status', text: st.noteExtra }));
       if (st.noteViewer) D.appendChild(viewerLink(st.selected, true));
@@ -783,9 +883,10 @@
       sl('last', tx('dlg.lib.last'), st.last);
       r.zNote = h('p', { class: 'ij-note', text: zNoteText() });
       D.appendChild(r.zNote);
-      const sel = h('select', { class: 'ij-search', disabled: locked || st.last === st.first, on: { change: () => setMethod(sel.value) } },
-        IJLibSource.METHODS.map((m) => { const o = h('option', { text: tx(METHOD_KEYS[m]) }); o.value = m; o.selected = m === st.method; return o; }));
-      sel.value = st.method;
+      const sel = h('select', { class: 'ij-search', disabled: locked || st.last === st.first, on: { change: () => (sel.value === 'stack' ? setStack(true) : (setStack(false), setMethod(sel.value))) } },
+        IJLibSource.METHODS.map((m) => { const o = h('option', { text: tx(METHOD_KEYS[m]) }); o.value = m; o.selected = m === st.method && !st.asStack; return o; })
+          .concat([(() => { const o = h('option', { text: tx('dlg.lib.methodStack') }); o.value = 'stack'; o.selected = st.asStack; return o; })()]));
+      sel.value = st.asStack ? 'stack' : st.method;
       D.appendChild(field(tx('dlg.lib.method'), [sel]));
       renderSource(D, locked);
     }
@@ -939,7 +1040,7 @@
     }
 
     return Object.assign(ctl, { mount, dispose, loadItems, visible, setQuery, toggleType, key, pick, describeSelected, setMode, setRange, setMethod, setSource, setTiff, setLevel,
-      setSpec, setTimepoint, plan, tiffRangeFor, levelRows, resultLine, open, cancel, text: textContent, refresh: () => { loadItems(); renderList(); } });
+      setSpec, setTimepoint, setStack, isStack, plan, tiffRangeFor, levelRows, resultLine, open, cancel, text: textContent, refresh: () => { loadItems(); renderList(); } });
   }
 
   // ───────────────────────────── page API of the package ─────────────────────────────

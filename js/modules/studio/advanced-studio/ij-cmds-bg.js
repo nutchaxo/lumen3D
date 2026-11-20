@@ -69,7 +69,8 @@
     const st = api.state();
     const info = st.doc;
     if (!info) return;
-    const composite = (info.channels || []).length > 1;
+    // an RGB image is three colour planes of ONE image, not a composite: it has the Normalize box and is remapped as a whole
+    const composite = (info.channels || []).length > 1 && !info.rgb;
     const roi = st.roi;
     const areaRoi = !!roi && !!AREA[roi.type] && !composite;
     const ch = st.activeChannel;
@@ -111,7 +112,7 @@
     // updateSelectionOnly = areaRoi && !entireImage (&& normalize): only the selection is remapped on 8 / 16 bits;
     // a 32-bit image is always normalised whole (normalizeFloat loops over every pixel, applyTable is a no-op).
     const selectionOnly = areaRoi && !v.entire && info.bitDepth !== 32;
-    const res = await api.run('enhanceNormalize', { min: range.min, max: range.max }, { docId: info.docId, channel: ch, noRoi: !selectionOnly, labelKey: 'op.enhanceNormalize' });
+    const res = await api.run('enhanceNormalize', { min: range.min, max: range.max }, { docId: info.docId, channel: info.rgb ? 'all' : ch, noRoi: !selectionOnly, labelKey: 'op.enhanceNormalize' });
     if (!res) return;
     await api.setDisplay(info.docId, ch, { min: 0, max: maxValue }); // run(): ip.setMinAndMax(0, 1.0 | maxValue())
   }

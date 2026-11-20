@@ -402,7 +402,9 @@
       return {
         name, width,
         stroke: argbOf(st.stroke, false), fill: argbOf(st.fill, true),
-        c: pos && isInt(pos.c) ? pos.c : 0, z: pos && isInt(pos.z) ? pos.z : 0, t: pos && isInt(pos.t) ? pos.t : 0
+        c: pos && isInt(pos.c) ? pos.c : 0, z: pos && isInt(pos.z) ? pos.z : 0, t: pos && isInt(pos.t) ? pos.t : 0,
+        // Roi.getPosition(): the stack slice of a plain stack (Roi.setPosition(int)); a hyperstack position is c / z / t and leaves it 0
+        n: pos && isInt(pos.n) && pos.n > 0 ? pos.n : 0
       };
     }
 
@@ -426,6 +428,7 @@
       if (st.stroke) putInt(dv, O.STROKE_COLOR, st.stroke);
       if (st.fill) putInt(dv, O.FILL_COLOR, st.fill);
       putShort(dv, O.OPTIONS, options);
+      if (st.n > 0) putInt(dv, O.POSITION, st.n);
       const h2 = HEADER + cfg.dataBytes;
       putInt(dv, O.HDR2, h2);
       putInt(dv, h2 + H2.C, st.c); putInt(dv, h2 + H2.Z, st.z); putInt(dv, h2 + H2.T, st.t);
@@ -556,6 +559,7 @@
       const subPixel = (options & OPT.SUB_PIXEL) !== 0 && version >= 222;
       const subRect = version >= 223 && subPixel && (type === T.rect || type === T.oval);
       let channel = 0, slice = 0, frameT = 0;
+      const stackN = size >= O.POSITION + 4 ? getInt(O.POSITION) : 0;
       if (hdr2 > 0 && hdr2 + H2.IMAGE_SIZE + 4 <= size) { channel = getInt(hdr2 + H2.C); slice = getInt(hdr2 + H2.Z); frameT = getInt(hdr2 + H2.T); }
       const need = (end) => { if (end > size) throw ijError('IJ_IO_BAD_ROI', 'truncated'); };
 
@@ -634,7 +638,7 @@
         roi, name: typeof name === 'string' ? name : '',
         stroke: strokeArgb ? strokeOf(strokeArgb) : null, fill: fillArgb ? fillOf(fillArgb) : null,
         width: width2 > 0 && roi.type !== 'line' && roi.type !== 'polyline' ? width2 : (roi.width || 0),
-        position: (channel > 0 || slice > 0 || frameT > 0) ? { c: channel, z: slice, t: frameT } : null
+        position: (channel > 0 || slice > 0 || frameT > 0 || stackN > 0) ? (stackN > 0 && !(channel > 0 || slice > 0 || frameT > 0) ? { c: 0, z: 0, t: 0, n: stackN } : { c: channel, z: slice, t: frameT }) : null
       };
     }
     function decode(bytes, o) { return decodeEntry(bytes, o).roi; }
@@ -967,8 +971,8 @@
       return null;
     }
     /* A picture the browser decoded → an image: one grey channel when every pixel has R = G = B (ImageJ turns a grey RGB picture
-     * into an 8-bit image), else three 8-bit channels coloured red, green and blue (ImageJ would open an RGB image, a type this view
-     * does not have). The browser hands over 8 bits per channel; the alpha is ignored. */
+     * into an 8-bit image, Opener.convertGrayJpegTo8Bits), else a 24-bit RGB image (`rgb: true`: three 8-bit planes named Red, Green,
+     * Blue). The browser hands over 8 bits per channel; the alpha is ignored. */
     function imageFromRgba(rgba, w, h, name) {
       const n = w * h;
       let grey = true;
@@ -977,184 +981,66 @@
       const plane = (k) => { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = rgba[i * 4 + k]; return a; };
       if (grey) return { name, width: w, height: h, bitDepth: 8, calibration, channels: [{ data: plane(0), name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }] };
       const rgb = [['Red', '#ff0000'], ['Green', '#00ff00'], ['Blue', '#0000ff']];
-      return { name, width: w, height: h, bitDepth: 8, calibration, channels: rgb.map(([lut, color], k) => ({ data: plane(k), name: lut, color, display: { min: 0, max: 255, lut, invert: false } })) };
+      return { name, width: w, height: h, bitDepth: 8, calibration, rgb: true, channels: rgb.map(([lut, color], k) => ({ data: plane(k), name: lut, color, display: { min: 0, max: 255, lut, invert: false } })) };
     }
     return { CODES, error, kindOf, imageFromRgba };
   })();
 
   // ====================================================================================== IJLocalTiff
   /* A compressed TIFF read from a file on disk (File > Open of a Download Center bundle page, or of anything an ImageJ
-   * writes with deflate): 8 / 16 / 32-bit float, single sample, classic TIFF, strips compressed with Adobe deflate (8) or
+   * writes with deflate): 8 / 16 / 32-bit float grey or 8-bit RGB, classic TIFF, strips compressed with Adobe deflate (8) or
    * 32946, predictor 1 or 2. Every strip goes through IJTiffStream.decodeStrip (inflate, byte order, horizontal predictor).
-   * The planes become channels, as IJTiff.read does; the ImageJ metadata (ranges, LUTs, labels) and the calibration are
-   * read the same way. `needsDecoder(bytes)` says whether the file is one of these (else IJTiff.read / doc.open takes it). */
+   * The directories, the ImageJ description (channels / slices / frames, hyperstack, mode, calibration) and the metadata (labels,
+   * ranges, LUTs) are read by IJTiff.parse / IJTiff.assemble — the same stack image as the uncompressed reader gives.
+   * `needsDecoder(bytes)` says whether the file is one of these (else IJTiff.read / doc.open takes it). */
   const IJLocalTiff = (() => {
-    const MAGIC = 0x494a494a, T_LABL = 0x6c61626c, T_RANG = 0x72616e67, T_LUTS = 0x6c757473;
-    const TYPE_SIZE = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8 };
     const unsupported = (m) => ijError('IJ_TIFF_UNSUPPORTED', m || 'unsupported TIFF');
-
-    function parse(bytes) {
-      if (bytes.length < 8) throw unsupported('short');
-      const le = bytes[0] === 0x49 && bytes[1] === 0x49;
-      if (!le && !(bytes[0] === 0x4d && bytes[1] === 0x4d)) throw unsupported('not TIFF');
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      if (dv.getUint16(2, le) !== 42) throw unsupported('version');
-      const inFile = (o, n) => o >= 0 && n >= 0 && o + n <= bytes.length;
-      const ifds = [], seen = new Set();
-      let off = dv.getUint32(4, le);
-      while (off) {
-        if (seen.has(off) || ifds.length > 65536 || !inFile(off, 2)) throw unsupported('bad IFD chain');
-        seen.add(off);
-        const n = dv.getUint16(off, le);
-        if (!inFile(off + 2, n * 12 + 4)) throw unsupported('bad IFD');
-        const tags = {};
-        for (let i = 0; i < n; i++) {
-          const e = off + 2 + i * 12;
-          const tag = dv.getUint16(e, le), type = dv.getUint16(e + 2, le), count = dv.getUint32(e + 4, le);
-          const sz = TYPE_SIZE[type];
-          if (!sz) continue;
-          const bytesLen = sz * count;
-          const at = bytesLen <= 4 ? e + 8 : dv.getUint32(e + 8, le);
-          if (!inFile(at, bytesLen)) throw unsupported('bad tag');
-          tags[tag] = { type, count, at, bytesLen };
-        }
-        ifds.push(tags);
-        off = dv.getUint32(off + 2 + n * 12, le);
-      }
-      if (!ifds.length) throw unsupported('no IFD');
-      const nums = (t) => {
-        const a = new Array(t.count);
-        for (let i = 0; i < t.count; i++) {
-          const p = t.at + i * TYPE_SIZE[t.type];
-          switch (t.type) {
-            case 1: case 7: a[i] = bytes[p]; break;
-            case 3: a[i] = dv.getUint16(p, le); break;
-            case 4: a[i] = dv.getUint32(p, le); break;
-            case 5: { const d = dv.getUint32(p + 4, le); a[i] = d ? dv.getUint32(p, le) / d : 0; break; }
-            case 12: a[i] = dv.getFloat64(p, le); break;
-            default: throw unsupported('tag type');
-          }
-        }
-        return a;
-      };
-      const one = (tags, id, dflt) => (tags[id] ? nums(tags[id])[0] : dflt);
-      return { le, dv, ifds, nums, one };
-    }
+    const tiff = () => { const t = root.IJTiff; if (!t || typeof t.parse !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJTiff'); return t; };
 
     /* Does the file need this reader (a compressed or predicted strip)? false for what IJTiff.read already reads;
      * throws IJ_TIFF_UNSUPPORTED when the file is neither. */
     function needsDecoder(input) {
       const bytes = toU8(input);
-      const t = parse(bytes);
+      const t = tiff().parse(bytes);
       return t.ifds.some((tags) => t.one(tags, 259, 1) !== 1 || t.one(tags, 317, 1) !== 1);
     }
 
     async function read(input, name, o) {
+      const T = tiff();
       const bytes = toU8(input);
       const stream = root.IJTiffStream;
       if (!stream || typeof stream.decodeStrip !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJTiffStream');
-      const { le, dv, ifds, nums, one } = parse(bytes);
-      const t0 = ifds[0];
-      let desc = {};
-      if (t0[270] && t0[270].type === 2) {
-        let s = '';
-        for (let i = 0; i < t0[270].count; i++) { const c = bytes[t0[270].at + i]; if (!c) break; s += String.fromCharCode(c); }
-        for (const line of s.split(/\r?\n/)) { const k = line.indexOf('='); if (k > 0) desc[line.slice(0, k)] = line.slice(k + 1); }
-      }
-      const W = one(t0, 256), H = one(t0, 257), bd = one(t0, 258, 1);
-      if (!(W > 0 && H > 0)) throw unsupported('size');
-      if ([8, 16, 32].indexOf(bd) < 0) throw unsupported('bit depth');
-      if ((parseInt(desc.slices, 10) || 1) * (parseInt(desc.frames, 10) || 1) > 1) throw ijError('IJ_IO_STACK', 'z / t stack');
-      const IJLuts = root.IJLuts, IJImage = root.IJImage;
+      const P = T.parse(bytes);
+      const infos = P.ifds.map((tags) => T.ifdInfo(P, tags));
+      const f = infos[0];
+      const W = f.W, H = f.H, bd = f.bd, spp = f.spp;
       const Ctor = bd === 8 ? Uint8Array : bd === 16 ? Uint16Array : Float32Array;
-      const planes = [];
-      const datas = [];
-      for (const tags of ifds) {
-        const compression = one(tags, 259, 1), predictor = one(tags, 317, 1);
-        if (one(tags, 256) !== W || one(tags, 257) !== H || one(tags, 258, 1) !== bd) throw unsupported('mixed planes');
-        if (compression !== 1 && compression !== 8 && compression !== 32946) throw unsupported('compression');
-        if (predictor !== 1 && predictor !== 2) throw unsupported('predictor');
-        if (one(tags, 277, 1) !== 1) throw unsupported('samples per pixel');
-        if (one(tags, 284, 1) !== 1) throw unsupported('planar');
-        if (tags[322] || tags[324]) throw unsupported('tiles');
-        const photo = one(tags, 262, 1);
-        if (photo !== 0 && photo !== 1) throw unsupported('photometric');
-        if (one(tags, 339, 1) !== (bd === 32 ? 3 : 1)) throw unsupported('sample format');
-        if (!tags[273] || !tags[279]) throw unsupported('strips');
-        const so = nums(tags[273]), sc = nums(tags[279]);
-        if (so.length !== sc.length) throw unsupported('strips');
-        let rps = one(tags, 278, H);
-        if (!(rps > 0) || rps > H) rps = H;
-        if (Math.ceil(H / rps) !== so.length) throw unsupported('strip count');
-        planes.push({ photo });
-        const p = { compression, predictor, bitDepth: bd, width: W, spp: 1, littleEndian: le, float: bd === 32 };
-        const plane = new Ctor(W * H);
-        for (let s = 0; s < so.length; s++) {
+      const images = [];
+      for (const info of infos) {
+        if (info.W !== W || info.H !== H || info.bd !== bd || info.spp !== spp) throw unsupported('mixed planes');
+        if (info.compression !== 1 && info.compression !== 8 && info.compression !== 32946) throw unsupported('compression');
+        if (info.predictor !== 1 && info.predictor !== 2) throw unsupported('predictor');
+        const strips = info.so.length;
+        // planar RGB: the strips of the three samples follow one another (spp planes of ceil(H / rps) strips)
+        const split = info.planarConfig === 2 && spp === 3;
+        const per = split ? strips / 3 : strips;
+        if (!Number.isInteger(per) || Math.ceil(H / info.rps) !== per) throw unsupported('strip count');
+        const planes = [];
+        for (let s = 0; s < (split ? 3 : 1); s++) planes.push(spp === 1 || split ? new Ctor(W * H) : [new Ctor(W * H), new Ctor(W * H), new Ctor(W * H)]);
+        const p = { compression: info.compression, predictor: info.predictor, bitDepth: bd, width: W, spp: split ? 1 : spp, littleEndian: P.le, float: bd === 32 };
+        for (let k = 0; k < strips; k++) {
           if (o && o.check) o.check();
-          const rows = Math.min(rps, H - s * rps);
-          if (!(so[s] >= 0 && so[s] + sc[s] <= bytes.length)) throw unsupported('data out of file');
-          const got = await stream.decodeStrip(p, bytes.subarray(so[s], so[s] + sc[s]), rows, o && o.inflate ? { inflate: o.inflate } : undefined);
-          plane.set(got[0], s * rps * W);
+          const sample = split ? Math.floor(k / per) : 0, strip = split ? k % per : k;
+          const rows = Math.min(info.rps, H - strip * info.rps);
+          if (!(info.so[k] >= 0 && info.so[k] + info.sc[k] <= bytes.length)) throw unsupported('data out of file');
+          const got = await stream.decodeStrip(p, bytes.subarray(info.so[k], info.so[k] + info.sc[k]), rows, o && o.inflate ? { inflate: o.inflate } : undefined);
+          if (split) planes[sample].set(got[0], strip * info.rps * W);
+          else if (spp === 1) planes[0].set(got[0], strip * info.rps * W);
+          else for (let c = 0; c < 3; c++) planes[0][c].set(got[c], strip * info.rps * W);
         }
-        datas.push(plane);
+        images.push(spp === 1 ? [planes[0]] : split ? planes : planes[0]);
       }
-      // ImageJ metadata: labels, display ranges, LUTs (identical to IJTiff.read)
-      let labels = null, ranges = null, luts = null;
-      const tc = t0[50838], td = t0[50839];
-      if (tc && td && tc.type === 4) {
-        const counts = nums(tc);
-        let p = td.at;
-        const end = td.at + td.bytesLen;
-        if (counts.length && counts[0] >= 4 && p + counts[0] <= end && dv.getUint32(p, le) === MAGIC) {
-          const nTypes = (counts[0] - 4) / 8;
-          const types = [];
-          for (let i = 0; i < nTypes; i++) types.push({ type: dv.getUint32(p + 4 + i * 8, le), count: dv.getUint32(p + 8 + i * 8, le) });
-          p += counts[0];
-          let ci = 1;
-          for (const t of types) {
-            for (let k = 0; k < t.count; k++) {
-              const n = counts[ci++];
-              if (n === undefined || p + n > end) throw unsupported('metadata');
-              if (t.type === T_RANG) { ranges = []; for (let q = 0; q + 16 <= n; q += 16) ranges.push([dv.getFloat64(p + q, le), dv.getFloat64(p + q + 8, le)]); }
-              else if (t.type === T_LUTS && n === 768) {
-                const tab = new Uint8Array(768);
-                for (let i = 0; i < 256; i++) { tab[i * 3] = bytes[p + i]; tab[i * 3 + 1] = bytes[p + 256 + i]; tab[i * 3 + 2] = bytes[p + 512 + i]; }
-                (luts || (luts = [])).push(tab);
-              } else if (t.type === T_LABL) {
-                let s = '';
-                for (let q = 0; q + 2 <= n; q += 2) s += String.fromCharCode(dv.getUint16(p + q, le));
-                (labels || (labels = [])).push(s);
-              }
-              p += n;
-            }
-          }
-        }
-      }
-      const cal = { pixelWidth: 1, pixelHeight: 1, unit: 'px' };
-      if (t0[282] && t0[283]) {
-        const xr = nums(t0[282])[0], yr = nums(t0[283])[0], ru = one(t0, 296, 2);
-        if (xr > 0 && yr > 0) {
-          if (desc.unit) { cal.unit = /^(micron|um|µm|μm)$/i.test(desc.unit) ? 'µm' : desc.unit; cal.pixelWidth = 1 / xr; cal.pixelHeight = 1 / yr; }
-          else if (ru === 3) { cal.unit = 'µm'; cal.pixelWidth = 10000 / xr; cal.pixelHeight = 10000 / yr; }
-          else if (ru === 2) { cal.unit = 'µm'; cal.pixelWidth = 25400 / xr; cal.pixelHeight = 25400 / yr; }
-        }
-      }
-      const dMin = desc.min !== undefined ? parseFloat(desc.min) : NaN, dMax = desc.max !== undefined ? parseFloat(desc.max) : NaN;
-      const base = { Grays: '#ffffff', Red: '#ff0000', Green: '#00ff00', Blue: '#0000ff', Cyan: '#00ffff', Magenta: '#ff00ff', Yellow: '#ffff00' };
-      const channels = datas.map((data, i) => {
-        const ch = { name: labels && labels[i] ? labels[i] : 'C' + (i + 1), color: '#ffffff', data };
-        const disp = IJImage.defaultDisplay(ch, bd);
-        if (ranges && ranges[i]) { disp.min = ranges[i][0]; disp.max = ranges[i][1]; }
-        else if (dMin === dMin && dMax === dMax) { disp.min = dMin; disp.max = dMax; }
-        if (luts && luts[i]) {
-          const id = IJLuts.identify(luts[i]);
-          disp.lut = id.lut; disp.invert = id.invert;
-          if (typeof id.lut === 'string') ch.color = id.lut.charAt(0) === '#' ? id.lut : (base[id.lut] || '#ffffff');
-        } else if (planes[Math.min(i, planes.length - 1)].photo === 0) disp.invert = true;
-        ch.display = disp;
-        return ch;
-      });
-      return { name: name || 'Untitled', width: W, height: H, bitDepth: bd, channels, calibration: cal, provenance: null };
+      return T.assemble(P, images, name);
     }
     return { needsDecoder, read };
   })();

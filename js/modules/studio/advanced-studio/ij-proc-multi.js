@@ -217,7 +217,8 @@
     if (params.divZero !== undefined && (typeof params.divZero !== 'string' || params.divZero.length > 64 || parseDivZero(params.divZero) === null)) throw ijError('IJ_BAD_ARGS', 'divZero');
     const other = info.docs && info.docs.length ? info.docs[0] : null;   // unknown when the request did not name docIds (a size estimate)
     if (params.all) {
-      if (other && other.channels !== info.channels) throw ijError('IJ_BAD_ARGS', 'channel counts differ');
+      // image 2 of ONE channel serves every channel of image 1 (a composite against a single image)
+      if (other && other.channels !== info.channels && other.channels !== 1) throw ijError('IJ_BAD_ARGS', 'channel counts differ');
     } else {
       if (!Number.isInteger(params.channel1) || params.channel1 < 0 || params.channel1 >= info.channels) throw ijError('IJ_BAD_ARGS', 'channel1');
       if (!Number.isInteger(params.channel2) || params.channel2 < 0 || (other && params.channel2 >= other.channels)) throw ijError('IJ_BAD_ARGS', 'channel2');
@@ -235,22 +236,35 @@
     return { min: d.min, max: d.max, lut: src && src.lut !== undefined ? src.lut : d.lut, invert: !!(src && src.invert) };
   }
 
+  // Stacks (Process all N images?): `params.slices` = 'all' runs every plane of image 1 against the plane of image 2 with the same number, or against
+  // image 2 itself when that is a single image (ImageCalculator.doStackOperation: "must be stacks with the same number of slices, or 'image2' must be a
+  // single image"); absent = the plane on screen of each (one result plane, as before). The result of a stack keeps the dimensions of image 1.
   R.define('imageCalculator', {
-    kind: 'newdoc', version: 1, roi: 'ignore',
-    validate: validateCalc,
+    kind: 'newdoc', version: 1, stack: 'whole', rgb: 'each', roi: 'ignore',
+    validate(params, info) {
+      validateCalc(params, info);
+      if (params.slices !== undefined && params.slices !== 'all' && params.slices !== 'current') throw ijError('IJ_BAD_ARGS', 'slices');
+    },
     scratchBytes(info, params) {
       const s = calcShape(info, params || {});
       const n = params && params.all ? info.channels : 1;
-      return s.w * s.h * n * bytesOf(s.outBd) + 8 * s.w * 4;
+      const planes = params && params.slices === 'all' ? (info.nSlices || 1) / Math.max(1, info.channels || 1) : 1;
+      return s.w * s.h * n * bytesOf(s.outBd) * Math.max(1, planes) + 8 * s.w * 4;
     },
     async run(view, params, roi, io) {
       if (CALC_OPS.indexOf(params.op) < 0) throw ijError('IJ_BAD_ARGS', 'operation');
       const id2 = Array.isArray(io.docIds) && io.docIds.length > 1 ? io.docIds[1] : view.id;
       const v2 = id2 === view.id ? view : io.readDoc(id2);
-      if (params.all && v2.channels.length !== view.channels.length) throw ijError('IJ_BAD_ARGS', 'channel counts differ');
+      if (params.all && v2.channels.length !== view.channels.length && v2.channels.length !== 1) throw ijError('IJ_BAD_ARGS', 'channel counts differ');
       const idx = params.all ? view.channels.map((c, i) => i) : [params.channel1];
-      const idx2 = params.all ? idx : [params.channel2];
+      const idx2 = params.all ? (v2.channels.length === 1 ? idx.map(() => 0) : idx) : [params.channel2];
       if (idx[0] >= view.channels.length || idx2[0] >= v2.channels.length) throw ijError('IJ_BAD_ARGS', 'channel');
+      // the planes: every one of image 1 for a stack, else the plane on screen
+      const NP1 = view.nZ * view.nT, NP2 = v2.nZ * v2.nT;
+      const all = params.slices === 'all' && NP1 > 1;
+      if (all && NP2 > 1 && NP2 !== NP1) throw ijError('IJ_CALC_STACKS', 'image1 and image2 must be stacks with the same number of slices, or image2 must be a single image');
+      const cur1 = io.pos ? io.pos.t * view.nZ + io.pos.z : 0;
+      const planeList = all ? Array.from({ length: NP1 }, (_, i) => i) : [cur1];
       // ImageCalculator.createNewImage: "int width = Math.min(ip1.getWidth(), ip2.getWidth()); ... ip3 =
       // ip1.createProcessor(width, height); ... ip3.insert(ip1, 0, 0);" — the smaller of the two rectangles.
       const w = Math.min(view.width, v2.width), h = Math.min(view.height, v2.height);
@@ -271,39 +285,54 @@
       const rowsPerTick = Math.max(1, Math.floor((1 << 20) / w));
       const srow = tempFloat || !intDst ? new Float32Array(w) : new Int32Array(w);
       const drow = tempFloat ? new Float32Array(w) : null;
+      const total = idx.length * planeList.length;
+      let done = 0;
       for (let k = 0; k < idx.length; k++) {
         const ch1 = view.channels[idx[k]], ch2 = v2.channels[idx2[k]];
         const read = rowReader(v2.bitDepth, tempFloat ? 32 : outBd, ch2.display || { min: 0, max: 255 });
-        const out = new Ctor(w * h);
-        const src1 = ch1.data;
-        for (let y = 0; y < h; y++) {
-          const o = y * w, o1 = y * view.width;
-          // ip3.insert(ip1, 0, 0): the top-left w x h rectangle of image 1 (a plain copy, or ip1.convertToFloat()).
-          if (outBd === view.bitDepth) out.set(src1.subarray(o1, o1 + w), o);
-          else for (let i = 0; i < w; i++) out[o + i] = src1[o1 + i];
-          read(ch2.data, y * v2.width, w, srow);
-          if (tempFloat) {
-            for (let i = 0; i < w; i++) drow[i] = out[o + i];
-            kernel(drow, 0, srow, w);
-            for (let i = 0; i < w; i++) {
-              let v = Math.fround(drow[i] + 0.5);
-              if (v < 0) v = 0;
-              if (v > max) v = max;
-              out[o + i] = d2i(v);
+        const outs = [];
+        for (const pi of planeList) {
+          const out = new Ctor(w * h);
+          const src1 = ch1.planes ? ch1.planes[pi] : ch1.data;
+          // image 2: the plane of the same number (stack x stack), its only plane (a single image), else the plane on screen
+          const src2 = all ? (NP2 > 1 && ch2.planes ? ch2.planes[pi] : (ch2.planes ? ch2.planes[0] : ch2.data)) : ch2.data;
+          for (let y = 0; y < h; y++) {
+            const o = y * w, o1 = y * view.width;
+            // ip3.insert(ip1, 0, 0): the top-left w x h rectangle of image 1 (a plain copy, or ip1.convertToFloat()).
+            if (outBd === view.bitDepth) out.set(src1.subarray(o1, o1 + w), o);
+            else for (let i = 0; i < w; i++) out[o + i] = src1[o1 + i];
+            read(src2, y * v2.width, w, srow);
+            if (tempFloat) {
+              for (let i = 0; i < w; i++) drow[i] = out[o + i];
+              kernel(drow, 0, srow, w);
+              for (let i = 0; i < w; i++) {
+                let v = Math.fround(drow[i] + 0.5);
+                if (v < 0) v = 0;
+                if (v > max) v = max;
+                out[o + i] = d2i(v);
+              }
+            } else kernel(out, o, srow, w);
+            if ((y + 1) % rowsPerTick === 0 || y === h - 1) {
+              io.check();
+              await io.tick((done + (y + 1) / h) / total, 'op.imageCalculator');
             }
-          } else kernel(out, o, srow, w);
-          if ((y + 1) % rowsPerTick === 0 || y === h - 1) {
-            io.check();
-            await io.tick((k + (y + 1) / h) / idx.length, 'op.imageCalculator');
           }
+          done++;
+          outs.push(out);
         }
-        outputs.push({ name: ch1.name, color: ch1.color, data: out, display: resultDisplay(out, outBd, ch1.display, outBd === 8 && !tempFloat) });
+        const disp = resultDisplay(outs[0], outBd, ch1.display, outBd === 8 && !tempFloat);
+        outputs.push(all ? { name: ch1.name, color: ch1.color, planes: outs, display: disp } : { name: ch1.name, color: ch1.color, data: outs[0], display: disp });
       }
-      // Calculator result: new ImagePlus("Result of "+img1.getTitle(), ip1); img3.setCalibration(cal1).
-      return [{
+      // Calculator result: new ImagePlus("Result of "+img1.getTitle(), ip1); img3.setCalibration(cal1). A stack keeps the dimensions (and labels) of image 1.
+      const res = {
         name: 'Result of ' + view.name, width: w, height: h, bitDepth: outBd,
         calibration: view.calibration ? Object.assign({}, view.calibration) : view.calibration, channels: outputs
-      }];
+      };
+      if (all) {
+        res.nZ = view.nZ; res.nT = view.nT; res.hyperstack = !!view.hyperstack;
+        if (idx.length === view.channels.length && Array.isArray(view.labels)) res.labels = view.labels.slice();
+      }
+      return [res];
     }
   });
 
@@ -311,20 +340,39 @@
   // splitChannels   ChannelSplitter.split: titles "C"+c+"-"+imp.getTitle(), calibration of the source.
   // ------------------------------------------------------------------------------------------------
   R.define('splitChannels', {
-    kind: 'newdoc', version: 1, roi: 'ignore',
+    kind: 'newdoc', version: 1, roi: 'ignore', stack: 'whole', rgb: 'whole',
     validate(params, info) { if (info.channels < 2) throw ijError('IJ_MULTI_SINGLE_CHANNEL', 'multichannel image required'); },
     scratchBytes: (info) => info.width * info.height * info.channels * bytesOf(info.bitDepth),
     async run(view, params, roi, io) {
       const n = view.channels.length;
       if (n < 2) throw ijError('IJ_MULTI_SINGLE_CHANNEL', 'multichannel image required');
+      const cal = () => (view.calibration ? Object.assign({}, view.calibration) : view.calibration);
+      const nZ = view.nZ || 1, nT = view.nT || 1, NP = nZ * nT;
       const out = [];
+      if (view.rgb) {
+        // ChannelSplitter.splitRGB: three 8-bit images "title (red)" / "(green)" / "(blue)", every slice of the stack
+        const names = [' (red)', ' (green)', ' (blue)'];
+        for (let c = 0; c < 3; c++) {
+          out.push({
+            name: view.name + names[c], width: view.width, height: view.height, bitDepth: 8, nZ, nT, hyperstack: !!view.hyperstack && nZ > 1 && nT > 1,
+            calibration: cal(), labels: view.labels ? Array.from(view.labels) : undefined,
+            channels: [NP > 1 ? { name: 'C1', color: '#ffffff', planes: view.channels[c].planes.slice() } : { name: 'C1', color: '#ffffff', data: view.channels[c].data.slice() }]
+          });
+          io.check();
+          await io.tick((c + 1) / 3, 'op.splitChannels');
+        }
+        return out;
+      }
       for (let c = 0; c < n; c++) {
         const ch = view.channels[c];
+        // the labels of this channel's planes: stack index = t*nC*nZ + z*nC + c
+        let labels;
+        if (view.labels) { labels = []; for (let pi = 0; pi < NP; pi++) labels.push(view.labels[pi * n + c] === undefined ? null : view.labels[pi * n + c]); }
         out.push({
-          name: 'C' + (c + 1) + '-' + view.name, width: view.width, height: view.height, bitDepth: view.bitDepth,
-          calibration: view.calibration ? Object.assign({}, view.calibration) : view.calibration,
+          name: 'C' + (c + 1) + '-' + view.name, width: view.width, height: view.height, bitDepth: view.bitDepth, nZ, nT, hyperstack: !!view.hyperstack && nZ > 1 && nT > 1,
+          calibration: cal(), labels,
           // ChannelSplitter.split: "if (imp.isComposite() && ((CompositeImage)imp).getMode()==IJ.GRAYSCALE) IJ.run(imp2, "Grays", "")"
-          channels: [{ name: ch.name, color: ch.color, data: ch.data.slice(), display: view.mode === 'gray' ? Object.assign({}, ch.display, { lut: 'Grays', invert: false }) : Object.assign({}, ch.display) }]
+          channels: [{ name: ch.name, color: ch.color, [NP > 1 ? 'planes' : 'data']: NP > 1 ? ch.planes.slice() : ch.data.slice(), display: view.mode === 'gray' ? Object.assign({}, ch.display, { lut: 'Grays', invert: false }) : Object.assign({}, ch.display) }]
         });
         io.check();
         await io.tick((c + 1) / n, 'op.splitChannels');
@@ -367,45 +415,70 @@
   }
 
   R.define('mergeChannels', {
-    kind: 'newdoc', version: 1, roi: 'ignore',
+    kind: 'newdoc', version: 1, roi: 'ignore', stack: 'whole',
     validate: validateMerge,
-    scratchBytes: (info, params) => info.width * info.height * (params && params.sources ? params.sources.length : info.channels) * bytesOf(info.bitDepth),
+    scratchBytes: (info, params) => info.width * info.height * (params && params.sources ? params.sources.length : info.channels) * bytesOf(info.bitDepth) * 2,
     async run(view, params, roi, io) {
       validateMerge(params);
       const sources = params.sources.slice().sort((a, b) => a.slot - b.slot);
       const views = sources.map((s) => (s.docId === view.id ? view : io.readDoc(s.docId)));
       const first = views[0];
+      // "Create composite" unticked: the merge is one 24-bit RGB image (RGBStackMerge.mergeStacks); sources that are hyperstacks always give a composite
+      const toRgb = params.rgb === true && !(views[0].hyperstack);
+      const nZ = first.nZ || 1, nT = first.nT || 1, NP = nZ * nT;
       for (const v of views) {
         // RGBStackMerge.mergeStacks: "Source hyperstacks cannot have more than 1 channel." / "The source
         // images or stacks must have the same width and height." / "The source images must have the same bit depth."
         if (v.channels.length !== 1) throw ijError('IJ_MULTI_NOT_SINGLE', 'source with several channels');
-        if (v.width !== first.width || v.height !== first.height) throw ijError('IJ_SIZE_MISMATCH', 'sizes differ');
-        if (v.bitDepth !== first.bitDepth) throw ijError('IJ_MULTI_DEPTH_MISMATCH', 'bit depths differ');
+        if (v.width !== first.width || v.height !== first.height || (v.nZ || 1) * (v.nT || 1) !== NP) throw ijError('IJ_SIZE_MISMATCH', 'sizes differ');
+        if (!toRgb && v.bitDepth !== first.bitDepth) throw ijError('IJ_MULTI_DEPTH_MISMATCH', 'bit depths differ');
       }
       const IJLuts = root.IJLuts;
       // "if (c<colors.length && colors[c]!=null && (ignoreLuts||allGrayLuts)) lut = LUT.createLutFromColor(colors[c]);
       //  lut.min = ip.getMin(); lut.max = ip.getMax(); else lut = new LUT(cm, ip.getMin(), ip.getMax());"
       const allGray = views.every((v) => !isColorLut(v.channels[0]));
-      const useDefault = !!params.ignoreLuts || allGray;
+      // an RGB merge colours the sources with the slot colours (red, green, blue, gray, cyan, magenta, yellow), whatever their own LUT
+      // (measured: only an INVERTING LUT of a source is honoured, the pixel shows as 255 - value)
+      const useDefault = !!params.ignoreLuts || allGray || toRgb;
+      // a single image keeps the flat `data` form of a one-plane channel, a stack its list of planes
+      const planesOf = (v) => (NP > 1 ? { planes: v.channels[0].planes.slice() } : { data: v.channels[0].data.slice() });
       const channels = [];
       for (let i = 0; i < views.length; i++) {
         const src = views[i].channels[0];
         if (useDefault) {
           const color = SLOT_COLORS[sources[i].slot];
-          channels.push({ name: src.name, color, data: src.data.slice(), display: { min: src.display.min, max: src.display.max, lut: IJLuts ? IJLuts.forColor(color) : 'Grays', invert: false } });
+          channels.push(Object.assign({ name: src.name, color }, planesOf(views[i]), { display: { min: src.display.min, max: src.display.max, lut: IJLuts ? IJLuts.forColor(color) : 'Grays', invert: toRgb ? !!src.display.invert : false } }));
         } else {
-          channels.push({ name: src.name, color: src.color, data: src.data.slice(), display: Object.assign({}, src.display) });
+          channels.push(Object.assign({ name: src.name, color: src.color }, planesOf(views[i]), { display: Object.assign({}, src.display) }));
         }
         io.check();
         await io.tick((i + 1) / views.length, 'op.mergeChannels');
       }
+      const cal = first.calibration ? Object.assign({}, first.calibration) : first.calibration;
+      if (toRgb) {
+        // the composite as displayed, converted to RGB (RGBStackConverter): every plane, each source through its LUT and display range
+        const Rn = root.IJStkRender;
+        if (!Rn) throw ijError('IJ_MODULE_MISSING', 'render');
+        const planes = [[], [], []];
+        for (let pi = 0; pi < NP; pi++) {
+          const list = channels.map((ch, k) => Rn.renderChannel(ch.planes ? ch.planes[pi] : ch.data, views[k].bitDepth, ch.display, first.width, first.height));
+          const rgb = Rn.renderComposite(list, first.width, first.height);
+          for (let k = 0; k < 3; k++) planes[k].push(rgb[k]);
+        }
+        return [{
+          name: 'RGB', width: first.width, height: first.height, bitDepth: 8, rgb: true, nZ, nT, hyperstack: !!first.hyperstack && nZ > 1 && nT > 1, calibration: cal,
+          labels: first.labels ? Array.from(first.labels) : undefined,
+          channels: [{ name: 'Red', color: '#ff0000', planes: planes[0] }, { name: 'Green', color: '#00ff00', planes: planes[1] }, { name: 'Blue', color: '#0000ff', planes: planes[2] }]
+        }];
+      }
       // "String title = imp.getTitle(); if (title.startsWith("C1-")) title = title.substring(3); else
-      //  title = frames>1?"Merged":"Composite";"  (frames is always 1 here)
+      //  title = frames>1?"Merged":"Composite";"
       const t0 = first.name;
-      const name = t0.indexOf('C1-') === 0 ? t0.substring(3) : 'Composite';
+      const name = t0.indexOf('C1-') === 0 ? t0.substring(3) : (nT > 1 ? 'Merged' : 'Composite');
+      let labels;
+      if (first.labels) { labels = []; for (let pi = 0; pi < NP; pi++) for (let c = 0; c < channels.length; c++) labels.push(first.labels[pi] === undefined ? null : first.labels[pi]); }
       return [{
-        name, width: first.width, height: first.height, bitDepth: first.bitDepth,
-        calibration: first.calibration ? Object.assign({}, first.calibration) : first.calibration, channels
+        name, width: first.width, height: first.height, bitDepth: first.bitDepth, nZ, nT, hyperstack: NP > 1 && channels.length > 1, calibration: cal, labels, channels
       }];
     }
   });

@@ -161,8 +161,7 @@
       IJ_IO_TOO_LARGE: 'err.ioTooLarge',
       IJ_IO_NEEDS_IMAGE: 'err.ioNeedsImage',
       IJ_IO_NEEDS_COMPOSITE: 'err.ioNeedsComposite',
-      IJ_IO_DECODE: 'err.ioDecode',
-      IJ_IO_STACK: 'err.ioStack'
+      IJ_IO_DECODE: 'err.ioDecode'
     }
   });
 })();

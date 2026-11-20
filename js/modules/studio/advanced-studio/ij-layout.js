@@ -716,8 +716,11 @@ void main() {
     let rafId = 0;
     let cw = 16, ch = 16;
 
-    const keyOf = (d, c, L, tx, ty) => `${d}|${c}|${L}|${tx}|${ty}`;
+    // A stack's planes are separate tiles: the key ends with the plane index pi = t * nZ + z (0 for a single image), so a tile that
+    // arrives late is stored under the plane it was asked for and is never drawn for another one.
+    const keyOf = (d, c, L, tx, ty, pi) => `${d}|${c}|${L}|${tx}|${ty}|${pi | 0}`;
     const docOfKey = (key) => key.slice(0, key.indexOf('|'));
+    const piOfKey = (key) => Number(key.slice(key.lastIndexOf('|') + 1));
 
     // ---- GL ---------------------------------------------------------------------------------------------
     function buildProgram(isInt) {
@@ -901,32 +904,42 @@ void main() {
       const until = failedUntil.get(req.key);
       return !(until && until > nowMs());
     }
+    let curPi = 0;
     function want(docId, c, L, tx, ty, rank, area) {
-      const req = { key: keyOf(docId, c, L, tx, ty), docId, c, L, tx, ty, rank, area };
+      const req = { key: keyOf(docId, c, L, tx, ty, curPi), docId, c, L, tx, ty, pi: curPi, rank, area };
       if (curRec) curRec.push(req);
       if (wanted(req)) queue.want(req);
     }
+    /** The (z, t) of a plane index of a document: what a tile request carries (null for a single image: its provider is called as before). */
+    function posOfPi(st, pi) {
+      if (!st || !st.multi) return null;
+      const nZ = Math.max(1, st.nZ | 0);
+      return { z: pi % nZ, t: Math.floor(pi / nZ) };
+    }
+    // the generation a result must still match to be stored: the channel's, and the plane's when only that plane was invalidated
+    const genOf = (st, c, pi) => st.chGen[c] + ':' + (st.pGen.get(pi) || 0);
     function pump() {
       if (destroyed) return;
       for (const r of queue.take(inflight.size, (k) => inflight.has(k))) startLoad(r);
     }
     function dirtyDoc(docId) { for (const v of views) if (v.docId === docId) v._dirty(); }
-    function startLoad({ key, docId, c, L, tx, ty }) {
+    function startLoad({ key, docId, c, L, tx, ty, pi = 0 }) {
       const st = docState(docId);
       if (!st || !st.provider) return;
-      const gen = st.chGen[c];
+      const gen = genOf(st, c, pi);
       inflight.set(key, gen);
       let p;
-      try { p = Promise.resolve(st.provider(c, L, tx, ty)); } catch (e) { p = Promise.reject(e); }
+      const at = posOfPi(st, pi);
+      try { p = Promise.resolve(at ? st.provider(c, L, tx, ty, at) : st.provider(c, L, tx, ty)); } catch (e) { p = Promise.reject(e); }
       p.then((tile) => {
         if (inflight.get(key) === gen) inflight.delete(key);
         const cur = docState(docId);
-        if (destroyed || lost || !cur || cur.chGen[c] !== gen || !tile || !gl) { pump(); return; }
+        if (destroyed || lost || !cur || genOf(cur, c, pi) !== gen || !tile || !gl) { pump(); return; }
         try {
           const up = uploadTexture(tile.bitDepth, tile.width, tile.height, tile.data);
           const old = tiles.get(key);
           if (old && old.tex) gl.deleteTexture(old.tex);
-          tiles.set(key, { tex: up.tex, bytes: up.bytes, float: up.float, bits: tile.bitDepth, w: tile.width, h: tile.height, docId, c, level: L, tx, ty, stale: false });
+          tiles.set(key, { tex: up.tex, bytes: up.bytes, float: up.float, bits: tile.bitDepth, w: tile.width, h: tile.height, docId, c, level: L, tx, ty, pi, stale: false });
           const pin = L === cur.maxLevel && !pinned.has(key) && S.canPin(pinnedBytes, up.bytes, budgetBytes());
           if (pin) { pinned.set(key, up.bytes); pinnedBytes += up.bytes; }
           lru.add(key, up.bytes, pinned.has(key));
@@ -955,11 +968,28 @@ void main() {
     // ---- document API ------------------------------------------------------------------------------------------
     function setDoc(docId, info, nCh) {
       let st = docsState.get(docId);
-      if (!st) { st = { provider: null, nCh: 0, maxLevel: 0, chGen: [], info: null }; docsState.set(docId, st); }
+      if (!st) { st = { provider: null, nCh: 0, maxLevel: 0, chGen: [], info: null, pGen: new Map(), nZ: 1, nT: 1, multi: false, pi: 0, shownPi: 0 }; docsState.set(docId, st); }
       st.info = info; st.nCh = nCh;
       st.maxLevel = info ? P.maxLevelFor(info.width, info.height) : 0;
       st.chGen = new Array(nCh).fill(0).map(() => ++lutCounter);
+      st.pGen = new Map();
+      // the planes of a stack (a plane count that changed starts again at the first plane)
+      const nZ = Math.max(1, (info && info.nZ) | 0 || 1), nT = Math.max(1, (info && info.nT) | 0 || 1);
+      if (nZ !== st.nZ || nT !== st.nT) { st.pi = 0; st.shownPi = 0; }
+      st.nZ = nZ; st.nT = nT; st.multi = nZ * nT > 1;
       return st;
+    }
+    /** The plane on screen of a document: { z, t }. A tile of another plane stays resident (the LRU decides), the picture of the last
+     *  COMPLETE plane keeps drawing under the tiles still to come (no flash while a slider moves). */
+    function setPlane(docId, p) {
+      const st = docState(docId);
+      if (!st || !st.multi) return false;
+      const z = Math.max(0, Math.min(st.nZ - 1, (p && p.z) | 0)), t = Math.max(0, Math.min(st.nT - 1, (p && p.t) | 0));
+      const pi = t * st.nZ + z;
+      if (pi === st.pi) return false;
+      st.pi = pi;
+      dirtyDoc(docId);
+      return true;
     }
     function setProvider(docId, fn) {
       let st = docsState.get(docId);
@@ -975,17 +1005,21 @@ void main() {
     /** Closes a doc: its tiles, provider and state go. */
     function dropDoc(docId) { dropDocTiles(docId); docsState.delete(docId); }
     /** Drops what is shown for `channels` (all when null): resident tiles keep drawing until the fresh ones arrive. */
-    function invalidate(docId, channels) {
+    function invalidate(docId, channels, planes) {
       const st = docState(docId);
       if (!st) return;
       const list = Array.isArray(channels) ? channels : Array.from({ length: st.nCh }, (_, i) => i);
+      // `planes` = the plane indices that changed (a stack step that touched some planes): the others keep their tiles; absent / 'all' = every plane
+      const only = Array.isArray(planes) && st.multi ? new Set(planes.map((p) => p | 0)) : null;
+      if (only && !only.size) { dirtyDoc(docId); return; }
       for (const c of list) {
         if (c < 0 || c >= st.nCh) continue;
-        st.chGen[c] = ++lutCounter;
-        for (const t of tiles.values()) if (t.docId === docId && t.c === c) t.stale = true;
+        if (only) for (const pi of only) st.pGen.set(pi, ++lutCounter); else st.chGen[c] = ++lutCounter;
+        for (const t of tiles.values()) if (t.docId === docId && t.c === c && (!only || only.has(t.pi | 0))) t.stale = true;
         const pre = docId + '|' + c + '|';
-        for (const key of Array.from(inflight.keys())) if (key.startsWith(pre)) inflight.delete(key);
-        for (const m of [failedUntil, failCount]) for (const key of Array.from(m.keys())) if (key.startsWith(pre)) m.delete(key);
+        const hit = (key) => key.startsWith(pre) && (!only || only.has(piOfKey(key)));
+        for (const key of Array.from(inflight.keys())) if (hit(key)) inflight.delete(key);
+        for (const m of [failedUntil, failCount]) for (const key of Array.from(m.keys())) if (hit(key)) m.delete(key);
       }
       dirtyDoc(docId);
     }
@@ -1056,6 +1090,7 @@ void main() {
       if (!gl || lost) return stats;
       const { info, dstate, view, size } = v;
       const st = docState(v.docId);
+      curPi = st ? st.pi : 0;
       curRec = v.record || null;
       if (curRec) curRec.length = 0;
       const pw = Math.max(1, Math.round(size.w * size.dpr)), ph = Math.max(1, Math.round(size.h * size.dpr));
@@ -1084,7 +1119,7 @@ void main() {
         const chans = channelsToDraw(dstate, st.nCh);
         const fromTile = (t, tx, ty, LL) => ({ tex: t.tex, w: t.w, h: t.h, float: t.float, bits: t.bits, origin: [tx * P.TILE * 2 ** LL, ty * P.TILE * 2 ** LL], scale: 2 ** LL });
         const interactive = (c, LL, tx, ty) => {
-          const key = keyOf(v.docId, c, LL, tx, ty);
+          const key = keyOf(v.docId, c, LL, tx, ty, curPi);
           const t = tiles.get(key);
           if (t) {
             lru.touch(key); frameUsed.add(key);
@@ -1093,9 +1128,15 @@ void main() {
           }
           want(v.docId, c, LL, tx, ty, v.rank, v.area);
           stats.fallback = true;
+          // a plane that was just left: its picture stays until this plane's tile arrives (a slider drag never flashes)
+          if (st.shownPi !== curPi) {
+            const ko = keyOf(v.docId, c, LL, tx, ty, st.shownPi);
+            const to = tiles.get(ko);
+            if (to) { lru.touch(ko); frameUsed.add(ko); return fromTile(to, tx, ty, LL); }
+          }
           for (let L2 = LL + 1; L2 <= st.maxLevel; L2++) {
             const p = P.parentTile(LL, tx, ty, L2);
-            const k2 = keyOf(v.docId, c, L2, p.tx, p.ty);
+            const k2 = keyOf(v.docId, c, L2, p.tx, p.ty, curPi);
             const t2 = tiles.get(k2);
             if (t2) { lru.touch(k2); frameUsed.add(k2); return fromTile(t2, p.tx, p.ty, L2); }
             want(v.docId, c, L2, p.tx, p.ty, v.rank, v.area);
@@ -1128,6 +1169,8 @@ void main() {
           paintChannel(info, dstate, v.interp, v.thr, v.thr.channel, target, L, list, interactive, OVERLAY_MODES[v.thr.mode] || 1, null);
         }
         gl.disable(gl.BLEND);
+        // the plane is complete: it is the one a later move keeps under the tiles still to come
+        if (!stats.fallback) st.shownPi = curPi;
       }
       gl.disable(gl.SCISSOR_TEST);
       curRec = null;
@@ -1189,6 +1232,7 @@ void main() {
       const o2 = out.getContext('2d');
       const L = P.levelForZoom(scale, st.maxLevel);
       const chans = channelsToDraw(dstate, st.nCh);
+      const pi0 = st.pi;   // the plane on screen when the export started
       const TW = Math.min(W, 4096), TH = Math.min(H, 4096);
       const nTiles = Math.ceil(W / 4096) * Math.ceil(H / 4096);
       let doneTiles = 0;
@@ -1226,7 +1270,7 @@ void main() {
               for (const c of chans) {
                 for (const { tx, ty } of list) {
                   const lk = `${c}|${L}|${tx}|${ty}`;
-                  const res = tiles.get(keyOf(docId, c, L, tx, ty));
+                  const res = tiles.get(keyOf(docId, c, L, tx, ty, pi0));
                   if (res && !res.stale && res.tex) { got.set(lk, { tex: res.tex, w: res.w, h: res.h, float: res.float, bits: res.bits, origin: [tx * P.TILE * 2 ** L, ty * P.TILE * 2 ** L], scale: 2 ** L }); continue; }
                   const f = fetched.get(lk);
                   if (f) { got.set(lk, f); continue; }
@@ -1235,7 +1279,8 @@ void main() {
               }
               if (!missing.length) { have = got; break; }
               for (const m of missing) {
-                const tile = await st.provider(m.c, L, m.tx, m.ty);
+                const at = posOfPi(st, pi0);
+                const tile = await (at ? st.provider(m.c, L, m.tx, m.ty, at) : st.provider(m.c, L, m.tx, m.ty));
                 if (destroyed || lost || !gl) throw err('IJ_CONTEXT_LOST');
                 if (signal && signal.aborted) throw err('IJ_CANCELLED');
                 const up = uploadTexture(tile.bitDepth, tile.width, tile.height, tile.data);
@@ -1318,7 +1363,7 @@ void main() {
     const api = {
       canvas: glCanvas,
       attach, detach, requestFrame, renderNow, ensureSize, draw, uploadTexture, deleteTexture,
-      setDoc, setProvider, dropDoc, dropTiles: dropDocTiles, invalidate, dropLut, renderToCanvas, destroy,
+      setDoc, setProvider, setPlane, dropDoc, dropTiles: dropDocTiles, invalidate, dropLut, renderToCanvas, destroy,
       isLost: () => lost,
       getStats: () => ({ residentTiles: tiles.size, residentBytes: lru.total, budgetBytes: budgetBytes(), pinnedBytes, inflight: inflight.size, queued: queue.size }),
       getDocStats: (docId) => {
@@ -1377,6 +1422,8 @@ const IJView = (() => {
     const octx = overlay.getContext('2d');
 
     let info = null, nCh = 0;
+    let plane = null;                 // { z, t } on screen of a stack (null for a single image)
+    const nChannelsOf = (i) => (i.channels && i.channels.length) || 1;
     let dstate = { mode: 'composite', active: 0, channels: [], visible: [] };
     let thr = null;
     let preview = null;
@@ -1480,14 +1527,17 @@ const IJView = (() => {
       const prev = info, prevN = nCh;
       draft = null;
       rois = { active: null, all: [], showAll: false, handles: true };
-      info = imgInfo ? { docId: imgInfo.docId, width: imgInfo.width, height: imgInfo.height, bitDepth: imgInfo.bitDepth, calibration: imgInfo.calibration || null } : null;
+      info = imgInfo ? { docId: imgInfo.docId, width: imgInfo.width, height: imgInfo.height, bitDepth: imgInfo.bitDepth, calibration: imgInfo.calibration || null,
+        nZ: Math.max(1, imgInfo.nZ | 0 || 1), nT: Math.max(1, imgInfo.nT | 0 || 1), nC: imgInfo.rgb ? 1 : nChannelsOf(imgInfo), hyperstack: !!imgInfo.hyperstack, rgb: !!imgInfo.rgb } : null;
       nCh = imgInfo && imgInfo.channels ? imgInfo.channels.length : 0;
       // Switching tabs never gets here (the view keeps its tiles); a refresh of the same geometry keeps the
-      // resident tiles drawing until fresh ones arrive, another geometry drops them.
-      const same = !!(prev && info && prev.width === info.width && prev.height === info.height && prev.bitDepth === info.bitDepth && prevN === nCh);
+      // resident tiles drawing until fresh ones arrive, another geometry (or another plane count) drops them.
+      const same = !!(prev && info && prev.width === info.width && prev.height === info.height && prev.bitDepth === info.bitDepth && prevN === nCh
+        && prev.nZ === info.nZ && prev.nT === info.nT);
       if (!same) { thr = null; overlayItems = null; cursorMark = null; }
       if (prev && !same) renderer.dropTiles(docId);
       renderer.setDoc(docId, info, nCh);
+      if (info && (info.nZ > 1 || info.nT > 1)) { plane = { z: Math.max(0, Math.min(info.nZ - 1, imgInfo.z | 0)), t: Math.max(0, Math.min(info.nT - 1, imgInfo.t | 0)) }; renderer.setPlane(docId, plane); } else plane = null;
       if (same) renderer.invalidate(docId, null);
       if (info) {
         const chs = imgInfo.channels.map((ch) => ({ ...(ch.display || {}), min: ch.display ? ch.display.min : 0, max: ch.display ? ch.display.max : (info.bitDepth === 8 ? 255 : 65535) }));
@@ -1555,7 +1605,23 @@ const IJView = (() => {
       return { x0: cl(-view.ox / z, 0, info.width), y0: cl(-view.oy / z, 0, info.height), x1: cl((size.w - view.ox) / z, 0, info.width), y1: cl((size.h - view.oy) / z, 0, info.height) };
     }
     function onViewChange(fn) { listeners.push(fn); return () => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); }; }
-    function invalidate(channels) { renderer.invalidate(docId, channels === undefined ? null : channels); }
+    function invalidate(channels, planes) { renderer.invalidate(docId, channels === undefined ? null : channels, planes); }
+    /** A stack: the plane on screen. Tile requests carry it; the picture of the plane just left stays under the tiles still to come. */
+    function setPosition(p) {
+      if (!info || !plane) return;
+      const z = Math.max(0, Math.min(info.nZ - 1, (p && p.z) | 0)), t = Math.max(0, Math.min(info.nT - 1, (p && p.t) | 0));
+      if (z === plane.z && t === plane.t) return;
+      plane = { z, t };
+      // a dialog preview belongs to the plane it was rendered from
+      dropPreviewTex();
+      renderer.setPlane(docId, plane);
+      self._dirty();
+    }
+    /** Does an item tied to a plane ({ c, z, t } 1-based, 0 = any: an ROI of the manager, an overlay item) belong to the plane on screen? */
+    function onPlane(p) {
+      if (!p || !info || !plane) return true;
+      return P.positionMatches(p, { nZ: info.nZ, nT: info.nT, nC: info.nC, rgb: info.rgb, hyperstack: info.hyperstack }, { c: dstate.active | 0, z: plane.z, t: plane.t });
+    }
     function focus() { try { host.focus({ preventScroll: true }); } catch (e) { /* detached */ } }
 
     const viewKey = (v) => `${v.zoom}|${v.ox}|${v.oy}`;
@@ -1698,6 +1764,7 @@ const IJView = (() => {
       for (let i = 0; i < n; i++) {
         const it = items[i];
         if (!it || typeof it !== 'object') continue;
+        if (it.position && !onPlane(it.position)) continue;
         octx.save();
         try {
           if (it.kind === 'roi' && it.roi) {
@@ -1754,6 +1821,8 @@ const IJView = (() => {
       const X = (x) => x * z + view.ox, Y = (y) => y * z + view.oy;
       if (rois.showAll) {
         rois.all.forEach((it, i) => {
+          // "Associate Show All ROIs with slices": a row tied to another plane is not drawn (the label keeps the row's number)
+          if (it && it.position && !onPlane(it.position)) return;
           const roi = it && it.roi ? it.roi : it;
           drawRoi(roi, '#00ffff', String(it && it.label != null ? it.label : i + 1), X, Y, z, it && it.roi ? { stroke: it.stroke, width: it.width, fill: it.fill } : null);
         });
@@ -1800,7 +1869,8 @@ const IJView = (() => {
 
     Object.assign(self, {
       setImage, updateInfo, setDisplayState, setDisplay: setDisplayState, invalidate, setPreview, setThresholdOverlay, setOverlay,
-      setAnnotations, setRois, setDraft, zoomAt, setZoom, fit, view100, zoomToRect, pan, setCursor, getView, setView, onViewChange,
+      setAnnotations, setRois, setDraft, zoomAt, setZoom, fit, view100, zoomToRect, pan, setCursor, getView, setView, onViewChange, setPosition,
+      getPosition: () => (plane ? { z: plane.z, t: plane.t } : null),
       setCursorMark, visibleRect, focus, setInterpolate, setSelectionColor, setVisible, destroy, resize: applySize, redraw: () => self._dirty(),
       setTileProvider: (fn) => renderer.setProvider(docId, fn),
       screenToImage: (x, y) => P.screenToImage(view, x, y),

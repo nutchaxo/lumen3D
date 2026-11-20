@@ -110,7 +110,7 @@
   const NOISE_MAX_SD = 100000;
   const NOISE_CHECK_DRAWS = 4096;   // a power of two
   REG.define('addNoise', {
-    kind: 'pixel', version: 1, preview: false, display: '16/32',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: false, display: '16/32',
     validate(p) {
       if (!isNum(p.seed) || !Number.isInteger(p.seed)) throw bad('seed');
       if (!isNum(p.sd) || p.sd < 0 || p.sd > NOISE_MAX_SD) throw bad('sd');
@@ -158,7 +158,7 @@
    *                                 rx = rand(xmin, xmax); ry = rand(ymin, ymax); pixels[ry*width+rx] = (byte)0; }
    * Pixels hit outside the mask are put back by the runner (the engine's mask pass). The command runs add(ip, 0.05). */
   REG.define('saltAndPepper', {
-    kind: 'pixel', version: 1, bitDepths: [8], preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8], preview: false,
     validate(p) {
       if (!isNum(p.seed) || !Number.isInteger(p.seed)) throw bad('seed');
       if (!isNum(p.percent) || !(p.percent > 0) || p.percent > 1) throw bad('percent');
@@ -191,7 +191,7 @@
   /* ImageProcessor.resetMinAndMax() after a 16 / 32-bit noise: the exact data range of the whole image
    * (findMinAndMax: a float ignores NaN and the infinities). A compute helper of the package, not a tool. */
   REG.define('enhDataRange', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate() {},
     scratchBytes: () => 0,
     async run(view, p, roi, io) {
@@ -459,7 +459,7 @@
   const binOf8 = (eq, v) => eq.binOf[v];
 
   REG.define('clahe', {
-    kind: 'pixel', version: 1, roi: 'ignore', preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', roi: 'ignore', preview: false,
     validate(p, info) { claheParams(p, info); },
     /* the 8-bit conversion of a 16 / 32-bit channel reads the display range, which is not journaled state */
     resolve(view, params, chans) {
@@ -502,7 +502,7 @@
 
   /* The 8-bit mask image of the CLAHE dialog: 1 where the mask image is not zero. params { maskDocId }, docIds = [image, mask]. */
   REG.define('claheMask', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate(p) { if (p.maskDocId === undefined || p.maskDocId === null) throw bad('maskDocId'); },
     scratchBytes: (info) => info.width * info.height * 2,
     async run(view, p, roi, io) {
@@ -682,7 +682,7 @@
    * without, sigma is in pixels and pw = ph = 1. The image is not normalised: 16-bit values give 16-bit-sized responses.
    * Output: a new 32-bit image "tubeness of <name>". Reference agreement: see tests/js/test_ij_enh_hessian.mjs. */
   REG.define('tubeness', {
-    kind: 'newdoc', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: false, channels: 'one', roi: 'ignore', preview: false,
     validate(p) {
       if (!isNum(p.sigma) || !(p.sigma > 0) || p.sigma > 100) throw bad('sigma');
       if (typeof p.useCalibration !== 'boolean') throw bad('useCalibration');
@@ -911,7 +911,7 @@
   }
 
   REG.define('frangi', {
-    kind: 'newdoc', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: false, channels: 'one', roi: 'ignore', preview: false,
     validate(p) {
       if (typeof p.doGauss !== 'boolean') throw bad('doGauss');
       if (!Array.isArray(p.spacing) || p.spacing.length !== 2 || p.spacing.some((s) => !isNum(s) || !(s > 0))) throw bad('spacing');

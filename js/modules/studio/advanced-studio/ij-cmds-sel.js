@@ -208,11 +208,13 @@
       title: api.tr('dlg.sel.straightenTitle'),
       fields: [
         { type: 'string', id: 'title', labelKey: 'dlg.sel.title', value: uniqueName(st.doc.name, taken) },
-        { type: 'number', id: 'width', labelKey: 'dlg.sel.lineWidth', value: width, min: 1, max: 4096, integer: true, decimals: 0, unitsKey: 'dlg.pixels' }],
+        { type: 'number', id: 'width', labelKey: 'dlg.sel.lineWidth', value: width, min: 1, max: 4096, integer: true, decimals: 0, unitsKey: 'dlg.pixels' },
+        // Straightener.run: "Process Entire Stack" for a stack (unticked by default: the slice on screen)
+        ...((st.doc.nZ | 0) * (st.doc.nT | 0) > 1 ? [{ type: 'check', id: 'process', labelKey: 'dlg.sel.straightenStack', value: false }] : [])],
       validate: (vals) => (typeof vals.title === 'string' && vals.title.length > 255 ? { title: 'dlg.sel.nameLong' } : null)
     });
     if (!v) return;
-    await api.run('straighten', { width: v.width, title: v.title }, { roi, labelKey: 'op.straighten' });
+    await api.run('straighten', { width: v.width, title: v.title }, { roi, labelKey: 'op.straighten', planes: v.process ? 'all' : 'current' });
   }
 
   /* Edit > Selection > Line to Area: "Roi roi2 = Roi.convertLineToArea(roi)". A straight line becomes a rotated rectangle at once; a

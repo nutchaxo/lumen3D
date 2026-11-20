@@ -682,7 +682,7 @@
     root.IJOpRegistry.define('paintMask', {
       // Scale Bar › Overlay off: the bar, its background and its text are written into the pixels. `layers` = [{ runs, values }]
       // painted in order, `values[c]` = the value of channel c (burnValue); the whole image, whatever the selection.
-      kind: 'pixel', version: 1, channels: 'each', roi: 'ignore', preview: false,
+      kind: 'pixel', version: 1, stack: 'plane', rgb: 'each', channels: 'each', roi: 'ignore', preview: false,
       validate(p, info) {
         if (!p || !Number.isInteger(p.w) || !Number.isInteger(p.h) || !Array.isArray(p.layers) || p.layers.length < 1 || p.layers.length > MAX_LAYERS) throw bad('paintMask params');
         if (info && (p.w !== info.width || p.h !== info.height)) throw fail('IJ_SIZE_MISMATCH', 'the mask is for another image size');

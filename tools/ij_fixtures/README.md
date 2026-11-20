@@ -197,3 +197,96 @@ Behaviours recorded here that a port must reproduce (found while building the fi
 * Process › Repeat Command re-shows the dialog with the last values (`repeat-command.json`); Undo and Close are not remembered
   (both are tested there: after Undo, Repeat re-runs Invert; after closing an image, Repeat re-runs Invert on the next one).
 * Binary Options "EDM output" (Overwrite / 8-bit / 16-bit / 32-bit) for Distance Map, Ultimate Points and Voronoi: `thr/edm_outputs_*.json`.
+
+---
+
+# Stacks (`tests/fixtures/ij-stacks`)
+
+Golden fixtures for the real image stacks / hyperstacks / 24-bit RGB work (`DOCS/studio-advanced/stacks/PLAN.md`). Local only, never CI.
+
+```
+tools/ij_fixtures/run4.sh <ij-1.54p.jar> [group ...]
+  group: dialogs zproj reslice substack reduce reverse concat hyper montage zprofile stats labels slices rgb convert tiff stackproc
+```
+
+Driver `W4Stk.java` (+ `W4Dlg`, `W4Zp`, `W4Ops`, `W4Hyp`, `W4Ana`, `W4Rgb`, `W4Conv`, `W4Tiff`, `W4Sp`; reuses `Fx` / `J` / `Gen`). Unlike waves 2 and 3, almost every case goes through
+`IJ.run(imp, command, options)` on a GUI-less `ij.ImageJ`, in batch mode (images stay hidden), the job on one thread named `Run$_fixtures`, a clean `user.home`, `blackBackground=true`, `padEdges=false`.
+Each case records the command AND the options string, so a port can check the macro option keys too. The `dialogs` group runs the commands in GUI mode with no options and walks the visible AWT
+dialog (public API only, the technique of `fiji/DialogCapture.java`; the jar alone, no Fiji). Output is byte-reproducible (full runs diff clean: seeded inputs, no clocks; the free-memory figure of
+the Reslice dialog is normalised, the Channels tool window that opens beside composites is ignored). A failing case writes `"error"` and the run goes on (the last run had none).
+477 files, about 8.4 MB. Do not run `IJ.run` with an EMPTY options string on a command that has a dialog: the dialog opens (use a blank, e.g. `" "`).
+
+## Schema
+
+```
+STACK = { "title", "dims": {"c","z","t"}, "hyperstack": bool, ["composite": true, "mode": "composite"|"color"|"grayscale"],
+          "width", "height", "bitDepth": 8|16|24|32, "currentSlice": n (1-based), "position": {"c","z","t"} (1-based),
+          "planes": [ARRAY in ImageJ stack order (n = t*nC*nZ + z*nC + c)], ["labels": [string|null per plane]],
+          "calibration": {pixelWidth,pixelHeight,pixelDepth,unit,xOrigin,yOrigin,zOrigin,frameInterval,timeUnit,fps,loop},
+          "displayRanges": [[min,max] per channel (one entry for a non-composite image, [0,255] for RGB)],
+          "luts": ["grays" | "inverting" | {"mapSize","rgb": base64 of 768 bytes = R[256],G[256],B[256]}] per channel (absent for RGB) }
+RGB plane = { "rgb": true, "b64", "dtype": "u8", "length": 3*w*h }   interleaved R,G,B per pixel (ColorProcessor int pixels, alpha dropped)
+other planes = the ARRAY of the section above (number[] when <= 256 values, else {b64,dtype,length}). An RGB stack's dims.c is 1 (its 3 colours are not channels).
+```
+
+A case file is `{imagej, case, op, command, options?, input: STACK, [input2 | inputs[] + current], [roi], self?, created[], table?, log?, dialogs?, thrown?}` or, when one input runs through several
+option strings (`input` stored once), `"cases": [ { options, self?, created[], table?, log?, dialogs?, thrown?, others? } ]`.
+`self` = the image the command ran on, afterwards (left out when unchanged, `null` when the command closed it); `created` = images that appeared (plots are `{title, plot:true}`); `others` = the other
+open inputs afterwards (`"unchanged"`, a STACK, or `null` when closed); `table` = Results `{headings, rows}` (Label as text); `dialogs` = the message / GenericDialog windows ImageJ raised while the command
+ran with options (an error: `thrown: "RuntimeException: Macro canceled"` accompanies it, `IJ.error` aborts a macro).
+
+Group specifics: `zprofile` `plots[{title,x,y,limits}]` (the Plot's own arrays, not its picture); `labels` `changedSlices` (slices that got pixels; the pixels are font dependent and not compared) and
+`overlay[{position,c,z,t,text,x,y}]` (the texts of `use` = overlay); `stats` `setMeasurements`; `tiff` = `{call, input, tiff:{b64,length}, byteOrder, ifdCount, ifds (tag,type,count,value of the first 3
+IFDs), description, fileInfo, reopened: STACK, reopenedClass}` + `tiff/description_strings.json`; `rgb` `weighted` = Conversions "Weighted RGB conversions"; `dialogs/*.json` = `{command, menuClass,
+menuPath, image (before the run), others, steps:[{class,title,modal,components:[{t,label,key,keyRaw,value|items|selected|state}]}]}` with t = label message numeric string checkbox radio choice
+button; `key` = the macro option key (first word of the label, lower case); `noDialog: true` = the command asks nothing; `windows` = other frames it opened.
+
+## ImageJ 1.54p behaviours recorded here that a port must reproduce
+
+* **Process all N images?** is a `YesNoCancelDialog`, title `Process Stack?`, text `Process all N images? There is\nno Undo if you select "Yes".` (Yes / No / Cancel). Histogram asks
+  `Include all N images?` (title `Histogram`); Analyze Particles and Image Calculator ask `Process all N images?` with the title `Process Stack?` and WITHOUT the Undo sentence. In macro mode
+  `IJ.setupDialog` reads the word `stack` as Yes and its absence as No (current slice only); `slice` in the options forces No on a composite. A composite in COMPOSITE mode is processed whole with no
+  question (`dialogs/process_all_invert_hyper_composite`: noDialog); COLOR / GRAYSCALE composites ask.
+* Z Project output types: 8-bit Average / Max / Min / Median stay 8-bit, Sum and SD are 32-bit; 16-bit Average / Max / Min stay 16-bit, **Sum, SD and Median are 32-bit** (through `IJ.run`); RGB gives RGB.
+  A hyperstack projection keeps the channels (composite, display ranges, LUTs); `all` is offered only with nT > 1; without it only the current frame is projected; start/stop are clamped.
+* Make Montage on a hyperstack with c > 1 and (z > 1 or t > 1) is refused: `5D hyperstacks are not supported`. A one-slice composite becomes a 24-bit RGB montage (composite and color mode alike).
+  Only the `label` option draws text (font dependent, not in these fixtures).
+* Reslice keeps c and t of a hyperstack. With `avoid` the output spacing is the z spacing whatever `output` says; a calibrated stack with `output=0.5` gets z * pixelDepth / output slices.
+  A line selection gives `slice_count` output slices, a rectangle ignores it.
+* Reduce... works IN PLACE (`self` changes, nothing is created); on a hyperstack it reduces frames unless `reduce` (Reduce in Z-Dimension) is set. Make Substack: `delete` removes the slices from the
+  original, `do` ("Do not create substack") did NOT suppress the substack in these runs (`substack_range`); a bad list is a MessageDialog `Invalid input string`. Make Subset and Make Substack are one
+  class (`SubstackMaker`); on a hyperstack it also moves the source's channel position (`self` differs by `position` only).
+* Reverse is refused on a hyperstack (`This command does not currently work with hyperstacks.`, title `Flip Z`).
+* Stack to Hyperstack: orders xyczt (default), xyctz, xyzct, xyztc, xytcz, xytzc; c x z x t must equal the slice count (`channels x slices x frames <> stack size`). With c > 1 the result is a NEW
+  CompositeImage in the chosen display mode (`created`; the original keeps its stack, with new dims); 12 channels come out in `color` mode. Hyperstack to Stack of a composite makes a plain stack (labels kept).
+* New Hyperstack: `display` is ignored for 1 channel; an RGB hyperstack has dims.c = 3 with 24-bit planes; labels `c1z1t1`. Reduce Dimensionality: a CHECKED dimension is kept, an unchecked one is taken at
+  the current position; `keep` (Keep source) is off by default and without it the source is replaced.
+* **RGB Stack / HSB Stack / HSB (32-bit)** convert IN PLACE to a plain 3-slice stack (dims.c = 3, not hyperstack, not composite) with labels `Red Green Blue` / `Hue Saturation Brightness`; RGB Color brings
+  such a stack back (`convert_rgb_stack_roundtrip`). RGB Stack of an RGB *stack* creates a composite hyperstack (c3 x z) and empties the original. **Lab Stack** (`ColorSpaceConverter.RGBToLab`,
+  `convert/lab_stack_converter_api`) is a **CompositeImage**: 32-bit, 3 channels, grayscale mode, labels `L* a* b*`; the command opens it as a new window and closes the original (so in batch mode `self`
+  is unchanged and `created` empty), and a stack gets the `Supported Conversions` message.
+* RGB Color from a composite: dialog `Convert to RGB` (Slices (z), Frames (t), Keep source). Without `keep` the image is converted IN PLACE (`self` becomes 24-bit); with `keep` a new `<title>-1`
+  (hyperstack) or `<title> (RGB)` (single plane) image is created. A single-channel 8/16/32-bit image or stack is converted in place through its LUT and display range (one range for the whole stack).
+* 8-bit / 16-bit / 32-bit from RGB: unweighted = (R+G+B)/3, weighted (Conversions...) = 0.299 R + 0.587 G + 0.114 B (`rgb/to_*`; `to_8bit_weighting_factors`). The Conversions command needs a non-empty options string.
+* 8-bit Color (MedianCut): an 8-bit image with its own LUT of `number` colours (300 gives 256, 1 gives 2).
+* Make Composite on an RGB image gives an 8-bit 3-channel composite (`display=` is not read); on a 2..8 slice stack it makes that many channels (composite mode).
+* Split Channels: RGB gives `title (red)` / `(green)` / `(blue)` 8-bit images (original closed); a composite gives `C1-title`, `C2-title`... keeping z and t. Merge Channels without `create` makes a 24-bit
+  image titled `RGB`, with `create` a `Composite`; sources are closed unless `keep`; c1..c3 = red green blue, c4 gray, c5 cyan, c6 magenta, c7 yellow; a missing key is `*None*`.
+* Refused on RGB (texts in `rgb/refused_on_rgb.json`): Skeletonize / Fill Holes / Erode (`requires an image of type 8-bit grayscale ...`), Distance Map / Watershed (`8-bit binary image (0 and 255) required.`),
+  Analyze Particles (`RGB images must be thresholded using Image>Adjust>Color Threshold.`), Invert LUT (`RGB images do not use LUTs`), Threshold.
+* ColorProcessor `setMinAndMax` rewrites the pixels (`rgb/rgb_set_min_max`); RGB statistics and histogram are of the luminance (weighted or not per Conversions).
+* `Statistics` (Stack Statistics) writes its own Results columns `Voxels, [Volume(unit^3)], %Volume, Mean, StdDev, Min, Max, Mode, Median` whatever Set Measurements says (Median empty for 32-bit).
+  Measure Stack... writes one row per slice with `Slice` (a hyperstack first asks `Measure Hyperstack`: Channels / Slices / Frames checkboxes). Stack position adds `Slice` (plain stack), `Ch Slice Frame`
+  (hyperstack; `Slice Frame` without channels); Display label gives `title:label`, or `title:n` for an unlabelled stack.
+* Plot Z-axis Profile: x = slice number, `(i-1) * pixelDepth` for a calibrated stack, `(i-1) * frameInterval` for a calibrated time profile; a hyperstack with z > 1 and t > 1 asks `Profile` =
+  `time` | `z-axis` (key `profile`, default time). A single image: `This command requires a stack.`
+* Label...: the overlay variant (`use`) adds one TextRoi per slice (text + trailing newline); `format=Label` on an unlabelled stack prints `null slice label (n)`.
+* Add Slice on a hyperstack asks `Add` = channel | slice | frame and `Prepend`; Delete Slice asks `Delete current`; Set Slice asks Channel / Slice / Frame; Images to Stack with different sizes asks the
+  `method` (`Copy (center)`, `Copy (top-left)`, `Scale (smallest)`, `Scale (largest)`); Stack to Images names images by slice label, else `title-0001`.
+* FileSaver (TIFF): **one IFD per plane** (hyperstacks too); description `ImageJ=1.54p\nimages=N\nchannels=..\nslices=..\nframes=..\nhyperstack=true\nmode=composite\nunit=micron\nfinterval=1.5\nspacing=2.0\nfps=5\nloop=false\nmin=..\nmax=..\n`
+  (null-terminated in the file); a unit `um` is stored as the literal text `µm`; channel ranges / LUTs and slice labels are in the IJMetadata tags (`ifds`).
+* **Driver globals:** `W4Stk.kase()` resets, BEFORE every case, what a case may have changed (Conversions: weighted off + scale on, Set Measurements: `W4Ana.DEFAULT`, Prefs.blackBackground = true,
+  the Results table), so a case that failed half-way can no longer leak into the next regeneration. File > New > Image has the fill choices `White, Black, Ramp, Noise`: `slices/new_image_invalid_fill`
+  records ImageJ's answer to a word that is none of them (a MessageDialog `"Random" is not a valid choice for "fill"`, then `Macro canceled`; the 32x24 black 8-bit `Untitled` in its `created` was verified to be ImageJ's own output, not a leftover: every case starts with no image open); `slices/new_image_stack` holds only successful fills.
+* Dialog keys: a checkbox label with a leading blank (`" Preview"`, `" Use overlay"`) gives key `""` by `Macro.trimKey` (`keyRaw`); `key` is computed on the trimmed label.
+* Inputs are small on purpose: plain images 30x18, hyperstacks 24x16 (2-3 channels, 2-4 slices, 1-2 frames), `touchingDisks` 48x40 for particles, 60x40 for Montage to Stack.

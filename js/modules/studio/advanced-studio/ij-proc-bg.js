@@ -885,7 +885,7 @@
   const bytesOf = (bd) => bd / 8;
 
   define('subtractBackground', {
-    kind: 'pixel', version: 1, channels: 'each', roi: 'ignore', preview: 'reduced', display: true,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', channels: 'each', roi: 'ignore', preview: 'reduced', display: true,
     validate(p, info) {
       if (!isNum(p.radius) || !(p.radius > 0.0001) || p.radius > 10000) throw fail('IJ_BAD_ARGS', 'radius');
       for (const k of ['light', 'createBackground', 'sliding', 'disableSmoothing']) if (p[k] !== undefined && typeof p[k] !== 'boolean') throw fail('IJ_BAD_ARGS', k);
@@ -943,7 +943,7 @@
   });
 
   define('saturatedRange', {
-    kind: 'compute', version: 1, channels: 'one',
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one',
     validate(p) {
       if (!isNum(p.saturated) || p.saturated < 0 || p.saturated > 100) throw fail('IJ_BAD_ARGS', 'saturated');
     },
@@ -998,7 +998,7 @@
   });
 
   define('enhanceNormalize', {
-    kind: 'pixel', version: 1, channels: 'one', roi: 'mask', preview: false, display: true,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', channels: 'one', roi: 'mask', preview: false, display: true,
     validate(p) {
       if (!isNum(p.min) || !isNum(p.max) || !(p.max > p.min)) throw fail('IJ_BAD_ARGS', 'range');
     },
@@ -1006,13 +1006,20 @@
     prepare(view, c, p) {
       const bd = view.bitDepth;
       if (bd === 32) return { apron: { x: 0, y: 0 }, fn: (src) => normalizeFloat(src.data, p.min, p.max) };
-      const lut = normalizeTable(bd, p.min, p.max);
+      // An RGB image (ContrastEnhancer.normalize → ColorProcessor.setMinAndMax): "v = i-(int)min; v = (int)(256.0*v/(max-min)); clamp 0..255" on each colour
+      // (rewrites the pixels; measured on tests/fixtures/ij-stacks/rgb/filter_enhance), not the table of the grey types.
+      let lut = null;
+      if (view.rgb) {
+        lut = new Uint8Array(256);
+        const mn = m_trunc(p.min);
+        for (let i = 0; i < 256; i++) { let v = m_trunc(256.0 * (i - mn) / (p.max - p.min)); if (v < 0) v = 0; if (v > 255) v = 255; lut[i] = v; }
+      } else lut = normalizeTable(bd, p.min, p.max);
       return { apron: { x: 0, y: 0 }, fn: (src) => applyTable(src.data, lut) };
     }
   });
 
   define('enhanceEqualize', {
-    kind: 'pixel', version: 1, channels: 'one', roi: 'ignore', preview: false, display: true, bitDepths: [8, 16],
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', channels: 'one', roi: 'ignore', preview: false, display: true, bitDepths: [8, 16],
     validate(p, info) {
       if (p.classic !== undefined && typeof p.classic !== 'boolean') throw fail('IJ_BAD_ARGS', 'classic');
       if (p.rect !== undefined && p.rect !== null) {

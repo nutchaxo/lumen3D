@@ -517,14 +517,19 @@
   }
 
   async function colorsOptions(api) {
-    const pick = (key, fallback) => { const v = String(api.settings.get(key) || '').trim().toLowerCase(); return COLOR_LIST.indexOf(v) >= 0 ? v : fallback; };
-    const options = COLOR_LIST.map((n) => ({ value: n, labelKey: COLOR_KEYS[n] }));
+    const pick = (key, fallback) => {
+      const v = String(api.settings.get(key) || '').trim().toLowerCase();
+      return COLOR_LIST.indexOf(v) >= 0 || /^#[0-9a-f]{6}$/.test(v) ? v : fallback;
+    };
+    // a colour no name gives (a macro's setForegroundColor) is offered as itself, as ImageJ's Colors dialog adds the custom colour to its list
+    const optionsFor = (cur) => COLOR_LIST.map((n) => ({ value: n, labelKey: COLOR_KEYS[n] })).concat(COLOR_LIST.indexOf(cur) < 0 ? [{ value: cur, label: cur }] : []);
+    const fg = pick('colors.foreground', 'white'), bg = pick('colors.background', 'black'), sel = pick('colors.selection', 'yellow');
     const v = await api.dialog({
       title: api.tr('dlg.edit.colorsTitle'), okLabel: api.tr('dlg.ok'),
       fields: [
-        { type: 'choice', id: 'foreground', labelKey: 'dlg.edit.foreground', value: pick('colors.foreground', 'white'), options },
-        { type: 'choice', id: 'background', labelKey: 'dlg.edit.background', value: pick('colors.background', 'black'), options },
-        { type: 'choice', id: 'selection', labelKey: 'dlg.edit.selection', value: pick('colors.selection', 'yellow'), options }
+        { type: 'choice', id: 'foreground', labelKey: 'dlg.edit.foreground', value: fg, options: optionsFor(fg) },
+        { type: 'choice', id: 'background', labelKey: 'dlg.edit.background', value: bg, options: optionsFor(bg) },
+        { type: 'choice', id: 'selection', labelKey: 'dlg.edit.selection', value: sel, options: optionsFor(sel) }
       ]
     });
     if (!v) return;

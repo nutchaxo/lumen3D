@@ -24,6 +24,8 @@ over half of the corpus gives the same entries as the full run).
 | `MacroProbe.java` | Lives in package `ij.macro` (the jar is not sealed) to read the package-private `Interpreter.lineNumber` / `errorMessage` that `showError` would only put in a dialog. Captures `System.out` and tags every line with the `ij.IJ` method that wrote it. `runLogWindow` installs a real `TextPanel` as the Log and returns its text. |
 | `stub/ij/gui/GenericDialog.java` | Headless stand-in placed in front of the jar: `Interpreter.showError` builds a `GenericDialog` (a `HeadlessException` otherwise). Makes an error inside a nested macro (`eval`) observable. |
 | `run_macro.sh` | Compiles to a temp dir (outside the repo) and runs. |
+| `run_runtime.sh <jar>` | Regenerates `tests/fixtures/ij-macro/runtime-golden.json` from the image-model corpus `tests/fixtures/ij-macro/runtime/` (the same driver; `tests/js/test_ij_macro_pixels.mjs` compares the Studio with it). |
+| `OptionsProbe.java` | Probe of `Macro.getValue` / `trimKey` / `GenericDialog` option parsing against the jar: writes `tests/fixtures/ij-macro/options-golden.json` (usage in its header; `tests/js/test_ij_macro_options.mjs`). |
 
 ## Why a class loader per case
 
@@ -102,3 +104,49 @@ Not covered here (needs another oracle): Fiji's `#@` script parameters. Fiji str
 text (REVIEW-external.md §1-2); plain ImageJ fails on them ("Unrecognized String function"), so a
 case here would record the wrong behaviour for Fiji. Also absent: everything that needs an image,
 a window, a file or the clock (`IJ.freeMemory/currentMemory/maxMemory` are machine-dependent).
+
+## Dialog keys (`DialogKeys.java`)
+
+What `run("Command", "key=value ...")` has to understand: for every ImageJ 1.54p command (all of `Menus.getCommands()`,
+minus a deny list of file pickers, quitters and browsers) and for the Fiji commands the Studio maps, the dialog the **real
+application** opens, walked with the public AWT / ImageJ API, written to `tests/fixtures/ij-macro/ij-dialogs.json` (ImageJ) and
+`tests/fixtures/ij-macro/fiji-macro-keys.json` (Fiji). Consumed by `ij-macro-cmds.js` (written by hand from these files) and
+cross-checked by `tests/js/test_ij_macro_capture.mjs`. Local only, never shipped, never in CI; needs a desktop session
+(dialogs and image windows appear while it runs, about 20-40 minutes for the whole jar: leave the machine alone).
+
+```
+tools/ij_fixtures/macro/run_dialogkeys.sh ij <path/to/ij-1.54p.jar> [out.json] [--only "Name;Other name"]
+tools/ij_fixtures/macro/run_dialogkeys.sh fiji [out.json]                      # env FIJI, default D:/APT/3A/BIOIMAGING/Fiji
+node tools/ij_fixtures/macro/capture_coverage.mjs                              # Studio commands vs the captures
+```
+
+How a command is captured (`IJ.run(imp, name, null)` on its own thread, clean `user.home`, `Locale.ROOT`, ImageJ started non-headless
+with `NO_SHOW`; a second image titled `other` is always open for the commands that ask for one):
+
+1. The inputs are tried in this order until a command opens a `GenericDialog`: 8-bit + rectangle, 16-bit, 32-bit, binary, 2-channel
+   composite, 8-bit + line, + point, 3-slice stack, RGB, 8-bit + oval, + polygon, 2c x 3z x 2t hyperstack (the recorded one is
+   `input`). A command that neither opens a dialog nor complains on the first two inputs is only retried on the stack and on RGB.
+2. A dialog is found by polling `Window.getWindows()`, walked in component order (labels, text fields typed by membership in
+   `getNumericFields()` / `getStringFields()`, sliders, checkboxes, `CheckboxGroup`s, choices with their items and selection,
+   text areas, messages, custom buttons), then closed with **OK** (defaults), so a multi-dialog command reaches its next dialog.
+   A "Process all N images?" `YesNoCancelDialog` is answered Yes, recorded as `processStack: true` on the dialog before it with the
+   question in `processQuestion` (asked only for a stack, hence one extra run on the stack input when the first input did not ask).
+3. **Keys**: `GenericDialog.saveLabel` (the `Macro.trimKey` of the label plus the `_0`, `_1` duplicate suffix) only runs while
+   `Recorder.record` is on, so the capture turns it on (a hidden `Recorder` instance is installed) and reads the dialog's private
+   `labels` table by reflection: the keys are the jar's own, including the ones that differ from the displayed label (ImageJ shows `_`
+   as a space but keeps it in the key: `pixel_width`; such components carry `"underscored": true`). A component the plugin never
+   registered (the Preview checkbox of a filter) has `key: null`; text areas are `text1` / `text2`; a file / directory field is its text field.
+4. **Cross-check**: the Recorder's own text of the run (default values, only ticked checkboxes, `[..]` around spaces) is `recorded`
+   (single-dialog commands: the whole option string; several dialogs: each dialog's share of `Recorder.getCommandOptions()`, plus
+   `recordedAll` on the first). A command recorded as a call (`imageCalculator(...)`) has `recordedCall`.
+5. Messages shown instead of a dialog ("8-bit grayscale image required", ...) are listed in `messages` (ImageJ's own text; useful for
+   `disabledText`). A command that ran with no dialog is `noDialog`, one that could not be captured is `skipped` with the reason
+   (deny list: file pickers, installs, quit, browser, windows that need clicks; or it did not finish within 12 s).
+
+Fiji: the GenericDialog commands go through the same walker against Fiji's own jars and Java; the SciJava command (Frangi
+Vesselness) has no dialog to open, its `components` come from the `@Parameter` names of its `ModuleInfo` (`FijiScijava.java`, `kind: "other"`,
+key = parameter name). Public API only, no Fiji code is read or copied.
+
+`ij-dialogs.json` schema: see `DOCS/studio-advanced/macros/INTEGRATION.md` section 5.5 (extra optional fields: `input.id`, `underscored`,
+`unrecognized` on a component, `scale` of a slider, `units` of a numeric field, `buttons` of a dialog, `recordedAll`, `recordedCall`,
+command-level `processQuestion`, `messages`, `opensWindow`, top-level `blackBackground`).

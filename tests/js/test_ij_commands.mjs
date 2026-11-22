@@ -68,9 +68,10 @@ const pj = readJson('plugin.json');
 assert.equal(pj.id, 'advanced-studio');
 assert.equal(pj.placement, 'studio');
 assert.deepEqual(pj.i18nLanguages, LANGS);
-// PLAN-wave3 §2.8: the final order — the 18 packages (7 of wave 2, 9 tool packages, the library, the stacks), the view, the layout, the controller, the commands
-const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk'];
-assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => `ij-proc-${k}.js`), 'ij-view.js', 'ij-layout.js', 'ij-app.js',
+// PLAN-wave3 §2.8: the final order — the 19 packages (7 of wave 2, 9 tool packages, the library, the stacks, the macros), the run() bridge
+// tables (ij-macro-cmds.js, DOCS/studio-advanced/macros/INTEGRATION.md §1.2), the view, the layout, the controller, the commands
+const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
+assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => `ij-proc-${k}.js`), 'ij-macro-cmds.js', 'ij-view.js', 'ij-layout.js', 'ij-app.js',
   ...PKGS.map((k) => `ij-cmds-${k}.js`)], 'plugin.json#scripts: the final order');
 for (const f of pj.scripts) assert.ok(existsSync(path.join(DIR, f)), `${f} exists`);
 same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...PKGS.map((k) => `ij-proc-${k}.js`)],
@@ -339,8 +340,9 @@ for (const m of SRC.matchAll(/labelKey: '([a-zA-Z0-9_.]+)'/g)) used.add(m[1]);
 // The package files: tr('…') / api.tr('…'), labelKey / stepKey, tick(…, 'op.x'), 'op.' + name. Their keys live in the
 // namespaces cmd. op. menu. meas. tool. res. err. dlg.<prefix>. — or are keys the base dictionaries already hold.
 const PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc', thr: 'thr', enh: 'enh', fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana',
-  edit: 'edit', fiji: 'fiji', lib: 'lib' };
+  edit: 'edit', fiji: 'fiji', lib: 'lib', stk: 'stk', macro: 'mac' };
 // PLAN-wave3 §1.3: the packages may also use the keys of warnings, the About box and the shell's menu names
+const MACRO_WRITE_OPS = (() => { const m = /const WRITE_OPS = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(readFileSync(path.join(DIR, 'ij-proc-macro.js'), 'utf8')); return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : []; })();
 const NAMESPACES = ['cmd.', 'op.', 'menu.', 'meas.', 'tool.', 'res.', 'err.', 'warn.', 'about.', 'view.menu.'];
 for (const f of [...CMD_FILES, ...PROC_FILES]) {
   const pkg = /^ij-(?:cmds|proc)-([a-z0-9]+)\.js$/.exec(f)[1];
@@ -353,6 +355,8 @@ for (const f of [...CMD_FILES, ...PROC_FILES]) {
   // unitsKey, option labels... (comments are dropped first).
   const code = text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '')).join('\n');
   for (const m of code.matchAll(/'((?:cmd|op|menu|meas|tool|res|err|warn|about|view\.menu|dlg\.[a-z]+)\.[A-Za-z0-9_.]*[A-Za-z0-9_])'/g)) keys.add(m[1]);
+  // the macro write-op names (IJMacroProto.WRITE_OPS, e.g. 'tool.set') are protocol literals, not lang keys
+  if (pkg === 'macro') for (const op of MACRO_WRITE_OPS) keys.delete(op);
   for (const k of keys) {
     const ok = NAMESPACES.some((n) => k.startsWith(n)) || k.startsWith('dlg.' + PREFIX[pkg] + '.') || resolve(baseLang.en, k) !== undefined;
     assert.ok(ok, `${f}: key ${k} is outside the namespaces a package may use`);

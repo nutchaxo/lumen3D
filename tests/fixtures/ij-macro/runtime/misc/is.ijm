@@ -1,0 +1,1 @@
+newImage("a", "8-bit black", 4, 4, 1); print(is("binary")); setPixel(0,0,255); print(is("binary")); setPixel(1,0,3); print(is("binary")); print(is("grayscale")); print(is("batch mode")); print(is("hyperstack")); print(is("composite")); makeRectangle(0,0,2,2); print(is("area")); print(is("line")); print(is("changes"));

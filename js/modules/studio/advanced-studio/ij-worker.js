@@ -1,11 +1,13 @@
 /* ij-worker.js — bootstrap of the Advanced Studio worker. The page starts it by URL
  * (new Worker(assetUrl)) and sends
  *   { init: { scripts: [blob URLs of ij-core.js, ij-analysis.js, ij-proc-shared.js, ij-engine.js],
- *             packages: [{ pkg, url }, …]   (ij-proc-<pkg>.js, each optional), budgetBytes } }
+ *             packages: [{ pkg, url, pre? }, …]   (ij-proc-<pkg>.js, each optional), budgetBytes } }
  * first; everything else is IJEngine.
  *
- * The four `scripts` are mandatory. Each package is loaded in its own try/catch: one that cannot
- * load (a syntax error, a missing file) is reported as { event: 'packageFailed', pkg } and the ops
+ * The four `scripts` are mandatory. Each package is loaded in its own try/catch, its `pre` files (urls
+ * loaded just before it, in the same try: the macro language before ij-proc-macro.js) first; importScripts
+ * stops at the first file that throws, so a package file never runs without what it needs. A package that
+ * cannot load (a syntax error, a missing file) is reported as { event: 'packageFailed', pkg } and the ops
  * and worker commands it had already registered (IJOpRegistry.defineCommand) are withdrawn, so its
  * commands are disabled by the page, a journal entry naming one of its ops stops the replay instead
  * of crashing the worker, and a request for one of its worker commands answers IJ_MODULE_MISSING.
@@ -27,7 +29,7 @@ self.onmessage = function (ev) {
       const before = reg ? reg.list() : [];
       const beforeCmds = reg && reg.listCommands ? reg.listCommands() : [];
       try {
-        importScripts(p.url);
+        importScripts.apply(self, (Array.isArray(p.pre) ? p.pre : []).concat([p.url]));
       } catch (err) {
         console.error('[ij-worker] package ' + p.pkg + ' failed', err);
         if (reg) for (const name of reg.list()) if (before.indexOf(name) < 0) reg.unregister(name);

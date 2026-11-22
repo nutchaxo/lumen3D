@@ -1,0 +1,193 @@
+{
+  "imagej": "1.54p",
+  "generator": "tools/ij_fixtures/macro/DialogKeys.java",
+  "locale": "ROOT",
+  "fiji": "1.54p99",
+  "blackBackground": true,
+  "commands": {
+    "Frangi Vesselness": {
+        "class": "net.imagej.ops.commands.filter.FrangiVesselness",
+        "menuPath": "Process>Filters",
+        "scijava": true,
+        "input": {"bitDepth": 8, "dims": {"c": 1, "z": 1, "t": 1}, "roi": "rect", "binary": false, "composite": false, "others": 1, "id": "8bit-rect"},
+        "dialogs": [{"kind": "other", "title": "Frangi Vesselness", "smartRecording": false, "components": [{"t": "other", "label": "", "key": "log", "type": "org.scijava.log.LogService", "value": null, "visibility": "NORMAL", "required": true}, {"t": "other", "label": "", "key": "opService", "type": "net.imagej.ops.OpService", "value": null, "visibility": "NORMAL", "required": true}, {"t": "other", "label": "", "key": "input", "type": "net.imglib2.img.Img", "value": null, "visibility": "NORMAL", "required": true}, {"t": "checkbox", "label": "Apply Gaussian at each scale:", "key": "doGauss", "state": false, "visibility": "NORMAL", "required": true}, {"t": "string", "label": "Spacing", "key": "spacingString", "value": "1, 1", "visibility": "NORMAL", "required": true}, {"t": "string", "label": "Scale", "key": "scaleString", "value": "2, 5", "visibility": "NORMAL", "required": true}], "processStack": false, "recorded": null}],
+        "outputs": ["result:net.imglib2.img.Img"]
+      },
+    "Auto Threshold": {
+      "class": "fiji.threshold.Auto_Threshold",
+      "menuPath": "Image>Adjust",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "Auto Threshold", "smartRecording": false, "components": [{"t": "choice", "label": "Method", "key": "method", "items": ["Try all", "Default", "Huang", "Huang2", "Intermodes", "IsoData", "Li", "MaxEntropy", "Mean", "MinError(I)", "Minimum", "Moments", "Otsu", "Percentile", "RenyiEntropy", "Shanbhag", "Triangle", "Yen"], "selected": "Try all"}, {"t": "checkbox", "label": "Ignore black", "key": "ignore_black", "state": false, "underscored": true}, {"t": "checkbox", "label": "Ignore white", "key": "ignore_white", "state": false, "underscored": true}, {"t": "checkbox", "label": "White objects on black background", "key": "white", "state": true}, {"t": "checkbox", "label": "SetThreshold instead of Threshold (single images)", "key": "setthreshold", "state": false}, {"t": "checkbox", "label": "Show threshold values in log window", "key": "show", "state": false}, {"t": "message", "text": "The thresholded result of 8 bit images is shown\nin white [255] in 8 bits.\nFor 16 bit images (support still experimental), results\nof 'Try all' and single slices of a stack are shown in\nwhite [65535] in 16 bits.\nUnsuccessfully thresholded images are left unchanged."}], "processStack": false, "recorded": "method=[Try all] white"}
+      ]
+    },
+    "Auto Local Threshold": {
+      "class": "fiji.threshold.Auto_Local_Threshold",
+      "menuPath": "Image>Adjust",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "Auto Local Threshold", "smartRecording": false, "components": [{"t": "choice", "label": "Method", "key": "method", "items": ["Try all", "Bernsen", "Contrast", "Mean", "Median", "MidGrey", "Niblack", "Otsu", "Phansalkar", "Sauvola"], "selected": "Try all"}, {"t": "numeric", "label": "Radius", "key": "radius", "value": "15", "decimals": 0}, {"t": "numeric", "label": "Parameter 1", "key": "parameter_1", "value": "0", "decimals": 0, "underscored": true}, {"t": "numeric", "label": "Parameter 2", "key": "parameter_2", "value": "0", "decimals": 0, "underscored": true}, {"t": "checkbox", "label": "White objects on black background", "key": "white", "state": true}], "processStack": false, "recorded": "method=[Try all] radius=15 parameter_1=0 parameter_2=0 white"}
+      ]
+    },
+    "Enhance Local Contrast (CLAHE)": {
+      "class": "mpicbg.ij.clahe.PlugIn",
+      "menuPath": "Process",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "CLAHE", "smartRecording": false, "components": [{"t": "numeric", "label": "blocksize :", "key": "blocksize", "value": "127", "decimals": 0}, {"t": "numeric", "label": "histogram bins :", "key": "histogram", "value": "256", "decimals": 0}, {"t": "numeric", "label": "maximum slope :", "key": "maximum", "value": "3.00", "decimals": 2}, {"t": "choice", "label": "mask :", "key": "mask", "items": ["*None*", "other", "capture"], "selected": "*None*"}, {"t": "checkbox", "label": "fast (less accurate)", "key": "fast_(less_accurate)", "state": true, "underscored": true}], "processStack": false, "recorded": "blocksize=127 histogram=256 maximum=3 mask=*None* fast_(less_accurate)"}
+      ]
+    },
+    "Tubeness": {
+      "class": "features.Tubeness_",
+      "menuPath": "Plugins>Analyze",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "\"Tubeness\" Filter (version 1.2)", "smartRecording": false, "components": [{"t": "numeric", "label": "Sigma:", "key": "sigma", "value": "1.0000", "decimals": 4}, {"t": "checkbox", "label": "Use calibration information", "key": "use", "state": true}], "processStack": false, "recorded": "sigma=1.0000 use"}
+      ]
+    },
+    "Directionality": {
+      "class": "fiji.analyze.directionality.Directionality_",
+      "menuPath": "Analyze",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "Directionality analysis v2.3.0", "smartRecording": false, "components": [{"t": "choice", "label": "Method:", "key": "method", "items": ["Fourier components", "Local gradient orientation"], "selected": "Fourier components"}, {"t": "numeric", "label": "Nbins:", "key": "nbins", "value": "90", "decimals": 0}, {"t": "numeric", "label": "Histogram start", "key": "histogram_start", "value": "-90", "decimals": 0, "units": "°", "underscored": true}, {"t": "numeric", "label": "Histogram end", "key": "histogram_end", "value": "90", "decimals": 0, "units": "°", "underscored": true}, {"t": "checkbox", "label": "Build orientation map", "key": "build", "state": false}, {"t": "checkbox", "label": "Display color wheel", "key": "display_color_wheel", "state": false, "underscored": true}, {"t": "checkbox", "label": "Display table", "key": "display_table", "state": false, "underscored": true}, {"t": "checkbox", "label": "Debug", "key": "debug", "state": false}], "processStack": false, "recorded": "method=[Fourier components] nbins=90 histogram_start=-90 histogram_end=90"}
+      ]
+    },
+    "Analyze Skeleton (2D/3D)": {
+      "class": "sc.fiji.analyzeSkeleton.AnalyzeSkeleton_",
+      "menuPath": "Analyze>Skeleton",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "Analyze Skeleton", "smartRecording": false, "components": [{"t": "choice", "label": "Prune cycle method:", "key": "prune", "items": ["none", "shortest branch", "lowest intensity voxel", "lowest intensity branch"], "selected": "none"}, {"t": "checkbox", "label": "Prune ends", "key": "prune_0", "state": false}, {"t": "checkbox", "label": "Exclude ROI from pruning", "key": "exclude", "state": false}, {"t": "checkbox", "label": "Calculate largest shortest path", "key": "calculate", "state": false}, {"t": "checkbox", "label": "Show detailed info", "key": "show", "state": false}, {"t": "checkbox", "label": "Display labeled skeletons", "key": "display", "state": false}], "processStack": false, "recorded": "prune=none"}
+      ]
+    },
+    "Local Thickness (complete process)": {
+      "class": "sc.fiji.localThickness.Local_Thickness_Driver",
+      "menuPath": "Analyze>Local Thickness",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "EDT...", "smartRecording": false, "components": [{"t": "numeric", "label": "Threshold (1 to 255; value < thresh is background)", "key": "threshold", "value": "128", "decimals": 0}, {"t": "checkbox", "label": "Inverse case (background when value >= thresh)", "key": "inverse", "state": false}], "processStack": false, "recorded": "threshold=128"}
+      ]
+    },
+    "Coloc 2": {
+      "class": "sc.fiji.coloc.Coloc_2",
+      "menuPath": "Analyze>Colocalization",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "Coloc 2", "smartRecording": false, "components": [{"t": "choice", "label": "Channel 1", "key": "channel_1", "items": ["other", "capture"], "selected": "other", "underscored": true}, {"t": "choice", "label": "Channel 2", "key": "channel_2", "items": ["other", "capture"], "selected": "capture", "underscored": true}, {"t": "choice", "label": "ROI or mask", "key": "roi_or_mask", "items": ["<None>", "ROI(s) in channel 1", "ROI(s) in channel 2", "ROI Manager", "other", "capture"], "selected": "<None>", "underscored": true}, {"t": "choice", "label": "Threshold regression", "key": "threshold_regression", "items": ["Costes", "Bisection"], "selected": "Costes", "underscored": true}, {"t": "checkbox", "label": "Show Save PDF Dialog", "key": "show_save_pdf_dialog", "state": true, "underscored": true}, {"t": "checkbox", "label": "Display Images in Result", "key": "display_images_in_result", "state": false, "underscored": true}, {"t": "checkbox", "label": "Display Shuffled Images", "key": "display_shuffled_images", "state": false, "underscored": true}, {"t": "checkbox", "label": "Li Histogram Channel 1", "key": "li_histogram_channel_1", "state": true, "underscored": true}, {"t": "checkbox", "label": "Li Histogram Channel 2", "key": "li_histogram_channel_2", "state": true, "underscored": true}, {"t": "checkbox", "label": "Li ICQ", "key": "li_icq", "state": true, "underscored": true}, {"t": "checkbox", "label": "Spearman's Rank Correlation", "key": "spearman's_rank_correlation", "state": true, "underscored": true}, {"t": "checkbox", "label": "Manders' Correlation", "key": "manders'_correlation", "state": true, "underscored": true}, {"t": "checkbox", "label": "Kendall's Tau Rank Correlation", "key": "kendall's_tau_rank_correlation", "state": true, "underscored": true}, {"t": "checkbox", "label": "2D Intensity Histogram", "key": "2d_intensity_histogram", "state": true, "underscored": true}, {"t": "checkbox", "label": "Costes' Significance Test", "key": "costes'_significance_test", "state": true, "underscored": true}, {"t": "numeric", "label": "PSF", "key": "psf", "value": "3.0", "decimals": 1}, {"t": "numeric", "label": "Costes randomisations", "key": "costes_randomisations", "value": "10", "decimals": 0, "underscored": true}], "processStack": false, "recorded": "channel_1=other channel_2=capture roi_or_mask=<None> threshold_regression=Costes show_save_pdf_dialog li_histogram_channel_1 li_histogram_channel_2 li_icq spearman's_rank_correlation manders'_correlation kendall's_tau_rank_correlation 2d_intensity_histogram costes'_significance_test psf=3 costes_randomisations=10"}
+      ]
+    },
+    "Cell Counter": {
+      "class": "sc.fiji.cellCounter.Cell_Counter",
+      "menuPath": "Plugins>Analyze>Cell Counter",
+      "noDialog": true,
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "opensWindow": "Cell Counter"
+    },
+    "Anisotropic Diffusion 2D": {
+      "class": "anisotropic_diffusion.Anisotropic_Diffusion_2D",
+      "menuPath": "Plugins>Process",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "2D Anisotropic Diffusion Tschumperle-Deriche v0.3", "smartRecording": false, "components": [{"t": "numeric", "label": "Number of iterations", "key": "number", "value": "20", "decimals": 0}, {"t": "numeric", "label": "Smoothings per iteration", "key": "smoothings", "value": "1", "decimals": 0}, {"t": "numeric", "label": "Keep each", "key": "keep", "value": "20", "decimals": 0, "units": "iteration"}, {"t": "numeric", "label": "a1 (Diffusion limiter along minimal variations)", "key": "a1", "value": "0.50", "decimals": 2}, {"t": "numeric", "label": "a2 (Diffusion limiter along maximal variations)", "key": "a2", "value": "0.90", "decimals": 2}, {"t": "numeric", "label": "dt (Time step)", "key": "dt", "value": "20.0", "decimals": 1}, {"t": "numeric", "label": "edge threshold height", "key": "edge", "value": "5.0", "decimals": 1}, {"t": "checkbox", "label": "Show filter stats", "key": "show_filter", "state": false, "underscored": true}, {"t": "checkbox", "label": "Show time stats", "key": "show_time", "state": false, "underscored": true}, {"t": "checkbox", "label": "Add labels", "key": "add", "state": false}, {"t": "message", "text": "Incorrect values will be replaced by defaults.\nLabels are drawn in the foreground color.\nPress Esc to stop processing."}], "processStack": false, "recorded": "number=20 smoothings=1 keep=20 a1=0.50 a2=0.90 dt=20 edge=5"}
+      ]
+    },
+    "Re-order Hyperstack ...": {
+      "class": "fiji.stacks.Hyperstack_rearranger",
+      "menuPath": "Image>Hyperstacks",
+      "input": {
+        "bitDepth": 8,
+        "dims": {"c": 1, "z": 1, "t": 1},
+        "roi": "rect",
+        "binary": false,
+        "composite": false,
+        "others": 1,
+        "id": "8bit-rect"
+      },
+      "dialogs": [
+        {"kind": "GenericDialog", "title": "Re-order Hyperstack [capture]", "smartRecording": false, "components": [{"t": "choice", "label": "Channels (c) ->", "key": "channels", "items": ["Channels (c)", "Slices (z)", "Frames (t)"], "selected": "Channels (c)"}, {"t": "choice", "label": "Slices (z) ->", "key": "slices", "items": ["Channels (c)", "Slices (z)", "Frames (t)"], "selected": "Slices (z)"}, {"t": "choice", "label": "Frames (t) ->", "key": "frames", "items": ["Channels (c)", "Slices (z)", "Frames (t)"], "selected": "Frames (t)"}], "processStack": false, "recorded": "channels=[Channels (c)] slices=[Slices (z)] frames=[Frames (t)]"}
+      ]
+    }
+  },
+  "unrecognized": ["16 colors", "HiLo"]
+}

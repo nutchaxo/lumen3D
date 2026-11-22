@@ -687,3 +687,82 @@
 @media (prefers-reduced-motion: reduce) {
   .ij-card, .ij-chip, .ij-divider { transition: none; }
 }
+
+/* ── Macros (package macro, ij-cmds-macro.js): Macro Editor, Log, Macro Error and text windows ──
+ * The editor's line height is a constant of ij-cmds-macro.js (LINE_PX = 16): the gutter and the text must share it. */
+.ij-mac-editor,
+.ij-mac-logwin,
+.ij-mac-errwin,
+.ij-mac-textwin { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; height: 100%; }
+.ij-mac-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-mac-status { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-status.ij-mac-status-err { color: var(--ij-danger-text); }
+.ij-mac-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 160px;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--ij-panel));
+  overflow: hidden;
+}
+.ij-mac-body:focus-within { border-color: var(--ij-accent); }
+.ij-mac-gutter {
+  flex: 0 0 auto;
+  min-width: 3.5em;
+  padding: 4px 6px 20px 4px;
+  overflow: hidden;
+  background: var(--ij-chrome);
+  border-right: 1px solid var(--ij-border);
+  color: var(--ij-muted);
+  font: 11px/16px var(--ij-mono);
+  text-align: right;
+  user-select: none;
+}
+.ij-mac-gutter-line { height: 16px; white-space: nowrap; }
+.ij-mac-gutter-line.ij-mac-err { color: var(--ij-danger-text); font-weight: 700; box-shadow: inset 3px 0 0 var(--ij-danger); }
+.ij-mac-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 6px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--ij-text);
+  font: 11px/16px var(--ij-mono);
+  white-space: pre;
+  overflow: auto;
+  tab-size: 4;
+}
+.ij-mac-pre {
+  flex: 1 1 auto;
+  min-height: 80px;
+  margin: 0;
+  padding: 4px 6px;
+  overflow: auto;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--ij-panel));
+  color: var(--ij-text);
+  font: 11px/16px var(--ij-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.ij-mac-pre:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
+.ij-mac-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--ij-border); }
+.ij-mac-tab {
+  padding: 2px 10px;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--ij-muted);
+  font: var(--ij-font);
+  cursor: pointer;
+}
+.ij-mac-tab:hover { color: var(--ij-text); background: var(--bg-hover); }
+.ij-mac-tab:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
+.ij-mac-tab.ij-mac-tab-active { border-color: var(--ij-border); border-bottom-color: var(--ij-panel); background: var(--ij-panel); color: var(--ij-text); }

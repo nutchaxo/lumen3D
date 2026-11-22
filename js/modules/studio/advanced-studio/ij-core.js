@@ -2278,7 +2278,7 @@
     // worker command of its own. The engine dispatches an unknown `cmd` name to it, the page's api.call may reach
     // it only from the package that registered it. Page and worker both load the package file, so both see the
     // names; only the worker ever runs a handler.
-    //   IJOpRegistry.defineCommand(name, { pkg, long?, handler(args, E) })   name: 'doc.tiff.project' (lower-case
+    //   IJOpRegistry.defineCommand(name, { pkg, long?, passive?, handler(args, E) })   name: 'doc.tiff.project' (lower-case
     //                              first segment, at least one dot; `engine.` and `session.` belong to the engine)
     //   IJOpRegistry.getCommand(name) → spec | null    listCommands(pkg?) → [name]
     //   IJOpRegistry.unregisterCommand(name)           the worker's package loader (a package that failed to load);
@@ -2290,6 +2290,8 @@
       if (!spec || typeof spec !== 'object' || typeof spec.pkg !== 'string' || !/^[a-z][a-z0-9]*$/.test(spec.pkg)) throw bad('command pkg ' + name);
       if (typeof spec.handler !== 'function') throw bad('command handler ' + name);
       if (spec.long !== undefined && typeof spec.long !== 'boolean') throw bad('command long ' + name);
+      // passive: answered by the page's api.call without a busy state (the macro bridge's replies arrive while a run holds the lane)
+      if (spec.passive !== undefined && typeof spec.passive !== 'boolean') throw bad('command passive ' + name);
       const old = commands.get(name);
       if (old) {
         if (old === spec) return spec;

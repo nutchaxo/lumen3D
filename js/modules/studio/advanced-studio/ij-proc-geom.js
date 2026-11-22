@@ -1223,6 +1223,10 @@
     validate(p) {
       if (!isNum(p.pixelWidth) || !isNum(p.pixelHeight) || !(p.pixelWidth > 0) || !(p.pixelHeight > 0)) throw bad('pixel size');
       if (typeof p.unit !== 'string' || p.unit.length > 32) throw bad('unit');
+      // Image > Properties also sets the voxel depth and the frame interval (optional)
+      if (p.pixelDepth !== undefined && (!isNum(p.pixelDepth) || !(p.pixelDepth > 0))) throw bad('pixel depth');
+      for (const k of ['frameInterval', 'fps']) if (p[k] !== undefined && (!isNum(p[k]) || p[k] < 0)) throw bad(k);
+      if (p.timeUnit !== undefined && (typeof p.timeUnit !== 'string' || p.timeUnit.length > 32)) throw bad('time unit');
     },
     async run(view, p) {
       // Calibration only: the very same arrays come back, which the engine records as `changed.calibration`.
@@ -1231,6 +1235,7 @@
       const u0 = sanitizeUnit(p.unit);
       const unit = (u0 === 'pixels' || u0 === 'px') ? 'pixel' : u0;
       const cal = Object.assign({}, view.calibration || {}, { pixelWidth: p.pixelWidth, pixelHeight: p.pixelHeight, unit });
+      for (const k of ['pixelDepth', 'frameInterval', 'fps', 'timeUnit']) if (p[k] !== undefined) cal[k] = p[k];
       return { width: view.width, height: view.height, bitDepth: view.bitDepth, calibration: cal, channels: view.channels.map((c) => ({ data: c.data })) };
     }
   });

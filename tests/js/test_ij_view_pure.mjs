@@ -1148,6 +1148,25 @@ function makeGl() {
   const p2 = shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'n', label: 'N', value: 1 }] });
   doc.fire('keydown', { key: 'Escape', target: doc.body });
   assert.equal(await p2, null);
+  // spec.signal (a macro run's, INTEGRATION.md §2.9): its abort closes the dialog as cancelled; an aborted signal answers null at once
+  {
+    const ac = new AbortController();
+    const ps = shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'n', label: 'N', value: 1 }], signal: ac.signal });
+    assert.equal(shell.windows.hasModal(), true, 'open while the signal lives');
+    ac.abort();
+    assert.equal(await ps, null, 'an abort cancels it');
+    assert.equal(shell.windows.hasModal(), false);
+    assert.equal(byClass(shell.el, 'ij-dialog-backdrop').length, 0, 'and removes it');
+    const n0 = byClass(shell.el, 'ij-dialog-backdrop').length;
+    assert.equal(await shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'n', label: 'N', value: 1 }], signal: ac.signal }), null, 'already aborted: null at once');
+    assert.equal(byClass(shell.el, 'ij-dialog-backdrop').length, n0, 'nothing was shown');
+    // answered normally, the signal's listener is gone (a later abort does nothing)
+    const ac2 = new AbortController();
+    const pk = shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'n', label: 'N', value: 4 }], signal: ac2.signal });
+    byClass(shell.el, 'ij-btn--primary')[0].fire('click');
+    deq({ ...(await pk) }, { n: 4 });
+    ac2.abort();
+  }
   // OK button
   const p3 = shell.windows.dialog({ title: 'x', fields: [{ type: 'number', id: 'n', label: 'N', value: 1, integer: true }] });
   const okBtn = byClass(shell.el, 'ij-btn--primary')[0];

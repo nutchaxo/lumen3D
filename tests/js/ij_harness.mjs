@@ -64,7 +64,10 @@ export function langPart(pkg) {
   }
   return out;
 }
-export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk'];
+export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
+// The files of the macro phase, written by several builders at once (DOCS/studio-advanced/macros/INTEGRATION.md §1.3): the page skips one that
+// is not on disk yet (the worker does not: a missing package file fails the package there, which is what production does).
+export const MACRO_FILES = ['ij-macro-lang.js', 'ij-proc-macro.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js'];
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function until(fn, what, ms = 8000) {
   const t0 = Date.now();
@@ -78,6 +81,8 @@ export async function until(fn, what, ms = 8000) {
 export const J = (x) => JSON.parse(JSON.stringify(x));
 
 const readSrc = (f, over) => (over && over[f] !== undefined ? over[f] : fs.readFileSync(path.join(DIR, f), 'utf8'));
+/** A macro-phase file the page may load: present on disk or given by the test. */
+const pageHas = (f, over) => !MACRO_FILES.includes(f) || (over && over[f] !== undefined) || fs.existsSync(path.join(DIR, f));
 
 
 /**
@@ -207,7 +212,17 @@ export function makeShellStub({ fakeEl, answer, ask, status = [], previews = [],
       view: (docId) => views.get(docId) || null,
       activeView, activeDocId: () => lay.active,
       windows: {
-        dialog: async (spec) => answer(spec), confirm: async (s) => (ask ? ask(s) : undefined), hasModal: () => false, closeAll() { shell.closedAll = true; },
+        // spec.signal (a macro run's): aborted = the dialog closes as cancelled, now or while it waits for its answer
+        dialog: async (spec) => {
+          const sig = spec && spec.signal;
+          if (sig && sig.aborted) return null;
+          if (!sig) return answer(spec);
+          return new Promise((resolve, reject) => {
+            const onAbort = () => resolve(null);
+            sig.addEventListener('abort', onAbort, { once: true });
+            Promise.resolve(answer(spec)).then((v) => { sig.removeEventListener('abort', onAbort); resolve(v); }, (e) => { sig.removeEventListener('abort', onAbort); reject(e); });
+          });
+        }, confirm: async (s) => (ask ? ask(s) : undefined), hasModal: () => false, closeAll() { shell.closedAll = true; },
         floating(spec) { const w = { id: spec.id, spec, focus() {}, close() { floats.delete(spec.id); if (spec.onClose) spec.onClose(); } }; floats.set(spec.id, w); return w; },
         list: windowsList, floats
       },
@@ -311,7 +326,9 @@ export async function boot(opts = {}) {
   page.requestAnimationFrame = (f) => setTimeout(f, 0);
   vm.createContext(page);
   const runPage = (f) => vm.runInContext(readSrc(f, o.pageSources), page, { filename: f });
-  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PACKAGES.map((p) => `ij-proc-${p}.js`)]) runPage(f);
+  // plugin.json's order: the ij-proc files (the page copy of ij-proc-macro.js registers the specs of its worker commands), then the pure
+  // run() bridge tables (ij-macro-cmds.js), all before ij-app.js
+  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PACKAGES.map((p) => `ij-proc-${p}.js`), 'ij-macro-cmds.js']) if (pageHas(f, o.pageSources)) runPage(f);
 
   // The view's pure helpers and the plot module, from the real file (its own context: no DOM is touched at load).
   const viewCtx = vm.createContext({ console, setTimeout, clearTimeout });
@@ -327,11 +344,16 @@ export async function boot(opts = {}) {
   // ---------------- the worker: the real ij-worker.js over a context that loads scripts on importScripts
   const workers = [];
   const workerStorage = { shared: store };
+  // a message is a macrotask of its own, as a browser's postMessage. opts.immediateMessages: setImmediate instead of setTimeout(0), for the
+  // tests that time an abort (Windows' 15.6 ms timer tick adds ~15 ms to every page <-> worker hop); opt-in, because a test whose fake
+  // streams over several hops (the library panel's cancel) needs the hops to take real time
+  const deliver = o.immediateMessages && typeof setImmediate === 'function' ? setImmediate : (f) => setTimeout(f, 0);
   function makeWorkerContext(fw) {
-    const w = { console, setTimeout, clearTimeout, MessageChannel, performance, TextEncoder, TextDecoder, Blob, queueMicrotask, navigator: {}, DecompressionStream: globalThis.DecompressionStream };
+    const w = { console, setTimeout, clearTimeout, setInterval, clearInterval, MessageChannel, performance, TextEncoder, TextDecoder, Blob, queueMicrotask, AbortController, navigator: {},
+      DecompressionStream: globalThis.DecompressionStream };
     w.self = w;
     w.onmessage = null;
-    w.postMessage = (m) => { if (!fw.dead) setTimeout(() => { if (!fw.dead && fw.onmessage) fw.onmessage({ data: m }); }, 0); };
+    w.postMessage = (m) => { if (!fw.dead) deliver(() => { if (!fw.dead && fw.onmessage) fw.onmessage({ data: m }); }); };
     vm.createContext(w);
     w.importScripts = (...urls) => {
       for (const u of urls) {
@@ -372,7 +394,7 @@ export async function boot(opts = {}) {
           return;
         }
       }
-      setTimeout(() => { if (!this.dead && this.far.onmessage) this.far.onmessage({ data: m }); }, 0);
+      deliver(() => { if (!this.dead && this.far.onmessage) this.far.onmessage({ data: m }); });
     }
     terminate() { this.dead = true; }
     crash() { this.dead = true; if (this.onerror) this.onerror({ message: 'boom', preventDefault() {} }); }
@@ -450,7 +472,7 @@ export async function boot(opts = {}) {
 
   runPage('ij-app.js');
   vm.runInContext('globalThis.__IJApp = IJApp;', page);
-  for (const p of PACKAGES) runPage(`ij-cmds-${p}.js`);
+  for (const p of PACKAGES) if (pageHas(`ij-cmds-${p}.js`, o.pageSources)) runPage(`ij-cmds-${p}.js`);
   const IJApp = page.__IJApp;
 
   const interp = (s, p) => String(s).replace(/\{(\w+)\}/g, (m, k) => (p && p[k] !== undefined ? p[k] : m));
@@ -545,6 +567,17 @@ export async function boot(opts = {}) {
       return w;
     },
     async flush() { return t.engine('flush'); },
+    /** A macro run through the page (ij-cmds-macro.js's IJMacroPage) and the Log it left. */
+    runMacro(source, mo) {
+      const P = vm.runInContext('typeof IJMacroPage !== "undefined" ? IJMacroPage : null', page);
+      if (!P) throw new Error('IJMacroPage is not loaded (ij-cmds-macro.js)');
+      return P.run(source, Object.assign({}, mo || {}));
+    },
+    macroLog() {
+      const P = vm.runInContext('typeof IJMacroPage !== "undefined" ? IJMacroPage : null', page);
+      if (!P) throw new Error('IJMacroPage is not loaded (ij-cmds-macro.js)');
+      return P.logLines();
+    },
     /** Stops this boot (the stored sessions stay) and boots a new page on the same storage. */
     async reload(more) {
       if (!(more && more.flush === false)) await t.flush().catch(() => {});

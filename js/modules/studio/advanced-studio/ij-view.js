@@ -1357,7 +1357,7 @@ const IJWindows = (() => {
 
     // ---- GenericDialog ----------------------------------------------------------------------
     /**
-     * dialog({ title | titleKey, fields, preview?, validate?, onChange?, okLabel, cancelLabel, nonModal? })
+     * dialog({ title | titleKey, fields, preview?, validate?, onChange?, okLabel, cancelLabel, noCancel?, nonModal?, signal? })
      *   field   = { type, id, label | labelKey, value, enabledIf?, visibleIf?, ... } — the types and
      *             their options are listed above IJViewPure.FIELD_TYPES; a spec with an unknown type,
      *             a missing id / label or an option-less choice is REFUSED (rejects IJ_BAD_DIALOG).
@@ -1373,6 +1373,9 @@ const IJWindows = (() => {
      */
     function dialog(spec = {}) {
       if (destroyed) return Promise.resolve(null);
+      // spec.signal (AbortSignal): the dialog closes as cancelled when it aborts (a macro run that ends takes its dialogs with it)
+      const signal = spec.signal && typeof spec.signal.addEventListener === 'function' ? spec.signal : null;
+      if (signal && signal.aborted) return Promise.resolve(null);
       const d = doc();
       const fields = spec.fields || [];
       const problems = P.fieldProblems(fields);
@@ -1558,7 +1561,8 @@ const IJWindows = (() => {
       buttons.className = 'ij-dialog-buttons';
       const okBtn = button(spec.okLabel || t('view.ok', 'OK'), 'ij-btn--primary', () => commit());
       const cancelBtn = button(spec.cancelLabel || t('view.cancel', 'Cancel'), '', () => finish(null));
-      buttons.appendChild(cancelBtn);
+      // spec.noCancel: OK alone (ImageJ's GenericDialog.hideCancelButton; Escape and the close box still cancel)
+      if (spec.noCancel !== true) buttons.appendChild(cancelBtn);
       buttons.appendChild(okBtn);
 
       box.appendChild(head); box.appendChild(body); box.appendChild(buttons);
@@ -1707,6 +1711,7 @@ const IJWindows = (() => {
       function finish(values) {
         if (closed) return;
         closed = true;
+        if (signal) signal.removeEventListener('abort', onAbort);
         clearTimeout(previewTimer);
         d.removeEventListener('keydown', onKey, true);
         const idx = modalStack.indexOf(handle);
@@ -1736,6 +1741,8 @@ const IJWindows = (() => {
       }
 
       const handle = { close: () => finish(null) };
+      function onAbort() { finish(null); }
+      if (signal) signal.addEventListener('abort', onAbort);
       modalStack.push(handle);
       mountPoint().appendChild(backdrop);
       const place = () => {

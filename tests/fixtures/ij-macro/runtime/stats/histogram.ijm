@@ -1,0 +1,13 @@
+newImage("a", "8-bit black", 16, 12, 1);
+for (y=0; y<getHeight; y++) for (x=0; x<getWidth; x++) setPixel(x, y, (x*7+y*13)%256);
+getHistogram(v, c, 256); print(v.length+" "+v[0]+" "+v[255]+" "+c[7]+" "+c[13]);
+getHistogram(v, c, 64); print(v.length+" "+v[0]+" "+v[1]+" "+v[63]); s=0; for (i=0;i<64;i++) s+=c[i]*(i+1); print(s);
+newImage("s", "16-bit black", 10, 8, 1);
+for (y=0; y<8; y++) for (x=0; x<10; x++) setPixel(x, y, 100+x*37+y*211);
+getHistogram(v, c, 65536); print(c.length+" "+c[100]+" "+c[137]);
+getHistogram(v, c, 10); print(v[0]+" "+v[1]+" "+v[9]); s=""; for (i=0;i<10;i++) s=s+c[i]+" "; print(s);
+getHistogram(v, c, 10, 0, 2000); print(v[0]+" "+v[1]+" "+v[9]); s=""; for (i=0;i<10;i++) s=s+c[i]+" "; print(s);
+newImage("f", "32-bit black", 9, 7, 1);
+for (y=0; y<7; y++) for (x=0; x<9; x++) setPixel(x, y, x*0.5-y);
+getHistogram(v, c, 8); s=""; for (i=0;i<8;i++) s=s+d2s(v[i],4)+":"+c[i]+" "; print(s);
+getHistogram(v, c, 4, -2, 2); s=""; for (i=0;i<4;i++) s=s+d2s(v[i],4)+":"+c[i]+" "; print(s);

@@ -57,7 +57,28 @@ final class W4Dlg {
 
     static void walk(Component c, List<Object> out, Map<Component, Boolean> numeric) {
         Object[] pend = new Object[1];
-        walk1(c, out, numeric, pend);
+        REAL_KEYS = realKeys(c);
+        try { walk1(c, out, numeric, pend); } finally { REAL_KEYS = null; }
+    }
+
+    // The macro key of a field is the one GenericDialog registered (its private `labels` table): ImageJ shows `_` as a space
+    // ("Do_not create substack" is shown "Do not create substack", key `do_not`), so trimKey of the displayed label is wrong.
+    static Map<Object, Object> REAL_KEYS;
+
+    static Map<Object, Object> realKeys(Component c) {
+        if (!(c instanceof GenericDialog)) return null;
+        try {
+            java.lang.reflect.Field f = GenericDialog.class.getDeclaredField("labels");
+            f.setAccessible(true);
+            Object l = f.get(c);
+            return l instanceof Map ? new IdentityHashMap<>((Map<?, ?>) l) : null;
+        } catch (Throwable e) { return null; }
+    }
+
+    static String keyOf(Component comp, String shown) {
+        Object k = REAL_KEYS == null ? null : REAL_KEYS.get(comp);
+        if (k != null) return String.valueOf(k);
+        return shown == null ? null : Macro.trimKey(shown.trim());
     }
 
     static void walk1(Component c, List<Object> out, Map<Component, Boolean> numeric, Object[] pend) {
@@ -67,17 +88,17 @@ final class W4Dlg {
             TextField tf = (TextField) c;
             Boolean isNum = numeric.get(tf);
             String lab = pend[0] == null ? null : (String) pend[0];
-            out.add(J.o("t", isNum == null ? "text" : isNum ? "numeric" : "string", "label", lab, "key", lab == null ? null : Macro.trimKey(lab.trim()), "value", tf.getText(), "columns", tf.getColumns()));
+            out.add(J.o("t", isNum == null ? "text" : isNum ? "numeric" : "string", "label", lab, "key", keyOf(tf, lab), "value", tf.getText(), "columns", tf.getColumns()));
             pend[0] = null;
         } else if (c instanceof Checkbox) {
             Checkbox cb = (Checkbox) c;
-            out.add(J.o("t", cb.getCheckboxGroup() != null ? "radio" : "checkbox", "label", cb.getLabel(), "key", Macro.trimKey(cb.getLabel().trim()), "keyRaw", Macro.trimKey(cb.getLabel()), "state", cb.getState()));
+            out.add(J.o("t", cb.getCheckboxGroup() != null ? "radio" : "checkbox", "label", cb.getLabel(), "key", keyOf(cb, cb.getLabel()), "keyRaw", keyOf(cb, cb.getLabel()), "state", cb.getState()));
         } else if (c instanceof Choice) {
             Choice ch = (Choice) c;
             String[] items = new String[ch.getItemCount()];
             for (int i = 0; i < items.length; i++) items[i] = ch.getItem(i);
             String lab = pend[0] == null ? null : (String) pend[0];
-            out.add(J.o("t", "choice", "label", lab, "key", lab == null ? null : Macro.trimKey(lab.trim()), "items", items, "selected", ch.getSelectedItem()));
+            out.add(J.o("t", "choice", "label", lab, "key", keyOf(ch, lab), "items", items, "selected", ch.getSelectedItem()));
             pend[0] = null;
         } else if (c instanceof Scrollbar) {
             Scrollbar sb = (Scrollbar) c;

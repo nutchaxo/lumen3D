@@ -34,7 +34,8 @@
     "Skeleton": "Esqueleto",
     "Plugins": "Plugins",
     "CellCounter": "Contador de células",
-    "Utilities": "Utilidades"
+    "Utilities": "Utilidades",
+    "Macros": "Macros"
   },
   "cmd": {
     "fileOpen": "Abrir…",
@@ -293,7 +294,10 @@
     "adjustAutoLocalThreshold": "Auto Local Threshold",
     "binMakeBinary": "Hacer binaria",
     "binMedian": "Mediana",
-    "binOptions": "Opciones…"
+    "binOptions": "Opciones…",
+    "macRun": "Ejecutar…",
+    "macEdit": "Editar…",
+    "windowLog": "Registro"
   },
   "tool": {
     "rect": "Rectángulo",
@@ -337,6 +341,8 @@
       "normalize": "Normalizar",
       "entire": "Actualizar todo al normalizar",
       "equalize": "Ecualizar histograma",
+      "processAll": "Procesar los {n} cortes",
+      "useStack": "Usar el histograma de la pila",
       "classic": "Ecualización clásica (sin raíz cuadrada)"
     },
     "coloc": {
@@ -432,6 +438,8 @@
       "title": "Título",
       "pixelWidth": "Ancho del píxel",
       "pixelHeight": "Alto del píxel",
+      "voxelDepth": "Profundidad del vóxel",
+      "frameInterval": "Intervalo entre fotogramas",
       "unit": "Unidad de longitud",
       "propertiesNote": "Deje la unidad vacía (o escriba none) para quitar la calibración.",
       "distancePx": "Distancia en píxeles",
@@ -451,6 +459,8 @@
       "channel2": "Canal de la imagen 2:",
       "float32": "Resultado de 32 bits (flotante)",
       "sizeNote": "Las imágenes tienen distinto tamaño: el resultado cubre su rectángulo común en la esquina superior izquierda.",
+      "create": "Crear una ventana nueva",
+      "keep": "Conservar las imágenes de origen",
       "newWindowNote": "El resultado se abre en una imagen nueva; la imagen 1 y la imagen 2 no cambian.",
       "opAdd": "Sumar",
       "opSubtract": "Restar",
@@ -1211,6 +1221,31 @@
       "stackCreate": "Crear una pila nueva",
       "previewNone": "Elija una operación en Hacer: para previsualizarla.",
       "levelsStatus": "{list}"
+    },
+    "mac": {
+      "editorTitle": "Editor de macros",
+      "logTitle": "Registro",
+      "errorTitle": "Error de macro",
+      "textTitle": "Texto",
+      "runTitle": "Ejecutar macro",
+      "runPrompt": "Código de la macro:",
+      "run": "Ejecutar",
+      "runSelection": "Ejecutar la selección",
+      "abort": "Interrumpir",
+      "clear": "Borrar",
+      "copy": "Copiar",
+      "showLine": "Mostrar en el editor",
+      "running": "Ejecutando…",
+      "finished": "Terminado",
+      "aborted": "Macro interrumpida",
+      "line": "Línea {n}",
+      "linesDropped": "… {n} líneas descartadas",
+      "empty": "El editor está vacío.",
+      "notPersisted": "Esta macro es demasiado larga para conservarse tras recargar la página.",
+      "invalidValue": "{title}: {message} ({key})",
+      "leaveTitle": "Macro en ejecución",
+      "leaveMessage": "Hay una macro en ejecución. ¿Detenerla y salir?",
+      "leaveStop": "Detener y salir"
     }
   },
   "op": {
@@ -1352,7 +1387,8 @@
     "straighten": "Enderezando",
     "autoThreshold": "Umbral automático",
     "autoLocalThreshold": "Umbral local automático",
-    "binaryMedian": "Mediana binaria"
+    "binaryMedian": "Mediana binaria",
+    "macRun": "Ejecutando la macro"
   },
   "win": {
     "results": "Resultados"
@@ -1622,7 +1658,31 @@
     "selBandTooWide": "Una banda no puede ser más ancha de 255 píxeles.",
     "thr32bit": "Auto Threshold necesita una imagen de 8 o de 16 bits: convierta antes ésta (Image › Type).",
     "thr8bit": "Auto Local Threshold necesita una imagen de 8 bits: convierta antes ésta (Image › Type).",
-    "thrNotBinary": "Se necesita una imagen binaria de 8 bits (solo los valores 0 y 255): conviértala primero en una máscara (Process › Binary › Make Binary)."
+    "thrNotBinary": "Se necesita una imagen binaria de 8 bits (solo los valores 0 y 255): conviértala primero en una máscara (Process › Binary › Make Binary).",
+    "macBusy": "Ya hay una macro en ejecución.",
+    "macStepBusy": "Espere a que termine el paso en curso antes de ejecutar una macro.",
+    "macUndoDuringRun": "Deshacer no está disponible mientras se ejecuta una macro: toda la ejecución es un solo paso de deshacer.",
+    "macFileLater": "{name} aún no está disponible en esta versión del Advanced Studio: las macros todavía no pueden leer ni escribir archivos en su ordenador.",
+    "macNetwork": "Las macros no pueden usar la red.",
+    "macBioFormats": "Bio-Formats no está disponible en el navegador: guarde la imagen como TIFF en Fiji (File › Save As › Tiff…) y abra el TIFF.",
+    "macExec": "exec() no está disponible en el navegador.",
+    "macEvalScript": "En el navegador solo se puede evaluar código de macro.",
+    "macExtensions": "Las extensiones de macro no están disponibles.",
+    "macDebug": "El depurador de macros no está disponible.",
+    "macCallRefused": "call() no está disponible en el navegador para «{target}».\nSolo se emulan algunas llamadas de ImageJ: ij.Prefs.get/set, ij.IJ.freeMemory/currentMemory/maxMemory/pad, RoiManager.getName, ThresholdAdjuster.setMode, ImageWindow.setNextLocation, ImagePlus.setDefault16bitRange.",
+    "macPadLimit": "call(): la longitud de ij.IJ.pad está limitada a 4096 en el navegador",
+    "macPrefsQuota": "call(\"ij.Prefs.set\"): el navegador guarda como máximo 256 preferencias de macro, de 8 KB cada una y 64 KB en total",
+    "mac16bitRange": "call(\"ij.ImagePlus.setDefault16bitRange\", {value}) no está disponible en el navegador: el rango de visualización de 16 bits es automático",
+    "macPageTimeout": "La página no respondió ({method}).",
+    "macRefused": "{command} no está disponible para las macros: {reason}",
+    "macReasonLibrary": "las macros no pueden abrir los conjuntos de datos del sitio.",
+    "macReasonHost": "cerraría el Studio en el que se ejecuta la macro.",
+    "macReasonRecover": "reemplaza la sesión abierta.",
+    "macReasonUndo": "la ejecución de una macro es un solo paso de deshacer.",
+    "macDisabled": "«{command}» no puede ejecutarse en esta imagen (tipo, tamaño o selección inadecuados).",
+    "macNotInBrowser": "{name} no está disponible en el navegador.",
+    "macArrow": "Las selecciones de flecha no están disponibles.",
+    "macClipboard": "El portapapeles solo puede usarse tras un clic."
   },
   "warn": {
     "unprotected": "Su trabajo no está protegido: el navegador se negó a guardarlo.",
@@ -1633,7 +1693,8 @@
     "annotationsCleared": "Se quitó la superposición de esta imagen porque su tamaño cambió.",
     "metaTooLarge": "Parte del estado del espacio de trabajo (anotaciones o datos de herramientas) es demasiado grande para conservarse tras recargar.",
     "libMissing": "No se pudieron leer {n} píxeles del plano oblicuo y quedan vacíos.",
-    "ovKept": "{n} elementos de la superposición que no son selecciones se quedan en ella."
+    "ovKept": "{n} elementos de la superposición que no son selecciones se quedan en ella.",
+    "macUndoDropped": "Deshacer no está disponible para los cambios de la macro en {title}: memoria insuficiente."
   },
   "bc": {
     "min": "Mínimo",

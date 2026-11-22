@@ -109,7 +109,8 @@ await test('IJOpRegistry: define is idempotent for one spec, refuses another und
   const sizeOps = arr(R2.list('size')), newdocOps = arr(R2.list('newdoc'));
   for (const n of ['convert', 'crop', 'rotate90']) assert.ok(sizeOps.includes(n), 'size op ' + n);
   for (const n of ['cropToNew', 'toMask']) assert.ok(newdocOps.includes(n), 'newdoc op ' + n);
-  const WAVE2_SIZE = ['arrangeChannels', 'bin', 'canvasSize', 'resize', 'rotateEnlarge', 'setCalibration', 'stackToMask'];   // stackToMask: Convert Stack to Binary, in place (the sweep, SWEEP.md)
+  const WAVE2_SIZE = ['arrangeChannels', 'bin', 'canvasSize', 'resize', 'rotateEnlarge', 'setCalibration', 'stackToMask'];
+  WAVE2_SIZE.push('macroCalibration');   // the macro package: setVoxelSize / Stack.setFrameInterval / units (INTEGRATION.md, no write op reaches the calibration)   // stackToMask: Convert Stack to Binary, in place (the sweep, SWEEP.md)
   // the stack package (stk): the size operations of Image > Stacks / Hyperstacks / Type / Color
   WAVE2_SIZE.push('stkAddSlice', 'stkDeleteSlice', 'stkReverse', 'stkReduce', 'stkDeleteRange', 'stkToHyperstack', 'stkHyperToStack', 'stkReduceDim', 'stkReorder', 'stkRemoveLabels', 'stkConvert',
     'stkRgbColorInPlace', 'stkRgbStack', 'stkHsbStack', 'stkHsb32', 'stkStackToRgbInPlace', 'stkMakeComposite', 'stk8BitColor');
@@ -637,7 +638,7 @@ await test('IJApp.extend: the rules, the extension API members, columns and erro
   // the pkg must name an ij-proc-<pkg>.js of WORKER_SCRIPTS (a lang prefix like `flt` could never be disabled when its package fails)
   assert.throws(() => A.extend({ pkg: 'flt', commands: [] }), (e) => e.code === 'IJ_BAD_ARGS' && /not a package/.test(e.message));
   assert.throws(() => A.extend({ pkg: 'shared', commands: [] }), (e) => e.code === 'IJ_BAD_ARGS');
-  assert.deepEqual(arr(A.PACKAGE_NAMES), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk']);
+  assert.deepEqual(arr(A.PACKAGE_NAMES), ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro']);
   assert.throws(() => A.extend({ pkg: 'bg' }), (e) => e.code === 'IJ_BAD_ARGS', 'a package registers once');
   assert.equal(A.COMMANDS.find((c) => c.id === 'noOrder'), undefined, 'nothing half-registers');
   // result columns: declared after their anchor, others in first-seen order

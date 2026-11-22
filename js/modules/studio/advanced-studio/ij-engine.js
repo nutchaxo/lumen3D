@@ -45,6 +45,13 @@
  * channels (Red, Green, Blue; nC = 1 for the page). A single-plane document behaves, and is stored and journaled, exactly as before
  * stacks existed; records and journal entries written before them restore as 1 × 1 stacks.
  *
+ * Macro runs (DOCS/studio-advanced/macros/INTEGRATION.md §2.6, §2.7): a worker command opens a run with E.macroGroup.begin; every
+ * image open then, or born during the run, is HELD until E.macroGroup.end — its steps push no undo record and write no journal entry
+ * or snapshot (a crash restores the pre-run state), Undo / Redo refuse IJ_MACRO_GROUP, and the end pushes ONE undo step per image
+ * that changed, back to the state saved at begin (a saved state is the last thing memory pressure gives up: that image then has no
+ * undo for the run). In batch mode (E.macroGroup.setBatch) an image born is hidden and EPHEMERAL: never a session entry, baseline,
+ * journal entry or snapshot, until doc.persist makes it an ordinary image.
+ *
  * Conventions
  *   - A channel's `data` array is IMMUTABLE once published: an operation builds a new
  *     array and swaps the reference at commit. That makes the undo record a plain
@@ -1024,6 +1031,10 @@ const IJEngine = (() => {
     let tileCacheBytes = opts.tileCacheBytes > 0 ? opts.tileCacheBytes : TILE_CACHE_BYTES;
     const blobs = new Map();          // ref → { ref, kind, data, bytes, docs:Set<docId>, at }
     const blobRefOf = new WeakMap();  // typed array → ref, for the arrays the store holds (no re-hash at commit)
+    // The macro run in progress (E.macroGroup, DOCS/studio-advanced/macros/INTEGRATION.md §2.6): one undo step per image it changes.
+    // docs: docId → { pre: fullState | null (dropped for memory), born, dropped, rev0 }. lastMacroRun answers a repeated end().
+    let macroRun = null;
+    let lastMacroRun = null;
 
     // ---- messaging ---------------------------------------------------------
 
@@ -1121,6 +1132,8 @@ const IJEngine = (() => {
       }
       for (const t of tiles.map.values()) add(t.img.data);
       for (const b of blobs.values()) add(b.data);
+      // the state a macro run restores on undo: the arrays the documents no longer hold stay in memory until the run ends
+      if (macroRun) for (const e of macroRun.docs.values()) if (e.pre) for (const c of e.pre.channels) addChannel(c);
       for (const p of projects.values()) total += p.estimate;
       return total + transientBytes;
     }
@@ -1180,6 +1193,7 @@ const IJEngine = (() => {
         for (const r of d.undo) addRec(r);
         for (const r of d.redo) addRec(r);
       }
+      if (macroRun) for (const e of macroRun.docs.values()) if (e.pre) for (const c of e.pre.channels) for (const a of c.planes) add(a);
       return reclaimable;
     }
 
@@ -1214,12 +1228,46 @@ const IJEngine = (() => {
             if (stack.length && (!best || stack[0].at < best.stack[0].at)) best = { stack, doc: d };
           }
         }
-        if (!best) break;
+        if (!best) {
+          // last resort before refusing: the saved state of a macro run, the one that frees most first (its image gets no undo for the run)
+          if (!dropMacroPre()) break;
+          continue;
+        }
         best.stack.shift();
       }
       if (usedBytes() + extra > budgetBytes) {
         throw ijError('IJ_OVER_BUDGET', 'not enough memory for this operation', { needBytes: extra, usedBytes: usedBytes(), budgetBytes });
       }
+    }
+
+    // Gives up the saved pre-run state that frees the most memory (they were all taken at the same moment); false when none is left.
+    function dropMacroPre() {
+      if (!macroRun) return false;
+      const live = new Set();
+      for (const d of budgetDocs()) {
+        for (const c of d.channels) for (const a of c.planes) live.add(a);
+        if (d.baselineData) for (const a of d.baselineData) live.add(a);
+        for (const st of [d.undo, d.redo]) for (const r of st) for (const a of recArrays(r)) live.add(a);
+      }
+      let best = null, bestBytes = -1;
+      for (const e of macroRun.docs.values()) {
+        if (!e.pre) continue;
+        let n = 0;
+        const seen = new Set();
+        for (const c of e.pre.channels) for (const a of c.planes) if (!live.has(a) && !seen.has(a)) { seen.add(a); n += a.byteLength; }
+        if (n > bestBytes) { best = e; bestBytes = n; }
+      }
+      if (!best) return false;
+      best.pre = null;
+      best.dropped = true;
+      return true;
+    }
+    function recArrays(r) {
+      const out = [];
+      if (r.patches) for (const p of r.patches) out.push(p.data);
+      if (r.full) for (const c of r.full.channels) { if (c.planes) for (const a of c.planes) out.push(a); else out.push(c.data); }
+      if (r.group) for (const g of r.group) for (const a of recArrays(g)) out.push(a);
+      return out;
     }
 
     // ---- tasks (cancel + slicing) -----------------------------------------------
@@ -1281,7 +1329,8 @@ const IJEngine = (() => {
     }
 
     function markMeta(doc) {
-      if (!storageOn || doc.held) return;
+      // a document a macro run holds writes its meta when the run ends; a batch image of a run never has a session entry
+      if (!storageOn || doc.held || doc.macroHold || doc.ephemeral) return;
       const s = sessions.get(doc.sessionKey);
       if (!s) return;
       s.docs[doc.id] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
@@ -1325,6 +1374,13 @@ const IJEngine = (() => {
       };
       if (doc.labels && doc.labels.length !== labelCount(doc)) doc.labels = null;
       syncData(doc);
+      // born during a macro run: held like the images the run started with (no undo of its own, written when the run ends);
+      // in batch mode a hidden, ephemeral image that the page closes at the end unless the macro shows it
+      if (macroRun && !macroRun.closing && !p.restore) {
+        doc.macroHold = true;
+        if (macroRun.batch) { doc.hidden = true; doc.ephemeral = true; }
+        macroRun.docs.set(doc.id, { pre: null, born: true, dropped: false, rev0: doc.rev });
+      }
       return doc;
     }
 
@@ -1336,7 +1392,7 @@ const IJEngine = (() => {
       docs.set(doc.id, doc);
       const s = sessionOf(doc.sessionKey, doc.provenance && doc.provenance.datasetId);
       activeSessionKey = doc.sessionKey;
-      if (o && o.baseline) writeBaseline(doc);
+      if (o && o.baseline && !doc.macroHold) writeBaseline(doc);
       markMeta(doc);
       scheduleIdle();
       return s;
@@ -1387,6 +1443,7 @@ const IJEngine = (() => {
     }
 
     function writeBaseline(doc) {
+      if (doc.ephemeral) return;
       // The baseline's arrays are numbered c * NP + pi (NP = nZ * nT): the flat list `baselineData`, and the index a stored record's
       // `baseIndex` points at.
       const NP = planeCountOf(doc);
@@ -1433,6 +1490,8 @@ const IJEngine = (() => {
       // that waits for the answer (doc.close "keep for later") is told nothing was kept.
       if (doc.held) return Promise.resolve(false);
       if (!storageOn || (!force && !docs.has(doc.id))) return queue;
+      // held by a macro run: the stored state stays the pre-run one until the run ends (a crash restores that); a batch image never is
+      if (doc.macroHold || doc.ephemeral) return queue;
       const rec = recordOf(doc, 'snapshot');
       const bytes = recDataBytes(rec);
       // The snapshot drops the stored selections of the entries it covers: the entries committed
@@ -1474,7 +1533,8 @@ const IJEngine = (() => {
     // Documents the stored state cannot restore as they are now (after a flush: the ones whose
     // write failed). Used to tell the page that "keep for later" did not keep anything.
     function unsafeDocs() {
-      return [...docs.values()].filter((d) => d.dirty || !d.protected || (d.pendingBaseline && !d.baselineStored)).map((d) => d.id);
+      // a batch image of a macro is never stored; one a run holds is stored as it was before the run until the run ends
+      return [...docs.values()].filter((d) => !d.ephemeral && !d.macroHold && (d.dirty || !d.protected || (d.pendingBaseline && !d.baselineStored))).map((d) => d.id);
     }
 
     const ROI_REF_BYTES = 65536;
@@ -1576,6 +1636,8 @@ const IJEngine = (() => {
 
     function noteCommit(doc, entry) {
       doc.dirty = true;
+      // a macro run's changes are stored as ONE snapshot when it ends; a batch image of a run never is
+      if (doc.macroHold || doc.ephemeral) return;
       doc.journalSeq++;
       if (entry && entry.kind === 'run' && entry.maskRule == null) entry.maskRule = 2;
       if (entry && storageOn && doc.protected) {
@@ -1622,7 +1684,7 @@ const IJEngine = (() => {
         channels: doc.channels.map((c) => ({ name: c.name, color: c.color, display: Object.assign({}, c.display) })),
         calibration: doc.calibration, provenance: doc.provenance,
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
-        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev, hidden: !!doc.hidden,
+        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev, hidden: !!doc.hidden, ephemeral: !!doc.ephemeral,
         bytes, levels: levelCount(doc.width, doc.height), tileSize: TILE,
         unsaved: doc.savedRev !== doc.rev || !!doc.held, protected: !!(storageOn && doc.protected),
         loading: false, memory: { usedBytes: usedBytes(), budgetBytes }
@@ -1847,6 +1909,8 @@ const IJEngine = (() => {
 
     // Push the undo record of a committed change; the redo stack is dead.
     function pushUndo(doc, rec) {
+      // a macro run makes ONE step of its own per image when it ends: the record of each step inside it is let go
+      if (doc.macroHold) { doc.redo.length = 0; return; }
       rec.bytes = recBytes(rec);
       doc.undo.push(rec);
       // inside doc.undoGroup.begin / end the steps are collected and folded into ONE composite record at `end`
@@ -2398,6 +2462,7 @@ const IJEngine = (() => {
       }
       const inv = { op: rec.op, at: Date.now(), replayable: rec.replayable, patches: null, full: null, display: null, bytes: 0, calOnly: !!rec.calOnly };
       if (rec.labelStep) inv.labelStep = true;
+      if (rec.macro) { inv.macro = true; inv.labelKey = rec.labelKey; }
       if (rec.patches) {
         const W = doc.width, H = doc.height;
         inv.patches = [];
@@ -2504,9 +2569,11 @@ const IJEngine = (() => {
         // `sameGeometry`: the width, height and bit depth did not move and every array is one the document already held (an Arrange reordered the channels): the page
         // refreshes its channel layout but keeps the selection and the view.
         const f = beforeSize && beforeSize.full;
+        // the step of a macro run that left the pixel grid as it was (a filter, a pixel loop): the selection, the overlays and the view stay
+        const sameGrid = !!(f && f.width === doc.width && f.height === doc.height && f.bitDepth === doc.bitDepth && f.nZ === doc.nZ && f.nT === doc.nT);
         return Object.assign({
           channels: doc.channels.map((c, i) => i), sizeChanged: true,
-          sameGeometry: !!(f && f.width === doc.width && f.height === doc.height && f.bitDepth === doc.bitDepth && f.nZ === doc.nZ && f.nT === doc.nT && sameArrays(f.channels, doc.channels))
+          sameGeometry: sameGrid && (rec.macro === true ? f.channels.length === doc.channels.length : sameArrays(f.channels, doc.channels))
         }, planesField(doc, 'all'));
       }
       const channels = [], planes = [];
@@ -2595,7 +2662,8 @@ const IJEngine = (() => {
       const inv = swapRecord(doc, synthetic);
       inv.replayable = false;
       b.arrays.forEach((a, i) => doc.baselineIndex.set(a, i));
-      doc.undo.push(inv);
+      // inside a macro run the run's own step covers the revert too
+      if (!doc.macroHold) doc.undo.push(inv);
       doc.redo.length = 0;
       doc.rev++;
       doc.layoutRev = doc.rev;
@@ -3067,6 +3135,10 @@ const IJEngine = (() => {
       if (pr && !docs.has(a.docId)) { projects.delete(a.docId); finishMutation(); return {}; }
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
+        // closing is never deferred by a macro run (ImageJ closes at once): the image leaves the run, a batch image is never kept
+        if (macroRun) macroRun.docs.delete(doc.id);
+        doc.macroHold = false;
+        if (doc.ephemeral) a = Object.assign({}, a, { discard: true });
         const clean = doc.savedRev === doc.rev && !doc.held;
         const s = sessions.get(doc.sessionKey);
         let ok = true;
@@ -3305,6 +3377,7 @@ const IJEngine = (() => {
     handlers['doc.undo'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
+        if (doc.macroHold) throw ijError('IJ_MACRO_GROUP', 'a macro run is one undo step: no undo while it runs');
         const changed = await doUndoRedo(doc, 'undo', false);
         post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry, calibration: !!changed.calibration, labels: !!changed.labels, planes: changed.planes === undefined ? 'all' : changed.planes });
         finishMutation();
@@ -3315,6 +3388,7 @@ const IJEngine = (() => {
     handlers['doc.redo'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
+        if (doc.macroHold) throw ijError('IJ_MACRO_GROUP', 'a macro run is one undo step: no undo while it runs');
         const changed = await doUndoRedo(doc, 'redo', false);
         post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry, calibration: !!changed.calibration, labels: !!changed.labels, planes: changed.planes === undefined ? 'all' : changed.planes });
         finishMutation();
@@ -3424,6 +3498,90 @@ const IJEngine = (() => {
       });
     };
 
+    // ---- macro runs (E.macroGroup; DOCS/studio-advanced/macros/INTEGRATION.md §2.6) ----------------------------------------------
+    // begin keeps the state of every open image (references: arrays are immutable, the plane lists copied) and HOLDS the image: the
+    // steps of the run push no undo record and write no journal entry, so a crash restores the stored pre-run state. end gives each held
+    // image that changed ONE undo step back to that state (applied like Revert's record), then one snapshot.
+    function macroBegin(runId, labelKey) {
+      if (macroRun) throw ijError('IJ_MACRO_BUSY', 'a macro run is already open');
+      if (typeof runId !== 'string' || !runId) throw ijError('IJ_BAD_ARGS', 'runId');
+      const run = { runId, labelKey: typeof labelKey === 'string' && labelKey ? labelKey : 'macro', batch: false, closing: false, docs: new Map(), ending: null };
+      for (const d of docs.values()) {
+        run.docs.set(d.id, { pre: fullState(d), born: false, dropped: false, rev0: d.rev });
+        d.macroHold = true;
+      }
+      macroRun = run;
+      return { docs: Array.from(run.docs.keys()) };
+    }
+    function macroSetBatch(runId, on) {
+      if (!macroRun || macroRun.runId !== runId || macroRun.closing) throw ijError('IJ_BAD_ARGS', 'no such macro run');
+      macroRun.batch = !!on;
+    }
+    function macroEnd(runId) {
+      if (lastMacroRun && lastMacroRun.runId === runId && lastMacroRun.ending) return lastMacroRun.ending;
+      const run = macroRun;
+      if (!run || run.runId !== runId) return Promise.resolve({ changed: [], dropped: [] });
+      if (run.ending) return run.ending;
+      run.closing = true;
+      run.ending = (async () => {
+        const changed = [], dropped = [];
+        try {
+          for (const [id, e] of Array.from(run.docs)) {
+            const doc0 = docs.get(id);
+            if (!doc0) continue;
+            await lockDoc(doc0, async () => {
+              const doc = docs.get(id);
+              if (!doc || !run.docs.has(id)) return;   // closed while the run waited for it
+              doc.macroHold = false;
+              const moved = doc.rev !== e.rev0;
+              if (moved) changed.push(id);
+              if (moved && e.dropped) {
+                // no undo for the run's changes: the older steps would be applied to a state they were not made from
+                dropped.push(id);
+                doc.undo.length = 0; doc.redo.length = 0;
+              }
+              if (moved && e.pre && !e.born) {
+                const rec = { op: run.labelKey, labelKey: run.labelKey, at: Date.now(), replayable: false, full: e.pre, patches: null, display: null, calOnly: false, macro: true, bytes: 0 };
+                rec.bytes = recBytes(rec);
+                doc.undo.push(rec);
+                while (doc.undo.length > MAX_UNDO) doc.undo.shift();
+                doc.redo.length = 0;
+              }
+              e.pre = null;
+              if (doc.ephemeral) return;
+              if (e.born) writeBaseline(doc);
+              else if (moved) snapshotNow(doc, true);
+              // the meta the run held back (display, position, a shown batch image)
+              markMeta(doc);
+            });
+          }
+        } finally {
+          for (const id of run.docs.keys()) { const d = docs.get(id); if (d) d.macroHold = false; }
+          for (const e of run.docs.values()) e.pre = null;
+          if (macroRun === run) macroRun = null;
+          lastMacroRun = run;
+          finishMutation();
+        }
+        return { changed, dropped };
+      })();
+      return run.ending;
+    }
+
+    // doc.persist { docId } → { info }: a batch image of a macro the macro shows becomes an ordinary one (a view, a session entry, a baseline);
+    // while the run still holds it, its baseline is written when the run ends.
+    handlers['doc.persist'] = (a) => {
+      const doc = getDoc(a.docId);
+      const was = !!doc.ephemeral;
+      doc.ephemeral = false;
+      doc.hidden = false;
+      if (!doc.macroHold) {
+        if (was) writeBaseline(doc);
+        markMeta(doc);
+        scheduleIdle();
+      }
+      return { info: infoOf(doc) };
+    };
+
     // Reads of a document's pixels go through the document's queue, behind any operation
     // already accepted for it: the operation swaps the channel arrays only at its commit, so a
     // read that overtook it would answer from the pixels it is about to replace. Display reads
@@ -3449,7 +3607,9 @@ const IJEngine = (() => {
         ensureRoomNoEvict(need);
         transientBytes += need;
         try {
-          const rows = measureRows(doc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit, invertY: a.invertY === true });
+          // raw (IJ.getValue "<column> raw"): measured with imp.setCalibration(null), the planes and everything else unchanged
+          const mdoc = a.raw === true ? Object.assign(Object.create(doc), { calibration: { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' } }) : doc;
+          const rows = measureRows(mdoc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit, invertY: a.invertY === true });
           return { row: rows[0], rows };
         } finally { transientBytes -= need; }
       });
@@ -3891,7 +4051,7 @@ const IJEngine = (() => {
               nZ: nZs, nT: nTs, z: src.z, t: src.t, labels: src.labels, hyperstack: !!src.hyperstack, rgb: !!src.rgb,
               channels: chans, calibration: src.calibration, provenance: src.provenance, rev: src.rev,
               savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0,
-              layoutRev: src.layoutRev || 0, hidden: !!src.hidden
+              layoutRev: src.layoutRev || 0, hidden: !!src.hidden, restore: true
             });
           } finally { transientBytes -= loadedBytes; }
           if (base) {
@@ -4073,8 +4233,11 @@ const IJEngine = (() => {
 
     // The `E` a package's worker command (IJOpRegistry.defineCommand) receives: the engine's own services, scoped to one
     // request. What it reserved and did not release is given back when the request ends.
+    // The engine reads E.request may run in-process for a worker command (same arguments and result as the page's request).
+    const E_REQUESTS = ['doc.info', 'doc.stats', 'doc.histogram', 'doc.profile', 'doc.threshold', 'doc.compute', 'doc.labels', 'doc.setLabel'];
     function commandContext(ctx) {
       let reserved = 0;
+      let openGroup = null;   // the macro run this request opened and has not ended (ended for it when the request ends)
       const E = {
         budgetBytes,
         ijError,
@@ -4143,12 +4306,13 @@ const IJEngine = (() => {
         },
         // ONE undo step replacing the planes `list` = [{ c, z, t, data }] (the macro working copy publishes through it). The arrays
         // become the document's own (reserve() them first and they are not counted twice); the record is not replayable, so the
-        // step forces a snapshot, exactly like a noUndo run. `o.labelKey` names the step.
+        // step forces a snapshot, exactly like a noUndo run. `o.labelKey` names the step; `o.final` skips the cancellation check.
         commitPlanes(docId, list, o) {
           const doc0 = getDoc(docId);
           return lockDocs([doc0], async () => {
             const doc = getDoc(docId);
-            ctx.task.check();
+            // o.final: the end-of-run publish of a macro, which an abort must not lose (ImageJ keeps what an aborted macro wrote)
+            if (!(o && o.final === true)) ctx.task.check();
             if (!Array.isArray(list) || !list.length) throw ijError('IJ_BAD_ARGS', 'planes');
             const Ctor = ctorFor(doc.bitDepth);
             const seen = new Set(), items = [];
@@ -4196,7 +4360,46 @@ const IJEngine = (() => {
           post(Object.assign({}, ev, { event: 'ext:' + ev.event }));
         },
         transfer: (buf) => { ctx.transfer.push(buf); },
-        done() { if (reserved) { transientBytes -= reserved; reserved = 0; } }
+        // ---- the macro run lane (DOCS/studio-advanced/macros/INTEGRATION.md §2.7)
+        macroGroup: Object.freeze({
+          begin(o) {
+            const r = macroBegin(o && o.runId, o && o.labelKey);
+            openGroup = o.runId;
+            return r;
+          },
+          setBatch(runId, on) { macroSetBatch(runId, on); },
+          end(runId) {
+            if (openGroup === runId) openGroup = null;
+            return macroEnd(runId);
+          }
+        }),
+        // fn() runs synchronously when a `cancel` request targets this request (a pending wait can reject at once)
+        onCancel(fn) {
+          if (typeof fn !== 'function') throw ijError('IJ_BAD_ARGS', 'onCancel');
+          ctx.task.onCancel = fn;
+        },
+        // the bytes of the planes of every open document (undo steps, caches and saved states excluded)
+        pixelBytes() {
+          const seen = new Set();
+          let n = 0;
+          for (const d of docs.values()) for (const c of d.channels) for (const a of c.planes) if (!seen.has(a)) { seen.add(a); n += a.byteLength; }
+          return n;
+        },
+        request(cmd, args) {
+          if (E_REQUESTS.indexOf(cmd) < 0) return Promise.reject(ijError('IJ_BAD_ARGS', 'E.request: ' + String(cmd)));
+          const sub = { id: null, task: ctx.task, transfer: [], release: null };
+          return Promise.resolve()
+            .then(() => handlers[cmd](args && typeof args === 'object' ? args : {}, sub))
+            .finally(() => { if (sub.release) sub.release(); });
+        },
+        done() {
+          if (reserved) { transientBytes -= reserved; reserved = 0; }
+          if (openGroup !== null) {
+            const id = openGroup;
+            openGroup = null;
+            macroEnd(id).catch((err) => console.error('[IJEngine] macro run end', err));
+          }
+        }
       };
       return E;
     }
@@ -4206,7 +4409,10 @@ const IJEngine = (() => {
 
     handlers['cancel'] = (a) => {
       const t = tasks.get(a.targetId);
-      if (t) t.cancelled = true;
+      if (t) {
+        t.cancelled = true;
+        if (typeof t.onCancel === 'function') { try { t.onCancel(); } catch (err) { console.error('[IJEngine] cancel hook', err); } }
+      }
       return {};
     };
 

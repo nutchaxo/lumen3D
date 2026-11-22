@@ -1121,7 +1121,11 @@
   // ------------------------------------------------------------------------------------------------
   R.define('stkConvert', {
     kind: 'size', version: 1, stack: 'whole', rgb: 'whole', roi: 'ignore',
-    validate(params) { if (!params || [8, 16, 32].indexOf(params.bitDepth) < 0) throw bad('bitDepth'); },
+    validate(params) {
+      if (!params || [8, 16, 32].indexOf(params.bitDepth) < 0) throw bad('bitDepth');
+      // weights: a macro's setRGBWeights (ColorProcessor.setWeightingFactors), optional
+      if (params.weights !== undefined && !(Array.isArray(params.weights) && params.weights.length === 3 && params.weights.every((x) => typeof x === 'number' && isFinite(x)))) throw bad('weights');
+    },
     resolve(view, params) {
       const p = Object.assign({}, params);
       if (!p.ranges) p.ranges = view.channels.map((ch) => ({ min: ch.display.min, max: ch.display.max }));
@@ -1141,11 +1145,12 @@
           let o;
           if (to === 32) {
             // TypeConverter.convertRGBToFloat: (float)(r*rw + g*gw + b*bw), double weights (1/3 each, or 0.299 / 0.587 / 0.114)
-            const rw = params.weighted ? 0.299 : 1 / 3, gw = params.weighted ? 0.587 : 1 / 3, bw = params.weighted ? 0.114 : 1 / 3;
+            const wt = params.weights || (params.weighted ? [0.299, 0.587, 0.114] : [1 / 3, 1 / 3, 1 / 3]);
+            const rw = wt[0], gw = wt[1], bw = wt[2];
             o = new Float32Array(a[0].length);
             for (let i = 0; i < o.length; i++) o[i] = a[0][i] * rw + a[1][i] * gw + a[2][i] * bw;
           } else {
-            const g = S.grayPlane(a[0], a[1], a[2], !!params.weighted);
+            const g = params.weights ? S.grayPlane(a[0], a[1], a[2], false, params.weights[0], params.weights[1], params.weights[2]) : S.grayPlane(a[0], a[1], a[2], !!params.weighted);
             o = new C(g.length);
             for (let i = 0; i < g.length; i++) o[i] = g[i];
           }
@@ -1396,7 +1401,6 @@
     scratchBytes: (info) => info.width * info.height * 4,
     async run(view, params, roi, io) {
       const m = model(view);
-      if (m.N < 2) throw ijError('IJ_STK_NEEDS_STACK', 'stack required');
       const reg = regionOf(roi, m.W, m.H);
       const planes = m.rgb ? statPlanes(m, params, 0) : sliceList(m).map((s) => s[0]);
       const st = stackStats(planes, m.rgb ? 8 : m.bd, m.W, m.H, reg, params.limit ? params.threshold : null);

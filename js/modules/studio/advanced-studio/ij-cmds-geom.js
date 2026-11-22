@@ -240,7 +240,15 @@
     while (taken.has(base + '-' + n)) n++;
     return base + '-' + n;
   }
-  async function scale(api) {
+  // Tools.parseDouble(s, dflt): Double.parseDouble or the default ("-", "", text)
+  function parseDoubleOr(s, dflt) {
+    const MO = typeof IJMacroOptions !== 'undefined' ? IJMacroOptions : null;
+    const t = String(s === undefined || s === null ? '' : s);
+    if (MO && typeof MO.javaDouble === 'function') { const n = MO.javaDouble(t); return n === null || Number.isNaN(n) ? dflt : n; }
+    const n = t.trim() === '' ? NaN : Number(t.trim());
+    return Number.isNaN(n) ? dflt : n;
+  }
+  async function scale(api, o) {
     const st = api.state();
     const doc = st.doc;
     if (!doc) return;
@@ -249,15 +257,22 @@
     const r = rect || { x: 0, y: 0, w: W, h: H };
     // Scaler.showDialog on a stack: "Z Scale", "Depth (images)" (z only: the slices of a stack, a z-scaled stack is a new window) and "Process entire stack"
     const nZ = doc.nZ || 1, nSl = doc.nSlices || 1, stackish = nSl > 1;
+    // A macro answers Scaler's own string fields ("-" or 0 = "follow the other fields"); its options are rewritten as Scaler.showDialog does
+    // (the run() table's `rewrite`): interpolate → Bilinear, no interpolation= → None, width= and height= → x=- y=- unless given.
+    const mac = !!(o && o.source === 'macro');
+    const w0 = Math.max(1, jround(r.w * 0.5)), h0 = Math.max(1, jround(r.h * 0.5));
+    const scaleField = (id, labelKey, value) => (mac ? { type: 'string', id, labelKey, value: String(value) } : { type: 'number', id, labelKey, value, min: 0.0001, max: 1000 });
+    const sizeField = (id, labelKey, value) => (mac ? { type: 'string', id, labelKey, value: String(value) }
+      : { type: 'number', id, labelKey, value, min: 1, max: 100000, integer: true, decimals: 0 });
     const v = await api.dialog({
       title: api.tr('cmd.imageScale'), okLabel: api.tr('dlg.ok'),
       fields: [
-        { type: 'number', id: 'xscale', labelKey: 'dlg.geom.xScale', value: 0.5, min: 0.0001, max: 1000 },
-        { type: 'number', id: 'yscale', labelKey: 'dlg.geom.yScale', value: 0.5, min: 0.0001, max: 1000 },
-        ...(nZ > 1 ? [{ type: 'number', id: 'zscale', labelKey: 'dlg.geom.zScale', value: 1, min: 0.0001, max: 1000 }] : []),
-        { type: 'number', id: 'width', labelKey: 'dlg.geom.widthPx', value: Math.max(1, jround(r.w * 0.5)), min: 1, max: 100000, integer: true, decimals: 0 },
-        { type: 'number', id: 'height', labelKey: 'dlg.geom.heightPx', value: Math.max(1, jround(r.h * 0.5)), min: 1, max: 100000, integer: true, decimals: 0 },
-        ...(nZ > 1 ? [{ type: 'number', id: 'depth', labelKey: 'dlg.geom.depthImages', value: nZ, min: 1, max: 100000, integer: true, decimals: 0 }] : []),
+        scaleField('xscale', 'dlg.geom.xScale', mac ? '0.5' : 0.5),
+        scaleField('yscale', 'dlg.geom.yScale', mac ? '0.5' : 0.5),
+        ...(nZ > 1 ? [scaleField('zscale', 'dlg.geom.zScale', mac ? '1.0' : 1)] : []),
+        sizeField('width', 'dlg.geom.widthPx', w0),
+        sizeField('height', 'dlg.geom.heightPx', h0),
+        ...(nZ > 1 ? [sizeField('depth', 'dlg.geom.depthImages', nZ)] : []),
         { type: 'choice', id: 'interpolation', labelKey: 'dlg.geom.interpolation', value: 'bilinear', options: interpOptions() },
         { type: 'check', id: 'average', labelKey: 'dlg.geom.average', value: true },
         ...(stackish ? [{ type: 'check', id: 'process', labelKey: 'dlg.geom.processStack', value: true }] : []),
@@ -265,6 +280,7 @@
         { type: 'string', id: 'title', labelKey: 'dlg.geom.title', value: uniqueName(api, doc.name), enabledIf: (vals) => !!vals.newWindow }
       ],
       onChange: (vals, set, changed) => {
+        if (mac) return;
         if (changed === 'xscale') set({ yscale: vals.xscale, width: Math.max(1, jround(vals.xscale * r.w)), height: Math.max(1, jround(vals.xscale * r.h)) });
         else if (changed === 'yscale') set({ height: Math.max(1, jround(vals.yscale * r.h)) });
         else if (changed === 'width') {
@@ -276,6 +292,25 @@
       }
     });
     if (!v) return;
+    if (mac) {
+      // Scaler.showDialog after gd.showDialog(), on the string fields
+      const xs = parseDoubleOr(v.xscale, 0), ys = parseDoubleOr(v.yscale, 0);
+      const wstr = String(v.width);
+      let nw = jround(parseDoubleOr(wstr, 0)), nh = jround(parseDoubleOr(v.height, 0));
+      if (nh !== 0 && (wstr === '-' || wstr === '0')) nw = jround(nh * r.w / r.h);
+      else if (nw !== 0 && nh === 0) nh = jround(nw * r.h / r.w);
+      else if (nh !== 0 && nw === 0) nw = jround(nh * r.w / r.h);
+      if (nw === 0 || nh === 0) throw Object.assign(new Error('Width or height is 0'), { code: 'IJ_MACRO_OPTIONS', macroText: 'Width or height is 0' });
+      if (xs > 0 && ys > 0) { nw = jround(r.w * xs); nh = jround(r.h * ys); }
+      v.width = nw; v.height = nh;
+      v.xscale = xs > 0 ? xs : nw / r.w;
+      v.yscale = xs > 0 ? ys : nh / r.h;
+      if (nZ > 1) {
+        const zs = parseDoubleOr(v.zscale, 0);
+        v.zscale = zs > 0 ? zs : 0;
+        v.depth = Math.max(1, jround(parseDoubleOr(v.depth, nZ)));
+      }
+    }
     let width = v.width, height = v.height;
     if (v.xscale > 0 && v.yscale > 0) { width = Math.max(1, jround(r.w * v.xscale)); height = Math.max(1, jround(r.h * v.yscale)); }
     // "Process entire stack" ticked (the default): every slice, else the one on screen; the depth is scaled only with the whole stack in a new window
@@ -314,12 +349,28 @@
     return -1;
   }
   const unitsPerCm = (i) => (i >= 0 ? UNITS[i][1] : 0);
+  // ImageProperties.validateInterval: "3sec" → "3 sec"
+  function validateInterval(text) {
+    const s = String(text);
+    if (s.indexOf(' ') !== -1) return s;
+    let first = -1;
+    for (let i = 0; i < s.length; i++) if (/\p{L}/u.test(s.charAt(i))) { first = i; break; }
+    return first > 0 && first < s.length - 1 ? s.slice(0, first) + ' ' + s.slice(first) : s;
+  }
   async function properties(api) {
     const st = api.state();
     const doc = st.doc;
     if (!doc) return;
     const cal = doc.calibration || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' };
     const pw0 = cal.pixelWidth > 0 ? cal.pixelWidth : 1, ph0 = cal.pixelHeight > 0 ? cal.pixelHeight : 1;
+    const pd0 = cal.pixelDepth > 0 ? cal.pixelDepth : 1;
+    const d = typeof api.dims === 'function' ? api.dims(doc.docId) : { nC: 1, nZ: 1, nT: 1, nSlices: 1, hyperstack: false };
+    const nC = d.nC || 1, nZ = d.nZ || 1, nT = d.nT || 1, stackSize = d.nSlices || nC * nZ * nT;
+    // ImageJ counts a plain stack as slices (channels = frames = 1)
+    const hyper = !!d.hyperstack || nC > 1 || nT > 1;
+    const c0 = hyper ? nC : 1, z0 = hyper ? nZ : stackSize, t0 = hyper ? nT : 1;
+    const fi0 = cal.frameInterval > 0 ? cal.frameInterval : 0;
+    const interval0 = (Math.trunc(fi0) === fi0 ? String(fi0) : d2s(fi0, 2)) + ' ' + (cal.timeUnit || 'sec');
     let oldUnitIndex = unitIndex(unitText(cal)), oldUnitsPerCm = unitsPerCm(oldUnitIndex);
     let calUnit = unitText(cal);
     // textChangedCount==1 && (calPixelHeight!=1.0||calPixelDepth!=1.0) → the height no longer follows the width
@@ -327,11 +378,19 @@
     const v = await api.dialog({
       title: doc.name || api.tr('cmd.imageProperties'), okLabel: api.tr('dlg.ok'),
       fields: [
+        { type: 'number', id: 'channels', labelKey: 'dlg.stk.nChannels', value: c0, integer: true, decimals: 0 },
+        { type: 'number', id: 'slices', labelKey: 'dlg.stk.nSlices', value: z0, integer: true, decimals: 0 },
+        { type: 'number', id: 'frames', labelKey: 'dlg.stk.nFrames', value: t0, integer: true, decimals: 0 },
         { type: 'number', id: 'pixelWidth', labelKey: 'dlg.geom.pixelWidth', value: pw0, min: 0 },
         { type: 'number', id: 'pixelHeight', labelKey: 'dlg.geom.pixelHeight', value: ph0, min: 0 },
         { type: 'string', id: 'unit', labelKey: 'dlg.geom.unit', value: unitText(cal) },
+        { type: 'number', id: 'pixelDepth', labelKey: 'dlg.geom.voxelDepth', value: pd0, min: 0 },
+        { type: 'string', id: 'frameInterval', labelKey: 'dlg.geom.frameInterval', value: interval0 },
         { type: 'message', id: 'note', labelKey: 'dlg.geom.propertiesNote' }
       ],
+      // "The product of channels (c), slices (z) and frames (t) must equal the stack size"
+      validate: (x) => (Math.max(1, Math.trunc(x.channels)) * Math.max(1, Math.trunc(x.slices)) * Math.max(1, Math.trunc(x.frames)) !== stackSize
+        ? { channels: 'err.stkBadDimensions' } : null),
       onChange: (vals, set, changed) => {
         const w = vals.pixelWidth, h = vals.pixelHeight;
         if (changed === 'pixelHeight' && h !== w) duplicatePixelWidth = false;
@@ -350,23 +409,44 @@
       }
     });
     if (!v) return;
+    // imp.setDimensions(channels, slices, frames)
+    const c1 = Math.max(1, Math.trunc(v.channels)), z1 = Math.max(1, Math.trunc(v.slices)), t1 = Math.max(1, Math.trunc(v.frames));
+    if ((c1 !== c0 || z1 !== z0 || t1 !== t0) && c1 * z1 * t1 === stackSize) {
+      const res = await api.run('stkToHyperstack', { order: 'xyczt', channels: c1, slices: z1, frames: t1, mode: c1 > 1 ? 'composite' : 'color' },
+        { docId: doc.docId, noRoi: true, labelKey: 'cmd.imageProperties' });
+      if (!res) return;
+    }
     const unit = String(v.unit).trim();
     const reset = unit === '' || unit.toLowerCase() === 'none' || v.pixelWidth === 0;
-    const next = reset ? { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' } : { pixelWidth: v.pixelWidth, pixelHeight: v.pixelHeight > 0 ? v.pixelHeight : v.pixelWidth, unit };
-    await applyCalibration(api, doc, next, 'cmd.imageProperties');
+    const next = reset ? { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' }
+      : { pixelWidth: v.pixelWidth, pixelHeight: v.pixelHeight > 0 ? v.pixelHeight : v.pixelWidth, pixelDepth: v.pixelDepth > 0 ? v.pixelDepth : 1, unit };
+    // the frame interval: "<number> <unit>" (Tools.split on " -"); a sec interval within [1/30, 2] also sets the animation rate
+    const parts = validateInterval(v.frameInterval).split(/[ -]+/).filter((x) => x.length > 0);
+    const n = parts.length ? Number(parts[0]) : NaN;
+    next.frameInterval = Number.isFinite(n) ? n : 0;
+    let timeUnit = parts.length >= 2 ? parts[1] : 'sec';
+    if (timeUnit === 'usec') timeUnit = 'µsec';
+    next.timeUnit = timeUnit;
+    if (timeUnit === 'sec' && next.frameInterval <= 2 && next.frameInterval >= 1 / 30) next.fps = 1 / next.frameInterval;
+    await applyCalibration(api, api.state().doc || doc, next, 'cmd.imageProperties');
   }
 
   async function applyCalibration(api, doc, next, labelKey) {
     const cal = doc.calibration || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' };
-    const same = cal.pixelWidth === next.pixelWidth && cal.pixelHeight === next.pixelHeight && unitText(cal) === unitText(next);
+    const extra = ['pixelDepth', 'frameInterval', 'timeUnit', 'fps'].filter((k) => next[k] !== undefined);
+    const dflt = { pixelDepth: 1, frameInterval: 0, timeUnit: 'sec', fps: 0 };
+    const same = cal.pixelWidth === next.pixelWidth && cal.pixelHeight === next.pixelHeight && unitText(cal) === unitText(next)
+      && extra.every((k) => (cal[k] === undefined ? dflt[k] : cal[k]) === next[k]);
     if (same) return;
-    await api.run('setCalibration', { pixelWidth: next.pixelWidth, pixelHeight: next.pixelHeight, unit: next.unit }, { noRoi: true, labelKey: labelKey || 'cmd.imageProperties' });
+    const params = { pixelWidth: next.pixelWidth, pixelHeight: next.pixelHeight, unit: next.unit };
+    for (const k of extra) params[k] = next[k];
+    await api.run('setCalibration', params, { noRoi: true, labelKey: labelKey || 'cmd.imageProperties' });
   }
 
   // ── Analyze > Set Scale... ─────────────────────────────────────────────────────────────────────
   // ScaleDialog.run: "Distance in pixels" (the raw length of a straight line, or the larger side of a rectangle), "Known
   // distance", "Pixel aspect ratio", "Unit of length", a live "Scale:" line and a "Click to Remove Scale" button.
-  async function setScale(api) {
+  async function setScale(api, o) {
     const st = api.state();
     const doc = st.doc;
     if (!doc) return;
@@ -427,7 +507,7 @@
       // `if (gd.scaleChanged || IJ.macroRunning()) cal.pixelWidth = known/measured;` — the flag, not a value comparison: the
       // fields show rounded text, so pressing OK on an untouched dialog must keep the stored width.
       const pw0 = cal.pixelWidth > 0 ? cal.pixelWidth : 1;
-      const pixelWidth = scaleChanged ? v.known / v.measured : pw0;
+      const pixelWidth = scaleChanged || (o && o.source === 'macro') ? v.known / v.measured : pw0;
       next = { pixelWidth, pixelHeight: v.aspect !== 0 ? pixelWidth * v.aspect : pixelWidth, unit: u };
     }
     await applyCalibration(api, doc, next, 'cmd.analyzeSetScale');

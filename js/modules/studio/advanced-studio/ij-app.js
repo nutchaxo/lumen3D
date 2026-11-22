@@ -179,6 +179,14 @@
  *   roiManager entries and annotation items take `position`: { c, z, t } (1-based, 0 = any) or { n } (a plain stack's slice); the view draws them
  *       only on that plane. events: 'doc' kind 'position' when the plane changes.
  *
+ * Macros (DOCS/studio-advanced/macros/INTEGRATION.md §2): package `macro` (its worker file ij-proc-macro.js is loaded after ij-macro-lang.js,
+ * PACKAGE_PRE) alone receives `api.macro` (start / abort / running / signal / pause / runCommand / mirror / ijId / docOf / selectImage /
+ * closeImages / showImages / adopt / results / tables / thresholds / thresholdMode / settings / measurements / colors / roiManagerShow /
+ * setVisible / status / progress) and may call its `passive` worker commands. While a run holds the lane (S.lane) the menus are off unless it
+ * waits for the operator; a command it starts (runMacroCommand) runs with `source: 'macro'`, its dialogs answered from the options string
+ * (IJMacroCmds.headlessAnswer) or shown with the lane paused, its errors recorded instead of shown, and an `ask` that passes `macro:` gets
+ * ImageJ's macro-mode answer. Each image keeps its threshold (S.thresholds; the Threshold window reads and writes it).
+ *
  * Fields of an IJOpRegistry op spec the app honours: `display: true` (the step resets the display range of the channels it changes, in its undo
  * step), `display: '16/32'` (the same, only on a 16 / 32-bit image), `docless: true` on a compute op (api.compute(…, { docless: true }) runs it
  * with view = null and no image open).
@@ -301,9 +309,12 @@ const IJApp = (() => {
   const WORKER_SCRIPTS = ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js',
     'ij-proc-bg.js', 'ij-proc-filters.js', 'ij-proc-seg.js', 'ij-proc-multi.js', 'ij-proc-geom.js', 'ij-proc-roi.js', 'ij-proc-coloc.js',
     'ij-proc-thr.js', 'ij-proc-enh.js', 'ij-proc-fft.js', 'ij-proc-sel.js', 'ij-proc-io.js', 'ij-proc-ov.js', 'ij-proc-ana.js',
-    'ij-proc-edit.js', 'ij-proc-fiji.js', 'ij-proc-lib.js', 'ij-proc-stk.js'];
+    'ij-proc-edit.js', 'ij-proc-fiji.js', 'ij-proc-lib.js', 'ij-proc-stk.js', 'ij-proc-macro.js'];
   const PACKAGE_FILE_RX = /^ij-proc-([a-z0-9]+)\.js$/;
   const PACKAGE_NAMES = WORKER_SCRIPTS.map((f) => PACKAGE_FILE_RX.exec(f)).filter((m) => m && m[1] !== 'shared').map((m) => m[1]);
+  // Files the worker loads right before a package file, in the same try/catch (a failure of either withdraws the package): the macro
+  // language is part of package `macro`, never a mandatory script.
+  const PACKAGE_PRE = Object.freeze({ macro: Object.freeze(['ij-macro-lang.js']) });
   const ESTIMATE_MIN_FRACTION = 1 / 64; // an image under budget/64 never needs the estimate round trip
   const PERSIST_MS = 1200;
   // The events api.on knows ('ext:<name>' = what a worker command posted), the settings with their defaults, the prefix each
@@ -314,7 +325,10 @@ const IJApp = (() => {
     'colors.background': 'black', 'colors.selection': 'yellow', 'appearance.interpolate': false, 'appearance.useNames': false };
   const CORE_SETTING_PREFIXES = ['conv', 'misc', 'colors', 'appearance'];
   const PKG_PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc', lay: 'lay', thr: 'thr', enh: 'enh',
-    fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana', edit: 'edit', fiji: 'fiji', lib: 'lib' };
+    fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana', edit: 'edit', fiji: 'fiji', lib: 'lib', macro: 'mac' };
+  // The preferences a macro may read and write (setOption, call("ij.Prefs…") equivalents; INTEGRATION.md §4.4).
+  const MACRO_SETTING_KEYS = Object.freeze(['thr.blackBackground', 'thr.padEdges', 'thr.edmOutput', 'thr.count', 'conv.scale', 'conv.weighted',
+    'conv.fullRange16', 'misc.divZero', 'appearance.interpolate', 'appearance.useNames']);
   // ij.gui.Toolbar / Colors.java: java.awt.Color constants (orange = 255,200,0; pink = 255,175,175; grays 128 / 192 / 64)
   const COLOR_NAMES = { red: [255, 0, 0], green: [0, 255, 0], blue: [0, 0, 255], magenta: [255, 0, 255], cyan: [0, 255, 255], yellow: [255, 255, 0],
     orange: [255, 200, 0], black: [0, 0, 0], white: [255, 255, 255], gray: [128, 128, 128], lightgray: [192, 192, 192], darkgray: [64, 64, 64],
@@ -481,6 +495,7 @@ const IJApp = (() => {
     'Process/FFT': { order: 85 }, 'Process/Filters': { order: 90 },
     'Analyze/Tools': { order: 110 }, 'Analyze/Colocalization': { order: 120, separatorBefore: true },
     'Analyze/LocalThickness': { order: 140 }, 'Analyze/Skeleton': { order: 150 },
+    'Plugins/Macros': { order: 5 },
     'Plugins/Analyze': { order: 10 }, 'Plugins/Analyze/CellCounter': { order: 10 }, 'Plugins/Process': { order: 20 }, 'Plugins/Utilities': { order: 30 }
   };
   for (const c of COMMANDS) {
@@ -658,7 +673,19 @@ const IJApp = (() => {
     posSync: new Map(),       // docId → coalescer of doc.setPosition (at most one in flight, the last value wins)
     labels: new Map(),        // docId → (string|null)[nSlices] | null (none), absent = not read yet
     anim: new Map(),          // docId → { timer, dir, fps } of a running animation
-    animOpts: new Map()       // docId → { fps, first, last, backAndForth, start } (Animation Options, per image like Calibration.fps)
+    animOpts: new Map(),      // docId → { fps, first, last, backAndForth, start } (Animation Options, per image like Calibration.fps)
+    // macros (DOCS/studio-advanced/macros/INTEGRATION.md §2): the run in progress and the page state macros read and write
+    lane: null,               // { runId, reqId, ctrl, paused, cmd, sentTables, startedAt, born, label, fraction } while a macro runs
+    persistDue: false,        // a meta persist asked for while a macro ran (written once when it ends)
+    thresholds: new Map(),    // docId → Map(c → { lower, upper, dark, src: 'window' | 'macro' }) (ImageJ: each image keeps its threshold)
+    thrMode: 'red',           // the Threshold window's display mode (red / bw / overunder)
+    thrOverlays: new Set(),   // images whose view draws a table threshold while the Threshold window is closed
+    macroTables: new Map(),   // name → Table of the tables a macro made (Table.create, IJ.renameResults…)
+    macroTableWins: new Map(),// name → the window showing it
+    tableSeq: 0,              // revision counter of the tables (what a mirror sends)
+    resultsSeen: null,        // { arr, len, rev } of S.results last given a revision
+    ijIds: new Map(),         // docId → ImageJ id (-1, -2, … in order of first registration; never reused in a mount)
+    ijSeq: 0
   };
 
   // ───────────────────────────── extension registry ─────────────────────────────
@@ -763,9 +790,26 @@ const IJApp = (() => {
     return clamp(Math.floor((dm * GIB) / 4), 512 * 1048576, 2 * GIB);
   }
 
+  /**
+   * The platform question. Inside a command a macro started, `config.macro` is ImageJ's macro-mode answer (an option id, or
+   * (options) => id; a function answers only when the macro gave options); any other question is shown to the operator while the
+   * run waits (paused: the menus work meanwhile).
+   */
   async function ask(config) {
+    const lc = S.lane && S.lane.cmd;
+    if (lc && config && config.macro !== undefined) {
+      if (typeof config.macro !== 'function') return config.macro;
+      if (lc.options !== null) return config.macro(lc.options);
+    }
     if (typeof Dialog === 'undefined') return config.dismissId || null;
-    return Dialog.ask(config);
+    if (!lc) return Dialog.ask(config);
+    // the operator answers for the macro; the run's end (abort, crash) takes the question with it, answered as dismissed
+    const sig = S.lane.ctrl.signal;
+    if (sig.aborted) return config.dismissId || null;
+    const onAbort = () => { if (typeof Dialog.close === 'function') Dialog.close(config.dismissId || null); };
+    sig.addEventListener('abort', onAbort);
+    const resume = lanePause();
+    try { return await Dialog.ask(config); } finally { sig.removeEventListener('abort', onAbort); resume(); }
   }
 
   // ───────────────────────────── errors ─────────────────────────────
@@ -783,6 +827,12 @@ const IJApp = (() => {
 
   /** Never err.message in the DOM: log it, show the sentence. */
   async function reportError(err) {
+    // a command a macro started never shows an error box: the run reports it at the macro's line
+    if (S.lane && S.lane.cmd) { laneRecord(err); return; }
+    // a page method a macro request runs (rename, …): no modal box either (it would wait for the operator while the request times out);
+    // the request answers with the error (api.macro.takeError, read by the request host of ij-cmds-macro.js)
+    // (a paused lane — the operator answering a waitForUser — keeps the boxes of the operator's own commands)
+    if (laneLocked()) { console.error('[advanced-studio]', err); if (!S.lane.rpcError) S.lane.rpcError = err; return; }
     console.error('[advanced-studio]', err);
     const text = errorText(err);
     if (!text) { setStatus(tr('status.cancelled')); return; }
@@ -823,13 +873,16 @@ const IJApp = (() => {
     S.worker = client;
   }
 
-  /** WORKER_SCRIPTS as the worker takes them: the mandatory scripts, then the packages (each loaded in its own try/catch). */
+  /** WORKER_SCRIPTS as the worker takes them: the mandatory scripts, then the packages (each loaded in its own try/catch, after its `pre` files). */
   function workerInit(p) {
     const scripts = [], packages = [];
     for (const f of WORKER_SCRIPTS) {
       const m = PACKAGE_FILE_RX.exec(f);
-      if (m && m[1] !== 'shared') packages.push({ pkg: m[1], url: p.fileUrl(f) });
-      else scripts.push(p.fileUrl(f));
+      if (m && m[1] !== 'shared') {
+        const entry = { pkg: m[1], url: p.fileUrl(f) };
+        if (PACKAGE_PRE[m[1]]) entry.pre = PACKAGE_PRE[m[1]].map((x) => p.fileUrl(x));
+        packages.push(entry);
+      } else scripts.push(p.fileUrl(f));
     }
     return { scripts, packages };
   }
@@ -927,7 +980,7 @@ const IJApp = (() => {
       case 'docCreated':
         // an image a worker-side request made (E.runOp of a macro or a package's command; a page-side doc.run carries its own answer):
         // adopted like a Duplicate, from the image it was made from, unless the page already knows it
-        if (m.info && m.info.docId !== undefined && !S.docs.has(m.info.docId)) adoptNewDocs([m.info.docId], S.docs.has(m.source) ? m.source : undefined).catch(reportError);
+        if (m.info && m.info.docId !== undefined && !S.docs.has(m.info.docId)) adoptNewDocs([m.info.docId], S.docs.has(m.source) ? m.source : undefined).catch((err) => { if (!err || err.code !== 'IJ_NO_DOC') reportError(err); });
         break;
       case 'position':
         // E.setPosition (a macro, a package's worker command): the view follows, nothing is sent back to the engine
@@ -977,6 +1030,8 @@ const IJApp = (() => {
     try { client.w.terminate(); } catch (_) { /* already gone */ }
     for (const [, e] of client.pending) e.reject(Object.assign(new Error('worker crashed'), { code: code || 'IJ_WORKER_CRASHED' }));
     client.pending.clear();
+    // a macro run dies with the worker: its dialogs close, its start() rejects (the pending macro.run did), the lane ends
+    if (S.worker === client && S.lane) { try { S.lane.ctrl.abort(); } catch (_) { /* aborted */ } }
     if (S.worker !== client || !S.mounted) return;
     S.docs.clear(); S.order = []; S.activeId = null;
     S.unprotected.clear(); S.held.clear(); showWarning();
@@ -1011,15 +1066,57 @@ const IJApp = (() => {
   }
   function endBusy() {
     S.busy = false; S.busyLabel = '';
-    if (S.shell) S.shell.setProgress(null);
+    // an operator step while a macro waited for him: the run's progress line comes back
+    if (S.lane) laneProgress(null);
+    else if (S.shell) S.shell.setProgress(null);
     refreshUi();
   }
   async function busy(label, fn) {
-    if (S.busy) return null;
+    if (S.lane && S.lane.cmd) {
+      // a command a macro started: no second busy state, no error box; the progress line names the step, then the run again
+      laneProgress(label);
+      try { return await fn(); }
+      catch (err) { laneRecord(err); return null; }
+      finally { laneProgress(null); }
+    }
+    if (S.busy || laneLocked()) return null;
     beginBusy(label);
     try { return await fn(); }
     catch (err) { await reportError(err); return null; }
     finally { endBusy(); }
+  }
+
+  // ── the macro lane (INTEGRATION.md §2.2): the page side of a macro run ──
+  /** A macro runs and does not wait for the operator: menus and command shortcuts are off. */
+  function laneLocked() { return !!S.lane && S.lane.paused === 0; }
+  /** The first error of the lane command wins; a cancel (a dialog the operator cancelled, the Cancel button) is not an error. */
+  function laneRecord(err) {
+    const cmd = S.lane && S.lane.cmd;
+    if (!cmd) { console.error('[advanced-studio]', err); return; }
+    if (err && (err.name === 'AbortError' || err.code === 'IJ_CANCELLED' || err.cancelled)) { cmd.cancelled = true; return; }
+    if (!cmd.error) cmd.error = err || Object.assign(new Error('failed'), { code: 'IJ_INTERNAL' });
+    // a macro's own options error is the macro's message, not a fault of the page
+    if (!err || err.code !== 'IJ_MACRO_OPTIONS') console.error('[advanced-studio]', err);
+  }
+  /** The shell's progress line while a macro runs: `label` while a step of a lane command runs, else the run's own. */
+  function laneProgress(label) {
+    if (!S.lane || !S.shell) return;
+    S.lane.label = label || '';
+    S.shell.setProgress({ fraction: label ? null : S.lane.fraction, label: label || tr('op.macRun'), cancellable: true });
+  }
+  /** The macro waits for the operator (waitForUser, an interactive dialog): the menus work meanwhile. → resume() (once). */
+  function lanePause() {
+    const lane = S.lane;
+    if (!lane) return () => {};
+    lane.paused++;
+    refreshUi();
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      if (lane.paused > 0) lane.paused--;
+      if (S.lane === lane) refreshUi();
+    };
   }
 
   // ───────────────────────────── documents ─────────────────────────────
@@ -1076,14 +1173,15 @@ const IJApp = (() => {
     const u = info ? S.undo.get(info.docId) || { undo: 0, redo: 0 } : { undo: 0, redo: 0 };
     return {
       doc: info, roi: info ? selOf(info.docId) : null, prevRoi: info ? S.prevSel.get(info.docId) || null : null,
-      busy: S.busy, nDocs: shownDocs().length,
+      // a running macro disables the menus (they work again while it waits for the operator, as in ImageJ's waitForUser)
+      busy: S.busy || laneLocked(), nDocs: shownDocs().length,
       canUndo: info ? (info.undoDepth !== undefined ? info.undoDepth > 0 : u.undo > 0) : false,
       canRedo: info ? (info.redoDepth !== undefined ? info.redoDepth > 0 : u.redo > 0) : false,
       dirty: info ? isDirty(info.docId) : false,
       hasResults: S.results.length > 0,
       canProject: !!(S.desc && S.desc.available),
       docs: shownDocs().map((id) => S.docs.get(id)),
-      threshold: S.threshold,
+      threshold: activeThreshold(),
       activeChannel: info ? activeChannel(info) : 0,
       // stacks: what a command's `enabled` decides on (Next Slice needs a stack, Z Project needs slices, a hyperstack command a hyperstack…)
       nSlices: info ? (info.nSlices | 0) || 1 : 0, nZ: info ? (info.nZ | 0) || 1 : 0, nT: info ? (info.nT | 0) || 1 : 0, nC: info ? (info.rgb ? 1 : (info.channels || []).length) : 0,
@@ -1096,6 +1194,8 @@ const IJApp = (() => {
     const isNew = !S.docs.has(id);
     S.docs.set(id, info);
     if (info.hidden) S.hidden.add(id);
+    ijIdOf(id);
+    if (isNew && S.lane) S.lane.born.add(id);
     S.annotDims.set(id, { w: info.width, h: info.height });
     if (!S.order.includes(id)) S.order.push(id);
     S.undo.set(id, { undo: 0, redo: 0 });
@@ -1345,6 +1445,9 @@ const IJApp = (() => {
     // Macro mode (IJ.setupDialog): the word `stack` in the options is Yes, its ABSENCE is No — the current plane only
     if (sp.stack === 'all') return 'all';
     if (sp.stack === 'current' || sp.macro === true) return 'current';
+    // a command a macro started with options: the same rule, read from the macro's own options string
+    const lc = S.lane && S.lane.cmd;
+    if (sp.stack === undefined && sp.macro === undefined && lc && lc.options !== null) return macroOptionWord(lc.options, 'stack') ? 'all' : 'current';
     const r = await ask({ title: tr('dlg.processStack'), message: tr('dlg.processAll', { n: info.nSlices || planes }),
       options: [{ id: 'all', label: tr('dlg.yes'), primary: true }, { id: 'current', label: tr('dlg.no') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
     return r === 'all' || r === 'current' ? r : null;
@@ -1447,6 +1550,7 @@ const IJApp = (() => {
       const ar = S.annot.get(docId);
       if (ar && typeof v.setAnnotations === 'function') v.setAnnotations(ar.items, ar.visible);
     }
+    if (S.thresholds.size) drawThresholdOverlays();
     refreshRois();
     syncRebind();
     return v;
@@ -1546,6 +1650,8 @@ const IJApp = (() => {
   }
 
   function scheduleMetaPersist() {
+    // a macro run writes the page meta once, when it ends (with the documents it changed)
+    if (S.lane) { S.persistDue = true; return; }
     clearTimeout(S.persistTimer);
     S.persistTimer = setTimeout(persistMeta, PERSIST_MS);
   }
@@ -1635,7 +1741,11 @@ const IJApp = (() => {
     const spec = await opSpecOf(op);
     if (!spec || spec.kind !== 'pixel' || spec.stack !== 'ask') return undefined;
     const multi = !info.rgb && (info.channels || []).length > 1;
-    if (isCompositeShown(info) && opt.slice !== true) return { planes: 'all', channel: 'all' };
+    // a command a macro started with options: `slice` anywhere in them keeps a composite to the plane on screen (IJ.setupDialog:
+    // macroOptions.contains("slice"), a substring test, as headlessAnswer's)
+    const lc = S.lane && S.lane.cmd;
+    const slice = opt.slice !== undefined ? opt.slice : (lc && typeof lc.options === 'string' ? lc.options.indexOf('slice') >= 0 : undefined);
+    if (isCompositeShown(info) && slice !== true) return { planes: 'all', channel: 'all' };
     const a = await askStack(info, { stack: opt.stack, macro: opt.macro });
     if (a === null) return null;
     return a === 'all' && multi ? { planes: a, channel: 'all' } : { planes: a };
@@ -1649,7 +1759,7 @@ const IJApp = (() => {
     try { est = await call('doc.estimate', Object.assign({ docId: info.docId, op, params, roi, channel }, posArg(info.docId) ? { pos: posArg(info.docId) } : {}, planes !== undefined ? { planes } : {})); } catch (_) { return false; } // the run reports the real error
     if (!est || est.fits || !est.fitsWithoutUndo) return false;
     const a = await ask({ title: tr('noUndo.title'), message: tr('noUndo.message'),
-      options: [{ id: 'go', label: tr('noUndo.run'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+      options: [{ id: 'go', label: tr('noUndo.run'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel', macro: 'go' });
     if (a !== 'go') throw Object.assign(new Error('cancelled'), { code: 'IJ_CANCELLED' });
     return true;
   }
@@ -1751,7 +1861,8 @@ const IJApp = (() => {
     const out = [];
     for (const id of S.order) {
       const info = S.docs.get(id);
-      if (!info || S.hidden.has(id)) continue;
+      // a hidden image is no choice, except a batch image of the macro running (image1= may name it)
+      if (!info || (S.hidden.has(id) && !(S.lane && S.lane.born.has(id)))) continue;
       let keep = true;
       if (typeof filter === 'function') { try { keep = !!filter(info); } catch (err) { console.error('[advanced-studio] doc filter', err); keep = false; } }
       if (keep) out.push({ value: id, label: info.name });
@@ -1870,14 +1981,34 @@ const IJApp = (() => {
       rep.offered[at] = offered;
       if (rep.replay && rep.replay[at]) spec.fields = prefillFields(spec.fields, rep.replay[at], rep.replayOffered && rep.replayOffered[at]);
     }
+    const lc = S.lane && S.lane.cmd ? S.lane.cmd : null;
+    if (lc && !lc.interactive) {
+      // a command a macro started with options: the dialog is answered from them (GenericDialog's macro mode), never shown, never previewed
+      const k = lc.dialogs++;
+      const MC = typeof IJMacroCmds !== 'undefined' ? IJMacroCmds : null;
+      const ai = activeInfo();
+      const r = MC ? MC.headlessAnswer(spec, lc.options, { commandId: lc.id, entry: lc.entry, dialogIndex: k, vars: lc.vars, pure: VP(), tr,
+        composite: isCompositeShown(ai), rgb: !!(ai && ai.rgb) })
+        : { ok: false, error: { text: tr('err.macNotInBrowser', { name: lc.name }) } };
+      if (r && r.ok) {
+        if (rep) rep.list[at] = r.values;
+        if (Array.isArray(r.unknown) && r.unknown.length) console.warn('[advanced-studio] macro options: no key for', lc.id, r.unknown.join(', '));
+        return r.values;
+      }
+      throw Object.assign(new Error('macro options'), { code: 'IJ_MACRO_OPTIONS', macroText: r && r.error ? String(r.error.text) : '' });
+    }
     const info = activeInfo();
     const ext = !!(config.preview && (config.preview.op || config.preview.compute) && !config.preview.onChange);
     if (ext) spec.preview = info ? extPreviewHook(config.preview, info) : undefined;
+    // a command a macro started without options: the operator answers, the run waits (and its end closes the dialog)
+    const resume = lc ? lanePause() : null;
+    if (lc) spec.signal = S.lane.ctrl.signal;
     try {
       const res = await S.shell.windows.dialog(spec);
       if (rep && res && typeof res === 'object') rep.list[at] = res;
+      if (lc && res === null) lc.cancelled = true;
       return res;
-    } finally { if (ext) clearExtPreview(); }
+    } finally { if (ext) clearExtPreview(); if (resume) resume(); }
   }
 
   function channelField(info, value) {
@@ -2063,7 +2194,9 @@ const IJApp = (() => {
   const resultColumns = () => resultColumnsOf(S.results);
   function columnHeader(key) {
     const e = EXTRA_COLUMNS.find((c) => c[0] === key);
-    return e ? e[1] : key;
+    if (e) return e[1];
+    // a column a macro made (setResult("X", …)): its key is 'mac:' + the heading
+    return typeof key === 'string' && key.indexOf('mac:') === 0 ? key.slice(4) : key;
   }
   // ── P-ana (wave 3): the Results table as ImageJ shows and writes it ──────────────────────────────────────────────
   // `ANA` holds the transient state of the Results window (rows are held by identity: a sort or a delete keeps the selection right).
@@ -2308,7 +2441,7 @@ const IJApp = (() => {
     const info = activeInfo();
     if (!info) return;
     const a = await ask({ title: tr('cmd.fileRevert'), message: tr('revert.message', { name: info.name }),
-      options: [{ id: 'revert', label: tr('cmd.fileRevert'), variant: 'danger' }, { id: 'cancel', label: tr('dlg.cancel'), primary: true }], dismissId: 'cancel' });
+      options: [{ id: 'revert', label: tr('cmd.fileRevert'), variant: 'danger' }, { id: 'cancel', label: tr('dlg.cancel'), primary: true }], dismissId: 'cancel', macro: 'revert' });
     if (a !== 'revert') return;
     await busy(tr('op.revert'), async () => {
       const res = await call('doc.revert', { docId: info.docId });
@@ -2326,8 +2459,8 @@ const IJApp = (() => {
   function forgetDoc(id) {
     const key = S.sessionKeys.get(id);
     stopAnimation(id);
-    for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.annot, S.annotDims, S.pos, S.posSync, S.labels, S.animOpts]) m.delete(id);
-    S.unprotected.delete(id); S.held.delete(id); S.hidden.delete(id);
+    for (const m of [S.docs, S.activeCh, S.dstate, S.sel, S.prevSel, S.undo, S.cleanRev, S.revs, S.sessionKeys, S.sources, S.annot, S.annotDims, S.pos, S.posSync, S.labels, S.animOpts, S.thresholds]) m.delete(id);
+    S.unprotected.delete(id); S.held.delete(id); S.hidden.delete(id); S.thrOverlays.delete(id);
     S.order = S.order.filter((x) => x !== id);
     S.roiList = S.roiList.filter((r) => r.docId !== id);
     if (S.redirect && S.redirect.docId === id) S.redirect = null;
@@ -2336,13 +2469,14 @@ const IJApp = (() => {
     emit('doc', { docId: id, kind: 'closed' });
   }
 
-  async function closeImage(docId) {
+  async function closeImage(docId, o) {
     const id = docId !== undefined ? docId : S.activeId;
     const info = S.docs.get(id);
     if (!info) return;
-    if (isDirty(id)) {
+    // o.noAsk: a macro's close() never asks (ImageJ's macro close sets "changes = false" first)
+    if (isDirty(id) && !(o && o.noAsk)) {
       const a = await ask({ title: tr('close.title', { name: info.name }), message: tr('close.message', { name: info.name }),
-        options: [{ id: 'save', label: tr('leave.save'), primary: true }, { id: 'discard', label: tr('leave.discard'), variant: 'danger' }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+        options: [{ id: 'save', label: tr('leave.save'), primary: true }, { id: 'discard', label: tr('leave.discard'), variant: 'danger' }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel', macro: 'discard' });
       if (a === 'save') { let ok = false; try { ok = await saveDocTiff(id); } catch (err) { await reportError(err); } if (!ok) return; }
       else if (a !== 'discard') return;
     }
@@ -3195,13 +3329,17 @@ const IJApp = (() => {
     const lossy = bits < info.bitDepth;
     if (lossy) {
       const a = await ask({ title: tr('type.title', { bits }), message: tr('type.lossy', { bits }),
-        options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+        options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel', macro: 'ok' });
       if (a !== 'ok') return;
     }
     // a stack or an RGB image goes through the stack-aware conversion (package stk: StackConverter, RGB -> luminance); a single grey plane keeps the v1 operation
     const stk = (info.nSlices || 1) > 1 || info.rgb;
     if (stk && typeof IJOpRegistry !== 'undefined' && IJOpRegistry.get('stkConvert') && !S.failedPackages.has('stk')) {
-      await runOp('stkConvert', { bitDepth: bits, scale: settingGet('conv.scale') !== false, weighted: settingGet('conv.weighted') === true }, { all: true, noRoi: true });
+      const params = { bitDepth: bits, scale: settingGet('conv.scale') !== false, weighted: settingGet('conv.weighted') === true };
+      // a macro's setRGBWeights (ColorProcessor.setWeightingFactors: global while the macro runs) wins over the setting
+      const lw = S.lane && S.lane.cmd ? S.lane.cmd.rgbWeights : null;
+      if (info.rgb && lw) params.weights = lw.slice();
+      await runOp('stkConvert', params, { all: true, noRoi: true });
       return;
     }
     await runOp('convert', { bitDepth: bits, scale: settingGet('conv.scale') !== false }, { all: true, noRoi: true });
@@ -3211,6 +3349,11 @@ const IJApp = (() => {
     const info = activeInfo();
     const hook = typeof IJStkCmds !== 'undefined' && IJStkCmds && typeof IJStkCmds.zProject === 'function' ? IJStkCmds : null;
     if (info && (info.nZ || 1) * (info.nT || 1) > 1 && hook && !S.failedPackages.has('stk')) return hook.zProject(apiFor('stk'));
+    // the slab projection reads the site's dataset: never from a macro, refused before its dialog
+    if (S.lane && S.lane.cmd) {
+      throw Object.assign(new Error('macro refused'), { code: 'IJ_MACRO_OPTIONS',
+        macroText: tr('err.macRefused', { command: S.lane.cmd.name, reason: tr('err.macReasonLibrary') }) });
+    }
     return a.zProject();
   }
 
@@ -3271,8 +3414,8 @@ const IJApp = (() => {
     Object.assign(THR_STACK, { method: v.method, background: v.background, calculate: !!v.calculate, list: !!v.list, create: !!v.create });
     // "Prefs.blackBackground = gd.getNextBoolean()": the box is the preference of Process > Binary > Options too
     settingSet('thr', 'thr.blackBackground', !!v.black);
-    // the range of the Threshold window = "imp.isThreshold()": applied to every slice as it is
-    const w = S.threshold && S.threshold.docId === info.docId && S.threshold.channel === ch ? S.threshold : null;
+    // the range of the Threshold window (or the one the image keeps) = "imp.isThreshold()": applied to every slice as it is
+    const w = thresholdFor(info, ch);
     const params = { method: v.method, background: v.background, calculate: !!v.calculate && !v.only, only: !!v.only, black: !!v.black };
     if (w) params.threshold = { lower: w.lower, upper: w.upper };
     // "if (only) { useLocal = false; listThresholds = false; createStack = false; }"
@@ -3280,6 +3423,8 @@ const IJApp = (() => {
     const run = await runExt(create ? 'stackToMaskNew' : 'stackToMask', params, { docId: info.docId, noRoi: true, channel: ch, labelKey: 'op.toMask' });
     if (run) {
       S.threshold = null;
+      dropThrEntry(info.docId, ch);
+      drawThresholdOverlays();
       if (create && run.newDocIds && run.newDocIds.length && !v.black) maskLut(run.newDocIds);
       scheduleToolRefresh('threshold');
     }
@@ -3295,7 +3440,7 @@ const IJApp = (() => {
       const ch = activeChannel(info);
       // Thresholder.run: "if (!imp.isThreshold()) autoThreshold(ip)": the range the Threshold window holds for this image and
       // channel when it holds one, else an automatic one (Default method; deviation: ImageJ's ISODATA2 also guesses the polarity).
-      const w = S.threshold && S.threshold.docId === info.docId && S.threshold.channel === ch ? S.threshold : null;
+      const w = thresholdFor(info, ch);
       let lower, upper;
       if (w) { lower = w.lower; upper = w.upper; } else {
         const t = await call('doc.threshold', { docId: info.docId, channel: ch, method: 'Default', dark: S.thrDark !== false, roi: isAreaRoi(selOf(info.docId)) ? selOf(info.docId) : null });
@@ -3360,10 +3505,57 @@ const IJApp = (() => {
     if (roi && roi.type === 'angle') return ['angle'];
     return measurementKeys(S.measurements, !!roi && (roi.type === 'line' || roi.type === 'polyline'));
   }
-  /** What the Threshold window holds for this image and channel (the range %Area and "Limit to threshold" read), or null. */
+  /**
+   * The threshold of this image and channel (the range %Area and "Limit to threshold" read): the Threshold window's range when it
+   * holds that image and channel, else the one the image keeps (a macro's setThreshold), else null.
+   */
   function thresholdFor(info, ch) {
     const t = S.threshold;
-    return t && t.docId === info.docId && t.channel === ch ? { lower: t.lower, upper: t.upper } : null;
+    if (t && t.docId === info.docId && t.channel === ch) return { lower: t.lower, upper: t.upper, dark: t.dark };
+    const e = thrEntry(info.docId, ch);
+    return e ? { lower: e.lower, upper: e.upper, dark: e.dark } : null;
+  }
+  /** state().threshold: the threshold of the active image and channel as { docId, channel, lower, upper, dark }, or null. */
+  function activeThreshold() {
+    if (S.threshold) return S.threshold;
+    const info = activeInfo();
+    if (!info) return null;
+    const ch = activeChannel(info);
+    const e = thrEntry(info.docId, ch);
+    return e ? { docId: info.docId, channel: ch, lower: e.lower, upper: e.upper, dark: e.dark } : null;
+  }
+  function thrEntry(docId, ch) { const m = S.thresholds.get(docId); return (m && m.get(ch)) || null; }
+  /** src 'window' = an entry the Threshold window made (gone when it closes, as before); a macro's entry stays until reset. */
+  function setThrEntry(docId, ch, v, src) {
+    let m = S.thresholds.get(docId);
+    if (!m) { m = new Map(); S.thresholds.set(docId, m); }
+    const old = m.get(ch);
+    m.set(ch, { lower: v.lower, upper: v.upper, dark: !!v.dark, src: old && old.src === 'macro' ? 'macro' : src });
+  }
+  function dropThrEntry(docId, ch) {
+    const m = S.thresholds.get(docId);
+    if (!m) return;
+    m.delete(ch);
+    if (!m.size) S.thresholds.delete(docId);
+  }
+  /** With the Threshold window closed, a shown image draws the red overlay of its active channel's kept threshold (ImageJ keeps it on screen). */
+  function drawThresholdOverlays() {
+    if (S.wins.has('threshold')) return;
+    for (const id of Array.from(S.thrOverlays)) {
+      const info = S.docs.get(id);
+      const v = viewOf(id);
+      if (!info || !v || !thrEntry(id, activeChannel(info))) { if (v) v.setThresholdOverlay(null); S.thrOverlays.delete(id); }
+    }
+    for (const [id] of S.thresholds) {
+      const info = S.docs.get(id);
+      const v = info ? viewOf(id) : null;
+      if (!v) continue;
+      const ch = activeChannel(info);
+      const e = thrEntry(id, ch);
+      if (!e) continue;
+      v.setThresholdOverlay({ channel: ch, lower: e.lower, upper: e.upper, mode: S.thrMode });
+      S.thrOverlays.add(id);
+    }
   }
   /** The arguments of doc.stats beyond the keys: the threshold, Limit to threshold, Redirect to. */
   function measureOptions(info, ch) {
@@ -3627,7 +3819,8 @@ const IJApp = (() => {
     if (isStackInfo(info)) {
       const answer = hopt && (hopt.stack === 'all' || hopt.stack === 'current') ? hopt.stack
         : await ask({ title: tr('cmd.analyzeHistogram'), message: tr('dlg.includeAll', { n: info.nSlices }),
-          options: [{ id: 'all', label: tr('dlg.yes'), primary: true }, { id: 'current', label: tr('dlg.no') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+          options: [{ id: 'all', label: tr('dlg.yes'), primary: true }, { id: 'current', label: tr('dlg.no') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel',
+          macro: (o) => (macroOptionWord(o, 'stack') ? 'all' : 'current') });
       if (answer !== 'all' && answer !== 'current') return;
       all = answer === 'all';
     }
@@ -4170,7 +4363,7 @@ const IJApp = (() => {
   // ── Threshold
 
   function buildThreshold() {
-    const T = { method: 'Default', dark: S.thrDark !== false, mode: 'red', lower: 0, upper: 255, overlayDoc: null, hist16: settingGet('thr.hist16') === true };
+    const T = { method: 'Default', dark: S.thrDark !== false, mode: S.thrMode || 'red', lower: 0, upper: 255, overlayDoc: null, hist16: settingGet('thr.hist16') === true };
     const canvas = h('canvas', { class: 'ij-hist', width: 256, height: 80 });
     const readout = h('div', { class: 'ij-readout' });
     let hist = null, token = 0;
@@ -4190,8 +4383,10 @@ const IJApp = (() => {
       // the overlay is drawn on the view of the image the window works on, and only there
       if (T.overlayDoc !== undefined && T.overlayDoc !== null && (!info || T.overlayDoc !== info.docId)) { const ov = viewOf(T.overlayDoc); if (ov) ov.setThresholdOverlay(null); T.overlayDoc = null; }
       if (info && viewOf(info.docId)) { viewOf(info.docId).setThresholdOverlay({ channel: activeChannel(info), lower: T.lower, upper: T.upper, mode: T.mode }); T.overlayDoc = info.docId; }
-      // What api.state().threshold reads: the window's current range, on the image and channel it was made for.
+      // What api.state().threshold reads: the window's current range, on the image and channel it was made for; the image keeps it
+      // (ImageProcessor.setThreshold), so the window comes back to it, and a macro reads it
       S.threshold = info ? { docId: info.docId, channel: activeChannel(info), lower: T.lower, upper: T.upper, dark: T.dark } : null;
+      if (info) setThrEntry(info.docId, activeChannel(info), T, 'window');
     }
     async function auto() {
       const info = activeInfo();
@@ -4215,6 +4410,9 @@ const IJApp = (() => {
         hist = hh;
         hist16Row.style.display = info.bitDepth === 16 ? '' : 'none'; // only a 16-bit image has a 16-bit histogram
       } catch (err) { console.error('[advanced-studio] histogram', err); }
+      // an image that keeps a threshold (set here before, or by a macro) shows it instead of a new automatic one (ThresholdAdjuster.setup)
+      const kept = thrEntry(info.docId, activeChannel(info));
+      if (kept) { T.lower = kept.lower; T.upper = kept.upper; T.dark = kept.dark; commit(); return; }
       if (autoToo) await auto(); else commit();
     }
     async function apply() {
@@ -4226,6 +4424,7 @@ const IJApp = (() => {
       if (res && res.newDocIds) maskLut(res.newDocIds);
     }
     function reset() {
+      { const ri = activeInfo(); if (ri) dropThrEntry(ri.docId, activeChannel(ri)); }
       S.threshold = null;
       if (T.overlayDoc !== null && T.overlayDoc !== undefined && viewOf(T.overlayDoc)) viewOf(T.overlayDoc).setThresholdOverlay(null);
       T.overlayDoc = null;
@@ -4239,9 +4438,10 @@ const IJApp = (() => {
         { type: 'number', id: 'lower', label: tr('thr.lower'), value: T.lower, step: 'any' }, { type: 'number', id: 'upper', label: tr('thr.upper'), value: T.upper, step: 'any' }] });
       if (v) { T.lower = Number(v.lower); T.upper = Math.max(T.lower, Number(v.upper)); commit(); }
     }
+    const modeSel = selectEl([{ value: 'red', label: tr('thr.red') }, { value: 'bw', label: tr('thr.bw') }, { value: 'overunder', label: tr('thr.overUnder') }], T.mode, (m) => { T.mode = m; S.thrMode = m; commit(); });
     const el = h('div', { class: 'ij-panel ij-threshold' }, canvas, readout, labelled(tr('thr.lower'), loS), labelled(tr('thr.upper'), hiS),
       row(selectEl(IJThresholdMethods().map((m) => ({ value: m, label: m })), T.method, (m) => { T.method = m; auto(); }),
-        selectEl([{ value: 'red', label: tr('thr.red') }, { value: 'bw', label: tr('thr.bw') }, { value: 'overunder', label: tr('thr.overUnder') }], T.mode, (m) => { T.mode = m; commit(); })),
+        modeSel),
       check(tr('thr.dark'), T.dark, (on) => { T.dark = on; S.thrDark = on; auto(); }),
       hist16Row,
       row(btn(tr('thr.auto'), auto), btn(tr('thr.apply'), apply, 'ij-btn--primary'), btn(tr('thr.reset'), reset), btn(tr('thr.setBtn'), setDialog)));
@@ -4258,10 +4458,26 @@ const IJApp = (() => {
           commit();
           return undefined;
         }
+        if (kind === 'reset') { reset(); return undefined; }
+        // ThresholdAdjuster.setMode (a macro's call("ij.plugin.frame.ThresholdAdjuster.setMode", …))
+        if (kind === 'setMode' && (payload === 'red' || payload === 'bw' || payload === 'overunder')) {
+          T.mode = payload; S.thrMode = payload;
+          if (modeSel && modeSel.tagName === 'SELECT') modeSel.value = payload;
+          else if (modeSel && modeSel.querySelector) { const s = modeSel.querySelector('select'); if (s) s.value = payload; }
+          commit();
+          return undefined;
+        }
         if (kind === 'doc' || kind === 'pixels') { const p = refresh(first); first = false; return p; } else if (kind === 'display') commit();
         return undefined;
       },
-      dispose() { S.threshold = null; if (T.overlayDoc !== null && T.overlayDoc !== undefined && viewOf(T.overlayDoc)) viewOf(T.overlayDoc).setThresholdOverlay(null); T.overlayDoc = null; }
+      dispose() {
+        S.threshold = null;
+        if (T.overlayDoc !== null && T.overlayDoc !== undefined && viewOf(T.overlayDoc)) viewOf(T.overlayDoc).setThresholdOverlay(null);
+        T.overlayDoc = null;
+        // closing the window ends the thresholds it made (as before tables existed); the ones a macro set stay, drawn on their images
+        for (const [id, m] of Array.from(S.thresholds)) for (const [c, e] of Array.from(m)) if (e.src === 'window') dropThrEntry(id, c);
+        drawThresholdOverlays();
+      }
     };
   }
   function IJThresholdMethods() {
@@ -4710,7 +4926,7 @@ const IJApp = (() => {
       let t = selectedList();
       if (!t.length) {
         const a = await ask({ title: tr('roi.title'), message: tr('roi.deleteAll'),
-          options: [{ id: 'yes', label: tr('roi.yes'), primary: true }, { id: 'no', label: tr('roi.no') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+          options: [{ id: 'yes', label: tr('roi.yes'), primary: true }, { id: 'no', label: tr('roi.no') }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel', macro: 'yes' });
         if (a !== 'yes') return;
         t = items;
       }
@@ -4766,7 +4982,7 @@ const IJApp = (() => {
       if (!v) return;
       if (t.length === items.length && t.length > 1) {   // "Apply changes to all N selections?"
         const a = await ask({ title: tr('roi.title'), message: tr('roi.applyAll', { n: t.length }),
-          options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+          options: [{ id: 'ok', label: tr('dlg.ok'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel', macro: 'ok' });
         if (a !== 'ok') return;
       }
       const stroke = parseStyleColor(v.stroke, false);
@@ -5194,7 +5410,10 @@ const IJApp = (() => {
   function onCommand(c, ev) {
     if (!c || typeof c.run !== 'function') return undefined;
     if (c.pkg && S.failedPackages.has(c.pkg)) return undefined;
-    if (!c.enabled(snapshot())) return undefined;
+    // a command another command starts inside a macro's command (Repeat Command) is not blocked by the macro's own lane
+    const st = snapshot();
+    if (S.lane && S.lane.cmd) st.busy = S.busy;
+    if (!c.enabled(st)) return undefined;
     // ImageJ's Executer remembers what ran (except Undo and Close) so Repeat Command can run it again
     // (a command another command started, REPEAT.run set, is not the one the operator chose: Executer's previousCommand is the menu command)
     if (c.repeatable !== false && !c.dynamic && !REPEAT.nested) S.lastCommand = c.id;
@@ -5289,7 +5508,7 @@ const IJApp = (() => {
   }
   async function wandAt(x, y, mods) {
     const info = activeInfo();
-    if (!info || S.busy || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= info.width || y >= info.height) return null;
+    if (!info || S.busy || laneLocked() || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= info.width || y >= info.height) return null;
     // the operation lives in ij-proc-roi.js: without it the click says why nothing happens instead of failing with IJ_UNKNOWN_OP
     if (S.failedPackages.has('roi')) { setStatus(tr('warn.packageFailed', { pkg: 'roi' })); return null; }
     const ch = activeChannel(info);
@@ -5342,7 +5561,7 @@ const IJApp = (() => {
     const info = activeInfo();
     return {
       doc: liveInfo(info), docs: shownDocs().map((id) => liveInfo(S.docs.get(id))), roi: info ? selOf(info.docId) : null, busy: S.busy,
-      activeChannel: info ? activeChannel(info) : 0, threshold: S.threshold, measurements: S.measurements.slice(), lineWidth: S.lineWidth,
+      activeChannel: info ? activeChannel(info) : 0, threshold: activeThreshold(), measurements: S.measurements.slice(), lineWidth: S.lineWidth,
       roiList: S.roiList.map((r) => ({ name: r.name, docId: r.docId, roi: r.roi })), resultsCount: S.results.length,
       pos: info ? positionOf(info.docId) : null, dims: info ? dimsExt(info.docId) : null
     };
@@ -5568,6 +5787,10 @@ const IJApp = (() => {
     const prefix = key.slice(0, key.indexOf('.'));
     const own = pkg ? PKG_PREFIX[pkg] : undefined;
     if (!(prefix === own || (pkg === 'edit' && CORE_SETTING_PREFIXES.indexOf(prefix) >= 0))) throw forbidden('settings.set: ' + key + ' is not a setting of package ' + String(pkg));
+    writeSetting(key, value);
+  }
+  /** Stores one preference (the caller has checked who may write it) and applies what it changes on screen. */
+  function writeSetting(key, value) {
     let text;
     try { text = JSON.stringify(value); } catch (_) { text = undefined; }
     if (text === undefined || text.length > 65536) throw extError('settings.set: value');
@@ -5917,6 +6140,10 @@ const IJApp = (() => {
   function runCommandExt(id, o) {
     const c = COMMANDS.find((x) => x.id === id);
     if (!c) throw extError('runCommand: ' + String(id));
+    // inside a command a macro started (Repeat Command, a command that runs another): the target passes the macro's run() table too, so a
+    // command refused to macros (a file of the user's PC, the site's library, Recover, Undo…) is never reached this way
+    const refusal = S.lane && S.lane.cmd ? macroRefusalOf(c) : null;
+    if (refusal !== null) return Promise.reject(Object.assign(new Error('refused to macros: ' + c.id), { code: 'IJ_MACRO_OPTIONS', macroText: refusal }));
     // the command runs normally; only Repeat Command brings the dialogs back with the values of the last run
     REPEAT.next = REPEAT.run && REPEAT.run.id === REPEAT_CALLER ? { id, list: REPEAT.memory.get(id) || null, offered: REPEAT.offered.get(id) || null } : null;
     REPEAT.nested = !!REPEAT.run;
@@ -5924,6 +6151,15 @@ const IJApp = (() => {
     REPEAT.next = null;
     REPEAT.nested = false;
     return Promise.resolve(p);
+  }
+  /** The text that refuses command `c` to a macro (a class E entry of IJMacroCmds, or a command the run() table does not know), else null. */
+  function macroRefusalOf(c) {
+    const MC = typeof IJMacroCmds !== 'undefined' ? IJMacroCmds : null;
+    const e = MC && Object.prototype.hasOwnProperty.call(MC.MACRO_COMMANDS, c.id) ? MC.MACRO_COMMANDS[c.id] : null;
+    if (!e) return tr('err.macNotInBrowser', { name: tr(c.labelKey) });
+    if (e.cls !== 'E') return null;
+    if (e.later) return tr('err.macFileLater', { name: e.name });
+    return tr('err.macRefused', { command: e.name, reason: tr(e.refuse) });
   }
   const lastCommandExt = () => (S.lastCommand ? { id: S.lastCommand } : null);
 
@@ -5934,6 +6170,11 @@ const IJApp = (() => {
     const spec = reg && typeof reg.getCommand === 'function' && typeof cmd === 'string' ? reg.getCommand(cmd) : null;
     if (!pkg || !spec || spec.pkg !== pkg) throw forbidden('call: ' + String(cmd) + ' is not a worker command of package ' + String(pkg));
     if (S.failedPackages.has(pkg)) throw Object.assign(new Error('package failed'), { code: 'IJ_MODULE_MISSING' });
+    // a passive command (the macro bridge's reply) answers at once: no busy state, no progress, nothing re-read
+    if (spec.passive === true) {
+      if (pkg !== 'macro') throw forbidden('call: ' + cmd + ' is a passive command, reserved to package macro');
+      return call(cmd, args || {}, opt.transfer);
+    }
     const label = opt.labelKey ? tr(opt.labelKey) : tr('op.working');
     const out = await busy(label, () => call(cmd, args || {}, opt.transfer, { long: opt.long === true || spec.long === true }));
     // a worker command that committed an undo step on an open image (E.commitPlanes) answers { docId, changed }: the page re-reads that image's info (undo depth)
@@ -6189,6 +6430,572 @@ const IJApp = (() => {
     selected() { const out = []; S.roiList.forEach((r, i) => { if (S.roiSelected.has(r)) out.push(i); }); return out; }
   });
 
+  // ───────────────────────────── macros: api.macro (DOCS/studio-advanced/macros/INTEGRATION.md §2.2 – §2.5, §2.8, §4.4) ─────────────────────────────
+  // The page side of a macro run: the lane (S.lane) a run holds, the bridge that runs a Studio command for a macro's run("…") with its
+  // dialogs answered from the options string, and the page state a macro reads (the mirror) and writes. Only package `macro` gets it.
+
+  /** IJ.setupDialog / PlugInFilterRunner's test of a word in a macro's options (IJMacroOptions.hasWord: "word " in the normalised string). */
+  function macroOptionWord(options, word) {
+    const MO = typeof IJMacroOptions !== 'undefined' ? IJMacroOptions : null;
+    if (MO && word === 'stack' && typeof MO.setupDialogStack === 'function') return !!MO.setupDialogStack(options);
+    if (MO && typeof MO.hasWord === 'function') return !!MO.hasWord(options, word);
+    return typeof options === 'string' && (options + ' ').indexOf(word + ' ') >= 0;
+  }
+  /** ImageJ's id of an image (getImageID): -1, -2, … in the order the page first met each image; never reused in a mount. */
+  function ijIdOf(docId) {
+    let v = S.ijIds.get(docId);
+    if (v === undefined) { v = -(++S.ijSeq); S.ijIds.set(docId, v); }
+    return v;
+  }
+  function docOfIjId(n) {
+    for (const [id, v] of S.ijIds) if (v === n) return S.docs.has(id) ? id : null;
+    return null;
+  }
+
+  // ── tables (Table = INTEGRATION.md §4.5) ──
+  const V1_HEADERS = new Set(COLUMNS.concat(PARTICLE_COLUMNS).map((c) => c[1]).concat(['Ch', 'Slice', 'Frame']));
+  const tableCell = (v) => (v === undefined || v === null ? null : (typeof v === 'number' || typeof v === 'string' ? v : String(v)));
+  /** The revision of the Results table: a new one whenever S.results is another array or another length (every mutation reassigns it). */
+  function resultsRev() {
+    const s = S.resultsSeen;
+    if (!s || s.arr !== S.results || s.len !== S.results.length) S.resultsSeen = { arr: S.results, len: S.results.length, rev: ++S.tableSeq };
+    return S.resultsSeen.rev;
+  }
+  function resultsTable() {
+    const rows = S.results;
+    const cols = resultColumnsOf(rows);
+    const headings = [], columns = {};
+    for (const k of cols) {
+      if (k === 'Label') continue;
+      const head = columnHeader(k);
+      if (Object.prototype.hasOwnProperty.call(columns, head)) continue;
+      headings.push(head);
+      columns[head] = rows.map((r) => tableCell(r[k]));
+    }
+    const labels = cols.includes('Label') ? rows.map((r) => (r.Label === undefined || r.Label === null ? null : String(r.Label))) : null;
+    return { name: 'Results', size: rows.length, headings, columns, labels, rev: resultsRev() };
+  }
+  function checkTable(t, what) {
+    if (!t || typeof t !== 'object' || !Array.isArray(t.headings) || !t.columns || typeof t.columns !== 'object' || !Number.isInteger(t.size) || t.size < 0) throw extError(what + ': table');
+    const seen = new Set();
+    for (const head of t.headings) {
+      if (typeof head !== 'string' || !head || head === 'Label' || seen.has(head)) throw extError(what + ': heading');
+      seen.add(head);
+      const col = t.columns[head];
+      if (!Array.isArray(col) || col.length !== t.size || !col.every((v) => v === null || typeof v === 'string' || (typeof v === 'number'))) throw extError(what + ': column ' + head);
+    }
+    if (t.labels !== null && t.labels !== undefined && (!Array.isArray(t.labels) || t.labels.length !== t.size || !t.labels.every((v) => v === null || typeof v === 'string'))) throw extError(what + ': labels');
+  }
+  function tableCopy(t, name, rev) {
+    const columns = {};
+    for (const head of t.headings) columns[head] = t.columns[head].slice();
+    return { name, size: t.size, headings: t.headings.slice(), columns, labels: t.labels ? t.labels.slice() : null, rev };
+  }
+  /** The Results rows of a Table: a heading goes back to the row key whose header it is (a v1 header is its own key, a package column
+   *  its declared key), a heading the table already has stays, anything else is a macro-made column 'mac:<heading>'. */
+  function resultsReplace(t) {
+    checkTable(t, 'results.replace');
+    const existing = new Set();
+    for (const r of S.results) for (const k of Object.keys(r)) existing.add(k);
+    const keyOf = (head) => {
+      const extra = EXTRA_COLUMNS.find((c) => c[1] === head);
+      if (extra) return extra[0];
+      if (V1_HEADERS.has(head) || existing.has(head)) return head;
+      return 'mac:' + head;
+    };
+    const keys = t.headings.map(keyOf);
+    const rows = [];
+    for (let i = 0; i < t.size; i++) {
+      const r = {};
+      if (t.labels && t.labels[i] !== null && t.labels[i] !== undefined) r.Label = t.labels[i];
+      t.headings.forEach((head, j) => { const v = t.columns[head][i]; if (v !== null && v !== undefined) r[keys[j]] = v; });
+      rows.push(r);
+    }
+    S.results = rows;
+    ANA.sel.clear();
+    scheduleToolRefresh('results');
+    scheduleMetaPersist();
+    refreshUi();
+  }
+  function tableRows(t) {
+    const out = [];
+    for (let i = 0; i < t.size; i++) out.push((t.labels ? [t.labels[i] === null ? '' : t.labels[i]] : []).concat(t.headings.map((head) => t.columns[head][i])));
+    return out;
+  }
+  function showMacroTable(name) {
+    const t = S.macroTables.get(name);
+    if (!t) return false;
+    const old = S.macroTableWins.get(name);
+    if (old && old.close) { try { old.close(); } catch (_) { /* gone */ } }
+    const win = openTable(name, (t.labels ? ['Label'] : []).concat(t.headings), tableRows(t));
+    if (win) S.macroTableWins.set(name, win);
+    return !!win;
+  }
+  function tableName(name) {
+    if (typeof name !== 'string' || !name || name.length > 255) throw extError('tables: name');
+    return name;
+  }
+  const emptyTable = () => ({ size: 0, headings: [], columns: {}, labels: null });
+  const tablesApi = Object.freeze({
+    list: () => Array.from(S.macroTables.keys()),
+    get(name) {
+      if (name === 'Results') return resultsTable();
+      const t = S.macroTables.get(name);
+      return t ? tableCopy(t, name, t.rev) : null;
+    },
+    replace(name, table) {
+      tableName(name);
+      if (name === 'Results') { resultsReplace(table); return; }
+      checkTable(table, 'tables.replace');
+      S.macroTables.set(name, tableCopy(table, name, ++S.tableSeq));
+      if (S.macroTableWins.has(name)) showMacroTable(name);
+    },
+    remove(name) {
+      tableName(name);
+      if (name === 'Results') { resultsReplace(emptyTable()); return; }
+      S.macroTables.delete(name);
+      const w = S.macroTableWins.get(name);
+      S.macroTableWins.delete(name);
+      if (w && w.close) { try { w.close(); } catch (_) { /* gone */ } }
+    },
+    // IJ.renameResults: a table moves to another name (Results included at either end)
+    rename(from, to) {
+      tableName(from); tableName(to);
+      if (from === to) return;
+      const t = from === 'Results' ? resultsTable() : S.macroTables.get(from);
+      if (!t) throw extError('tables.rename: ' + from);
+      tablesApi.remove(from);
+      tablesApi.replace(to, t);
+    },
+    show(name) {
+      tableName(name);
+      if (name === 'Results') { openTool('results'); return true; }
+      return showMacroTable(name);
+    }
+  });
+
+  // ── thresholds, settings, measurements, colours ──
+  function needChannel(docId, c, what) {
+    const info = needDoc(docId);
+    if (!Number.isInteger(c) || c < 0 || c >= (info.rgb ? 1 : Math.max(1, (info.channels || []).length))) throw extError(what + ': channel');
+    return info;
+  }
+  /** The Threshold window, when it holds this image and channel (S.threshold is its current range). */
+  const windowHolds = (docId, c) => !!(S.wins.has('threshold') && S.threshold && S.threshold.docId === docId && S.threshold.channel === c);
+  const thresholdsApi = Object.freeze({
+    get(docId, c) {
+      const info = needChannel(docId, c, 'thresholds.get');
+      return thresholdFor(info, c);
+    },
+    set(docId, c, v) {
+      needChannel(docId, c, 'thresholds.set');
+      const lower = Number(v && v.lower), upper = Number(v && v.upper);
+      if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower > upper) throw extError('thresholds.set: range');
+      const dark = !!(v && v.dark);
+      setThrEntry(docId, c, { lower, upper, dark }, 'macro');
+      const u = S.winUpdaters.get('threshold');
+      if (windowHolds(docId, c) && u) u('setRange', { lower, upper, dark });
+      drawThresholdOverlays();
+    },
+    reset(docId, c) {
+      needChannel(docId, c, 'thresholds.reset');
+      dropThrEntry(docId, c);
+      const u = S.winUpdaters.get('threshold');
+      if (windowHolds(docId, c) && u) u('reset');
+      drawThresholdOverlays();
+    }
+  });
+  function thresholdModeExt(mode) {
+    if (mode !== 'red' && mode !== 'bw' && mode !== 'overunder') throw extError('thresholdMode: mode');
+    S.thrMode = mode;
+    const u = S.winUpdaters.get('threshold');
+    if (u) u('setMode', mode);
+  }
+  const macroSettingsApi = Object.freeze({
+    get(key) {
+      if (MACRO_SETTING_KEYS.indexOf(key) < 0) throw forbidden('macro settings: ' + String(key));
+      return settingGet(key);
+    },
+    set(key, value) {
+      if (MACRO_SETTING_KEYS.indexOf(key) < 0) throw forbidden('macro settings: ' + String(key));
+      writeSetting(key, value);
+    }
+  });
+  const measurementsApi = Object.freeze({
+    get: () => ({ groups: S.measurements.slice(), decimals: anaDecimals() }),
+    set(o) {
+      if (!o || typeof o !== 'object') throw extError('measurements.set');
+      if (o.groups !== undefined) {
+        if (!Array.isArray(o.groups) || !o.groups.every((g) => typeof g === 'string' && MEASURE_GROUPS[g])) throw extError('measurements.set: groups');
+        S.measurements = Array.from(new Set(o.groups));
+        saveMeasurements();
+      }
+      if (o.decimals !== undefined) {
+        if (!Number.isInteger(o.decimals) || o.decimals < 0 || o.decimals > 9) throw extError('measurements.set: decimals');
+        writeSetting('ana.decimals', o.decimals);
+      }
+      scheduleToolRefresh('results');
+      scheduleMetaPersist();
+      refreshUi();
+    }
+  });
+  const COLOR_WHICH = ['foreground', 'background', 'selection'];
+  const colorsApi = Object.freeze({
+    get() {
+      const out = {};
+      for (const w of COLOR_WHICH) out[w] = parseColorValue(settingGet('colors.' + w)) || (w === 'background' ? [0, 0, 0] : (w === 'foreground' ? [255, 255, 255] : [255, 255, 0]));
+      return out;
+    },
+    set(o) {
+      if (!o || typeof o !== 'object') throw extError('colors.set');
+      for (const w of COLOR_WHICH) {
+        if (o[w] === undefined) continue;
+        const c = o[w];
+        if (!Array.isArray(c) || c.length !== 3 || !c.every((x) => Number.isInteger(x) && x >= 0 && x <= 255)) throw extError('colors.set: ' + w);
+        // Colors.colorToString: the name of a named colour, else #rrggbb
+        let name = null;
+        for (const [n, v] of Object.entries(COLOR_NAMES)) if (v[0] === c[0] && v[1] === c[1] && v[2] === c[2]) { name = n; break; }
+        writeSetting('colors.' + w, name || '#' + c.map((x) => (x < 16 ? '0' : '') + x.toString(16)).join(''));
+      }
+      scheduleToolRefresh('display');
+    }
+  });
+
+  // ── the mirror: the page state a macro reads, sent with the run and after every request (INTEGRATION.md §4.4) ──
+  function mirrorImage(id, info) {
+    const d = S.dstate.get(id);
+    const cal = info.calibration || {};
+    const num0 = (v, dflt) => (typeof v === 'number' && Number.isFinite(v) ? v : dflt);
+    const nC = info.rgb ? 1 : Math.max(1, (info.channels || []).length);
+    const sd = stackDims(info);
+    return {
+      docId: id, id: ijIdOf(id), title: info.name, width: info.width, height: info.height,
+      bitDepth: typeof info.bitDepthIJ === 'number' ? info.bitDepthIJ : (info.rgb ? 24 : info.bitDepth),
+      nC, nZ: sd.nZ, nT: sd.nT, hyperstack: !!info.hyperstack, rgb: !!info.rgb, hidden: S.hidden.has(id), ephemeral: !!info.ephemeral,
+      changes: isDirty(id), mode: d ? d.mode : (info.mode || 'composite'), active: S.activeCh.get(id) || 0, pos: positionOf(id),
+      visible: d ? d.visible.slice() : (info.visible || []).slice(),
+      calibration: { pixelWidth: num0(cal.pixelWidth, 1), pixelHeight: num0(cal.pixelHeight, 1), pixelDepth: num0(cal.pixelDepth, 1), unit: typeof cal.unit === 'string' && cal.unit ? cal.unit : 'pixel',
+        xOrigin: num0(cal.xOrigin, 0), yOrigin: num0(cal.yOrigin, 0), zOrigin: num0(cal.zOrigin, 0), frameInterval: num0(cal.frameInterval, 0), fps: num0(cal.fps, 0),
+        timeUnit: typeof cal.timeUnit === 'string' && cal.timeUnit ? cal.timeUnit : 'sec' },
+      display: (d ? d.channels : (info.channels || []).map((c) => c.display || {})).map((c) => ({ min: c.min, max: c.max, lut: typeof c.lut === 'string' ? c.lut : null, invert: !!c.invert }))
+    };
+  }
+  /** An identity of the ROI Manager's content: each entry, its selection object and its fields (selections are replaced, never edited in place). */
+  const rmIds = new WeakMap();
+  let rmSeq = 0;
+  const rmIdOf = (o) => { if (!o || typeof o !== 'object') return String(o); let v = rmIds.get(o); if (v === undefined) { v = ++rmSeq; rmIds.set(o, v); } return v; };
+  function roiManagerKey() {
+    const parts = [];
+    for (const r of S.roiList) parts.push(rmIdOf(r) + ':' + rmIdOf(r.roi) + ':' + rmIdOf(r.position) + ':' + r.docId + ':' + r.name + ':' + r.stroke + ':' + r.width + ':' + r.fill);
+    return parts.join('|');
+  }
+  function macroMirror() {
+    const lane = S.lane;
+    const images = [];
+    const selections = {};
+    const thresholds = {};
+    for (const id of S.order) {
+      const info = S.docs.get(id);
+      if (!info) continue;
+      images.push(mirrorImage(id, info));
+      const roi = selOf(id);
+      selections[id] = roi ? cloneRoiPlain(roi) : null;
+    }
+    for (const [id, m] of S.thresholds) {
+      if (!S.docs.has(id)) continue;
+      const o = {};
+      for (const [c, e] of m) o[c] = { lower: e.lower, upper: e.upper, dark: !!e.dark };
+      thresholds[id] = o;
+    }
+    const tables = {};
+    const send = (name, rev, make) => {
+      if (lane && lane.sentTables.get(name) === rev) tables[name] = { same: true };
+      else { tables[name] = make(); if (lane) lane.sentTables.set(name, rev); }
+    };
+    send('Results', resultsRev(), resultsTable);
+    for (const [name, t] of S.macroTables) send(name, t.rev, () => tableCopy(t, name, t.rev));
+    const ext = S.shell && S.shell.layout && typeof S.shell.layout.extent === 'function' ? S.shell.layout.extent() : null;
+    // the ROI Manager's list goes once per change, as the tables do: `same: true` = the list this lane last received (a list of thousands of
+    // polygons cloned into every reply stalled the page at each request)
+    const rmKey = roiManagerKey();
+    const rm = { selected: roiManagerApi.selected(), showAll: !!S.showAll, labels: !!roiLabels };
+    if (lane && lane.sentRm === rmKey) rm.same = true;
+    else { rm.list = roiManagerApi.list(); if (lane) lane.sentRm = rmKey; }
+    return {
+      images, current: S.activeId, selections,
+      roiManager: rm,
+      tables, thresholds,
+      thresholdWindow: S.wins.has('threshold') && S.threshold ? { docId: S.threshold.docId, channel: S.threshold.channel, mode: S.thrMode } : null,
+      settings: MACRO_SETTING_KEYS.reduce((o, k) => { o[k] = settingGet(k); return o; }, {}),
+      measurements: measurementsApi.get(), colors: colorsApi.get(),
+      lineWidth: S.lineWidth, tool: S.tool,
+      workspace: { width: ext ? ext.w : 0, height: ext ? ext.h : 0 }
+    };
+  }
+
+  // ── images ──
+  async function macroSelectImage(docId) {
+    needDoc(docId);
+    if (S.hidden.has(docId)) { S.activeId = docId; scheduleToolRefresh('doc'); return; }
+    await showDoc(docId);
+  }
+  async function macroCloseImages(docIds) {
+    if (!Array.isArray(docIds)) throw extError('closeImages: ids');
+    const closed = [];
+    for (const id of docIds) {
+      if (!S.docs.has(id)) continue;
+      await closeImage(id, { noAsk: true });
+      if (!S.docs.has(id)) closed.push(id);
+    }
+    return closed;
+  }
+  async function macroShowImages(docIds) {
+    if (!Array.isArray(docIds)) throw extError('showImages: ids');
+    let last = null;
+    for (const id of docIds) {
+      const info = S.docs.get(id);
+      if (!info) continue;
+      if (info.ephemeral || S.hidden.has(id)) {
+        const res = await call('doc.persist', { docId: id });
+        if (res && res.info) S.docs.set(id, res.info);
+        S.hidden.delete(id);
+      }
+      refreshView(id);
+      last = id;
+    }
+    if (last !== null) await showDoc(last);
+    syncWindowMenu();
+  }
+  async function macroAdopt(docId) {
+    const fresh = await call('doc.info', { docId });
+    if (!S.docs.has(docId)) registerDoc(fresh, { clean: false });
+    else S.docs.set(docId, fresh);
+    if (!fresh.hidden) await showDoc(docId);
+    commitHook();
+    return ijIdOf(docId);
+  }
+
+  // ── the run ──
+  /** Stops the run: the macro.run request and every page-side long request are cancelled (the run ends, then its lane). */
+  function macroAbort() {
+    if (!S.lane) return;
+    cancelRunning();
+  }
+  async function macroStart(o) {
+    const opt = o || {};
+    if (S.lane) throw Object.assign(new Error('a macro is running'), { code: 'IJ_MACRO_BUSY' });
+    if (S.failedPackages.has('macro')) throw Object.assign(new Error('package failed'), { code: 'IJ_MODULE_MISSING' });
+    if (!S.worker || S.worker.dead) throw Object.assign(new Error('worker is down'), { code: 'IJ_WORKER_CRASHED' });
+    if (typeof opt.runId !== 'string' || !opt.runId) throw extError('macro.start: runId');
+    // the operator's own long step still runs (its progress line and Cancel button stay its own; a run's commands would race it)
+    const stepBusy = () => Object.assign(new Error('a step is running'), { code: 'IJ_MACRO_STEP_BUSY' });
+    if (S.busy) throw stepBusy();
+    // a floating paste is committed before the run reads the page
+    await flushPending();
+    if (S.lane) throw Object.assign(new Error('a macro is running'), { code: 'IJ_MACRO_BUSY' });
+    if (S.busy) throw stepBusy();
+    const lane = { runId: opt.runId, reqId: 0, ctrl: new AbortController(), paused: 0, cmd: null, cmdDone: null, sentTables: new Map(), startedAt: Date.now(),
+      born: new Set(), label: '', fraction: null, ended: false };
+    S.lane = lane;
+    laneProgress(null);
+    refreshUi();
+    let result = null, error = null;
+    try {
+      const args = {
+        runId: lane.runId, source: String(opt.source === undefined || opt.source === null ? '' : opt.source), name: opt.name ? String(opt.name) : 'Macro',
+        arg: opt.arg === undefined || opt.arg === null ? '' : String(opt.arg), mirror: macroMirror(),
+        log: Array.isArray(opt.log) ? opt.log.slice() : [], texts: opt.texts && typeof opt.texts === 'object' ? opt.texts : {},
+        prefs: opt.prefs && typeof opt.prefs === 'object' ? opt.prefs : {},
+        options: Object.assign({ fastPath: true, syncLoops: false, syncRecursion: false }, opt.options && typeof opt.options === 'object' ? opt.options : {})
+      };
+      const p = call('macro.run', args, [], { long: true });
+      lane.reqId = p.reqId;
+      result = await p;
+    } catch (err) { error = err; }
+    await laneEnd(lane, result);
+    if (error) throw error;
+    return result;
+  }
+  /**
+   * The end of a run (normal, error, abort, crash): its signal aborts (open dialogs close), the batch images nobody showed are closed
+   * (ImageJ's Interpreter.finishUp), the images it changed are read again, an active image that is gone or hidden gives way to the shown
+   * one, the page meta it held back is written, the progress line goes.
+   */
+  async function laneEnd(lane, result) {
+    if (lane.ended) return;
+    lane.ended = true;
+    try { lane.ctrl.abort(); } catch (_) { /* aborted */ }
+    if (lane.cmdDone) await Promise.race([lane.cmdDone.catch(() => {}), new Promise((r) => setTimeout(r, 2000))]);
+    const alive = () => !!(S.worker && !S.worker.dead && S.lane === lane);
+    try {
+      if (alive()) {
+        let list = [];
+        try { list = ((await call('doc.list', {})) || {}).docs || []; } catch (err) { console.error('[advanced-studio] macro end', err); }
+        for (const info of list) {
+          if (!info || !info.ephemeral) continue;
+          if (S.docs.has(info.docId)) await closeImage(info.docId, { noAsk: true });
+          else { try { await call('doc.close', { docId: info.docId, discard: true }); } catch (err) { console.error('[advanced-studio] macro end', err); } }
+        }
+        const changed = new Set([].concat(result && Array.isArray(result.changedDocs) ? result.changedDocs : [], result && result.undo && Array.isArray(result.undo.changed) ? result.undo.changed : []));
+        for (const id of changed) {
+          if (!S.docs.has(id)) continue;
+          try { await refreshInfo(id); if (S.shell) S.shell.updateInfo(viewInfo(id)); } catch (err) { console.error('[advanced-studio] macro end', err); }
+        }
+        if (S.activeId === null || !S.docs.has(S.activeId) || S.hidden.has(S.activeId)) {
+          const la = S.shell && S.shell.layout && typeof S.shell.layout.active === 'function' ? S.shell.layout.active() : null;
+          const shown = shownDocs();
+          const next = la !== null && la !== undefined && S.docs.has(la) && !S.hidden.has(la) ? la : (shown.length ? shown[shown.length - 1] : null);
+          S.activeId = null;
+          if (next !== null) await showDoc(next);
+          else if (S.shell) showEmpty();
+        }
+      }
+    } finally {
+      if (S.lane === lane) S.lane = null;
+      // an operator step still running (started while the run waited for him) keeps its progress line
+      if (S.shell) S.shell.setProgress(S.busy ? { fraction: null, label: S.busyLabel, cancellable: true } : null);
+      if (S.persistDue) { S.persistDue = false; persistMeta(); }
+      syncWindowMenu();
+      scheduleToolRefresh('doc');
+    }
+  }
+  /** Teardown without a worker to ask (unmount, release, crash): the run is told to stop and the lane is gone at once. */
+  function laneTeardown() {
+    const lane = S.lane;
+    if (!lane) return;
+    lane.ended = true;
+    try { lane.ctrl.abort(); } catch (_) { /* aborted */ }
+    S.lane = null;
+    S.persistDue = false;
+  }
+
+  /**
+   * run("…") of a macro (INTEGRATION.md §2.4): the Studio command `name` on the macro's current image, its dialogs answered from
+   * `options` (null = shown to the operator). → { status, text, current, created, closed }; never rejects, never opens a modal.
+   */
+  async function runMacroCommand(name, options, o) {
+    const opt = o || {};
+    const lane = S.lane;
+    const out = (status, text, extra) => Object.assign({ status, text: text || '', current: S.activeId === undefined ? null : S.activeId, created: [], closed: [] }, extra || {});
+    if (!lane) return out('refused', tr('err.macBusy'));
+    const MO = typeof IJMacroOptions !== 'undefined' ? IJMacroOptions : null;
+    const MC = typeof IJMacroCmds !== 'undefined' ? IJMacroCmds : null;
+    if (!MO || !MC) return out('refused', tr('err.macNotInBrowser', { name: String(name) }));
+    if (lane.cmd) return out('refused', tr('err.macBusy'));
+    const nm = String(name);
+    try {
+      const opts = MO.normalize(options === undefined ? null : options);
+      const r = MC.resolve(nm);
+      if (!r) return out('unrecognized', 'Unrecognized command: "' + nm + '"');
+      if (r.refuse) {
+        const p = r.refuse.params || {};
+        return out('refused', tr(r.refuse.key, Object.assign({}, p, p.reasonKey ? { reason: tr(p.reasonKey) } : null)));
+      }
+      const c = COMMANDS.find((x) => x.id === r.id);
+      if (!c || c.dynamic) return out('unrecognized', 'Unrecognized command: "' + nm + '"');
+      if (c.pkg && S.failedPackages.has(c.pkg)) return out('disabled', tr('warn.packageFailed', { pkg: c.pkg }));
+      const target = opt.current !== undefined && opt.current !== null && S.docs.has(opt.current) ? opt.current : S.activeId;
+      if (target !== null && target !== undefined && target !== S.activeId && S.docs.has(target)) {
+        if (S.hidden.has(target)) S.activeId = target; else await showDoc(target);
+      }
+      const st = Object.assign(snapshot(), { busy: false });
+      let enabled = false;
+      try { enabled = !!c.enabled(st); } catch (_) { enabled = false; }
+      if (!enabled) {
+        if (!st.doc) return out('disabled', MC.NO_IMAGE_TEXT);
+        if (r.entry && r.entry.noopWhenDisabled === true) return out('ok', '');
+        return out('disabled', (r.entry && r.entry.disabledText) || tr('err.macDisabled', { command: nm }));
+      }
+      const before = new Set(S.docs.keys());
+      const rw = Array.isArray(opt.rgbWeights) && opt.rgbWeights.length === 3 && opt.rgbWeights.every((x) => typeof x === 'number' && Number.isFinite(x)) ? opt.rgbWeights.slice() : null;
+      const cmdRec = { id: c.id, name: nm, options: opts, interactive: opts === null, vars: opt.vars && typeof opt.vars === 'object' ? opt.vars : {}, entry: r.entry || null,
+        dialogs: 0, error: null, cancelled: false, docId: S.activeId, rgbWeights: rw };
+      lane.cmd = cmdRec;
+      const exec = (async () => {
+        await flushPending();
+        // the dialogs of this run are numbered for the options (REPEAT.run) but never remembered: Repeat Command repeats the operator's command
+        const outer = REPEAT.run;
+        const rec = { id: c.id, list: [], offered: [], k: 0, replay: null, replayOffered: null, done: false };
+        REPEAT.next = null;
+        REPEAT.run = rec;
+        try {
+          const ret = await c.run(c.ext ? apiFor(c.pkg) : API, { alt: !!opt.alt, shift: !!opt.shift, source: 'macro' });
+          // Image Calculator without `create`: the worker copies the result back into image 1 (RunReply.inPlace)
+          if (ret && typeof ret === 'object' && ret.macroInPlace && typeof ret.macroInPlace === 'object') cmdRec.inPlace = ret.macroInPlace;
+        } catch (err) { laneRecord(err); }
+        finally { rec.done = true; if (REPEAT.run === rec) REPEAT.run = outer && !outer.done ? outer : null; }
+      })();
+      lane.cmdDone = exec;
+      try { await exec; } finally { if (lane.cmd === cmdRec) lane.cmd = null; if (lane.cmdDone === exec) lane.cmdDone = null; }
+      const created = S.order.filter((id) => S.docs.has(id) && !before.has(id));
+      const closed = Array.from(before).filter((id) => !S.docs.has(id));
+      const current = created.length ? created[created.length - 1] : (target !== null && target !== undefined && S.docs.has(target) ? target : (S.activeId === undefined ? null : S.activeId));
+      const extra = { created, closed, current };
+      if (cmdRec.cancelled) return out('cancelled', 'Macro canceled', extra);
+      if (cmdRec.error) {
+        const e = cmdRec.error;
+        return out('failed', e && e.code === 'IJ_MACRO_OPTIONS' ? String(e.macroText || '') : errorText(e), extra);
+      }
+      if (cmdRec.inPlace) extra.inPlace = cmdRec.inPlace;
+      return out('ok', '', extra);
+    } catch (err) {
+      console.error('[advanced-studio] macro run(' + nm + ')', err);
+      return out('failed', errorText(err));
+    }
+  }
+
+  /** close("B&C") / close("Threshold") / …: closes a built-in tool window (bc channels threshold results roiManager) → was it open? */
+  function macroCloseTool(id) {
+    if (!Object.prototype.hasOwnProperty.call(TOOL_WINDOWS, id)) return false;
+    const w = S.wins.get(id);
+    if (!w) return false;
+    w.close();
+    return true;
+  }
+
+  const MACRO_API = Object.freeze({
+    start: macroStart,
+    abort: macroAbort,
+    running: () => (S.lane ? { runId: S.lane.runId, paused: S.lane.paused > 0 } : null),
+    signal: () => (S.lane ? S.lane.ctrl.signal : null),
+    pause: () => lanePause(),
+    // the first error a page method reported while serving the current request (then cleared), else null
+    takeError: () => { if (!S.lane) return null; const e = S.lane.rpcError || null; S.lane.rpcError = null; return e; },
+    runCommand: runMacroCommand,
+    closeTool: macroCloseTool,
+    mirror: macroMirror,
+    ijId: (docId) => ijIdOf(docId),
+    docOf: (n) => docOfIjId(n),
+    selectImage: macroSelectImage,
+    closeImages: macroCloseImages,
+    showImages: macroShowImages,
+    adopt: macroAdopt,
+    results: Object.freeze({ get: resultsTable, replace: resultsReplace }),
+    tables: tablesApi,
+    thresholds: thresholdsApi,
+    thresholdMode: thresholdModeExt,
+    settings: macroSettingsApi,
+    measurements: measurementsApi,
+    colors: colorsApi,
+    roiManagerShow(o) {
+      S.showAll = !!(o && o.showAll);
+      roiLabels = !!(o && o.labels);
+      refreshRois();
+      scheduleToolRefresh('rois');
+    },
+    setVisible(docId, visible) {
+      const info = needDoc(docId);
+      if (!Array.isArray(visible) || visible.length !== (info.channels || []).length) throw extError('setVisible: one flag per channel');
+      setDocDisplayMode(docId, { visible: visible.map((v) => !!v) });
+    },
+    status: (text) => setStatus(text === undefined || text === null ? '' : String(text)),
+    progress(fraction) {
+      if (!S.lane) return;
+      S.lane.fraction = typeof fraction === 'number' && Number.isFinite(fraction) ? clamp(fraction, 0, 1) : null;
+      if (!S.lane.label) laneProgress(null);
+    }
+  });
+
   const EXT_API = Object.freeze({
     tr: (key, params) => tr(key, params),
     state: stateForApi,
@@ -6258,7 +7065,7 @@ const IJApp = (() => {
         call: (cmd, args, o) => callExt(pkg, cmd, args, o),
         settings: Object.freeze({ get: settingGet, set: (k, v) => settingSet(pkg, k, v) }),
         sessionData: Object.freeze({ get: (p) => sessionDataGet(pkg, p), set: (p, j) => sessionDataSet(pkg, p, j) })
-      }));
+      }, pkg === 'macro' ? { macro: MACRO_API } : null));
       API_BY_PKG.set(key, a);
     }
     return a;
@@ -6446,6 +7253,15 @@ const IJApp = (() => {
   }
 
   async function canLeave(reason) {
+    if (S.lane) {
+      // a macro runs: stop it first (and wait a moment for its end), or stay
+      const a = await ask({ title: tr('dlg.mac.leaveTitle'), message: tr('dlg.mac.leaveMessage'),
+        options: [{ id: 'stop', label: tr('dlg.mac.leaveStop'), primary: true }, { id: 'cancel', label: tr('dlg.cancel') }], dismissId: 'cancel' });
+      if (a !== 'stop') return false;
+      macroAbort();
+      const t0 = Date.now();
+      while (S.lane && Date.now() - t0 < 2000) await new Promise((r) => setTimeout(r, 20));
+    }
     if (reason === 'simple') { S.leaving = 'simple'; return true; }
     const dirty = dirtyDocs();
     let keep = false;
@@ -6488,7 +7304,8 @@ const IJApp = (() => {
       return;
     }
     if (S.leaving === 'simple' && S.shell) {
-      // Hidden, not torn down: the worker and the documents keep running.
+      // Hidden, not torn down: the worker and the documents keep running; a macro run is stopped (its end follows from the worker's answer)
+      if (S.lane) { macroAbort(); try { S.lane.ctrl.abort(); } catch (_) { /* aborted */ } }
       S.mounted = false;
       endPreview();
       // A modal left open would keep swallowing the keyboard of the Simple view.
@@ -6509,6 +7326,13 @@ const IJApp = (() => {
 
   function dispose() {
     S.mounted = false;
+    // a macro run is told to stop and its lane is gone at once (its start() rejects: the worker is going)
+    if (S.lane) {
+      macroAbort();
+      laneTeardown();
+      const w0 = S.worker;
+      if (w0) for (const [id, e] of Array.from(w0.pending)) if (e.cmd === 'macro.run') { w0.pending.delete(id); e.reject(Object.assign(new Error('closed'), { code: 'IJ_CANCELLED' })); }
+    }
     // a floating paste still pending owns a timer and blob refs: its own cancel stops them (before the worker goes)
     cancelPending();
     REPEAT.run = null; REPEAT.next = null; REPEAT.nested = false;
@@ -6542,13 +7366,14 @@ const IJApp = (() => {
     // the extension state belongs to the session that is gone (listeners are dropped here, not when the Simple view merely hides the page)
     S.listeners.clear(); S.annot.clear(); S.annotDims.clear(); S.hidden.clear(); S.pending = null; S.lastCommand = null; S.extData = {}; S.luts.clear();
     S.sync = { cursor: true, imageCoords: true, scaling: false, docs: new Set() }; S.syncing = false; S.metaWarned = false; S.lastActiveEmitted = null; S.engineUsed = 0;
+    S.thresholds.clear(); S.thrOverlays.clear(); S.macroTables.clear(); S.macroTableWins.clear(); S.ijIds.clear(); S.ijSeq = 0; S.resultsSeen = null; S.persistDue = false; S.lane = null;
     S.leaving = null; S.busy = false; S.unprotected.clear(); S.held.clear(); S.warnBudget = ''; S.warnLow = false;
   }
 
   return {
     mount, unmount, release, canLeave, hasUnsavedWork,
     COMMANDS, TOOLS, LUT_NAMES, ERROR_KEYS, MEASURE_GROUPS,
-    extend, EXT_API_MEMBERS, apiFor, WORKER_SCRIPTS, PACKAGE_NAMES, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
+    extend, EXT_API_MEMBERS, apiFor, WORKER_SCRIPTS, PACKAGE_NAMES, PACKAGE_PRE, MACRO_SETTING_KEYS, GROUP_META, ORDER, EXTRA_COLUMNS, resultColumnsOf, columnHeader,
     // pure helpers, exposed for tests
     imageSizeString, planLevels, mapRange, mvox, projectionProgress, outputBitDepth, bcMath, measurementKeys, errorKey, snapshotOf: (st) => st, workerInit, distributionHistogram, distributionDefaultColumn, COLUMNS, PARTICLE_COLUMNS
   };

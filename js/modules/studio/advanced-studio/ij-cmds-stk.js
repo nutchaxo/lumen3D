@@ -308,7 +308,15 @@
     const params = { columns: Math.trunc(v.columns), rows: Math.trunc(v.rows), scale: Number(v.scale), first: clampInt(v.first, 1, n), last: clampInt(v.last, 1, n), inc: Math.max(1, Math.trunc(v.increment)), border: Math.max(0, Math.trunc(v.border)) };
     if (v.useForeground) {
       const lum = (rgb) => Math.round((rgb[0] + rgb[1] + rgb[2]) / 3);
-      const rgbOf = (key, dflt) => FG_NAMES[String(api.settings.get(key) || '').toLowerCase()] || dflt;
+      // a named colour, or the #rrggbb a macro's setForegroundColor stores
+      const rgbOf = (key, dflt) => {
+        const k = String(api.settings.get(key) || '').trim().toLowerCase();
+        if (FG_NAMES[k]) return FG_NAMES[k];
+        const m = /^#?([0-9a-f]{6})$/.exec(k);
+        if (!m) return dflt;
+        const n = parseInt(m[1], 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      };
       params.fg = lum(rgbOf('colors.foreground', [255, 255, 255])); params.bg = lum(rgbOf('colors.background', [0, 0, 0]));
     }
     const res = await api.run('stkMontage', params, { docId: info.docId, noRoi: true, labelKey: 'op.stkMontage', placement: 'tab' });
@@ -335,9 +343,10 @@
     if (!info) return;
     const r = await api.compute('stkStats', { rgbWeighted: api.settings.get('conv.weighted') === true }, { docId: info.docId, labelKey: 'op.stkStats' });
     if (!r) return;
-    const row = { voxels: r.voxels, pctVolume: r.percentVolume, mean: r.mean, stdDev: r.stdDev, min: r.min, max: r.max, mode: r.mode };
+    // the statistics columns carry the Results headings of the measurement columns (Mean, StdDev …), as Analyze › Measure's rows do
+    const row = { voxels: r.voxels, pctVolume: r.percentVolume, Mean: r.mean, StdDev: r.stdDev, Min: r.min, Max: r.max, Mode: r.mode };
     if (r.calibrated) row.volume = r.volume;
-    if (r.median !== null && r.median !== undefined) row.median = r.median;
+    if (r.median !== null && r.median !== undefined) row.Median = r.median;
     api.addResults([row]);
   }
 
@@ -378,7 +387,7 @@
     if (docs.length < 2) { api.toast('err.stkNeedTwoImages'); return; }
     const opts = docs.map((d) => ({ value: d.docId, label: d.name }));
     const many = Math.min(docs.length + 1, 8);
-    const fields = [check('all', 'all', 'dlg.stk.allOpen', false)];
+    const fields = [check('all', 'all_open', 'dlg.stk.allOpen', false)];
     for (let i = 0; i < many; i++) {
       const isLast = i >= docs.length;
       fields.push(choice('image' + (i + 1), 'image' + (i + 1), 'dlg.stk.image', i < 2 ? docs[i].docId : 'none',
@@ -430,7 +439,7 @@
     const note = { type: 'message', id: 'hint', labelKey: 'dlg.stk.rangeHint' };
     const fields = multi
       ? [note, str('channels', 'channels', 'dlg.stk.channelsField', '1-' + d.nC), str('slices', 'slices', 'dlg.stk.slicesField', '1-' + d.nZ), str('frames', 'frames', 'dlg.stk.framesField', '1-' + d.nT)]
-      : [note, str('slices', 'slices', 'dlg.stk.slicesField', ''), check('delete', 'delete', 'dlg.stk.deleteOrig', false), check('do', 'do', 'dlg.stk.noCreate', false)];
+      : [note, str('slices', 'slices', 'dlg.stk.slicesField', ''), check('delete', 'delete', 'dlg.stk.deleteOrig', false), check('do', 'do_not', 'dlg.stk.noCreate', false)];
     const v = await api.dialog({ title: api.tr(multi ? 'dlg.stk.subsetTitle' : 'dlg.stk.substackTitle'), okLabel: OK(api), fields });
     if (!v) return;
     const params = multi ? { channels: String(v.channels), slices: String(v.slices), frames: String(v.frames) } : { slices: String(v.slices).trim() };
@@ -611,7 +620,7 @@
     { id: 'stackZProfile', menu: STK, order: 110, enabled: stackIdle, run: zProfile },
     { id: 'stackMeasure', menu: STK, order: 120, long: true, enabled: stackIdle, run: measureStack },
     { id: 'stackLabel', menu: STK, order: 130, enabled: idle, run: labelStack },
-    { id: 'stackStatistics', menu: STK, order: 140, enabled: stackIdle, run: stackStatistics },
+    { id: 'stackStatistics', menu: STK, order: 140, enabled: idle, run: stackStatistics },
 
     { id: 'stackStartAnimation', menu: ANIM, order: 10, shortcut: '\\', keys: ['\\'], enabled: stackIdle, run: toggleAnimation },
     { id: 'stackStopAnimation', menu: ANIM, order: 20, enabled: stackIdle, run: stopAnimation },

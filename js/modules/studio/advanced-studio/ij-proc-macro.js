@@ -4379,7 +4379,7 @@
     IJMacro.define('str', 'debug', function* (f) { yield* skipArgs(f); f.interp.error(runOf(f).tr('err.macDebug')); return ''; },
       { suspends: false, sync(f) { skipArgs$s(f); f.interp.error(runOf(f).tr('err.macDebug')); return ''; } });
 
-    // eval(code) runs macro code in a nested interpreter of the same run; eval("js"|"script"|"bsh"|"python", …) is refused
+    // the macro function eval with code runs macro code in a nested interpreter of the same run; eval with "js", "script", "bsh" or "python" is refused
     IJMacro.define('str', 'eval', function* (f) {
       const it = f.interp;
       it.getLeftParen();
@@ -4391,7 +4391,7 @@
       return yield* runNested(f, name, arg);
     }, { suspends: true });
   }
-  /* The nested interpreter of eval(): IJ.runMacro (Macro_Runner) shares the run's context, so the same lane and undo group. */
+  /* The nested interpreter of the macro eval: IJ.runMacro (Macro_Runner) shares the run's context, so the same lane and undo group. */
   function* runNested(f, code, arg) {
     const IJMacro = LANG();
     const outer = f.interp;

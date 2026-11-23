@@ -121,7 +121,11 @@ for (const [id, e] of Object.entries(T)) {
   seen.set(e.name, id);
 }
 
-// ── IJ.convert, verbatim from ij/IJ.java 1.54p
+// ── IJ.convert, verbatim from ij/IJ.java 1.54p: the committed extract tests/fixtures/ij-macro/ij-convert.json, itself checked
+// against the source when the (gitignored) ImageJ sources are present
+const convert = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'ij-macro', 'ij-convert.json'), 'utf8')).table;
+assert.ok(Object.keys(convert).length > 50);
+assert.deepEqual(J(C.IJ_CONVERT), convert, 'IJ_CONVERT = IJ.convert of 1.54p');
 const ijJava = path.join(ROOT, 'DOCS', 'studio-advanced', 'macros', 'ij-src', 'ij', 'IJ.java');
 if (fs.existsSync(ijJava)) {
   const src = fs.readFileSync(ijJava, 'utf8');
@@ -129,9 +133,8 @@ if (fs.existsSync(ijJava)) {
   const unq = (s) => s.replace(/\\(.)/g, '$1');
   const table = {};
   for (const m of body.matchAll(/commandTable\.put\("((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\)/g)) table[unq(m[1])] = unq(m[2]);
-  assert.ok(Object.keys(table).length > 50);
-  assert.deepEqual(J(C.IJ_CONVERT), table, 'IJ_CONVERT = IJ.convert of 1.54p');
-} else console.log('SKIP ij/IJ.java absent: IJ_CONVERT not compared with the source');
+  assert.deepEqual(convert, table, 'ij-convert.json = IJ.convert of ij/IJ.java');
+}
 
 // ── resolve
 const R = (n) => J(C.resolve(n));

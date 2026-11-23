@@ -50,11 +50,16 @@ test('the operations of the swept packages and the engine write `stack` and `rgb
 });
 
 // ── SWEEP.md ──
-const doc = fs.readFileSync(path.join(ROOT, 'DOCS', 'studio-advanced', 'stacks', 'SWEEP.md'), 'utf8');
-const rows = new Map();
-for (const line of doc.split('\n')) {
-  const m = /^\| `(\w+)` \| (\w+) \| (\w+) \| `(\w+)` \| `(\w+)` \|/.exec(line);
-  if (m) rows.set(m[1], { pkg: m[2], kind: m[3], stack: m[4], rgb: m[5] });
+// the table is committed as tests/fixtures/ij-stacks/sweep-registry.json; SWEEP.md (gitignored) must agree with it when present
+const rows = new Map(Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'ij-stacks', 'sweep-registry.json'), 'utf8')).rows));
+const sweepDoc = path.join(ROOT, 'DOCS', 'studio-advanced', 'stacks', 'SWEEP.md');
+if (fs.existsSync(sweepDoc)) {
+  const docRows = {};
+  for (const line of fs.readFileSync(sweepDoc, 'utf8').split('\n')) {
+    const m = /^\| `(\w+)` \| (\w+) \| (\w+) \| `(\w+)` \| `(\w+)` \|/.exec(line);
+    if (m) docRows[m[1]] = { pkg: m[2], kind: m[3], stack: m[4], rgb: m[5] };
+  }
+  assert.deepEqual(Object.fromEntries(rows), docRows, 'sweep-registry.json = the table of SWEEP.md');
 }
 
 test('SWEEP.md lists the operations, with the kind, stack and rgb the registry has', () => {

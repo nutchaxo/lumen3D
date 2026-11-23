@@ -1,0 +1,1 @@
+a=newArray(1,2);b=a;b[0]=9;Array.print(a);

@@ -87,10 +87,13 @@
     {
       id: 'procImageCalculator', menu: ['Process'], order: 100, separatorBefore: true, long: true,
       enabled: (st) => idle(st),
-      async run(api) {
+      async run(api, o) {
         const st = api.state();
         const docs = docsOf(st);
         if (!docs.length) return;
+        // ImageJ changes image 1 unless "Create new window" is ticked; the operator's command always opens the result as a new image,
+        // a macro gets ImageJ's behaviour (the macro runtime copies the result back into image 1)
+        const mac = !!(o && o.source === 'macro');
         const byId = new Map(docs.map((d) => [d.docId, d]));
         const count = (id) => nChan(byId.get(id));
         const sameCount = (v) => count(v.image1) === count(v.image2) && count(v.image1) > 1;
@@ -104,12 +107,13 @@
             { type: 'check', id: 'allChannels', labelKey: 'dlg.allChannels', value: true, visibleIf: (x) => sameCount(x) },
             { type: 'channel', id: 'channel1', docField: 'image1', labelKey: 'dlg.multi.channel1', visibleIf: (x) => count(x.image1) > 1 && !(sameCount(x) && x.allChannels) },
             { type: 'channel', id: 'channel2', docField: 'image2', labelKey: 'dlg.multi.channel2', value: 0, visibleIf: (x) => count(x.image2) > 1 && !(sameCount(x) && x.allChannels) },
+            ...(mac ? [{ type: 'check', id: 'create', labelKey: 'dlg.multi.create', value: false }] : []),
             { type: 'check', id: 'float32', labelKey: 'dlg.multi.float32', value: false },
             {
               type: 'message', id: 'sizeNote', labelKey: 'dlg.multi.sizeNote',
               visibleIf: (x) => { const a = byId.get(x.image1), b = byId.get(x.image2); return !!(a && b && (a.width !== b.width || a.height !== b.height)); }
             },
-            { type: 'message', id: 'newWindowNote', labelKey: 'dlg.multi.newWindowNote' }
+            { type: 'message', id: 'newWindowNote', labelKey: 'dlg.multi.newWindowNote', visibleIf: () => !mac }
           ]
         });
         if (!v) return;
@@ -119,12 +123,29 @@
         const pick = (c, id) => (Number.isInteger(c) && c >= 0 && c < count(id) ? c : 0);
         const params = { op: v.op, float32: !!v.float32, all };
         if (!all) { params.channel1 = pick(v.channel1, id1); params.channel2 = pick(v.channel2, id2); }
+        // ImageCalculator.calculate on a stack: "Process all N images?" (Yes / No / Cancel, no sentence about Undo — the result is a new image). Image 2 is a single
+        // image or a stack of the same length; a hyperstack is processed whole, it asks nothing. A macro answers with the word `stack` (params.stack).
+        const a = byId.get(id1), b = byId.get(id2);
+        const planesOf = (d) => (d && d.nZ ? d.nZ * d.nT : 1);
+        if (a && planesOf(a) > 1) {
+          if (planesOf(b) > 1 && planesOf(b) !== planesOf(a)) { const err = new Error('stack depth'); err.code = 'IJ_CALC_STACKS'; throw err; }
+          const dimAware = !!a.hyperstack || nChan(a) > 1;
+          const answer = dimAware ? 'all' : await api.askStack({ docId: id1, stack: v.stack });
+          if (answer === null) return;
+          if (answer === 'all') params.slices = 'all';
+        }
         // Edit > Options > Misc. "Divide by zero value:" (FloatBlitter.divideByZeroValue): carried only when it is not the default, so
         // a journal written without it replays as before
         const dz = api.settings.get('misc.divZero');
         if (v.op === 'divide' && typeof dz === 'string' && dz.trim().toLowerCase() !== 'infinity') params.divZero = dz;
         // the result opens beside the images it was made from (PLAN-wave3 §2.3)
-        await api.run('imageCalculator', params, { docId: id1, docIds: id1 === id2 ? [id1] : [id1, id2], noRoi: true, labelKey: 'op.imageCalculator', placement: 'splitRight' });
+        const res = await api.run('imageCalculator', params, { docId: id1, docIds: id1 === id2 ? [id1] : [id1, id2], noRoi: true, labelKey: 'op.imageCalculator', placement: 'splitRight' });
+        // ImageCalculator.calculate: a 32-bit result of images that are not both 32-bit always opens in a new window
+        const forcedNew = !!v.float32 && !(a && b && a.bitDepth === 32 && b.bitDepth === 32 && !a.rgb && !b.rgb);
+        if (mac && !v.create && !forcedNew && res && Array.isArray(res.newDocIds) && res.newDocIds.length) {
+          return { macroInPlace: { docId: id1, resultId: res.newDocIds[0], all, channel1: all ? 0 : params.channel1, slices: params.slices === 'all' ? 'all' : null } };
+        }
+        return undefined;
       }
     },
     {
@@ -140,8 +161,11 @@
     {
       id: 'colorMergeChannels', menu: ['Image', 'Color'], order: 20, long: true,
       enabled: (st) => !!st && !st.busy && docsOf(st).filter((d) => nChan(d) === 1).length >= 1,
-      async run(api) {
+      async run(api, o) {
         const st = api.state();
+        // RGBStackMerge closes the source images unless "Keep source images" is ticked; the operator's command always keeps them, a macro
+        // gets ImageJ's behaviour
+        const mac = !!(o && o.source === 'macro');
         // RGBStackMerge: "Source hyperstacks cannot have more than 1 channel": only single-channel images are offered.
         const docs = docsOf(st).filter((d) => nChan(d) === 1);
         if (docs.length < 1) return;
@@ -149,8 +173,10 @@
         const initial = initialSources(docs);
         const options = [{ value: 'none', labelKey: 'dlg.multi.none' }].concat(docs.map((d) => ({ value: d.docId, label: d.name })));
         const fields = SLOT_LABEL_KEYS.map((labelKey, i) => ({ type: 'choice', id: 'c' + (i + 1), labelKey, options, value: initial[i] === null ? 'none' : initial[i] }));
-        fields.push({ type: 'check', id: 'ignoreLuts', labelKey: 'dlg.multi.ignoreLuts', value: false });
-        fields.push({ type: 'message', id: 'mergeNote', labelKey: 'dlg.multi.mergeNote' });
+        fields.push({ type: 'check', id: 'createComposite', ijKey: 'create', labelKey: 'dlg.multi.createComposite', value: true });
+        if (mac) fields.push({ type: 'check', id: 'keep', ijKey: 'keep', labelKey: 'dlg.multi.keep', value: false });
+        fields.push({ type: 'check', id: 'ignoreLuts', ijKey: 'ignore', labelKey: 'dlg.multi.ignoreLuts', value: false });
+        if (!mac) fields.push({ type: 'message', id: 'mergeNote', labelKey: 'dlg.multi.mergeNote' });
         const chosen = (x) => { const out = []; SLOT_LABEL_KEYS.forEach((k, i) => { const id = x['c' + (i + 1)]; if (id !== undefined && id !== 'none') out.push({ docId: id, slot: i }); }); return out; };
         const v = await api.dialog({
           title: api.tr('dlg.multi.mergeTitle'), okLabel: api.tr('dlg.ok'), fields,
@@ -161,7 +187,8 @@
             for (const s of src) {
               const d = byId.get(s.docId);
               if (d.width !== first.width || d.height !== first.height) return { ['c' + (s.slot + 1)]: 'dlg.multi.sizeMismatch' };
-              if (d.bitDepth !== first.bitDepth) return { ['c' + (s.slot + 1)]: 'dlg.multi.depthMismatch' };
+              // ImageJ: "The source images must have the same bit depth" only when a composite is made; an RGB merge converts each source
+              if (x.createComposite !== false && d.bitDepth !== first.bitDepth) return { ['c' + (s.slot + 1)]: 'dlg.multi.depthMismatch' };
             }
             return null;
           }
@@ -170,7 +197,9 @@
         const sources = chosen(v);
         const ids = [];
         for (const s of sources) if (ids.indexOf(s.docId) < 0) ids.push(s.docId);
-        await api.run('mergeChannels', { sources, ignoreLuts: !!v.ignoreLuts }, { docId: sources[0].docId, docIds: ids, noRoi: true, labelKey: 'op.mergeChannels', placement: 'splitRight' });
+        const res = await api.run('mergeChannels', { sources, ignoreLuts: !!v.ignoreLuts, rgb: v.createComposite === false }, { docId: sources[0].docId, docIds: ids, noRoi: true, labelKey: 'op.mergeChannels', placement: 'splitRight' });
+        // "if (!keep) { imp.changes = false; imp.close(); }" for each source (a macro answers the unsaved question with discard)
+        if (mac && !v.keep && res && Array.isArray(res.newDocIds) && res.newDocIds.length) for (const id of ids) await api.closeDoc(id);
       }
     },
     {
@@ -234,6 +263,7 @@
       IJ_MULTI_SINGLE_CHANNEL: 'err.multiSingleChannel',
       IJ_MULTI_NOT_SINGLE: 'err.multiNotSingle',
       IJ_MULTI_DEPTH_MISMATCH: 'err.multiDepthMismatch',
+      IJ_CALC_STACKS: 'err.calcStacks',
       IJ_MULTI_NEED_TWO: 'err.multiNeedTwo',
       IJ_MULTI_TOO_MANY: 'err.multiTooMany'
     }

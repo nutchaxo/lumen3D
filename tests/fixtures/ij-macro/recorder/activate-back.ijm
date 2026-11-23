@@ -1,0 +1,2 @@
+selectImage("b");
+selectImage("a");

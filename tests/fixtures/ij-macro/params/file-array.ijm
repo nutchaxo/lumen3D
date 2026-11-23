@@ -1,0 +1,2 @@
+#@ File[] fs
+print(fs);

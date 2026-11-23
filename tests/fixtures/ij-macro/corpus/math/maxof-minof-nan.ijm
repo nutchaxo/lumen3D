@@ -1,0 +1,1 @@
+print(maxOf(NaN,1));print(minOf(1,NaN));print(maxOf(-0,0));

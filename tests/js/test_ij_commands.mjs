@@ -68,9 +68,12 @@ const pj = readJson('plugin.json');
 assert.equal(pj.id, 'advanced-studio');
 assert.equal(pj.placement, 'studio');
 assert.deepEqual(pj.i18nLanguages, LANGS);
-// PLAN-wave3 §2.8: the final order — the 17 packages (7 of wave 2, 9 tool packages, the library), the view, the layout, the controller, the commands
-const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib'];
-assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => `ij-proc-${k}.js`), 'ij-view.js', 'ij-layout.js', 'ij-app.js',
+// PLAN-wave3 §2.8: the final order — the 19 packages (7 of wave 2, 9 tool packages, the library, the stacks, the macros), the run() bridge
+// tables (ij-macro-cmds.js, DOCS/studio-advanced/macros/INTEGRATION.md §1.2), the view, the layout, the controller, the commands
+const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
+// the macro package's virtual file system (FILES.md §10.1) loads on the page right before ij-proc-macro.js; the #@ parser and the Recorder
+// right after the macro command table (EXTRAS.md §2)
+assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => (k === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${k}.js`])).flat(), 'ij-macro-cmds.js', 'ij-macro-params.js', 'ij-macro-rec.js', 'ij-view.js', 'ij-layout.js', 'ij-app.js',
   ...PKGS.map((k) => `ij-cmds-${k}.js`)], 'plugin.json#scripts: the final order');
 for (const f of pj.scripts) assert.ok(existsSync(path.join(DIR, f)), `${f} exists`);
 same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...PKGS.map((k) => `ij-proc-${k}.js`)],
@@ -78,8 +81,8 @@ same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js',
 assert.deepEqual(pj.styles, ['ij-style.css']);
 assert.deepEqual(pj.contexts, ['page']);
 // ctx.studio.library and api/tiff-index arrived with the core 1.86.0; the deferred, stamped plugin loading of 1.87.1 keeps a
-// host's page boot under its burst limit with this plugin's file count
-assert.ok(pj.platformCompat.includes('1.87.1'));
+// host's page boot under its burst limit with this plugin's file count; 1.3.0 (stacks) ships with the core 1.88.0
+assert.ok(pj.platformCompat.includes('1.88.0'));
 
 // ── lang parity ──
 const enKeys = leafKeys(lang.en);
@@ -339,8 +342,9 @@ for (const m of SRC.matchAll(/labelKey: '([a-zA-Z0-9_.]+)'/g)) used.add(m[1]);
 // The package files: tr('…') / api.tr('…'), labelKey / stepKey, tick(…, 'op.x'), 'op.' + name. Their keys live in the
 // namespaces cmd. op. menu. meas. tool. res. err. dlg.<prefix>. — or are keys the base dictionaries already hold.
 const PREFIX = { bg: 'bg', filters: 'flt', seg: 'seg', multi: 'multi', geom: 'geom', roi: 'roi', coloc: 'coloc', thr: 'thr', enh: 'enh', fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana',
-  edit: 'edit', fiji: 'fiji', lib: 'lib' };
+  edit: 'edit', fiji: 'fiji', lib: 'lib', stk: 'stk', macro: 'mac' };
 // PLAN-wave3 §1.3: the packages may also use the keys of warnings, the About box and the shell's menu names
+const MACRO_WRITE_OPS = (() => { const m = /const WRITE_OPS = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(readFileSync(path.join(DIR, 'ij-proc-macro.js'), 'utf8')); return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : []; })();
 const NAMESPACES = ['cmd.', 'op.', 'menu.', 'meas.', 'tool.', 'res.', 'err.', 'warn.', 'about.', 'view.menu.'];
 for (const f of [...CMD_FILES, ...PROC_FILES]) {
   const pkg = /^ij-(?:cmds|proc)-([a-z0-9]+)\.js$/.exec(f)[1];
@@ -353,6 +357,8 @@ for (const f of [...CMD_FILES, ...PROC_FILES]) {
   // unitsKey, option labels... (comments are dropped first).
   const code = text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '')).join('\n');
   for (const m of code.matchAll(/'((?:cmd|op|menu|meas|tool|res|err|warn|about|view\.menu|dlg\.[a-z]+)\.[A-Za-z0-9_.]*[A-Za-z0-9_])'/g)) keys.add(m[1]);
+  // the macro write-op names (IJMacroProto.WRITE_OPS, e.g. 'tool.set') are protocol literals, not lang keys
+  if (pkg === 'macro') for (const op of MACRO_WRITE_OPS) keys.delete(op);
   for (const k of keys) {
     const ok = NAMESPACES.some((n) => k.startsWith(n)) || k.startsWith('dlg.' + PREFIX[pkg] + '.') || resolve(baseLang.en, k) !== undefined;
     assert.ok(ok, `${f}: key ${k} is outside the namespaces a package may use`);
@@ -484,9 +490,11 @@ for (const m of createCall[1].matchAll(/(?:^|[\s,{])(commands|getState|t|tools|o
 assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW), 'the shell exposes its windows');
 
 // ── the error codes the controller maps are codes the engine / pure modules really throw ──
-const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
+const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-macro-math.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
 // IJ_SIZE_MISMATCH is mapped by W0 for the packages that compare two images (Image Calculator, Coloc): they throw it.
-const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH', 'IJ_PICTURE_TOO_LARGE']); // the client raises its own crash code; File › Open of a picture (ij-app.js) raises the other
+// the client raises its own crash code; File › Open of a picture (ij-app.js) raises the other; pickFile / saveFile inside a command a macro
+// started raise IJ_MACRO_FILE_DIRECT (ij-app.js, FILES.md §9.4)
+const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH', 'IJ_PICTURE_TOO_LARGE', 'IJ_MACRO_FILE_DIRECT']);
 for (const code of Object.keys(IJApp.ERROR_KEYS)) {
   if (!code.startsWith('IJ_') || PACKAGE_THROWN.has(code)) continue;
   assert.ok(CODE_SRC.includes(`'${code}'`), `ERROR_KEYS maps ${code}, which no engine module throws`);
@@ -507,7 +515,7 @@ assert.ok(/--ij-warn-text/.test(CSS) && /\[data-theme="light"\] \.ij-root\s*\{[^
   const orderOf = Object.fromEntries(COMMANDS.map((c) => [c.id, c]));
   const want = { fileClose: ['File', 20], fileOpen: ['File', 10], fileRevert: ['File', 30], fileRecover: ['File', 40], fileSimple: ['File', 60], fileCloseStudio: ['File', 70],
     editMakeInverse: ['Edit/Selection', 100], editAddToManager: ['Edit/Selection', 240], editSelectAll: ['Edit/Selection', 10], editSelectNone: ['Edit/Selection', 20], editRestoreSelection: ['Edit/Selection', 30],
-    stackProject: ['Image/Stacks', 20], lutInvert: ['Image/LookupTables', 10], lutApply: ['Image/LookupTables', 20], lutFire: ['Image/LookupTables', 30], lutGrays: ['Image/LookupTables', 40],
+    stackProject: ['Image/Stacks', 100], lutInvert: ['Image/LookupTables', 10], lutApply: ['Image/LookupTables', 20], lutFire: ['Image/LookupTables', 30], lutGrays: ['Image/LookupTables', 40],
     lutIce: ['Image/LookupTables', 50], lutSpectrum: ['Image/LookupTables', 60], lutRed: ['Image/LookupTables', 80], lutGreen: ['Image/LookupTables', 90], lutBlue: ['Image/LookupTables', 100],
     lutCyan: ['Image/LookupTables', 110], lutMagenta: ['Image/LookupTables', 120], lutYellow: ['Image/LookupTables', 130], lut16Colors: ['Image/LookupTables', 150], lutHiLo: ['Image/LookupTables', 160],
     toolsRoiManager: ['Analyze/Tools', 50], toolsSyncWindows: ['Analyze/Tools', 80],

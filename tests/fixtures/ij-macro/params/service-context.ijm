@@ -1,0 +1,2 @@
+#@ Context ctx
+print("ok");

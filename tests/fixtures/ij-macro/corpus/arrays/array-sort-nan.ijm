@@ -1,0 +1,1 @@
+a=newArray(3,NaN,1);Array.sort(a);Array.print(a);

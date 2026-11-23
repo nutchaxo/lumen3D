@@ -1,0 +1,1 @@
+List.fromArrays(newArray("k1","k2"),newArray("v1",3));print(List.get("k2"));print(List.size);

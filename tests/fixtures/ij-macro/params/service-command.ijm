@@ -1,0 +1,2 @@
+#@ CommandService cs
+print("ok");

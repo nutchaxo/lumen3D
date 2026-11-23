@@ -1,0 +1,11 @@
+newImage("img", "8-bit ramp", 16, 16, 1);
+run("Tiff...", "path=[{ROOT}a.dat]");
+print("title " + getTitle());
+run("PNG...", "path=[{ROOT}b.dat]");
+print("title " + getTitle());
+run("Jpeg...", "path=[{ROOT}c.dat]");
+print("title " + getTitle());
+run("ZIP...", "path=[{ROOT}d.dat]");
+print("title " + getTitle());
+run("Raw Data...", "path=[{ROOT}e.bin]");
+print("title " + getTitle());

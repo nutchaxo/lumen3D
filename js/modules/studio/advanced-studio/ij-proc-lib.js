@@ -912,7 +912,9 @@
     function calibrationOf(E, c) {
       if (c === undefined || c === null) return { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' };
       if (typeof c !== 'object' || !(c.pixelWidth > 0) || !(c.pixelHeight > 0) || !Number.isFinite(c.pixelWidth) || !Number.isFinite(c.pixelHeight)) throw bad(E, 'calibration');
-      return { pixelWidth: c.pixelWidth, pixelHeight: c.pixelHeight, unit: typeof c.unit === 'string' ? c.unit.slice(0, 64) : 'pixel' };
+      const cal = { pixelWidth: c.pixelWidth, pixelHeight: c.pixelHeight, unit: typeof c.unit === 'string' ? c.unit.slice(0, 64) : 'pixel' };
+      if (Number.isFinite(c.pixelDepth) && c.pixelDepth > 0) cal.pixelDepth = c.pixelDepth;      // the z step of a stack
+      return cal;
     }
     const plain = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : {});
     const checkMethod = (E, m) => { if (IJLibSource.METHODS.indexOf(m) < 0) throw bad(E, 'method'); return m; };
@@ -1080,6 +1082,121 @@
       return { info };
     } });
     define('doc.zproj.abort', { async handler(a) { return { dropped: live.delete(a && a.token) }; } });
+
+    // ---------------------------------------------------------------------------------------- doc.stack.*  /  doc.tiff.stack
+    /* The slices of a processed volume as a real z-stack (File › Open from Library, "Stack"): no projection, every plane kept.
+     * begin { width, height, depth, channels: [{ name, color }], name, calibration (pixelDepth = the z step, µm), provenance, sessionKey }
+     *   → { token, bytes }: the whole stack is reserved HERE (IJ_OVER_BUDGET before one byte is streamed);
+     * add { token, y0, rows, z0, depth, data: [Uint8Array per channel, depth × rows × width] } → { fraction };
+     * finish { token } → { info }; abort { token }. */
+    define('doc.stack.begin', { async handler(a, E) {
+      if (!a || typeof a !== 'object') throw bad(E, 'args');
+      for (const k of ['width', 'height', 'depth']) if (!isInt(a[k]) || a[k] < 1) throw bad(E, k);
+      if (!Array.isArray(a.channels) || !a.channels.length || a.channels.length > 64) throw bad(E, 'channels');
+      const calibration = calibrationOf(E, a.calibration);
+      const C = a.channels.length, plane = a.width * a.height;
+      const bytes = C * a.depth * plane;
+      E.reserve(bytes);
+      const planes = a.channels.map(() => Array.from({ length: a.depth }, () => new Uint8Array(plane)));
+      const token = newToken('s', { planes, filled: 0, total: a.height * a.depth,
+        a: { name: cleanName(a.name, 'stack'), width: a.width, height: a.height, depth: a.depth, calibration,
+          channels: a.channels.map((c, i) => ({ name: cleanName(c && c.name, 'C' + (i + 1)), color: hexColor(c && c.color) })),
+          provenance: plain(a.provenance), sessionKey: keyOfArgs(a) } });
+      return { token, bytes };
+    } });
+    define('doc.stack.add', { long: true, async handler(a, E) {
+      E.check();
+      const rec = tokenOf(E, a && a.token, 's');
+      const m = rec.a;
+      if (!isInt(a.y0) || !isInt(a.rows) || !isInt(a.z0) || !isInt(a.depth) || a.y0 < 0 || a.rows < 1 || a.y0 + a.rows > m.height || a.z0 < 0 || a.depth < 1 || a.z0 + a.depth > m.depth) throw bad(E, 'block');
+      if (!Array.isArray(a.data) || a.data.length !== m.channels.length) throw bad(E, 'data');
+      const n = a.rows * m.width;
+      a.data.forEach((data, c) => {
+        if (!data || !ArrayBuffer.isView(data) || data.BYTES_PER_ELEMENT !== 1 || data.length !== n * a.depth) throw bad(E, 'block size');
+        for (let z = 0; z < a.depth; z++) rec.planes[c][a.z0 + z].set(data.subarray(z * n, (z + 1) * n), a.y0 * m.width);
+      });
+      rec.filled += a.rows * a.depth;
+      return { fraction: Math.min(1, rec.filled / rec.total) };
+    } });
+    define('doc.stack.finish', { async handler(a, E) {
+      const rec = tokenOf(E, a && a.token, 's');
+      live.delete(a.token);
+      const m = rec.a;
+      const C = m.channels.length;
+      const info = E.createDoc({ name: m.name, width: m.width, height: m.height, bitDepth: 8, nZ: m.depth, nT: 1, hyperstack: C > 1 && m.depth > 1, calibration: m.calibration,
+        channels: m.channels.map((c, k) => ({ planes: rec.planes[k], name: c.name, color: c.color })) }, { provenance: m.provenance, sessionKey: m.sessionKey });
+      return { info };
+    } });
+    define('doc.stack.abort', { async handler(a) { return { dropped: live.delete(a && a.token) }; } });
+
+    /* The same, from an original TIFF: pages z0..z1 of the chosen channels read whole (several pages per Range request, IJTiffStream), every
+     * plane kept at the TIFF's bit depth. The stack is reserved before the first request. Progress: the event `libTiffProgress { fraction }`.
+     * args: { url, index, z0, z1, frame, channels: [{ c, name, color }], name, calibration, provenance, sessionKey, asChannels } */
+    define('doc.tiff.stack', { long: true, async handler(a, E) {
+      if (!a || typeof a !== 'object') throw bad(E, 'args');
+      if (typeof a.url !== 'string' || !/^[a-z][a-z0-9+.-]*:\/\/[^/]/i.test(a.url)) throw bad(E, 'url');
+      const plan = IJLibSource.planFor(a.index, !!a.asChannels);
+      const z0 = a.z0, z1 = a.z1, frame = a.frame === undefined ? 0 : a.frame;
+      if (!isInt(z0) || !isInt(z1) || z0 < 0 || z1 < z0 || z1 >= plan.slices) throw bad(E, 'z range');
+      if (!isInt(frame) || frame < 0 || frame >= plan.frames) throw bad(E, 'frame');
+      const nCh = plan.spp > 1 ? plan.spp : plan.channels;
+      if (!Array.isArray(a.channels) || !a.channels.length || a.channels.length > 64) throw bad(E, 'channels');
+      const chans = a.channels.map((c) => {
+        if (!c || !isInt(c.c) || c.c < 0 || c.c >= nCh) throw bad(E, 'channel');
+        return { c: c.c, name: cleanName(c.name, 'C' + (c.c + 1)), color: hexColor(c.color) };
+      });
+      const calibration = calibrationOf(E, a.calibration);
+      const C = chans.length, depth = z1 - z0 + 1, bps = plan.bitDepth / 8;
+      const fetchBytes = Math.min(FETCH_MAX, Math.max(4 * MIB, Math.floor((E.budgetBytes || 0) / 8)));
+      // the whole stack, one page of decoded samples and the fetch window: refused here, before a request is made
+      E.reserve(C * depth * plan.width * plan.height * bps + plan.width * plan.height * bps * (plan.spp + 1) + fetchBytes);
+      const Ctor = plan.bitDepth === 8 ? Uint8Array : plan.bitDepth === 16 ? Uint16Array : Float32Array;
+      const planes = chans.map(() => new Array(depth).fill(null));
+      const ac = typeof AbortController === 'function' ? new AbortController() : { signal: undefined, abort() {} };
+      let cancelled = false;
+      const watch = setInterval(() => { try { E.check(); } catch (err) { cancelled = true; ac.abort(); } }, 100);
+      let requests = 0, lastPct = -1, pagesDone = 0;
+      const targets = new Map(), entries = [];
+      const want = (page, t) => { if (!targets.has(page)) { targets.set(page, []); entries.push(page); } targets.get(page).push(t); };
+      for (let z = z0; z <= z1; z++) {
+        if (plan.chunky) { const page = IJTiffStream.pageOf(plan, { z, c: 0, t: frame }); chans.forEach((ch, k) => want(page, { z, ci: k, plane: ch.c })); }
+        else chans.forEach((ch, k) => want(IJTiffStream.pageOf(plan, { z, c: ch.c, t: frame }), { z, ci: k, plane: 0 }));
+      }
+      try {
+        const got = await IJTiffStream.readPages(a.url, plan, entries, {
+          concurrency: 2, signal: ac.signal, fetchImpl: (...args) => E.fetch(...args), maxBytes: Math.floor(fetchBytes / 2),
+          onPage: async (entry, bytes) => {
+            const list = targets.get(entry.page);
+            const decoded = await IJTiffStream.decodePage(plan, entry, bytes, { signal: ac.signal });
+            for (const t of list) {
+              const src = decoded[t.plane];
+              const own = src.byteOffset === 0 && src.byteLength === src.buffer.byteLength ? src : src.slice();
+              planes[t.ci][t.z - z0] = own instanceof Ctor ? own : new Ctor(own);
+            }
+            pagesDone++;
+            const frac = pagesDone / entries.length;
+            await E.tick(frac, 'op.libTiff');
+            const pct = Math.floor(100 * frac);
+            if (pct > lastPct) { lastPct = pct; E.postEvent({ event: 'libTiffProgress', fraction: frac }); }
+          }
+        });
+        requests += got.requests;
+        E.check();
+      } catch (err) {
+        if (cancelled || (err && err.name === 'AbortError')) throw E.ijError('IJ_CANCELLED', 'cancelled');
+        throw err;
+      } finally { clearInterval(watch); }
+      for (const list of planes) if (list.some((p) => !p)) throw E.ijError('IJ_LIB_TIFF_CORRUPT', 'a page was not delivered');
+      const channels = chans.map((ch, k) => {
+        const out = { planes: planes[k], name: ch.name, color: ch.color };
+        const lo = plan.ranges[ch.c * 2], hi = plan.ranges[ch.c * 2 + 1];
+        if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) out.display = { min: lo, max: hi, lut: root.IJLuts ? root.IJLuts.forColor(ch.color || '#ffffff') : null, invert: false };
+        return out;
+      });
+      const info = E.createDoc({ name: cleanName(a.name, 'TIFF'), width: plan.width, height: plan.height, bitDepth: plan.bitDepth, nZ: depth, nT: 1,
+        hyperstack: C > 1 && depth > 1, calibration, channels }, { provenance: plain(a.provenance), sessionKey: keyOfArgs(a) });
+      return { info, bitDepth: plan.bitDepth, requests };
+    } });
 
     // ---------------------------------------------------------------------------------------- doc.oblique.*
     /* begin { G, channels: [{ index, name, color }], name, calibration, provenance, sessionKey } → { token } (the handler checks what the

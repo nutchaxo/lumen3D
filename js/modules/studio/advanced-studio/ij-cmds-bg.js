@@ -65,25 +65,60 @@
     await api.run('subtractBackground', params(values), { docId: info.docId, channel: values.all ? 'all' : st.activeChannel, noRoi: true, labelKey: 'op.subtractBackground' });
   }
 
-  async function enhanceContrast(api) {
+  async function enhanceContrast(api, o) {
     const st = api.state();
     const info = st.doc;
     if (!info) return;
-    const composite = (info.channels || []).length > 1;
+    // an RGB image is three colour planes of ONE image, not a composite: it has the Normalize box and is remapped as a whole
+    const composite = (info.channels || []).length > 1 && !info.rgb;
     const roi = st.roi;
     const areaRoi = !!roi && !!AREA[roi.type] && !composite;
     const ch = st.activeChannel;
+    // ContrastEnhancer.showDialog on a stack ("if (composite) stackSize = 1"): "Process_all N slices" (not on a composite) and "Use stack histogram"
+    const d = typeof api.dims === 'function' ? api.dims(info.docId) : { nZ: 1, nT: 1 };
+    const nZ = d.nZ || 1, nT = d.nT || 1, stackSize = composite ? 1 : nZ * nT;
     const fields = [{ type: 'number', id: 'saturated', labelKey: 'dlg.bg.saturated', value: last.saturated, min: 0, max: 100, step: 0.1, decimals: 2, units: '%' }];
     if (!composite) fields.push({ type: 'check', id: 'normalize', labelKey: 'dlg.bg.normalize', value: false });
     if (areaRoi) fields.push({ type: 'check', id: 'entire', labelKey: 'dlg.bg.entire', value: false });
     fields.push({ type: 'check', id: 'equalize', labelKey: 'dlg.bg.equalize', value: last.equalize });
     fields.push({ type: 'check', id: 'classic', labelKey: 'dlg.bg.classic', value: false, enabledIf: (v) => !!v.equalize });
+    if (stackSize > 1) {
+      fields.push({ type: 'check', id: 'processAll', label: api.tr('dlg.bg.processAll', { n: stackSize }), value: false });
+      fields.push({ type: 'check', id: 'useStack', labelKey: 'dlg.bg.useStack', value: false });
+    }
+    // a macro's options may say normalize_all (ImageJ's former name of process_all)
     const v = await api.dialog({ title: api.tr('cmd.procEnhanceContrast'), okLabel: api.tr('dlg.ok'), fields });
     if (!v) return;
     last.saturated = Number(v.saturated);
     last.equalize = !!v.equalize;
-    const normalize = !composite && !!v.normalize;
+    const processAll = stackSize > 1 && !!v.processAll;
+    // "if (processStack && !equalize) normalize = true"
+    const normalize = !composite && (!!v.normalize || (processAll && !v.equalize));
     const maxValue = info.bitDepth === 32 ? 1 : info.bitDepth === 16 ? 65535 : 255;
+    if (stackSize > 1 && (v.useStack || (processAll && v.equalize))) {
+      // StackStatistics over every slice, and a stack equalised with the first slice's histogram, are not built in this version
+      const name = api.tr('cmd.procEnhanceContrast') + ' (' + api.tr(v.useStack ? 'dlg.bg.useStack' : 'dlg.bg.equalize') + ')';
+      const err = Object.assign(new Error('enhance contrast stack option'), { code: 'IJ_MACRO_OPTIONS', macroText: api.tr('err.macNotInBrowser', { name }) });
+      if (o && o.source === 'macro') throw err;
+      api.toast('err.macNotInBrowser', { name });
+      return;
+    }
+    if (processAll) {
+      // stretchHistogram over the stack: each slice with its own statistics, normalised (8 / 16 / 32-bit tables of enhanceNormalize)
+      for (let t = 0; t < nT; t++) {
+        for (let z = 0; z < nZ; z++) {
+          const range = await api.compute('saturatedRange', { saturated: Math.min(100, Math.max(0, Number(v.saturated))) },
+            { docId: info.docId, channel: ch, pos: { z, t }, labelKey: 'op.saturatedRange' });
+          if (!range) return;
+          if (!range.valid) continue;
+          const res = await api.run('enhanceNormalize', { min: range.min, max: range.max },
+            { docId: info.docId, channel: info.rgb ? 'all' : ch, noRoi: true, planes: { z: [z, z], t: [t, t] }, labelKey: 'op.enhanceNormalize' });
+          if (!res) return;
+        }
+      }
+      await api.setDisplay(info.docId, ch, { min: 0, max: maxValue });
+      return;
+    }
 
     if (v.equalize) {
       // ContrastEnhancer.equalize(imp): "Equalization of 32-bit images not supported."
@@ -111,7 +146,7 @@
     // updateSelectionOnly = areaRoi && !entireImage (&& normalize): only the selection is remapped on 8 / 16 bits;
     // a 32-bit image is always normalised whole (normalizeFloat loops over every pixel, applyTable is a no-op).
     const selectionOnly = areaRoi && !v.entire && info.bitDepth !== 32;
-    const res = await api.run('enhanceNormalize', { min: range.min, max: range.max }, { docId: info.docId, channel: ch, noRoi: !selectionOnly, labelKey: 'op.enhanceNormalize' });
+    const res = await api.run('enhanceNormalize', { min: range.min, max: range.max }, { docId: info.docId, channel: info.rgb ? 'all' : ch, noRoi: !selectionOnly, labelKey: 'op.enhanceNormalize' });
     if (!res) return;
     await api.setDisplay(info.docId, ch, { min: 0, max: maxValue }); // run(): ip.setMinAndMax(0, 1.0 | maxValue())
   }

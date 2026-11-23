@@ -1,0 +1,3079 @@
+{
+  "fiji": {
+    "imagej": "2.18.0",
+    "imagej-legacy": "3.0.0",
+    "scijava-common": "2.101.0",
+    "ij": "1.54p"
+  },
+  "generator": "tools/ij_fixtures/macro/ParamGolden.java",
+  "note": "headless Fiji (java.awt.headless=true); inputs given programmatically through ScriptService.run(file, true, inputs), the way a caller passes values without a dialog (runs with {} show the headless defaults); SciJava prefs cleared before each case. parsed.inputs[].label = ModuleItem.getLabel(), widgetLabel = what a dialog shows (DefaultWidgetModel.getWidgetLabel). runs[].log = what print wrote (stdout), error = the Macro Error text headless Fiji prints, warnings = SciJava's log lines. program = the tokenized program the IJ1 engine ran (see ParamGolden.dump); {DIR} = the folder of the case scripts. Input values: Java type in javaType; File paths print with backslashes because the capture ran on Windows",
+  "findings": ["Line 1 of the program starts with `var <names>; initializeSciJavaParameters();` before the script's own first line: every input name followed by a comma, even the last (tokens `var a , b , ;`), `var ;` when there is none (int-default, primitives, no-params, prefix-excerpt-none)", "Names are listed, and assigned, in java.util.HashMap iteration order of the input names (bucket = (h ^ h>>>16) & (capacity-1), h = String.hashCode, capacity 16 doubled past 0.75 load; insertion order within a bucket) - not declaration order (label-description, primitives, many-inputs)", "The `#@` lines are emptied in place (line numbers unchanged: error lines are source lines) (line-numbers, crlf, final-blank-lines)", "After the script: one line break when the script does not end with one, then a blank line, then `function initializeSciJavaParameters() {`, `call(\"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\");`, one `name = value;` line per input that has a value, `}` (int-default, no-final-newline, final-blank-lines)", "Values: numbers as the exact double (Integer 3 -> 3, Float 0.1f -> 0.1, Long/BigInteger as doubles; a negative value is `-` then the number); NaN -> NaN; Infinity -> the identifier Infinity, an `Undefined variable` error at its line (number-format, number-infinity, float-format, biginteger, number-big)", "Boolean -> true / false; String, Character, File (absolute path, OS separators), ColorRGB (`r,g,b`), Dataset (its title), services and other objects (their toString) -> a string literal holding the exact text (quote-escaping, quote-unicode-ctl, file-*, color, dataset, imgplus, service-ui)", "ImagePlus -> its image ID (a negative number); with no value given, the current image (imageplus); none open -> the run is canceled", "Inputs of visibility MESSAGE are declared and assigned like the others (vis-message); an input without a value (not required, not given) is declared but not assigned, so it reads 0 (required-false); `#@output` names are not declared", "A `#@` line SciJava cannot parse (no space between type and attributes before the name, `#@ script (`, an unknown type, an indented line) is left in the source: the IJ1 interpreter then stops with `Statement cannot begin with '#'` on that line; SciJava logs `[WARNING] Ignoring invalid parameter` (attr-spacing-1, script-header-space, unknown-type, attr-spacing-7)", "Attributes may follow the name (`#@ Integer n (value=3)`), spaces inside the parentheses are free, unknown attributes are ignored; a bare attribute value with a space makes the whole script invalid (attr-spacing-2/3/6, attr-unknown, attr-bare-values)", "Names that are not valid identifiers, and names of built-in macro functions or constants (print, getTitle, PI, log), are left out of the declaration and the assignments (name-with-dash, name-with-dot, name-builtin, service-log); a duplicate name keeps one declaration and the value given (duplicate-name); the script's own `var a = 7` runs after the injection and wins (own-var-collision), a later one does not (own-var-later)", "Headless with no value: a required input with a default gets it (or the persisted value); a required input with neither cancels the run before it starts, reason `'<name>' is required but unset.` (required-default-missing, imageplus-none, date, vis-message-noval)", "Persisted values are keyed by the input name only: another script with an input of that name gets it (persist-shared-name); persist=false is not loaded (persist-false); a value given programmatically is persisted too", "Min/max/choices are not enforced on a value given programmatically (int-min-max, string-choices-unknown); callback and initializer functions are not called (callback, initializer)", "Outputs: `#@output` / `#@both` values read after the run (Integer 3 -> 3, Double 2 -> 2.0, an array -> 0.0, never assigned -> null); without any output declared, `result` holds what a top-level `return \"text\"` returned (a number return is the macro error `Macros can only return strings`) (output-*, implicit-*)", "runMacro() of a file with `#@` lines does not process them: the child stops with `Statement cannot begin with '#'` on line 1 and the caller continues (nested-runmacro)", "Dialog label: the `label` attribute, else the name with its first letter upper-cased (`fooBar` -> `FooBar`); an empty label also falls back to the name (label-description)"],
+  "cases": {
+    "int-default": {
+      "source": "#@ Integer (value=5) n\nprint(n); print(n+1);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "5", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 3, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3", "4"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["3", "4"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ; print ( n + 1.0 ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 3.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "int-min-max": {
+      "source": "#@ Integer (min=1, max=10, value=3) n\nprint(n);\n",
+      "note": "Fiji does not clamp a value given programmatically",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": "1", "max": "10", "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "3", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 7, "javaType": "java.lang.Integer"}
+          },
+          "log": ["7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {
+            "n": {"value": 42, "javaType": "java.lang.Integer"}
+          },
+          "log": ["42"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 7.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "int-slider": {
+      "source": "#@ Integer (style=\"slider\", min=0, max=100, stepSize=5, value=20) n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": "slider", "min": "0", "max": "100", "softMin": null, "softMax": null, "stepSize": "5.0", "choices": null, "columns": 6, "rows": null, "value": "20", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 35, "javaType": "java.lang.Integer"}
+          },
+          "log": ["35"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 35.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "int-spinner": {
+      "source": "#@ Integer (style=\"spinner\", min=-5, max=5) n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": "spinner", "min": "-5", "max": "5", "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": -2, "javaType": "java.lang.Integer"}
+          },
+          "log": ["-2"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = - 2.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "int-scrollbar": {
+      "source": "#@ Integer (style=\"scroll bar\", min=0, max=255, value=128) n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": "scroll bar", "min": "0", "max": "255", "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "128", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 200, "javaType": "java.lang.Integer"}
+          },
+          "log": ["200"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 200.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "long": {
+      "source": "#@ Long l\nprint(l); print(d2s(l,0));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "l", "type": "java.lang.Long", "declared": "Long", "label": null, "widgetLabel": "L", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "l": {"value": "123456789012", "javaType": "java.lang.Long"}
+          },
+          "log": ["1.2346E11", "123456789012"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var l , ; initializeSciJavaParameters ( ) ;", "2: print ( l ) ; print ( d2s ( l , 0.0 ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: l = 1.23456789012E11 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "short": {
+      "source": "#@ Short s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.Short", "declared": "Short", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": -300, "javaType": "java.lang.Short"}
+          },
+          "log": ["-300"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = - 300.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "byte": {
+      "source": "#@ Byte b\nprint(b);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "b", "type": "java.lang.Byte", "declared": "Byte", "label": null, "widgetLabel": "B", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "b": {"value": -5, "javaType": "java.lang.Byte"}
+          },
+          "log": ["-5"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var b , ; initializeSciJavaParameters ( ) ;", "2: print ( b ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: b = - 5.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "float-format": {
+      "source": "#@ Float (style=\"format:0.000\", value=1.5) f\nprint(d2s(f,12)); if (f==0.1) print(\"exact\"); else print(\"float\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "f", "type": "java.lang.Float", "declared": "Float", "label": null, "widgetLabel": "F", "description": null, "style": "format:0.000", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": "1.5", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "f": {"value": 0.10000000149011612, "javaType": "java.lang.Float"}
+          },
+          "log": ["0.100000000", "exact"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var f , ; initializeSciJavaParameters ( ) ;", "2: print ( d2s ( f , 12.0 ) ) ; if ( f == 0.1 ) print ( \"exact\" ) ; else print ( \"float\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: f = 0.1 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "double-step": {
+      "source": "#@ Double (stepSize=0.25, min=0, max=2, value=0.5) d\nprint(d);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "d", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "D", "description": null, "style": null, "min": "0.0", "max": "2.0", "softMin": null, "softMax": null, "stepSize": "0.25", "choices": null, "columns": 6, "rows": null, "value": "0.5", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "d": {"value": 1.75, "javaType": "java.lang.Double"}
+          },
+          "log": ["1.75"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var d , ; initializeSciJavaParameters ( ) ;", "2: print ( d ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: d = 1.75 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "biginteger": {
+      "source": "#@ BigInteger bi\nprint(bi); print(d2s(bi,0));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "bi", "type": "java.math.BigInteger", "declared": "BigInteger", "label": null, "widgetLabel": "Bi", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "bi": {"value": "12345678901234567890", "javaType": "java.math.BigInteger"}
+          },
+          "log": ["1.2346E19", "12345678901234570000"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var bi , ; initializeSciJavaParameters ( ) ;", "2: print ( bi ) ; print ( d2s ( bi , 0.0 ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: bi = 1.234567890123457E19 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "bigdecimal": {
+      "source": "#@ BigDecimal bd\nprint(bd); print(d2s(bd,4));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "bd", "type": "java.math.BigDecimal", "declared": "BigDecimal", "label": null, "widgetLabel": "Bd", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "bd": {"value": "0.30", "javaType": "java.math.BigDecimal"}
+          },
+          "log": ["0.3", "0.3000"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var bd , ; initializeSciJavaParameters ( ) ;", "2: print ( bd ) ; print ( d2s ( bd , 4.0 ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: bd = 0.3 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "primitives": {
+      "source": "#@ int i\n#@ double d\n#@ boolean b\n#@ float f\n#@ long l\nprint(i+\" \"+d+\" \"+b+\" \"+f+\" \"+l);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "i", "type": "int", "declared": "int", "label": null, "widgetLabel": "I", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "d", "type": "double", "declared": "double", "label": null, "widgetLabel": "D", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "b", "type": "boolean", "declared": "boolean", "label": null, "widgetLabel": "B", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "f", "type": "float", "declared": "float", "label": null, "widgetLabel": "F", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "l", "type": "long", "declared": "long", "label": null, "widgetLabel": "L", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "i": {"value": 2, "javaType": "java.lang.Integer"},
+            "d": {"value": 2.5, "javaType": "java.lang.Double"},
+            "b": {"value": true, "javaType": "java.lang.Boolean"},
+            "f": {"value": 1.25, "javaType": "java.lang.Float"},
+            "l": {"value": "7", "javaType": "java.lang.Long"}
+          },
+          "log": ["2 2.5 1 1.25 7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var b , d , f , i , l , ; initializeSciJavaParameters ( ) ;", "6: print ( i + \" \" + d + \" \" + b + \" \" + f + \" \" + l ) ;", "9: function initializeSciJavaParameters ( ) {", "10: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "11: b = true ;", "12: d = 2.5 ;", "13: f = 1.25 ;", "14: i = 2.0 ;", "15: l = 7.0 ;", "16: }"],
+      "programNote": "the dump call sat on line 7 (left out)"
+    },
+    "string-plain": {
+      "source": "#@ String s\nprint(s); print(lengthOf(s));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "hello world", "javaType": "java.lang.String"}
+          },
+          "log": ["hello world", "11"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ; print ( lengthOf ( s ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"hello world\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-choices": {
+      "source": "#@ String (choices={\"alpha\",\"beta gamma\",\"delta\"}) s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {
+            "name": "s",
+            "type": "java.lang.String",
+            "declared": "String",
+            "label": null,
+            "widgetLabel": "S",
+            "description": null,
+            "style": null,
+            "min": null,
+            "max": null,
+            "softMin": null,
+            "softMax": null,
+            "stepSize": null,
+            "choices": ["alpha", "beta gamma", "delta"],
+            "columns": 6,
+            "rows": null,
+            "value": null,
+            "persist": true,
+            "persistKey": null,
+            "required": true,
+            "visibility": "NORMAL",
+            "callback": null,
+            "initializer": null,
+            "autoFill": true,
+            "ioType": "INPUT"
+          }
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "beta gamma", "javaType": "java.lang.String"}
+          },
+          "log": ["beta gamma"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["beta gamma"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"beta gamma\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-listbox": {
+      "source": "#@ String (choices={\"a\",\"b\"}, style=\"listBox\") s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {
+            "name": "s",
+            "type": "java.lang.String",
+            "declared": "String",
+            "label": null,
+            "widgetLabel": "S",
+            "description": null,
+            "style": "listBox",
+            "min": null,
+            "max": null,
+            "softMin": null,
+            "softMax": null,
+            "stepSize": null,
+            "choices": ["a", "b"],
+            "columns": 6,
+            "rows": null,
+            "value": null,
+            "persist": true,
+            "persistKey": null,
+            "required": true,
+            "visibility": "NORMAL",
+            "callback": null,
+            "initializer": null,
+            "autoFill": true,
+            "ioType": "INPUT"
+          }
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "b", "javaType": "java.lang.String"}
+          },
+          "log": ["b"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"b\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-radio-h": {
+      "source": "#@ String (choices={\"one\",\"two\"}, style=\"radioButtonHorizontal\", value=\"two\") s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {
+            "name": "s",
+            "type": "java.lang.String",
+            "declared": "String",
+            "label": null,
+            "widgetLabel": "S",
+            "description": null,
+            "style": "radioButtonHorizontal",
+            "min": null,
+            "max": null,
+            "softMin": null,
+            "softMax": null,
+            "stepSize": null,
+            "choices": ["one", "two"],
+            "columns": 6,
+            "rows": null,
+            "value": "two",
+            "persist": true,
+            "persistKey": null,
+            "required": true,
+            "visibility": "NORMAL",
+            "callback": null,
+            "initializer": null,
+            "autoFill": true,
+            "ioType": "INPUT"
+          }
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "one", "javaType": "java.lang.String"}
+          },
+          "log": ["one"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["one"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"one\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-radio-v": {
+      "source": "#@ String (choices={\"x\",\"y\",\"z\"}, style=\"radioButtonVertical\") s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {
+            "name": "s",
+            "type": "java.lang.String",
+            "declared": "String",
+            "label": null,
+            "widgetLabel": "S",
+            "description": null,
+            "style": "radioButtonVertical",
+            "min": null,
+            "max": null,
+            "softMin": null,
+            "softMax": null,
+            "stepSize": null,
+            "choices": ["x", "y", "z"],
+            "columns": 6,
+            "rows": null,
+            "value": null,
+            "persist": true,
+            "persistKey": null,
+            "required": true,
+            "visibility": "NORMAL",
+            "callback": null,
+            "initializer": null,
+            "autoFill": true,
+            "ioType": "INPUT"
+          }
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "z", "javaType": "java.lang.String"}
+          },
+          "log": ["z"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"z\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-textarea": {
+      "source": "#@ String (style=\"text area\", rows=4, columns=30, value=\"line1\") t\nprint(t);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "t", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "T", "description": null, "style": "text area", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 30, "rows": "4", "value": "line1", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "t": {"value": "a\nb", "javaType": "java.lang.String"}
+          },
+          "log": ["a", "b"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var t , ; initializeSciJavaParameters ( ) ;", "2: print ( t ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: t = \"a\\nb\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-password": {
+      "source": "#@ String (style=\"password\") pw\nprint(lengthOf(pw));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "pw", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "Pw", "description": null, "style": "password", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "pw": {"value": "secret", "javaType": "java.lang.String"}
+          },
+          "log": ["6"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var pw , ; initializeSciJavaParameters ( ) ;", "2: print ( lengthOf ( pw ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: pw = \"secret\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "string-choices-unknown": {
+      "source": "#@ String (choices={\"a\",\"b\"}) s\nprint(s);\n",
+      "note": "a value outside the choices, given programmatically",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {
+            "name": "s",
+            "type": "java.lang.String",
+            "declared": "String",
+            "label": null,
+            "widgetLabel": "S",
+            "description": null,
+            "style": null,
+            "min": null,
+            "max": null,
+            "softMin": null,
+            "softMax": null,
+            "stepSize": null,
+            "choices": ["a", "b"],
+            "columns": 6,
+            "rows": null,
+            "value": null,
+            "persist": true,
+            "persistKey": null,
+            "required": true,
+            "visibility": "NORMAL",
+            "callback": null,
+            "initializer": null,
+            "autoFill": true,
+            "ioType": "INPUT"
+          }
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "c", "javaType": "java.lang.String"}
+          },
+          "log": ["c"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"c\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "boolean": {
+      "source": "#@ Boolean (value=true) b\nprint(b); if (b) print(\"yes\"); else print(\"no\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "b", "type": "java.lang.Boolean", "declared": "Boolean", "label": null, "widgetLabel": "B", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": "true", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "b": {"value": false, "javaType": "java.lang.Boolean"}
+          },
+          "log": ["0", "no"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["0", "no"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var b , ; initializeSciJavaParameters ( ) ;", "2: print ( b ) ; if ( b ) print ( \"yes\" ) ; else print ( \"no\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: b = false ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "file-open": {
+      "source": "#@ File (style=\"open\") f\nprint(f);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "f", "type": "java.io.File", "declared": "File", "label": null, "widgetLabel": "F", "description": null, "style": "open", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "f": {"value": "C:/data/in put/a.tif", "javaType": "java.io.File"}
+          },
+          "log": ["C:\\data\\in put\\a.tif"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var f , ; initializeSciJavaParameters ( ) ;", "2: print ( f ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: f = \"C:\\\\data\\\\in put\\\\a.tif\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "file-save": {
+      "source": "#@ File (style=\"save\") f\nprint(f);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "f", "type": "java.io.File", "declared": "File", "label": null, "widgetLabel": "F", "description": null, "style": "save", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "f": {"value": "C:/data/out.tif", "javaType": "java.io.File"}
+          },
+          "log": ["C:\\data\\out.tif"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var f , ; initializeSciJavaParameters ( ) ;", "2: print ( f ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: f = \"C:\\\\data\\\\out.tif\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "file-directory": {
+      "source": "#@ File (style=\"directory\") d\nprint(d);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "d", "type": "java.io.File", "declared": "File", "label": null, "widgetLabel": "D", "description": null, "style": "directory", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "d": {"value": "C:/data/folder", "javaType": "java.io.File"}
+          },
+          "log": ["C:\\data\\folder"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var d , ; initializeSciJavaParameters ( ) ;", "2: print ( d ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: d = \"C:\\\\data\\\\folder\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "file-extensions": {
+      "source": "#@ File (style=\"extensions:png/tif\") f\nprint(f);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "f", "type": "java.io.File", "declared": "File", "label": null, "widgetLabel": "F", "description": null, "style": "extensions:png/tif", "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "f": {"value": "C:/data/a.png", "javaType": "java.io.File"}
+          },
+          "log": ["C:\\data\\a.png"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var f , ; initializeSciJavaParameters ( ) ;", "2: print ( f ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: f = \"C:\\\\data\\\\a.png\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "file-quote": {
+      "source": "#@ File f\nprint(f); print(lengthOf(f));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "f", "type": "java.io.File", "declared": "File", "label": null, "widgetLabel": "F", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "f": {"value": "C:/da\"ta/x'y.tif", "javaType": "java.io.File"}
+          },
+          "log": ["C:\\da\"ta\\x'y.tif", "16"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var f , ; initializeSciJavaParameters ( ) ;", "2: print ( f ) ; print ( lengthOf ( f ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: f = \"C:\\\\da\\\"ta\\\\x'y.tif\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "file-array": {
+      "source": "#@ File[] fs\nprint(fs);\n",
+      "note": "headless Fiji asks a UI for the file list: the run fails",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "fs", "type": "[Ljava.io.File;", "declared": "File[]", "label": null, "widgetLabel": "Fs", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": null,
+          "returnValue": null,
+          "error": null,
+          "thrown": "java.lang.UnsupportedOperationException",
+          "warnings": ["[ERROR] Command errored: script:{DIR}file-array-r0.ijm"]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "color": {
+      "source": "#@ ColorRGB (value=\"red\") c\nprint(c);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "c", "type": "org.scijava.util.ColorRGB", "declared": "ColorRGB", "label": null, "widgetLabel": "C", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": "255,0,0", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["255,0,0"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {
+            "c": {"value": "10,20,30", "javaType": "org.scijava.util.ColorRGB"}
+          },
+          "log": ["10,20,30"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var c , ; initializeSciJavaParameters ( ) ;", "2: print ( c ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: c = \"255,0,0\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "imageplus": {
+      "source": "#@ ImagePlus imp\nprint(imp); print(getTitle()); if (getImageID()==imp) print(\"current\");\n",
+      "image": {
+        "title": "img-imageplus",
+        "type": "8-bit ramp",
+        "width": 16,
+        "height": 8,
+        "id": -2
+      },
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "imp", "type": "ij.ImagePlus", "declared": "ImagePlus", "label": null, "widgetLabel": "Imp", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "imp": {"value": "<image>", "javaType": "ij.ImagePlus (the case image)"}
+          },
+          "log": ["-2", "img-imageplus", "current"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["-2", "img-imageplus", "current"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var imp , ; initializeSciJavaParameters ( ) ;", "2: print ( imp ) ; print ( getTitle ( ) ) ; if ( getImageID ( ) == imp ) print ( \"current\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: imp = - 2.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "imageplus-none": {
+      "source": "#@ ImagePlus imp\nprint(imp);\n",
+      "note": "no image open",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "imp", "type": "ij.ImagePlus", "declared": "ImagePlus", "label": null, "widgetLabel": "Imp", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null,
+          "canceled": "'imp' is required but unset.",
+          "statusWarnings": ["'imp' is required but unset."]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "dataset": {
+      "source": "#@ Dataset ds\nprint(ds); print(getTitle());\n",
+      "image": {
+        "title": "img-dataset",
+        "type": "8-bit ramp",
+        "width": 16,
+        "height": 8,
+        "id": -3
+      },
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "ds", "type": "net.imagej.Dataset", "declared": "Dataset", "label": null, "widgetLabel": "Ds", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["img-dataset", "img-dataset"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {
+            "ds": {"value": "<image>", "javaType": "ij.ImagePlus (the case image)"}
+          },
+          "log": ["img-dataset", "img-dataset"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ds , ; initializeSciJavaParameters ( ) ;", "2: print ( ds ) ; print ( getTitle ( ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: ds = \"img-dataset\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "imgplus": {
+      "source": "#@ ImgPlus ip\nprint(ip);\n",
+      "image": {
+        "title": "img-imgplus",
+        "type": "8-bit ramp",
+        "width": 16,
+        "height": 8,
+        "id": -4
+      },
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "ip", "type": "net.imagej.ImgPlus", "declared": "ImgPlus", "label": null, "widgetLabel": "Ip", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["net.imagej.ImgPlus@<hash>"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ip , ; initializeSciJavaParameters ( ) ;", "2: print ( ip ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: ip = \"net.imagej.ImgPlus@<hash>\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "vis-message": {
+      "source": "#@ String (visibility=MESSAGE, value=\"Read me first\") msg\n#@ Integer n\nprint(n); print(msg);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "msg", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "Msg", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": "Read me first", "persist": true, "persistKey": null, "required": true, "visibility": "MESSAGE", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 1, "javaType": "java.lang.Integer"}
+          },
+          "log": ["1", "Read me first"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var msg , n , ; initializeSciJavaParameters ( ) ;", "3: print ( n ) ; print ( msg ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: msg = \"Read me first\" ;", "9: n = 1.0 ;", "10: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "vis-message-noval": {
+      "source": "#@ String (visibility=MESSAGE) msg\nprint(\"ran\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "msg", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "Msg", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "MESSAGE", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null,
+          "canceled": "'msg' is required but unset.",
+          "statusWarnings": ["'msg' is required but unset."]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "vis-invisible": {
+      "source": "#@ Integer (visibility=INVISIBLE, value=7) hidden\nprint(hidden);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "hidden", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Hidden", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "7", "persist": true, "persistKey": null, "required": true, "visibility": "INVISIBLE", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {
+            "hidden": {"value": 9, "javaType": "java.lang.Integer"}
+          },
+          "log": ["9"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var hidden , ; initializeSciJavaParameters ( ) ;", "2: print ( hidden ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: hidden = 7.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "vis-transient": {
+      "source": "#@ Integer (visibility=TRANSIENT, value=2) t\nprint(t);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "t", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "T", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "2", "persist": true, "persistKey": null, "required": true, "visibility": "TRANSIENT", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "t": {"value": 8, "javaType": "java.lang.Integer"}
+          },
+          "log": ["8"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["8"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var t , ; initializeSciJavaParameters ( ) ;", "2: print ( t ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: t = 8.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "label-description": {
+      "source": "#@ Integer (label=\"My number\", description=\"Help text\") n\n#@ Integer count\n#@ String fooBar\n#@ String (label=\"\") empty\nprint(n+\" \"+count+\" \"+fooBar);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": "My number", "widgetLabel": "My number", "description": "Help text", "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "count", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Count", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "fooBar", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "FooBar", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "empty", "type": "java.lang.String", "declared": "String", "label": "", "widgetLabel": "Empty", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 1, "javaType": "java.lang.Integer"},
+            "count": {"value": 2, "javaType": "java.lang.Integer"},
+            "fooBar": {"value": "z", "javaType": "java.lang.String"},
+            "empty": {"value": "", "javaType": "java.lang.String"}
+          },
+          "log": ["1 2 z"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var fooBar , count , n , empty , ; initializeSciJavaParameters ( ) ;", "5: print ( n + \" \" + count + \" \" + fooBar ) ;", "8: function initializeSciJavaParameters ( ) {", "9: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "10: fooBar = \"z\" ;", "11: count = 2.0 ;", "12: n = 1.0 ;", "13: empty = \"\" ;", "14: }"],
+      "programNote": "the dump call sat on line 6 (left out)"
+    },
+    "persist-default": {
+      "source": "#@ Integer (value=5) pa\nprint(pa);\n",
+      "note": "persist defaults to true: the second run, given no value, gets the first run's",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "pa", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Pa", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "5", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "pa": {"value": 7, "javaType": "java.lang.Integer"}
+          },
+          "log": ["7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var pa , ; initializeSciJavaParameters ( ) ;", "2: print ( pa ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: pa = 7.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "persist-false": {
+      "source": "#@ Integer (value=5, persist=false) pb\nprint(pb);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "pb", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Pb", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "5", "persist": false, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "pb": {"value": 7, "javaType": "java.lang.Integer"}
+          },
+          "log": ["7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["5"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var pb , ; initializeSciJavaParameters ( ) ;", "2: print ( pb ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: pb = 7.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "persist-shared-name": {
+      "source": "#@ Integer (value=5) shared\nprint(\"A \"+shared);\n",
+      "note": "persisted values are keyed by the input's name, not by the script",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "shared", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Shared", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "5", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "shared": {"value": 11, "javaType": "java.lang.Integer"}
+          },
+          "log": ["A 11"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "source": "#@ Integer (value=6) shared\nprint(\"B \"+shared);\n",
+          "note": "another script with an input of the same name",
+          "log": ["B 11"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var shared , ; initializeSciJavaParameters ( ) ;", "2: print ( \"A \" + shared ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: shared = 11.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "persist-key": {
+      "source": "#@ Integer (value=5, persistKey=\"myKey\") pk\nprint(pk);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "pk", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Pk", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "5", "persist": true, "persistKey": "myKey", "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "pk": {"value": 13, "javaType": "java.lang.Integer"}
+          },
+          "log": ["13"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["13"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var pk , ; initializeSciJavaParameters ( ) ;", "2: print ( pk ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: pk = 13.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "required-false": {
+      "source": "#@ String (required=false) s\n#@ Integer (required=false) n\nprint(\"[\"+s+\"] \"+n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": false, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": false, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["[0] 0"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , n , ; initializeSciJavaParameters ( ) ;", "3: print ( \"[\" + s + \"] \" + n ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: n = 0.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "required-default-missing": {
+      "source": "#@ String s\n#@ Integer n\nprint(\"[\"+s+\"] \"+n);\n",
+      "note": "no value, no default, headless",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null,
+          "canceled": "'s' is required but unset.",
+          "statusWarnings": ["'s' is required but unset."]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "callback": {
+      "source": "#@ Integer (callback=\"cb\", value=1) n\nprint(n);\nfunction cb() { print(\"callback ran\"); }\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "1", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": "cb", "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 4, "javaType": "java.lang.Integer"}
+          },
+          "log": ["4"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "3: function cb ( ) { print ( \"callback ran\" ) ; }", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: n = 4.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "autofill-false": {
+      "source": "#@ ImagePlus (autoFill=false) imp\nprint(imp);\n",
+      "image": {
+        "title": "img-autofill-false",
+        "type": "8-bit ramp",
+        "width": 16,
+        "height": 8,
+        "id": -5
+      },
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "imp", "type": "ij.ImagePlus", "declared": "ImagePlus", "label": null, "widgetLabel": "Imp", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": false, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null,
+          "canceled": "'imp' is required but unset.",
+          "statusWarnings": ["'imp' is required but unset."]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "columns-rows": {
+      "source": "#@ String (columns=12) s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 12, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "x", "javaType": "java.lang.String"}
+          },
+          "log": ["x"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"x\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "initializer": {
+      "source": "#@ Integer (initializer=\"init\") n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": "init", "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 3, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 3.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "output-string": {
+      "source": "#@ String name\n#@output String greeting\ngreeting = \"Hello \" + name;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "name", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "Name", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "greeting", "type": "java.lang.String"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "name": {"value": "Ann", "javaType": "java.lang.String"}
+          },
+          "log": [],
+          "outputs": {
+            "greeting": {"toString": "Hello Ann", "javaType": "java.lang.String"}
+          },
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var name , ; initializeSciJavaParameters ( ) ;", "3: greeting = \"Hello \" + name ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: name = \"Ann\" ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "output-number": {
+      "source": "#@output Double r\n#@output Integer k\n#@output Double whole\nr = 1.5; k = 3; whole = 2;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "r", "type": "java.lang.Double"},
+          {"name": "k", "type": "java.lang.Integer"},
+          {"name": "whole", "type": "java.lang.Double"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {
+            "r": {"toString": "1.5", "javaType": "java.lang.Double"},
+            "whole": {"toString": "2.0", "javaType": "java.lang.Double"},
+            "k": {"toString": "3", "javaType": "java.lang.Integer"}
+          },
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ;", "4: r = 1.5 ; k = 3.0 ; whole = 2.0 ;", "7: function initializeSciJavaParameters ( ) {", "8: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "9: }"],
+      "programNote": "the dump call sat on line 5 (left out)"
+    },
+    "output-unset": {
+      "source": "#@output String never\nprint(\"no assignment\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "never", "type": "java.lang.String"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["no assignment"],
+          "outputs": {"never": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ;", "2: print ( \"no assignment\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "output-array": {
+      "source": "#@output String arr\narr = newArray(1, 2, 3);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "arr", "type": "java.lang.String"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {
+            "arr": {"toString": "0.0", "javaType": "java.lang.String"}
+          },
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ;", "2: arr = newArray ( 1.0 , 2.0 , 3.0 ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "output-both": {
+      "source": "#@both Integer n\nn = n * 2;\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "BOTH"}
+        ],
+        "outputs": [
+          {"name": "n", "type": "java.lang.Integer"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 21, "javaType": "java.lang.Integer"}
+          },
+          "log": ["42"],
+          "outputs": {
+            "n": {"toString": "42", "javaType": "java.lang.Integer"}
+          },
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: n = n * 2.0 ;", "3: print ( n ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: n = 21.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "output-io-space": {
+      "source": "#@output Integer out1\n#@ output Integer out2\nout1 = 1; out2 = 2;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "out1", "type": "java.lang.Integer"},
+          {"name": "out2", "type": "java.lang.Integer"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {
+            "out2": {"toString": "2", "javaType": "java.lang.Integer"},
+            "out1": {"toString": "1", "javaType": "java.lang.Integer"}
+          },
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ;", "3: out1 = 1.0 ; out2 = 2.0 ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "implicit-result": {
+      "source": "print(\"x\");\nreturn \"retval\";\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["x"],
+          "outputs": {
+            "result": {"toString": "retval", "javaType": "java.lang.String"}
+          },
+          "returnValue": {"toString": "retval", "javaType": "java.lang.String"},
+          "error": null
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "implicit-result-var": {
+      "source": "result = 42;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ; result = 42.0 ;", "4: function initializeSciJavaParameters ( ) {", "5: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "6: }"],
+      "programNote": "the dump call sat on line 2 (left out)"
+    },
+    "implicit-result-number": {
+      "source": "return 3.5;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Macros can only return strings", "line": 1, "excerpt": "var ; initializeSciJavaParameters ( ) ; return <3.5> ; ", "text": "Macro Error: Macros can only return strings in line 1\n \nvar ; initializeSciJavaParameters ( ) ; return <3.5> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "implicit-with-output": {
+      "source": "#@output String o\no = \"set\";\nreturn \"r\";\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "o", "type": "java.lang.String"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {
+            "o": {"toString": "set", "javaType": "java.lang.String"}
+          },
+          "returnValue": {"toString": "r", "javaType": "java.lang.String"},
+          "error": null
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "legacy-comment": {
+      "source": "// @Integer n\n// @String(value=\"x\") s\nprint(n+s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": "x", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 4, "javaType": "java.lang.Integer"},
+            "s": {"value": "y", "javaType": "java.lang.String"}
+          },
+          "log": ["4y"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , n , ; initializeSciJavaParameters ( ) ;", "3: print ( n + s ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: s = \"y\" ;", "9: n = 4.0 ;", "10: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "legacy-comment-space": {
+      "source": "// @ Integer n\n//@Integer m\nprint(n+m);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "m", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "M", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 1, "javaType": "java.lang.Integer"},
+            "m": {"value": 2, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var m , n , ; initializeSciJavaParameters ( ) ;", "3: print ( n + m ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: m = 2.0 ;", "9: n = 1.0 ;", "10: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "name-with-dash": {
+      "source": "#@ Integer my-n\n#@ Integer ok_1\nprint(ok_1);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "my-n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "My-n", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "ok_1", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Ok_1", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "my-n": {"value": 3, "javaType": "java.lang.Integer"},
+            "ok_1": {"value": 4, "javaType": "java.lang.Integer"}
+          },
+          "log": ["4"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ok_1 , ; initializeSciJavaParameters ( ) ;", "3: print ( ok_1 ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: ok_1 = 4.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "name-with-dot": {
+      "source": "#@ Integer a.b\n#@ Integer c\nprint(c);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a.b", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "A.b", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "c", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "C", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a.b": {"value": 3, "javaType": "java.lang.Integer"},
+            "c": {"value": 5, "javaType": "java.lang.Integer"}
+          },
+          "log": ["5"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var c , ; initializeSciJavaParameters ( ) ;", "3: print ( c ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: c = 5.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "name-builtin": {
+      "source": "#@ Integer print\n#@ String getTitle\n#@ Integer x\n#@ Integer PI\nprint(x);\n",
+      "note": "input names that are built-in macro functions or constants",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "print", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "Print", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "getTitle", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "GetTitle", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "x", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "X", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "PI", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "PI", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "print": {"value": 1, "javaType": "java.lang.Integer"},
+            "getTitle": {"value": "t", "javaType": "java.lang.String"},
+            "x": {"value": 3, "javaType": "java.lang.Integer"},
+            "PI": {"value": 4, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var x , ; initializeSciJavaParameters ( ) ;", "5: print ( x ) ;", "8: function initializeSciJavaParameters ( ) {", "9: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "10: x = 3.0 ;", "11: }"],
+      "programNote": "the dump call sat on line 6 (left out)"
+    },
+    "service-ui": {
+      "source": "#@ UIService ui\nprint(ui);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "ui", "type": "org.scijava.ui.UIService", "declared": "UIService", "label": null, "widgetLabel": "Ui", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["org.scijava.ui.DefaultUIService [priority = 0.0]"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ui , ; initializeSciJavaParameters ( ) ;", "2: print ( ui ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: ui = \"org.scijava.ui.DefaultUIService [priority = 0.0]\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "service-log": {
+      "source": "#@ LogService log\nprint(\"ok\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "log", "type": "org.scijava.log.LogService", "declared": "LogService", "label": null, "widgetLabel": "Log", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["ok"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ;", "2: print ( \"ok\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "service-context": {
+      "source": "#@ Context ctx\nprint(\"ok\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "ctx", "type": "org.scijava.Context", "declared": "Context", "label": null, "widgetLabel": "Ctx", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["ok"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ctx , ; initializeSciJavaParameters ( ) ;", "2: print ( \"ok\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: ctx = \"org.scijava.Context@<hash>\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "service-command": {
+      "source": "#@ CommandService cs\nprint(\"ok\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "cs", "type": "org.scijava.command.CommandService", "declared": "CommandService", "label": null, "widgetLabel": "Cs", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["ok"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var cs , ; initializeSciJavaParameters ( ) ;", "2: print ( \"ok\" ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: cs = \"org.scijava.command.DefaultCommandService [priority = 0.0]\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "quote-escaping": {
+      "source": "#@ String s\nprint(s); print(lengthOf(s));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "a\"b\\c\nd\teé", "javaType": "java.lang.String"}
+          },
+          "log": ["a\"b\\c", "d\teé", "10"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ; print ( lengthOf ( s ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"a\\\"b\\\\c\\nd\\teé\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "quote-unicode-ctl": {
+      "source": "#@ String s\nprint(lengthOf(s)); print(charCodeAt(s, 1));\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "s": {"value": "x\u0001y", "javaType": "java.lang.String"}
+          },
+          "log": ["3", "1"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( lengthOf ( s ) ) ; print ( charCodeAt ( s , 1.0 ) ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"x\\u0001y\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "number-format": {
+      "source": "#@ Double a\n#@ Double b\n#@ Double c\n#@ Double d\n#@ Double f\nif (a==1e-10) print(\"a exact\"); print(b); print(c); print(d); print(f); print(1/f);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "b", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "B", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "c", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "C", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "d", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "D", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "f", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "F", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 1.0E-10, "javaType": "java.lang.Double"},
+            "b": {"value": 0.1, "javaType": "java.lang.Double"},
+            "c": {"value": 3, "javaType": "java.lang.Double"},
+            "d": {"value": "NaN", "javaType": "java.lang.Double"},
+            "f": {"value": 0, "javaType": "java.lang.Double"}
+          },
+          "log": ["a exact", "0.1", "3", "NaN", "-0", "-Infinity"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var a , b , c , d , f , ; initializeSciJavaParameters ( ) ;", "6: if ( a == 1.0E-10 ) print ( \"a exact\" ) ; print ( b ) ; print ( c ) ; print ( d ) ; print ( f ) ; print ( 1.0 / f ) ;", "9: function initializeSciJavaParameters ( ) {", "10: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "11: a = 1.0E-10 ;", "12: b = 0.1 ;", "13: c = 3.0 ;", "14: d = NaN ;", "15: f = - 0.0 ;", "16: }"],
+      "programNote": "the dump call sat on line 7 (left out)"
+    },
+    "number-infinity": {
+      "source": "#@ Double e\nprint(e);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "e", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "E", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "e": {"value": "Infinity", "javaType": "java.lang.Double"}
+          },
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 6, "excerpt": "e = <Infinity> ; ", "text": "Macro Error: Undefined variable in line 6\n\t\t(called from line 1)\n \ne = <Infinity> ; "}
+        },
+        {
+          "inputs": {
+            "e": {"value": "-Infinity", "javaType": "java.lang.Double"}
+          },
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 6, "excerpt": "e = - <Infinity> ; ", "text": "Macro Error: Undefined variable in line 6\n\t\t(called from line 1)\n \ne = - <Infinity> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "number-big": {
+      "source": "#@ Double a\n#@ Integer b\nprint(a); print(b);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Double", "declared": "Double", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1.0", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "b", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "B", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 1.5E300, "javaType": "java.lang.Double"},
+            "b": {"value": -2147483648, "javaType": "java.lang.Integer"}
+          },
+          "log": ["1.5000E300", "-2147483648"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var a , b , ; initializeSciJavaParameters ( ) ;", "3: print ( a ) ; print ( b ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: a = 1.5E300 ;", "9: b = - 2.147483648E9 ;", "10: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "line-numbers": {
+      "source": "#@ Integer n\n#@ String s\nx = undefinedThing;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 1, "javaType": "java.lang.Integer"},
+            "s": {"value": "a", "javaType": "java.lang.String"}
+          },
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 3, "excerpt": "x = <undefinedThing> ; ", "text": "Macro Error: Undefined variable in line 3\n \nx = <undefinedThing> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "prefix-excerpt": {
+      "source": "print(a); z = q;\n#@ Integer a\n#@ String b\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "b", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "B", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 2, "javaType": "java.lang.Integer"},
+            "b": {"value": "x", "javaType": "java.lang.String"}
+          },
+          "log": ["2"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 1, "excerpt": "var a , b , ; initializeSciJavaParameters ( ) ; print ( a ) ; z = <q> ; ", "text": "Macro Error: Undefined variable in line 1\n \nvar a , b , ; initializeSciJavaParameters ( ) ; print ( a ) ; z = <q> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "prefix-excerpt-none": {
+      "source": "z = q;\n",
+      "note": "no parameter at all",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 1, "excerpt": "var ; initializeSciJavaParameters ( ) ; z = <q> ; ", "text": "Macro Error: Undefined variable in line 1\n \nvar ; initializeSciJavaParameters ( ) ; z = <q> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "script-header": {
+      "source": "#@script(name=\"Hello\", label=\"Hi there\", menuPath=\"Plugins>X\")\n#@ Integer n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": "Hello", "label": "Hi there", "menuPath": "[Plugins, X]"}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 1, "javaType": "java.lang.Integer"}
+          },
+          "log": ["1"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "3: print ( n ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: n = 1.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "script-header-space": {
+      "source": "#@ script (name=\"Spaced\")\nprint(\"ok\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": ["[WARNING] Ignoring invalid parameter:  script (name=\"Spaced\")"],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "var ; initializeSciJavaParameters ( ) ; <#> @ script ( name = \"Spaced\" ) ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \nvar ; initializeSciJavaParameters ( ) ; <#> @ script ( name = \"Spaced\" ) "},
+          "warnings": ["[WARNING] Ignoring invalid parameter:  script (name=\"Spaced\")"]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "attr-spacing-1": {
+      "source": "#@Integer(value=3)n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": ["[WARNING] Ignoring invalid parameter: Integer(value=3)n"],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "var ; initializeSciJavaParameters ( ) ; <#> @ Integer ( value = 3 ) n ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \nvar ; initializeSciJavaParameters ( ) ; <#> @ Integer ( value = 3 ) n "},
+          "warnings": ["[WARNING] Ignoring invalid parameter: Integer(value=3)n"]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "attr-spacing-2": {
+      "source": "#@ Integer n (value=3)\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "3", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 3.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "attr-spacing-3": {
+      "source": "#@ Integer ( value = 3 , min = 1 ) n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": "1", "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "3", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 3.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "attr-spacing-4": {
+      "source": "#@   Integer    n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 9, "javaType": "java.lang.Integer"}
+          },
+          "log": ["9"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 9.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "attr-spacing-5": {
+      "source": "#@Integer n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 8, "javaType": "java.lang.Integer"}
+          },
+          "log": ["8"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 8.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "attr-spacing-6": {
+      "source": "#@ Integer(value=3) n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "3", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 3.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "attr-spacing-7": {
+      "source": "  #@ Integer n\nprint(n);\n",
+      "note": "indented line",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 6, "javaType": "java.lang.Integer"}
+          },
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "var ; initializeSciJavaParameters ( ) ; <#> @ Integer n ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \nvar ; initializeSciJavaParameters ( ) ; <#> @ Integer n "},
+          "warnings": ["[WARNING] Unmatched input: n"]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "attr-bare-values": {
+      "source": "#@ String (value=abc, label=Some label) s\nprint(s);\n",
+      "parsed": {
+        "error": "java.lang.IllegalArgumentException: Invalid character at index 23",
+        "warnings": [],
+        "inputs": [],
+        "outputs": [],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": null,
+          "returnValue": null,
+          "error": null,
+          "thrown": "java.lang.IllegalArgumentException: Invalid character at index 23",
+          "warnings": ["[ERROR] Command errored: script:{DIR}attr-bare-values-r0.ijm"]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "attr-unknown": {
+      "source": "#@ Integer (foo=\"bar\", value=4) n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": "4", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["4"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 4.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "attr-quoted-escape": {
+      "source": "#@ String (value=\"say \\\"hi\\\"\") s\nprint(s);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": "say \"hi\"", "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["say \"hi\""],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var s , ; initializeSciJavaParameters ( ) ;", "2: print ( s ) ;", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: s = \"say \\\"hi\\\"\" ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "duplicate-name": {
+      "source": "#@ Integer n\n#@ String n\nprint(n);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "n", "type": "java.lang.String", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": "zz", "javaType": "java.lang.String"}
+          },
+          "log": ["zz"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "3: print ( n ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: n = \"zz\" ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "unknown-type": {
+      "source": "#@ Foo x\nprint(1);\n",
+      "parsed": {
+        "error": null,
+        "warnings": ["[WARNING] Invalid class: Foo", "[WARNING] Ignoring invalid parameter:  Foo x"],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "var ; initializeSciJavaParameters ( ) ; <#> @ Foo x ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \nvar ; initializeSciJavaParameters ( ) ; <#> @ Foo x "},
+          "warnings": ["[WARNING] Invalid class: Foo", "[WARNING] Ignoring invalid parameter:  Foo x"]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "char": {
+      "source": "#@ Character ch\n#@ char c2\nprint(ch+c2);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "ch", "type": "java.lang.Character", "declared": "Character", "label": null, "widgetLabel": "Ch", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "c2", "type": "char", "declared": "char", "label": null, "widgetLabel": "C2", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "ch": {"value": "q", "javaType": "java.lang.Character"},
+            "c2": {"value": "r", "javaType": "java.lang.Character"}
+          },
+          "log": ["qr"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ch , c2 , ; initializeSciJavaParameters ( ) ;", "3: print ( ch + c2 ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: ch = \"q\" ;", "9: c2 = \"r\" ;", "10: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "date": {
+      "source": "#@ Date d\nprint(\"ran\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "d", "type": "java.util.Date", "declared": "Date", "label": null, "widgetLabel": "D", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": [],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null,
+          "canceled": "'d' is required but unset.",
+          "statusWarnings": ["'d' is required but unset."]
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "own-var-collision": {
+      "source": "#@ Integer a\nvar a = 7;\nprint(a);\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 3, "javaType": "java.lang.Integer"}
+          },
+          "log": ["7"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var a , ; initializeSciJavaParameters ( ) ;", "2: var a = 7.0 ;", "3: print ( a ) ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: a = 3.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "own-var-later": {
+      "source": "#@ Integer a\nprint(a);\nvar a = 7;\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 3, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var a , ; initializeSciJavaParameters ( ) ;", "2: print ( a ) ;", "3: var a = 7.0 ;", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: a = 3.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "own-function": {
+      "source": "#@ Integer a\nprint(a);\nfunction initializeSciJavaParameters() { print(\"mine\"); }\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 3, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var a , ; initializeSciJavaParameters ( ) ;", "2: print ( a ) ;", "3: function initializeSciJavaParameters ( ) { print ( \"mine\" ) ; }", "6: function initializeSciJavaParameters ( ) {", "7: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "8: a = 3.0 ;", "9: }"],
+      "programNote": "the dump call sat on line 4 (left out)"
+    },
+    "macro-block": {
+      "source": "#@ Integer a\nmacro \"Main\" {\n  print(a);\n}\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "a", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "A", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "a": {"value": 3, "javaType": "java.lang.Integer"}
+          },
+          "log": ["3"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "nested-runmacro": {
+      "source": "print(\"outer\");\nrunMacro(\"{DIR}child.ijm\", \"arg\");\nprint(\"back\");\n",
+      "files": {
+        "child.ijm": "#@ Integer (value=4) n\nprint(\"child \"+n+\" \"+getArgument());\n"
+      },
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["outer", "back"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "<#> @ Integer ( value = 4 ) n ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \n<#> @ Integer ( value = 4 ) n "}
+        }
+      ],
+      "program": null,
+      "programNote": "no running interpreter when the dump call ran (a nested runMacro ended it)"
+    },
+    "nested-runmacro-persisted": {
+      "source": "print(\"outer\");\nrunMacro(\"{DIR}child2.ijm\");\n",
+      "files": {
+        "child2.ijm": "#@ Integer (value=4) cn\nprint(\"child \"+cn);\n"
+      },
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["outer"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "<#> @ Integer ( value = 4 ) cn ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \n<#> @ Integer ( value = 4 ) cn "}
+        },
+        {
+          "inputs": {
+            "cn": {"value": 9, "javaType": "java.lang.Integer"}
+          },
+          "source": "#@ Integer cn\nprint(\"direct \"+cn);\n",
+          "note": "a direct run that persists cn = 9",
+          "log": ["direct 9"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        },
+        {
+          "inputs": {},
+          "log": ["outer"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Statement cannot begin with '#'", "line": 1, "excerpt": "<#> @ Integer ( value = 4 ) cn ", "text": "Macro Error: Statement cannot begin with '#' in line 1\n \n<#> @ Integer ( value = 4 ) cn "}
+        }
+      ],
+      "program": null,
+      "programNote": "no running interpreter when the dump call ran (a nested runMacro ended it)"
+    },
+    "no-params": {
+      "source": "print(\"plain\");\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {},
+          "log": ["plain"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var ; initializeSciJavaParameters ( ) ; print ( \"plain\" ) ;", "4: function initializeSciJavaParameters ( ) {", "5: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "6: }"],
+      "programNote": "the dump call sat on line 2 (left out)"
+    },
+    "no-final-newline": {
+      "source": "#@ Integer n\nprint(n); y = 1 +",
+      "note": "the script ends without a line break, inside an expression",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 2, "javaType": "java.lang.Integer"}
+          },
+          "log": ["2"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Number or numeric function expected", "line": 4, "excerpt": "<function> initializeSciJavaParameters ( ) { ", "text": "Macro Error: Number or numeric function expected in line 4\n \n<function> initializeSciJavaParameters ( ) { "}
+        }
+      ],
+      "program": ["1: var n , ; initializeSciJavaParameters ( ) ;", "2: print ( n ) ; y = 1.0 +", "5: function initializeSciJavaParameters ( ) {", "6: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "7: n = 2.0 ;", "8: }"],
+      "programNote": "the dump call sat on line 3 (left out)"
+    },
+    "final-blank-lines": {
+      "source": "#@ Integer n\nprint(n);\n\n\nz = q;",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 2, "javaType": "java.lang.Integer"}
+          },
+          "log": ["2"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 5, "excerpt": "z = <q> ; ", "text": "Macro Error: Undefined variable in line 5\n \nz = <q> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    },
+    "many-inputs": {
+      "source": "#@ Integer v1\n#@ Integer v2\n#@ Integer v3\n#@ Integer v4\n#@ Integer v5\n#@ Integer v6\n#@ Integer v7\n#@ Integer v8\n#@ Integer v9\n#@ Integer v10\n#@ Integer v11\n#@ Integer v12\n#@ Integer v13\n#@ Integer v14\nprint(v1+v2+v3+v4+v5+v6+v7+v8+v9+v10+v11+v12+v13+v14);\n",
+      "note": "14 inputs: the order of the var list and of the assignments past 12 names",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "v1", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V1", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v2", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V2", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v3", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V3", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v4", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V4", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v5", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V5", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v6", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V6", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v7", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V7", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v8", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V8", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v9", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V9", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v10", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V10", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v11", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V11", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v12", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V12", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v13", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V13", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "v14", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "V14", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "v1": {"value": 1, "javaType": "java.lang.Integer"},
+            "v2": {"value": 2, "javaType": "java.lang.Integer"},
+            "v3": {"value": 3, "javaType": "java.lang.Integer"},
+            "v4": {"value": 4, "javaType": "java.lang.Integer"},
+            "v5": {"value": 5, "javaType": "java.lang.Integer"},
+            "v6": {"value": 6, "javaType": "java.lang.Integer"},
+            "v7": {"value": 7, "javaType": "java.lang.Integer"},
+            "v8": {"value": 8, "javaType": "java.lang.Integer"},
+            "v9": {"value": 9, "javaType": "java.lang.Integer"},
+            "v10": {"value": 10, "javaType": "java.lang.Integer"},
+            "v11": {"value": 11, "javaType": "java.lang.Integer"},
+            "v12": {"value": 12, "javaType": "java.lang.Integer"},
+            "v13": {"value": 13, "javaType": "java.lang.Integer"},
+            "v14": {"value": 14, "javaType": "java.lang.Integer"}
+          },
+          "log": ["105"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": null
+        }
+      ],
+      "program": ["1: var v6 , v7 , v8 , v9 , v10 , v12 , v11 , v14 , v13 , v1 , v2 , v3 , v4 , v5 , ; initializeSciJavaParameters ( ) ;", "15: print ( v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 ) ;", "18: function initializeSciJavaParameters ( ) {", "19: call ( \"net.imagej.legacy.plugin.IJ1MacroEngine.saveInterpreter\" ) ;", "20: v6 = 6.0 ;", "21: v7 = 7.0 ;", "22: v8 = 8.0 ;", "23: v9 = 9.0 ;", "24: v10 = 10.0 ;", "25: v12 = 12.0 ;", "26: v11 = 11.0 ;", "27: v14 = 14.0 ;", "28: v13 = 13.0 ;", "29: v1 = 1.0 ;", "30: v2 = 2.0 ;", "31: v3 = 3.0 ;", "32: v4 = 4.0 ;", "33: v5 = 5.0 ;", "34: }"],
+      "programNote": "the dump call sat on line 16 (left out)"
+    },
+    "crlf": {
+      "source": "#@ Integer n\r\n#@ String s\r\nprint(n+s);\r\nx = q;\r\n",
+      "parsed": {
+        "error": null,
+        "warnings": [],
+        "inputs": [
+          {"name": "n", "type": "java.lang.Integer", "declared": "Integer", "label": null, "widgetLabel": "N", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": "1", "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"},
+          {"name": "s", "type": "java.lang.String", "declared": "String", "label": null, "widgetLabel": "S", "description": null, "style": null, "min": null, "max": null, "softMin": null, "softMax": null, "stepSize": null, "choices": null, "columns": 6, "rows": null, "value": null, "persist": true, "persistKey": null, "required": true, "visibility": "NORMAL", "callback": null, "initializer": null, "autoFill": true, "ioType": "INPUT"}
+        ],
+        "outputs": [
+          {"name": "result", "type": "java.lang.Object"}
+        ],
+        "script": {"name": null, "label": null, "menuPath": null}
+      },
+      "runs": [
+        {
+          "inputs": {
+            "n": {"value": 1, "javaType": "java.lang.Integer"},
+            "s": {"value": "b", "javaType": "java.lang.String"}
+          },
+          "log": ["1b"],
+          "outputs": {"result": null},
+          "returnValue": null,
+          "error": {"message": "Undefined variable", "line": 4, "excerpt": "x = <q> ; ", "text": "Macro Error: Undefined variable in line 4\n \nx = <q> ; "}
+        }
+      ],
+      "program": null,
+      "programNote": "the run never reached the dump call (error, return, cancel or exit first)"
+    }
+  }
+}

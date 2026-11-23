@@ -1,0 +1,11 @@
+open("{ROOT}a.tif");
+print("title " + getTitle());
+print("size " + getWidth() + "x" + getHeight() + " bitDepth " + bitDepth() + " slices " + nSlices);
+print("image.directory " + getInfo("image.directory"));
+print("image.filename " + getInfo("image.filename"));
+print("getDirectory(image) " + getDirectory("image"));
+print("File.directory " + File.directory);
+print("File.name " + File.name);
+print("File.nameWithoutExtension " + File.nameWithoutExtension);
+print("getDirectory(file) " + getDirectory("file"));
+print("pixels " + getPixel(0, 0) + " " + getPixel(8, 0) + " " + getPixel(15, 0));

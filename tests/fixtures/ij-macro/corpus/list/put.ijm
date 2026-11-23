@@ -1,0 +1,1 @@
+List.clear();List.put("a",1);print(List.get("a"));

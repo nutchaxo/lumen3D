@@ -1,0 +1,1 @@
+s="  Hello World ";print(s.trim().toLowerCase());print(s.length);print(s.contains("World"));

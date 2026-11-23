@@ -1,0 +1,1 @@
+a=newArray("b","A","a","B","c");Array.sort(a);Array.print(a);

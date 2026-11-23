@@ -1,0 +1,1 @@
+print("a\"b");print('a\'b');print("it's");print('say "hi"');

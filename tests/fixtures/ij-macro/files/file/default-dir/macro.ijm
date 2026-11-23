@@ -1,0 +1,10 @@
+print("initial [" + File.getDefaultDir + "]");
+File.setDefaultDir("{ROOT}sub");
+print("getDefaultDir [" + File.getDefaultDir + "]");
+File.setDefaultDir("{ROOT}sub/");
+print("with separator [" + File.getDefaultDir + "]");
+open("a.tif");
+print("title " + getTitle());
+print("image.directory " + getInfo("image.directory"));
+print("getDirectory(current) " + getDirectory("current"));
+print("getDirectory(default) " + getDirectory("default"));

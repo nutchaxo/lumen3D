@@ -1,0 +1,1 @@
+a=newArray("x","y");b=Array.filter(a,"z");print(b.length);

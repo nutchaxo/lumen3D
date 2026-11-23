@@ -1,0 +1,1 @@
+print(parseFloat("1e3"));print(parseFloat(" 2.5 "));print(parseFloat("Infinity"));print(parseFloat("-Infinity"));print(parseFloat("NaN"));print(parseFloat(""));print(parseFloat("1,5"));print(parseFloat("7d"));print(parseFloat("+3"));print(parseFloat(".5"));

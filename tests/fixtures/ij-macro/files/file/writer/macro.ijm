@@ -1,0 +1,14 @@
+f = File.open("{ROOT}w.txt");
+print("handle " + f);
+print(f, "a");
+print(f, "b\n");
+print(f, "c" + "d");
+print(f, 3 + 4);
+File.close(f);
+s = File.openAsRawString("{ROOT}w.txt");
+s = replace(s, "\r", "");
+print("length without CR " + lengthOf(s));
+print("[" + replace(s, "\n", "<LF>") + "]");
+g = File.open("{ROOT}w.txt");
+File.close(g);
+print("truncated length " + File.length("{ROOT}w.txt"));

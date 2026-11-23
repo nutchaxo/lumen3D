@@ -1,0 +1,2 @@
+function f(a){ return a>2; }
+print(f(3));print(f(1));print(f(3)+1);

@@ -1,0 +1,14 @@
+setBatchMode(true);
+newImage("img", "8-bit ramp", 32, 32, 1);
+makeRectangle(2, 3, 5, 6);
+roiManager("Add");
+makeOval(1, 1, 8, 6);
+roiManager("Add");
+print("count " + roiManager("count"));
+roiManager("Save", "{ROOT}rs.zip");
+roiManager("Reset");
+print("after reset " + roiManager("count"));
+roiManager("Open", "{ROOT}rs.zip");
+print("after open " + roiManager("count"));
+roiManager("Select", 1);
+print("second selectionType " + selectionType());

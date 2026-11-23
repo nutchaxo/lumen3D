@@ -11,6 +11,7 @@
  *   IJOps      statistics, histogram, contrast, conversion, maths, geometry
  *   IJProject  band-based streaming Z projector (six methods)
  *   IJTiff     ImageJ-hyperstack TIFF writer + uncompressed TIFF reader
+ *   IJStack    pure index maths of stacks / hyperstacks and the RGB packing / grey conversion
  *
  * Conventions
  *   - A "channel image" is { width, height, bitDepth, data } with bitDepth 8
@@ -985,12 +986,12 @@
       const hmax = i;
       const dataMin = o.dataMin !== undefined ? o.dataMin : histMin;
       const dataMax = o.dataMax !== undefined ? o.dataMax : histMin + (n - 1) * binWidth;
-      let min, max;
+      let min, max, reset = false;
       if (hmax >= hmin) {
         min = histMin + hmin * binWidth; max = histMin + hmax * binWidth;
         if (min === max) { min = dataMin; max = dataMax; }
-      } else { min = dataMin; max = dataMax; }
-      return { min, max, nextAutoThreshold: t };
+      } else { min = dataMin; max = dataMax; reset = true; }   // ContrastAdjuster: "reset(imp, ip); return;" — nothing recorded, the halving starts over
+      return { min, max, nextAutoThreshold: t, reset };
     }
 
     /* Apply the display range to the pixel data (ImageJ ContrastAdjuster.apply,
@@ -1440,10 +1441,26 @@
   })();
 
   // ---------------------------------------------------------------- IJTiff
+  /* TIFF reader and writer of the Advanced view.
+   *
+   *   write(doc)  A single-plane document (nZ = nT = 1, not RGB) keeps the layout of the first versions: little endian, one IFD per
+   *               channel, `ImageJ=1.54f` with `hyperstack=true`. A stack, a hyperstack or an RGB image is written as ImageJ's
+   *               TiffEncoder / FileSaver does (1.54p): big endian, ONE IFD PER PLANE in ImageJ's stack order
+   *               (n = t·nC·nZ + z·nC + c), the tags and the description in FileSaver's order, the ImageJ metadata
+   *               (slice labels, display ranges, LUTs) in IJMetadata, 24-bit RGB chunky, an 8-bit image with a LUT as a palette
+   *               image (Photometric 3). ImageJ re-opens it identically (tests/fixtures/ij-stacks/tiff).
+   *   read(bytes) Classic TIFF, uncompressed: 8 / 16 / 32-bit float grey, 8-bit RGB (chunky or planar), 8-bit palette, several IFDs or
+   *               ImageJ's one-IFD `images=N` stack, little or big endian. The ImageJ description gives the dimensions (channels,
+   *               slices, frames), the hyperstack flag, the display mode, the calibration; IJMetadata the labels, ranges and LUTs.
+   *               The compressed files go through IJLocalTiff (ij-proc-io.js), which shares parse() and assemble().
+   * Stack images (DOCS/studio-advanced/stacks/API.md §3) come out of read(); an image of one plane keeps the first versions' shape. */
   const IJTiff = (() => {
     const MAGIC = 0x494a494a; // 'IJIJ', ImageJ metadata header
-    const T_LABL = 0x6c61626c, T_RANG = 0x72616e67, T_LUTS = 0x6c757473;
+    const T_INFO = 0x696e666f, T_LABL = 0x6c61626c, T_RANG = 0x72616e67, T_LUTS = 0x6c757473;
     const TYPE_SIZE = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8 };
+    // CompositeImage.colors: the LUT a channel of a composite image has until one is assigned
+    const COMPOSITE_COLORS = ['#ff0000', '#00ff00', '#0000ff', '#ffffff', '#00ffff', '#ff00ff', '#ffff00', '#ffffff'];
+    const MAX_IMAGES = 1 << 20;
 
     function unsupported(msg) { return fail('IJ_TIFF_UNSUPPORTED', msg || 'unsupported TIFF'); }
     function fmtNum(v) { return Number.isInteger(v) ? v.toFixed(1) : String(v); }
@@ -1461,20 +1478,58 @@
       for (let i = 0; i < 256; i++) { p[i] = t[i * 3]; p[256 + i] = t[i * 3 + 1]; p[512 + i] = t[i * 3 + 2]; }
       return p;
     }
-    // An inverting display is stored as the reversed table.
-    function lutBytes(display) {
-      const t = IJLuts.get(display.lut || 'Grays');
-      if (!display.invert) return planar(t);
+    // The table a display shows: an inverting display is the reversed table.
+    function effectiveTable(display) {
+      const t = IJLuts.get((display && display.lut) || 'Grays');
+      if (!display || !display.invert) return t;
       const r = new Uint8Array(768);
       for (let i = 0; i < 256; i++) { const j = 255 - i; r[i * 3] = t[j * 3]; r[i * 3 + 1] = t[j * 3 + 1]; r[i * 3 + 2] = t[j * 3 + 2]; }
-      return planar(r);
+      return r;
+    }
+    function lutBytes(display) { return planar(effectiveTable(display)); }
+    // ImageProcessor.isInvertedLut: no step in 1..254 where r+g+b grows
+    function isInvertedTable(t) {
+      for (let i = 1; i < 255; i++) {
+        if (t[(i - 1) * 3] + t[(i - 1) * 3 + 1] + t[(i - 1) * 3 + 2] < t[i * 3] + t[i * 3 + 1] + t[i * 3 + 2]) return false;
+      }
+      return true;
+    }
+    function isGrayRamp(t) {
+      for (let i = 0; i < 256; i++) if (t[i * 3] !== i || t[i * 3 + 1] !== i || t[i * 3 + 2] !== i) return false;
+      return true;
     }
 
-    /* ImageJ metadata (tags 50838 byte counts / 50839 data): magic, (type, count)
-     * pairs, then the entries in the same order — slice labels ('labl', UTF-16),
-     * display ranges ('rang', 2 doubles per channel) and LUTs ('luts', planar
-     * r,g,b × 256 per channel). All integers use the file's (little) byte order,
-     * which is also how ImageJ and tifffile read the block. */
+    /* Java's Double.toString: the shortest digits that read back, plain between 1e-3 and 1e7 (always a decimal point), else d.dddE±n. */
+    function javaDouble(v) {
+      if (v !== v) return 'NaN';
+      if (v === Infinity) return 'Infinity';
+      if (v === -Infinity) return '-Infinity';
+      if (v === 0) return Object.is(v, -0) ? '-0.0' : '0.0';
+      const a = Math.abs(v);
+      if (a >= 1e-3 && a < 1e7) { const s = String(v); return s.indexOf('.') < 0 ? s + '.0' : s; }
+      const m = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(v.toExponential());
+      if (!m) return String(v);
+      // toExponential() without a digit count gives the shortest digits that round trip
+      return m[1] + m[2] + '.' + (m[3] || '0') + 'E' + Number(m[4]);
+    }
+    // FileSaver: "(int)x == x ? (int)x : x"
+    function intOrDouble(v) { return Number.isInteger(v) ? String(v) : javaDouble(v); }
+    // FileSaver.appendEscapedLine: characters outside 32..126, and the backslash, as \uXXXX
+    function escapedLine(s) {
+      let out = '';
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c >= 32 && c < 127 && c !== 92) out += s.charAt(i);
+        else out += '\\u' + c.toString(16).toUpperCase().padStart(4, '0');
+      }
+      return out + '\n';
+    }
+    function unescapeText(s) { return String(s).replace(/\\u([0-9A-Fa-f]{4})/g, (m, h) => String.fromCharCode(parseInt(h, 16))); }
+
+    // ---------------------------------------------------------------------------------------------- the first versions' writer
+    /* ImageJ metadata (tags 50838 byte counts / 50839 data) of the single-plane layout: magic, (type, count)
+     * pairs, then the entries in the same order — slice labels ('labl', UTF-16), display ranges ('rang', 2 doubles per channel) and
+     * LUTs ('luts', planar r,g,b × 256 per channel). All integers use the file's (little) byte order. */
     function buildMetadata(img) {
       const C = img.channels.length;
       const parts = [], counts = [];
@@ -1510,7 +1565,7 @@
      * the directories. Resolution tags carry pixels per unit as num / 10^k
      * (ResolutionUnit 1 = none, `unit=micron` in the ImageJ description).
      * Larger than 4 GiB → IJ_TOO_LARGE. */
-    function write(img) {
+    function writeSinglePlane(img) {
       const C = img.channels.length, W = img.width, H = img.height, bd = img.bitDepth;
       if (!C || !(W > 0 && H > 0) || [8, 16, 32].indexOf(bd) < 0) throw fail('IJ_BAD_SIZE', 'image');
       const planeBytes = W * H * (bd / 8);
@@ -1581,17 +1636,228 @@
       return out;
     }
 
+    // ---------------------------------------------------------------------------------------------- ImageJ's layout (stacks, RGB)
+    const planesOf = (ch) => (Array.isArray(ch.planes) ? ch.planes : [ch.data]);
+    function shapeOf(img) {
+      const rgb = img.rgb === true;
+      const nZ = Number.isInteger(img.nZ) && img.nZ > 0 ? img.nZ : 1, nT = Number.isInteger(img.nT) && img.nT > 0 ? img.nT : 1;
+      return { rgb, nC: rgb ? 1 : img.channels.length, nZ, nT, NP: nZ * nT };
+    }
+    const unitOf = (u) => (!u || u === 'px' || u === 'pixels' || u === 'pixel' ? 'pixel' : u === 'um' ? 'µm' : String(u));
+
+    /* FileSaver.getDescriptionString (1.54p), in its order: images, channels, slices, frames, hyperstack, mode, unit, finterval, tunit,
+     * [images > 1: spacing, fps, loop], min, max, xorigin, yorigin, zorigin. The unit is written when the calibration is scaled
+     * (Calibration.scaled) — the text escaped as appendEscapedLine does. */
+    function describe(img, sh, o) {
+      const cal = img.calibration || {};
+      const N = sh.nC * sh.nZ * sh.nT;
+      let s = 'ImageJ=1.54p\n';
+      if (N > 1) s += 'images=' + N + '\n';
+      if (sh.nC > 1) s += 'channels=' + sh.nC + '\n';
+      if (sh.nZ > 1) s += 'slices=' + sh.nZ + '\n';
+      if (sh.nT > 1) s += 'frames=' + sh.nT + '\n';
+      if (img.hyperstack === true) s += 'hyperstack=true\n';
+      if (o.composite) s += 'mode=' + (img.mode === 'color' ? 'color' : img.mode === 'gray' || img.mode === 'grayscale' ? 'grayscale' : 'composite') + '\n';
+      if (o.unit !== null) s += escapedLine('unit=' + o.unit);
+      if (cal.frameInterval) s += 'finterval=' + intOrDouble(cal.frameInterval) + '\n';
+      if (cal.timeUnit && cal.timeUnit !== 'sec') s += escapedLine('tunit=' + cal.timeUnit);
+      if (N > 1) {
+        if (o.pixelDepth !== 1) s += 'spacing=' + javaDouble(o.pixelDepth) + '\n';
+        if (cal.fps) s += 'fps=' + intOrDouble(cal.fps) + '\n';
+        s += 'loop=' + (cal.loop ? 'true' : 'false') + '\n';
+      }
+      if (o.range) s += 'min=' + javaDouble(o.range.min) + '\nmax=' + javaDouble(o.range.max) + '\n';
+      if (cal.xOrigin) s += 'xorigin=' + javaDouble(cal.xOrigin) + '\n';
+      if (cal.yOrigin) s += 'yorigin=' + javaDouble(cal.yOrigin) + '\n';
+      if (cal.zOrigin) s += 'zorigin=' + javaDouble(cal.zOrigin) + '\n';
+      return ascii(s);   // ends with the NUL ImageJ appends
+    }
+
+    /* IJMetadata of FileSaver / TiffEncoder.getMetaDataSize: header (magic + one (type, count) pair per kind), then the entries in
+     * the order of the kinds: slice labels (one per image, an empty entry for a missing label), display ranges (one entry, every
+     * channel's min, max), channel LUTs (one 768-byte entry per channel; only when a channel's LUT is not its composite default). */
+    function imageJMetadata(img, sh, composite, chans) {
+      const N = sh.nC * sh.nZ * sh.nT;
+      const kinds = [], entries = [];
+      const labels = Array.isArray(img.labels) ? img.labels.slice(0, N) : null;
+      if (labels && labels.some((l) => typeof l === 'string' && l.length > 0)) {
+        kinds.push([T_LABL, labels.length]);
+        for (const l of labels) {
+          const s = typeof l === 'string' ? l : '';
+          const b = new Uint8Array(s.length * 2), v = new DataView(b.buffer);
+          for (let i = 0; i < s.length; i++) v.setUint16(i * 2, s.charCodeAt(i), false);
+          entries.push(b);
+        }
+      }
+      if (composite) {
+        kinds.push([T_RANG, 1]);
+        const rang = new Uint8Array(chans.length * 16), rv = new DataView(rang.buffer);
+        chans.forEach((ch, i) => { rv.setFloat64(i * 16, ch.display.min, false); rv.setFloat64(i * 16 + 8, ch.display.max, false); });
+        entries.push(rang);
+        const custom = chans.some((ch, i) => {
+          const def = IJLuts.get(IJLuts.forColor(COMPOSITE_COLORS[i < COMPOSITE_COLORS.length ? i : 7]));
+          const t = effectiveTable(ch.display);
+          for (let k = 0; k < 768; k++) if (t[k] !== def[k]) return true;
+          return false;
+        });
+        if (custom) {
+          kinds.push([T_LUTS, chans.length]);
+          for (const ch of chans) entries.push(lutBytes(ch.display));
+        }
+      }
+      if (!kinds.length) return null;
+      const header = new Uint8Array(4 + 8 * kinds.length), hv = new DataView(header.buffer);
+      hv.setUint32(0, MAGIC, false);
+      kinds.forEach(([type, count], i) => { hv.setUint32(4 + i * 8, type, false); hv.setUint32(8 + i * 8, count, false); });
+      const counts = [header.length].concat(entries.map((e) => e.length));
+      let total = header.length;
+      for (const e of entries) total += e.length;
+      const bytes = new Uint8Array(total);
+      bytes.set(header, 0);
+      let at = header.length;
+      for (const e of entries) { bytes.set(e, at); at += e.length; }
+      return { bytes, counts };
+    }
+
+    function putRational(dv, at, num, den) { dv.setUint32(at, num >>> 0, false); dv.setUint32(at + 4, den >>> 0, false); }
+
+    /* TiffEncoder layout: header, IFD of image 1, [bits per sample of an RGB image], description, resolution, metadata byte counts,
+     * metadata, colour map, ALL the pixel data, then the IFDs of images 2..N (each one's offsets pointing at the first IFD's tag data). */
+    function writeImageJ(img, sh) {
+      const { rgb, nC, nZ, nT, NP } = sh;
+      const W = img.width, H = img.height, bd = img.bitDepth;
+      if (!(W > 0 && H > 0) || [8, 16, 32].indexOf(bd) < 0) throw fail('IJ_BAD_SIZE', 'image');
+      if (!img.channels || !img.channels.length || (rgb && (img.channels.length !== 3 || bd !== 8))) throw fail('IJ_BAD_SIZE', 'channels');
+      const lists = img.channels.map(planesOf);
+      for (const l of lists) {
+        if (l.length !== NP) throw fail('IJ_BAD_SIZE', 'planes');
+        for (const a of l) if (!a || a.length !== W * H) throw fail('IJ_BAD_SIZE', 'plane size');
+      }
+      const N = nC * nZ * nT;
+      const bytesPerPixel = rgb ? 3 : bd / 8;
+      const imageSize = W * H * bytesPerPixel;
+      const composite = !rgb && nC > 1;
+      const chans = rgb ? [] : img.channels;
+      const active = Math.min(img.channels.length - 1, Math.max(0, Number.isInteger(img.active) ? img.active : 0));
+      const cur = rgb ? null : img.channels[active].display;
+
+      const cal = img.calibration || {};
+      const pw = cal.pixelWidth > 0 ? cal.pixelWidth : 1, ph = cal.pixelHeight > 0 ? cal.pixelHeight : 1;
+      const pd = cal.pixelDepth > 0 ? cal.pixelDepth : 1;
+      const unit = unitOf(cal.unit);
+      const scaled = pw !== 1 || ph !== 1 || pd !== 1 || unit !== 'pixel';
+      const fiUnit = scaled ? unit : null;
+
+      // palette (8-bit with a LUT), white-is-zero (16 / 32-bit inverted LUT)
+      let colorMap = null, photo = rgb ? 2 : 1;
+      if (!rgb && nC === 1) {
+        const t = effectiveTable(cur);
+        if (bd === 8) { if (!isGrayRamp(t)) { colorMap = t; photo = 3; } }
+        else if (isInvertedTable(t)) photo = 0;
+      }
+      let range = null;
+      if (!rgb) {
+        const lo = cur.min, hi = cur.max;
+        if (bd !== 8 || lo !== 0 || hi !== 255) range = { min: lo, max: hi };
+      }
+      const description = describe(img, sh, { composite, unit: fiUnit, pixelDepth: pd, range });
+      const meta = imageJMetadata(img, sh, composite, chans);
+
+      const entries = (first) => {
+        const e = [[254, 4, 1, 0], [256, 4, 1, W], [257, 4, 1, H], [258, 3, rgb ? 3 : 1, rgb ? 'BPS' : bd], [259, 3, 1, 1], [262, 3, 1, photo],
+          [270, 2, description.length, 'DESC'], [273, 4, 1, 'STRIP'], [277, 3, 1, rgb ? 3 : 1], [278, 4, 1, H], [279, 4, 1, imageSize]];
+        if (fiUnit !== null) e.push([282, 5, 1, 'XRES'], [283, 5, 1, 'YRES'], [296, 3, 1, 1]);
+        if (colorMap) e.push([320, 3, 768, 'CMAP']);
+        if (!rgb && bd === 32) e.push([339, 3, 1, 3]);
+        if (meta && first) e.push([50838, 4, meta.counts.length, 'MCOUNT'], [50839, 1, meta.bytes.length, 'META']);
+        return e;
+      };
+      const first = entries(true), later = entries(false);
+      const ifd0Size = 2 + first.length * 12 + 4, ifdNSize = 2 + later.length * 12 + 4;
+      const bpsOff = 8 + ifd0Size;
+      const descOff = bpsOff + (rgb ? 6 : 0);
+      const scaleOff = descOff + description.length;
+      const countsOff = scaleOff + (fiUnit !== null ? 16 : 0);
+      const metaOff = countsOff + (meta ? meta.counts.length * 4 : 0);
+      const cmapOff = metaOff + (meta ? meta.bytes.length : 0);
+      const imageOffset = cmapOff + (colorMap ? 1536 : 0);
+      const dataEnd = imageOffset + imageSize * N;
+      const total = dataEnd + (N - 1) * ifdNSize;
+      if (total > 0xffffffff) throw fail('IJ_TOO_LARGE', 'over 4 GiB');
+
+      const out = new Uint8Array(total), dv = new DataView(out.buffer);
+      out[0] = 0x4d; out[1] = 0x4d; dv.setUint16(2, 42, false); dv.setUint32(4, 8, false);
+      const writeIfd = (at, list, strip, next) => {
+        dv.setUint16(at, list.length, false);
+        let p = at + 2;
+        for (const [tag, type, count, val] of list) {
+          dv.setUint16(p, tag, false); dv.setUint16(p + 2, type, false); dv.setUint32(p + 4, count, false);
+          let v = val;
+          if (typeof val === 'string') {
+            v = val === 'BPS' ? bpsOff : val === 'DESC' ? descOff : val === 'STRIP' ? strip : val === 'XRES' ? scaleOff : val === 'YRES' ? scaleOff + 8
+              : val === 'CMAP' ? cmapOff : val === 'MCOUNT' ? countsOff : metaOff;
+          }
+          if (type === 3 && count === 1) dv.setUint16(p + 8, v, false); else dv.setUint32(p + 8, v, false);
+          p += 12;
+        }
+        dv.setUint32(p, next, false);
+      };
+      writeIfd(8, first, imageOffset, N > 1 ? dataEnd : 0);
+      for (let k = 1; k < N; k++) writeIfd(dataEnd + (k - 1) * ifdNSize, later, imageOffset + k * imageSize, k + 1 < N ? dataEnd + k * ifdNSize : 0);
+
+      if (rgb) { dv.setUint16(bpsOff, 8, false); dv.setUint16(bpsOff + 2, 8, false); dv.setUint16(bpsOff + 4, 8, false); }
+      out.set(description, descOff);
+      if (fiUnit !== null) {
+        // TiffEncoder.writeScale: pixels per unit as (int)(x·scale) / (int)scale, scale 1e6 unless that overflows an int
+        const xs = 1 / pw, ys = 1 / ph;
+        let scale = 1000000;
+        if (xs * scale > 2147483647 || ys * scale > 2147483647) scale = 2147483647 / Math.max(xs, ys);
+        putRational(dv, scaleOff, Math.trunc(xs * scale), Math.trunc(scale));
+        putRational(dv, scaleOff + 8, Math.trunc(ys * scale), Math.trunc(scale));
+      }
+      if (meta) {
+        meta.counts.forEach((n, i) => dv.setUint32(countsOff + i * 4, n, false));
+        out.set(meta.bytes, metaOff);
+      }
+      if (colorMap) for (let i = 0; i < 256; i++) { out[cmapOff + i * 2] = colorMap[i * 3]; out[cmapOff + 512 + i * 2] = colorMap[i * 3 + 1]; out[cmapOff + 1024 + i * 2] = colorMap[i * 3 + 2]; }
+
+      // pixels, ImageJ stack order (n = t·nC·nZ + z·nC + c), big endian
+      for (let n = 0; n < N; n++) {
+        const t = Math.floor(n / (nC * nZ)), rem = n % (nC * nZ), z = Math.floor(rem / nC), c = rem % nC;
+        const pi = t * nZ + z;
+        const at = imageOffset + n * imageSize;
+        if (rgb) {
+          const r = lists[0][pi], g = lists[1][pi], b = lists[2][pi];
+          for (let i = 0, o = at; i < r.length; i++, o += 3) { out[o] = r[i]; out[o + 1] = g[i]; out[o + 2] = b[i]; }
+        } else {
+          const a = lists[c][pi];
+          if (bd === 8) out.set(a, at);
+          else if (bd === 16) { for (let i = 0, o = at; i < a.length; i++, o += 2) { const v = a[i]; out[o] = v >> 8; out[o + 1] = v & 255; } }
+          else { for (let i = 0, o = at; i < a.length; i++, o += 4) dv.setFloat32(o, a[i], false); }
+        }
+      }
+      return out;
+    }
+
+    /* A document / image with `channels[c].data` (one plane) or `.planes` (nZ·nT planes, pi = t·nZ + z), `nZ`, `nT`, `hyperstack`,
+     * `rgb`, `labels`, `mode`, `active`, `calibration`. */
+    function write(img) {
+      if (!img || !Array.isArray(img.channels)) throw fail('IJ_BAD_SIZE', 'image');
+      const sh = shapeOf(img);
+      if (sh.NP === 1 && !sh.rgb) return writeSinglePlane(img);
+      return writeImageJ(img, sh);
+    }
+
+    // ---------------------------------------------------------------------------------------------- reading
     function parseDescription(s) {
       const o = {};
       for (const line of s.split(/\r?\n/)) { const k = line.indexOf('='); if (k > 0) o[line.slice(0, k)] = line.slice(k + 1); }
       return o;
     }
 
-    /* Uncompressed, strip-organised, single-sample 8/16/32-bit (float) TIFF,
-     * little or big endian. Planes become channels. ImageJ's one-IFD stacks
-     * (`images=N`, planes back to back) and one-IFD-per-plane files both read.
-     * Anything else → IJ_TIFF_UNSUPPORTED. */
-    function read(input, name) {
+    /* The directory chain of a classic TIFF: { bytes, le, dv, ifds: [tag table], nums(tag), one(tags, id, default), desc, imagej }.
+     * Throws IJ_TIFF_UNSUPPORTED for what is not a classic TIFF. */
+    function parse(input) {
       const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
       if (bytes.length < 8) throw unsupported('short');
       const le = bytes[0] === 0x49 && bytes[1] === 0x49;
@@ -1605,7 +1871,7 @@
       const seen = new Set();
       let off = dv.getUint32(4, le);
       while (off) {
-        if (seen.has(off) || ifds.length > 65536 || !inFile(off, 2)) throw unsupported('bad IFD chain');
+        if (seen.has(off) || ifds.length > MAX_IMAGES || !inFile(off, 2)) throw unsupported('bad IFD chain');
         seen.add(off);
         const n = dv.getUint16(off, le);
         if (!inFile(off + 2, n * 12 + 4)) throw unsupported('bad IFD');
@@ -1641,75 +1907,123 @@
         return a;
       };
       const one = (tags, id, dflt) => (tags[id] ? nums(tags[id])[0] : dflt);
-
       const t0 = ifds[0];
-      let desc = {};
+      let desc = {}, imagej = false;
       if (t0[270] && t0[270].type === 2) {
         let s = '';
         for (let i = 0; i < t0[270].count; i++) { const c = bytes[t0[270].at + i]; if (!c) break; s += String.fromCharCode(c); }
+        imagej = /^ImageJ=/.test(s);
         desc = parseDescription(s);
       }
+      return { bytes, le, dv, ifds, nums, one, desc, imagej, inFile };
+    }
 
-      const W = one(t0, 256), H = one(t0, 257), bd = one(t0, 258, 1);
+    /* What one IFD says about its pixels (everything uncompressed AND compressed readers need): { W, H, bd, spp, planarConfig,
+     * compression, predictor, photo, so, sc, rps, cmap }. Refuses what no reader here takes (tiles, signed, other sample counts). */
+    function ifdInfo(P, tags) {
+      const { one, nums } = P;
+      const W = one(tags, 256), H = one(tags, 257), bd = one(tags, 258, 1), spp = one(tags, 277, 1);
       if (!(W > 0 && H > 0)) throw unsupported('size');
-      if ([8, 16, 32].indexOf(bd) < 0) throw unsupported('bit depth');
-      const planeBytes = W * H * (bd / 8);
-      if ((parseInt(desc.slices, 10) || 1) * (parseInt(desc.frames, 10) || 1) > 1) throw unsupported('z / t stacks');
-
-      const planes = [];
-      for (const tags of ifds) {
-        if (one(tags, 256) !== W || one(tags, 257) !== H || one(tags, 258, 1) !== bd) throw unsupported('mixed planes');
-        if (one(tags, 259, 1) !== 1) throw unsupported('compression');
-        if (one(tags, 277, 1) !== 1) throw unsupported('samples per pixel');
-        if (one(tags, 284, 1) !== 1) throw unsupported('planar');
-        if (tags[322] || tags[324]) throw unsupported('tiles');
-        if (one(tags, 317, 1) !== 1) throw unsupported('predictor');
-        const photo = one(tags, 262, 1);
-        if (photo !== 0 && photo !== 1) throw unsupported('photometric');
-        if (one(tags, 339, 1) !== (bd === 32 ? 3 : 1)) throw unsupported('sample format');
-        if (!tags[273] || !tags[279]) throw unsupported('strips');
-        const so = nums(tags[273]), sc = nums(tags[279]);
-        if (so.length !== sc.length) throw unsupported('strips');
-        planes.push({ so, sc, photo });
+      if (spp !== 1 && spp !== 3) throw unsupported('samples per pixel');
+      if (spp === 3) { if (tags[258] && tags[258].count === 3 && nums(tags[258]).some((b) => b !== 8)) throw unsupported('bit depth'); }
+      const bits = spp === 3 ? 8 : bd;
+      if ([8, 16, 32].indexOf(bits) < 0) throw unsupported('bit depth');
+      const planarConfig = one(tags, 284, 1);
+      if (planarConfig !== 1 && planarConfig !== 2) throw unsupported('planar');
+      if (tags[322] || tags[324]) throw unsupported('tiles');
+      const photo = one(tags, 262, 1);
+      if (spp === 3 ? photo !== 2 : (photo !== 0 && photo !== 1 && !(photo === 3 && bits === 8 && tags[320]))) throw unsupported('photometric');
+      if (one(tags, 339, 1) !== (bits === 32 && spp === 1 ? 3 : 1)) throw unsupported('sample format');
+      if (!tags[273] || !tags[279]) throw unsupported('strips');
+      const so = nums(tags[273]), sc = nums(tags[279]);
+      if (so.length !== sc.length) throw unsupported('strips');
+      let rps = one(tags, 278, H);
+      if (!(rps > 0) || rps > H) rps = H;
+      let cmap = null;
+      if (photo === 3) {
+        const m = nums(tags[320]);
+        if (m.length !== 768) throw unsupported('colour map');
+        cmap = new Uint8Array(768);
+        for (let i = 0; i < 256; i++) { cmap[i * 3] = m[i] >> 8; cmap[i * 3 + 1] = m[256 + i] >> 8; cmap[i * 3 + 2] = m[512 + i] >> 8; }
       }
+      return { W, H, bd: bits, spp, planarConfig, compression: one(tags, 259, 1), predictor: one(tags, 317, 1), photo, so, sc, rps, cmap };
+    }
 
-      // ImageJ stacks: one IFD + `images=N` means N planes back to back.
+    /* The images of an uncompressed TIFF: [ [plane] ] (grey) or [ [R, G, B] ] (RGB) per ImageJ image, in file order. */
+    function readImages(P) {
+      const { bytes, le, ifds, desc, inFile } = P;
+      const infos = ifds.map((t) => ifdInfo(P, t));
+      const f = infos[0];
+      for (const i of infos) {
+        if (i.W !== f.W || i.H !== f.H || i.bd !== f.bd || i.spp !== f.spp) throw unsupported('mixed planes');
+        if (i.compression !== 1) throw unsupported('compression');
+        if (i.predictor !== 1) throw unsupported('predictor');
+      }
+      const W = f.W, H = f.H, bd = f.bd, spp = f.spp;
+      const sampleBytes = W * H * (bd / 8);
+      const imageBytes = sampleBytes * spp;
       const images = parseInt(desc.images, 10) || 1;
-      let sources;
-      if (ifds.length === 1 && images > 1) {
-        const first = planes[0].so[0];
-        sources = [];
-        for (let k = 0; k < images; k++) sources.push([{ o: first + k * planeBytes, n: planeBytes }]);
-      } else {
-        sources = planes.map((p) => {
+      const Ctor = bd === 8 ? Uint8Array : bd === 16 ? Uint16Array : Float32Array;
+      if (ifds.length === 1 && images > 1 && f.planarConfig === 2) throw unsupported('planar stack');
+      if (ifds.length === 1 && images > MAX_IMAGES) throw unsupported('images');
+
+      // the bytes of one image as `spp` strip groups: [[{ o, n }…] per sample], or one group for chunky data
+      const runsOf = (info, offset) => {
+        const groups = info.planarConfig === 2 && spp === 3 ? 3 : 1;
+        const per = Math.ceil(info.so.length / groups);
+        const out = [];
+        for (let g = 0; g < groups; g++) {
+          const need = groups === 3 ? sampleBytes : imageBytes;
           let have = 0;
           const runs = [];
-          for (let i = 0; i < p.so.length && have < planeBytes; i++) {
-            const n = Math.min(p.sc[i], planeBytes - have);
-            runs.push({ o: p.so[i], n }); have += n;
+          for (let i = g * per; i < (g + 1) * per && i < info.so.length && have < need; i++) {
+            const n = Math.min(info.sc[i], need - have);
+            runs.push({ o: info.so[i] + (offset || 0), n }); have += n;
           }
-          if (have !== planeBytes) throw unsupported('strip size');
-          return runs;
-        });
-      }
-
-      const Ctor = bd === 8 ? Uint8Array : bd === 16 ? Uint16Array : Float32Array;
-      const datas = sources.map((runs) => {
-        const buf = new Uint8Array(planeBytes);
+          if (have !== need) throw unsupported('strip size');
+          out.push(runs);
+        }
+        return out;
+      };
+      const gather = (runs, size) => {
+        const buf = new Uint8Array(size);
         let at = 0;
         for (const r of runs) {
           if (!inFile(r.o, r.n)) throw unsupported('data out of file');
           buf.set(bytes.subarray(r.o, r.o + r.n), at); at += r.n;
         }
-        if (bd > 8 && le !== LE) { // swap into host order
+        return buf;
+      };
+      const toArray = (buf) => {
+        if (bd > 8 && le !== LE) {   // swap into host order
           const k = bd / 8;
           for (let i = 0; i < buf.length; i += k) for (let a = 0, b = k - 1; a < b; a++, b--) { const t = buf[i + a]; buf[i + a] = buf[i + b]; buf[i + b] = t; }
         }
         return new Ctor(buf.buffer);
-      });
+      };
+      const one = (groups) => {
+        if (spp === 1) return [toArray(gather(groups[0], sampleBytes))];
+        if (groups.length === 3) return groups.map((g) => gather(g, sampleBytes));
+        const buf = gather(groups[0], imageBytes);          // chunky RGB → three planes
+        const r = new Uint8Array(W * H), g = new Uint8Array(W * H), b = new Uint8Array(W * H);
+        for (let i = 0, o = 0; i < W * H; i++, o += 3) { r[i] = buf[o]; g[i] = buf[o + 1]; b[i] = buf[o + 2]; }
+        return [r, g, b];
+      };
+      const out = [];
+      if (ifds.length === 1 && images > 1) {
+        const base = infos[0].so[0];
+        for (let k = 0; k < images; k++) out.push(one([[{ o: base + k * imageBytes, n: imageBytes }]]));
+      } else {
+        for (const info of infos) out.push(one(runsOf(info, 0)));
+      }
+      return out;
+    }
 
-      // ImageJ metadata: labels, display ranges, LUTs
-      let labels = null, ranges = null, luts = null;
+    /* ImageJ's metadata block: { labels: [string] | null, ranges: [[min, max]] | null, luts: [table] | null, info }. */
+    function readMetadata(P) {
+      const { bytes, le, dv, ifds, nums } = P;
+      const t0 = ifds[0];
+      let labels = null, ranges = null, luts = null, info = null;
       const tc = t0[50838], td = t0[50839];
       if (tc && td && tc.type === 4) {
         const counts = nums(tc);
@@ -1736,43 +2050,125 @@
                 let s = '';
                 for (let q = 0; q + 2 <= n; q += 2) s += String.fromCharCode(dv.getUint16(p + q, le));
                 (labels || (labels = [])).push(s);
+              } else if (t.type === T_INFO && n > 0 && info === null) {
+                let s = '';
+                for (let q = 0; q + 2 <= n; q += 2) s += String.fromCharCode(dv.getUint16(p + q, le));
+                info = s;
               }
               p += n;
             }
           }
         }
       }
+      return { labels, ranges, luts, info };
+    }
 
-      // calibration: pixels per unit → size of a pixel
+    /* The calibration a TIFF carries: pixels per unit → size of a pixel (the unit from the ImageJ description, else the
+     * resolution unit: centimetres and inches become µm), plus what the ImageJ description adds (spacing, finterval, tunit, fps, loop,
+     * origins). `stack`: the image has several planes or is RGB (pixelDepth is always given then). */
+    function calibrationOf(P, stack) {
+      const { ifds, nums, one, desc } = P;
+      const t0 = ifds[0];
       const cal = { pixelWidth: 1, pixelHeight: 1, unit: 'px' };
       if (t0[282] && t0[283]) {
         const xr = nums(t0[282])[0], yr = nums(t0[283])[0], ru = one(t0, 296, 2);
         if (xr > 0 && yr > 0) {
-          if (desc.unit) { cal.unit = /^(micron|um|µm|μm)$/i.test(desc.unit) ? 'µm' : desc.unit; cal.pixelWidth = 1 / xr; cal.pixelHeight = 1 / yr; }
+          const u = desc.unit !== undefined ? unescapeText(desc.unit) : '';
+          if (u) { cal.unit = /^(micron|um|µm|μm)$/i.test(u) ? 'µm' : u; cal.pixelWidth = 1 / xr; cal.pixelHeight = 1 / yr; }
           else if (ru === 3) { cal.unit = 'µm'; cal.pixelWidth = 10000 / xr; cal.pixelHeight = 10000 / yr; }
           else if (ru === 2) { cal.unit = 'µm'; cal.pixelWidth = 25400 / xr; cal.pixelHeight = 25400 / yr; }
         }
       }
-
-      const dMin = desc.min !== undefined ? parseFloat(desc.min) : NaN, dMax = desc.max !== undefined ? parseFloat(desc.max) : NaN;
-      const base = { Grays: '#ffffff', Red: '#ff0000', Green: '#00ff00', Blue: '#0000ff', Cyan: '#00ffff', Magenta: '#ff00ff', Yellow: '#ffff00' };
-      const channels = datas.map((data, i) => {
-        const ch = { name: labels && labels[i] ? labels[i] : 'C' + (i + 1), color: '#ffffff', data };
-        const disp = IJImage.defaultDisplay(ch, bd);
-        if (ranges && ranges[i]) { disp.min = ranges[i][0]; disp.max = ranges[i][1]; }
-        else if (dMin === dMin && dMax === dMax) { disp.min = dMin; disp.max = dMax; }
-        if (luts && luts[i]) {
-          const id = IJLuts.identify(luts[i]);
-          disp.lut = id.lut; disp.invert = id.invert;
-          if (typeof id.lut === 'string') ch.color = id.lut.charAt(0) === '#' ? id.lut : (base[id.lut] || '#ffffff');
-        } else if (planes[Math.min(i, planes.length - 1)].photo === 0) disp.invert = true;
-        ch.display = disp;
-        return ch;
-      });
-      return { name: name || 'Untitled', width: W, height: H, bitDepth: bd, channels, calibration: cal, provenance: null };
+      const num = (k) => { const v = parseFloat(desc[k]); return v === v ? v : null; };
+      const sp = num('spacing');
+      if (sp !== null && sp !== 0) cal.pixelDepth = Math.abs(sp); else if (stack) cal.pixelDepth = 1;
+      const fi = num('finterval'); if (fi !== null && fi !== 0) cal.frameInterval = fi;
+      if (desc.tunit) cal.timeUnit = unescapeText(desc.tunit);
+      const fps = num('fps'); if (fps !== null && fps !== 0) cal.fps = fps;
+      if (desc.loop === 'true') cal.loop = true;
+      for (const [k, key] of [['xorigin', 'xOrigin'], ['yorigin', 'yOrigin'], ['zorigin', 'zOrigin']]) { const v = num(k); if (v) cal[key] = v; }
+      return cal;
     }
 
-    return { write, read };
+    /* The stack image of decoded pixels. images[n] = [plane] or [R, G, B] in ImageJ stack order. */
+    function assemble(P, images, name) {
+      const { desc, ifds } = P;
+      const info0 = ifdInfo(P, ifds[0]);
+      const W = info0.W, H = info0.H, bd = info0.bd;
+      const rgb = info0.spp === 3;
+      const N = images.length;
+      if (!N) throw unsupported('no image');
+      let c = parseInt(desc.channels, 10) || 1, z = parseInt(desc.slices, 10) || 1, t = parseInt(desc.frames, 10) || 1;
+      if (c * z * t !== N) { c = 1; z = N; t = 1; }
+      if (rgb && c > 1) { z = c * z; c = 1; }
+      const nC = c, nZ = z, nT = t, NP = nZ * nT;
+      const nDims = (nC > 1 ? 1 : 0) + (nZ > 1 ? 1 : 0) + (nT > 1 ? 1 : 0);
+      const hyperstack = desc.hyperstack === 'true' && nDims >= 2;
+      const meta = readMetadata(P);
+      const cal = calibrationOf(P, NP > 1 || rgb);
+      const dMin = desc.min !== undefined ? parseFloat(desc.min) : NaN, dMax = desc.max !== undefined ? parseFloat(desc.max) : NaN;
+      const base = { Grays: '#ffffff', Red: '#ff0000', Green: '#00ff00', Blue: '#0000ff', Cyan: '#00ffff', Magenta: '#ff00ff', Yellow: '#ffff00' };
+      const planeAt = (ch, pi) => {            // plane of channel `ch` at (z, t)
+        const tt = Math.floor(pi / nZ), zz = pi % nZ;
+        return images[tt * nC * nZ + zz * nC + ch][0];
+      };
+
+      let channels;
+      if (rgb) {
+        const names = ['Red', 'Green', 'Blue'], colors = ['#ff0000', '#00ff00', '#0000ff'];
+        channels = [0, 1, 2].map((k) => {
+          const planes = images.map((im) => im[k]);
+          const ch = { name: names[k], color: colors[k], display: { min: 0, max: 255, lut: names[k], invert: false } };
+          if (NP > 1) ch.planes = planes; else ch.data = planes[0];
+          return ch;
+        });
+      } else {
+        const photoInverted = [info0.photo === 0];
+        channels = [];
+        for (let i = 0; i < nC; i++) {
+          const planes = [];
+          for (let pi = 0; pi < NP; pi++) planes.push(planeAt(i, pi));
+          const ch = { name: NP === 1 && meta.labels && meta.labels[i] ? meta.labels[i] : 'C' + (i + 1), color: '#ffffff' };
+          if (NP > 1) ch.planes = planes; else ch.data = planes[0];
+          const disp = IJImage.defaultDisplay({ data: planes[0], bitDepth: bd }, bd);
+          if (meta.ranges && meta.ranges[i]) { disp.min = meta.ranges[i][0]; disp.max = meta.ranges[i][1]; }
+          else if (dMin === dMin && dMax === dMax) { disp.min = dMin; disp.max = dMax; }
+          let table = null;
+          if (meta.luts && meta.luts[i]) table = meta.luts[i];
+          else if (info0.cmap && nC === 1) table = info0.cmap;
+          if (table) {
+            const id = IJLuts.identify(table);
+            disp.lut = id.lut; disp.invert = id.invert;
+            if (typeof id.lut === 'string') ch.color = id.lut.charAt(0) === '#' ? id.lut : (base[id.lut] || '#ffffff');
+          } else if (nC > 1) {
+            // a composite image without LUTs shows each channel in ImageJ's default colour
+            const col = COMPOSITE_COLORS[i < COMPOSITE_COLORS.length ? i : 7];
+            ch.color = col; disp.lut = IJLuts.forColor(col); disp.invert = false;
+          } else if (photoInverted[Math.min(i, photoInverted.length - 1)]) disp.invert = true;
+          ch.display = disp;
+          channels.push(ch);
+        }
+      }
+
+      const out = { name: name || 'Untitled', width: W, height: H, bitDepth: bd, channels, calibration: cal, provenance: null };
+      if (NP > 1 || rgb) {
+        out.nZ = nZ; out.nT = nT; out.hyperstack = hyperstack; out.rgb = rgb;
+        if (meta.labels && meta.labels.some((l) => l)) {
+          const n = rgb ? NP : N;
+          if (meta.labels.length >= n) out.labels = meta.labels.slice(0, n).map((l) => (l ? l : null));
+        }
+      }
+      if (nC > 1) out.mode = desc.mode === 'color' ? 'color' : desc.mode === 'grayscale' ? 'gray' : 'composite';
+      return out;
+    }
+
+    /* Uncompressed TIFF → stack image (see the header). Compressed → IJ_TIFF_UNSUPPORTED (IJLocalTiff takes those). */
+    function read(input, name) {
+      const P = parse(input);
+      return assemble(P, readImages(P), name);
+    }
+
+    return { write, read, parse, ifdInfo, assemble, readMetadata, javaDouble, escapedLine, COMPOSITE_COLORS };
   })();
 
   // ---------------------------------------------------------------- IJOpRegistry
@@ -1828,6 +2224,9 @@
       if (['each', 'one', 'all'].indexOf(spec.channels) < 0) throw bad('op channels ' + name);
       if (spec.roi === undefined) spec.roi = 'mask';
       if (['mask', 'bounds', 'ignore'].indexOf(spec.roi) < 0) throw bad('op roi ' + name);
+      // roiFor(params) → 'mask' | 'bounds' | 'ignore': the roi mode of one request when it depends on the parameters; an op that answers
+      // 'ignore' gets the selection's mask as ctx.selection in prepare and applies it itself
+      if (spec.roiFor !== undefined && typeof spec.roiFor !== 'function') throw bad('op roiFor ' + name);
       if (spec.preview === undefined) spec.preview = spec.kind === 'pixel' ? 'region' : false;
       if (spec.preview !== false && spec.preview !== 'region' && spec.preview !== 'reduced') throw bad('op preview ' + name);
       if (spec.kind !== 'pixel' && spec.preview !== false) throw bad('only a pixel op previews ' + name);
@@ -1837,6 +2236,21 @@
       if (spec.display !== undefined && spec.display !== true && spec.display !== false && spec.display !== '16/32') throw bad('op display ' + name);
       if (spec.docless !== undefined && typeof spec.docless !== 'boolean') throw bad('op docless ' + name);
       if (spec.docless && spec.kind !== 'compute') throw bad('only a compute op can be docless ' + name);
+      // Stacks and RGB (DOCS/studio-advanced/stacks/API.md §5). `stack`: which planes the op sees / the engine runs it on
+      //   pixel   'ask' (default, DOES_STACKS: the request's `planes` picks the (z,t) set) | 'plane' (the plane at `pos` only)
+      //   size    'all' (default: run once per (z,t), results assembled) | 'whole' (one run, the view carries every plane)
+      //   newdoc  'plane' (default) | 'each' (per (z,t), one stack document per output) | 'whole'
+      //   compute 'plane' (default) | 'whole'
+      // `rgb`: what a 24-bit RGB document (three 8-bit channels) means for the op: 'each' (default of pixel / size / newdoc: the
+      // three colour planes are processed as three 8-bit channels and the result stays RGB), 'gray' (default of compute: the
+      // op sees ONE 8-bit luminance channel), 'whole' (the op sees the three channels and view.rgb === true), false (refused
+      // on RGB with IJ_BAD_TYPE, like a PlugInFilter without DOES_RGB).
+      const STACKS = { pixel: ['ask', 'plane'], size: ['all', 'whole'], newdoc: ['plane', 'each', 'whole'], compute: ['plane', 'whole'] };
+      if (spec.stack === undefined) spec.stack = STACKS[spec.kind][0];
+      if (STACKS[spec.kind].indexOf(spec.stack) < 0) throw bad('op stack ' + name);
+      if (spec.rgb === undefined) spec.rgb = spec.kind === 'compute' ? 'gray' : 'each';
+      const RGBS = spec.kind === 'compute' || spec.kind === 'newdoc' ? ['each', 'gray', 'whole', false] : ['each', 'whole', false];
+      if (RGBS.indexOf(spec.rgb) < 0) throw bad('op rgb ' + name);
       if (spec.kind === 'pixel') { if (typeof spec.prepare !== 'function') throw bad('op prepare ' + name); }
       else if (typeof spec.run !== 'function') throw bad('op run ' + name);
       return spec;
@@ -1867,7 +2281,7 @@
     // worker command of its own. The engine dispatches an unknown `cmd` name to it, the page's api.call may reach
     // it only from the package that registered it. Page and worker both load the package file, so both see the
     // names; only the worker ever runs a handler.
-    //   IJOpRegistry.defineCommand(name, { pkg, long?, handler(args, E) })   name: 'doc.tiff.project' (lower-case
+    //   IJOpRegistry.defineCommand(name, { pkg, long?, passive?, handler(args, E) })   name: 'doc.tiff.project' (lower-case
     //                              first segment, at least one dot; `engine.` and `session.` belong to the engine)
     //   IJOpRegistry.getCommand(name) → spec | null    listCommands(pkg?) → [name]
     //   IJOpRegistry.unregisterCommand(name)           the worker's package loader (a package that failed to load);
@@ -1879,6 +2293,8 @@
       if (!spec || typeof spec !== 'object' || typeof spec.pkg !== 'string' || !/^[a-z][a-z0-9]*$/.test(spec.pkg)) throw bad('command pkg ' + name);
       if (typeof spec.handler !== 'function') throw bad('command handler ' + name);
       if (spec.long !== undefined && typeof spec.long !== 'boolean') throw bad('command long ' + name);
+      // passive: answered by the page's api.call without a busy state (the macro bridge's replies arrive while a run holds the lane)
+      if (spec.passive !== undefined && typeof spec.passive !== 'boolean') throw bad('command passive ' + name);
       const old = commands.get(name);
       if (old) {
         if (old === spec) return spec;
@@ -1903,11 +2319,107 @@
     return { define, get, list, unregister, defineCommand, getCommand, listCommands, unregisterCommand, isWithdrawnCommand };
   })();
 
+  // ---------------------------------------------------------------- IJStack
+  /* Pure index maths of image stacks (DOCS/studio-advanced/stacks/API.md §1). Page and worker, no state.
+   *   dims   = { nC, nZ, nT } (an RGB image has nC = 1: its three colour planes are not channels)
+   *   c, z, t are 0-BASED here; ImageJ's 1-based values are only shown and spoken by macros.
+   *   pi     = plane index of ONE channel's plane list: t * nZ + z
+   *   n      = ImageJ's 1-based flat stack index: t*nC*nZ + z*nC + c + 1 (ImagePlus.getStackIndex(c+1, z+1, t+1)) */
+  const IJStack = (() => {
+    const ORDERS = ['xyczt', 'xyctz', 'xyzct', 'xyztc', 'xytcz', 'xytzc'];
+    const int = (v, dflt) => (typeof v === 'number' && isFinite(v) ? Math.floor(v) : dflt);
+    const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+
+    function planeIndex(dims, z, t) { return t * dims.nZ + z; }
+    function stackIndex(dims, c, z, t) { return t * dims.nC * dims.nZ + z * dims.nC + c + 1; }
+    // ImagePlus.convertIndexToPosition: the inverse of stackIndex.
+    function position(dims, n) {
+      const i = n - 1;
+      const c = i % dims.nC;
+      const z = Math.floor(i / dims.nC) % dims.nZ;
+      const t = Math.floor(i / (dims.nC * dims.nZ));
+      return { c, z, t };
+    }
+    function size(dims) { return dims.nC * dims.nZ * dims.nT; }
+    // A document info / frozen view / { channels, nZ, nT } → { nC, nZ, nT }. `channels` may be a list or a count.
+    function dims(x) {
+      const rgb = !!(x && x.rgb);
+      const ch = x && x.channels;
+      const count = x && typeof x.nC === 'number' ? x.nC : (Array.isArray(ch) ? ch.length : (typeof ch === 'number' ? ch : 1));
+      return { nC: rgb ? 1 : Math.max(1, count), nZ: Math.max(1, int(x && x.nZ, 1)), nT: Math.max(1, int(x && x.nT, 1)) };
+    }
+    // Every coordinate into [0, n-1] (a missing / non-finite one is 0).
+    function clampPos(d, pos) {
+      const p = pos || {};
+      return {
+        c: clamp(int(p.c, 0), 0, d.nC - 1),
+        z: clamp(int(p.z, 0), 0, d.nZ - 1),
+        t: clamp(int(p.t, 0), 0, d.nT - 1)
+      };
+    }
+    // 'xyczt', 'XYCZT', 'xyczt(default)' → 'xyczt'; an order that is not one of ImageJ's six throws IJ_BAD_ARGS.
+    function parseOrder(s) {
+      const m = /^\s*([xyczt]{5})\s*(\(default\))?\s*$/i.exec(String(s));
+      const o = m ? m[1].toLowerCase() : '';
+      if (ORDERS.indexOf(o) < 0) throw fail('IJ_BAD_ARGS', 'stack order');
+      return o;
+    }
+    // Position of (c, z, t) in a stack laid out in `order` (xy first, then the letters from the FASTEST to the slowest).
+    function flatIndex(d, order, c, z, t) {
+      const ext = { c: d.nC, z: d.nZ, t: d.nT }, val = { c, z, t };
+      let stride = 1, idx = 0;
+      for (let k = 2; k < 5; k++) { const a = order[k]; idx += val[a] * stride; stride *= ext[a]; }
+      return idx;
+    }
+    // Int32Array map: NEW flat index (a stack laid out in `to`) → OLD flat index (the same images laid out in `from`).
+    // This is what HyperStackConverter.shuffle needs: new[i] = old[map[i]]. dims = the target { nC, nZ, nT }.
+    function reorderIndices(d, from, to) {
+      const f = parseOrder(from), t = parseOrder(to);
+      const n = d.nC * d.nZ * d.nT;
+      const map = new Int32Array(n);
+      for (let tt = 0; tt < d.nT; tt++) for (let z = 0; z < d.nZ; z++) for (let c = 0; c < d.nC; c++) {
+        map[flatIndex(d, t, c, z, tt)] = flatIndex(d, f, c, z, tt);
+      }
+      return map;
+    }
+    // RGB → grey as ImageJ 1.54p TypeConverter.convertRGBToByte does it: (int)(r*rw + g*gw + b*bw + 0.5), the
+    // weights being ColorProcessor.getWeightingFactors() = 1/3, 1/3, 1/3 (0.3333333333333333, in double) by default and
+    // 0.299, 0.587, 0.114 after Edit > Options > Conversions > "Weighted RGB conversions". The sum is evaluated left to right
+    // in doubles, as the Java does. Explicit weights (wR, wG, wB) override both.
+    const W3 = 0.3333333333333333;
+    function weights(weighted, wR, wG, wB) {
+      if (typeof wR === 'number' && typeof wG === 'number' && typeof wB === 'number') return [wR, wG, wB];
+      return weighted ? [0.299, 0.587, 0.114] : [W3, W3, W3];
+    }
+    function rgbToGray(r, g, b, weighted, wR, wG, wB) {
+      const w = weights(weighted, wR, wG, wB);
+      return (r * w[0] + g * w[1] + b * w[2] + 0.5) | 0;
+    }
+    // A whole plane: three Uint8Array of the same length → the Uint8Array of rgbToGray values.
+    function grayPlane(r, g, b, weighted, wR, wG, wB) {
+      const w = weights(weighted, wR, wG, wB), w0 = w[0], w1 = w[1], w2 = w[2];
+      const n = r.length, out = new Uint8Array(n);
+      for (let i = 0; i < n; i++) out[i] = (r[i] * w0 + g[i] * w1 + b[i] * w2 + 0.5) | 0;
+      return out;
+    }
+    // ImageJ's packed pixel (alpha dropped): 0xRRGGBB, what the macro getPixel() returns on an RGB image (value & 0xffffff).
+    function pack(r, g, b) { return ((r & 255) << 16) | ((g & 255) << 8) | (b & 255); }
+    function unpack(v) { return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }; }
+    // ImageJ's type of an info: 24 for an RGB image, else the storage bit depth.
+    function bitDepthOf(info) {
+      if (!info) return 0;
+      if (typeof info.bitDepthIJ === 'number') return info.bitDepthIJ;
+      return info.rgb ? 24 : info.bitDepth;
+    }
+    return { planeIndex, stackIndex, position, size, dims, clampPos, parseOrder, reorderIndices, rgbToGray, grayPlane, pack, unpack, bitDepthOf, ORDERS: ORDERS.slice() };
+  })();
+
   root.IJImage = IJImage;
   root.IJLuts = IJLuts;
   root.IJRoi = IJRoi;
   root.IJOps = IJOps;
   root.IJProject = IJProject;
   root.IJTiff = IJTiff;
+  root.IJStack = IJStack;
   root.IJOpRegistry = IJOpRegistry;
 })(typeof self !== 'undefined' ? self : globalThis);

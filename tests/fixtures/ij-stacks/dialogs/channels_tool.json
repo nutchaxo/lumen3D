@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"channels_tool","op":"dialog","command":"Channels Tool...","image":{"title":"hyp","bitDepth":16,"dims":{"c":2,"z":3,"t":2},"hyperstack":true,"composite":true,"width":24,"height":16,"roi":null},"others":[],"menuClass":"ij.plugin.frame.Channels","menuPath":"Image>Color","steps":[],"noDialog":true}

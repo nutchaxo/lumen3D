@@ -1,0 +1,10 @@
+s = File.openAsRawString("{ROOT}big.bin");
+print("bin default length " + lengthOf(s));
+s = File.openAsRawString("{ROOT}small.bin");
+print("small bin length " + lengthOf(s));
+s = File.openAsRawString("{ROOT}big.txt");
+print("txt whole length " + lengthOf(s));
+s = File.openAsRawString("{ROOT}lat.bin");
+print("latin1 " + (s == fromCharCode(233, 224, 255, 128)) + " length " + lengthOf(s));
+s = File.openAsRawString("{ROOT}utf.bin");
+print("utf8 bytes read as latin1: length " + lengthOf(s));

@@ -1,0 +1,1 @@
+print(toUpperCase("éaß"));print(toLowerCase("ÉA"));

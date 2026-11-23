@@ -1,0 +1,1 @@
+for(v=0;v<5;v++){ if(v==0) print("z"); else if(v==1) print("o"); else if(v==2) print("t"); else print("m"); }

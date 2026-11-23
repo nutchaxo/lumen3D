@@ -1,0 +1,2 @@
+  #@ Integer n
+print(n);

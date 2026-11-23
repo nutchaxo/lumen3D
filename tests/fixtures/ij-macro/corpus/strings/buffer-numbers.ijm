@@ -1,0 +1,1 @@
+String.resetBuffer;String.append(1/3);String.append(5);print(String.buffer);

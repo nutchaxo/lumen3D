@@ -1,0 +1,1 @@
+print(tanh(1));

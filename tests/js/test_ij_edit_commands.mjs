@@ -46,7 +46,7 @@ await test('menu rows, shortcuts and labels: ImageJ\'s order, the Fiji / ImageJ 
     editCut: [['Edit'], 22, 'Ctrl+X'], editCopy: [['Edit'], 24, 'Ctrl+C'], editCopyToSystem: [['Edit'], 26, null], editPaste: [['Edit'], 27, 'Ctrl+V'],
     editPasteControl: [['Edit'], 28, null], editDraw: [['Edit'], 55, 'd'],
     optAppearance: [['Edit', 'Options'], 10, null], optColors: [['Edit', 'Options'], 30, null], optConversions: [['Edit', 'Options'], 50, null], optMisc: [['Edit', 'Options'], 110, null],
-    colorInvertLuts: [['Image', 'Color'], 35, null], colorShowLut: [['Image', 'Color'], 60, null], stackMontage: [['Image', 'Stacks'], 10, null],
+    colorInvertLuts: [['Image', 'Color'], 35, null], colorShowLut: [['Image', 'Color'], 60, null], stackMontage: [['Image', 'Stacks'], 80, null],
     lut332RGB: [['Image', 'LookupTables'], 70, null], lutRedGreen: [['Image', 'LookupTables'], 140, null]
   };
   for (const [id, [menu, order, key]] of Object.entries(want)) {
@@ -615,7 +615,7 @@ await test('Edit > Options > Conversions… and Appearance…: the preferences t
   const t = await fresh();
   await t.runCommand('optConversions', {});
   let spec = lastSpec(t);
-  eq(spec.fields.map((f) => f.id), ['scale', 'fullRange16']);
+  eq(spec.fields.map((f) => f.id), ['scale', 'weighted', 'fullRange16']);
   assert.equal(field(spec, 'scale').value, true); assert.equal(field(spec, 'fullRange16').value, false);
   await t.runCommand('optConversions', { scale: false, fullRange16: true });
   assert.equal(t.settings.get('conv.scale'), false); assert.equal(t.settings.get('conv.fullRange16'), true);
@@ -791,8 +791,9 @@ await test('Make Montage…: ImageJ\'s defaults for the channel count, an R/G/B 
   assert.equal(field(spec, 'fontSize').value, 12);
   let docs = await t.docs();
   const m = docs.find((d) => d.name === 'Montage');
-  assert.ok(m && m.width === 120 && m.height === 30 && m.bitDepth === 8 && m.channels.length === 3);
-  eq(m.channels.map((c) => c.name), ['R', 'G', 'B']);
+  // a one-slice composite makes a 24-bit RGB montage (ImageJ's MontageMaker converts each channel as displayed: the stack package, ij-proc-stk.js stkMontage)
+  assert.ok(m && m.width === 120 && m.height === 30 && m.bitDepth === 8 && m.channels.length === 3 && m.rgb === true);
+  eq(m.channels.map((c) => c.name), ['Red', 'Green', 'Blue']);
   // the first tile is channel 1 through its LUT
   const E = t.page.IJEdit;
   const tile = E.renderChannelRGB({ data: await t.pixels(id, 0), display: src.channels[0].display, color: src.channels[0].color }, 8, false);

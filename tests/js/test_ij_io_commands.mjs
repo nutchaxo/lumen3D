@@ -234,7 +234,7 @@ await test('File › Open: TIFF (uncompressed and deflate with predictor), sever
   const t = await fresh();
   const W = 20, H = 12;
   const p0 = new Uint16Array(W * H).map((_, i) => (i * 37) % 4096), p1 = new Uint16Array(W * H).map((_, i) => (i * 11 + 5) % 4096);
-  const plain = buildTiff({ width: W, height: H, bitDepth: 16, planes: [p0.slice(), p1.slice()] });
+  const plain = buildTiff({ width: W, height: H, bitDepth: 16, planes: [p0.slice(), p1.slice()], description: 'ImageJ=1.54f\nimages=2\nchannels=2\n' });
   const packed = buildTiff({ width: W, height: H, bitDepth: 16, planes: [p0.slice(), p1.slice()], compression: 'deflate', predictor: 2, rowsPerStrip: 5, imagejMeta: { labels: ['A', 'B'], ranges: [[0, 4095], [0, 4095]] }, description: 'ImageJ=1.54f\nchannels=2\n' });
   // the strip loops run in the worker: the page's own copy of the compressed-TIFF reader is never called
   t.page.IJLocalTiff.read = () => { throw new Error('the page decoded a compressed TIFF'); };
@@ -257,7 +257,7 @@ await test('File › Open: TIFF (uncompressed and deflate with predictor), sever
   t.close();
 });
 
-await test('File › Open: PNG / JPEG / GIF / BMP — grey becomes one 8-bit channel, colour three coloured channels', async () => {
+await test('File › Open: PNG / JPEG / GIF / BMP — grey becomes one 8-bit channel, colour a 24-bit RGB image', async () => {
   const t = await fresh();
   // the browser's decoder is a stand-in here: the bytes of the "image" are a JSON of the pixels it would decode
   t.page.createImageBitmap = async (blob) => { const j = JSON.parse(await blob.text()); return { width: j.w, height: j.h, rgba: j.rgba, fill: j.fill, close() { t.page.__closed = (t.page.__closed || 0) + 1; } }; };
@@ -283,7 +283,8 @@ await test('File › Open: PNG / JPEG / GIF / BMP — grey becomes one 8-bit cha
   deq([g.width, g.height, g.bitDepth, g.channels.length], [3, 2, 8, 1]);
   deq(arr(await t.pixels(g.docId, 0)), [0, 10, 20, 30, 40, 50]);
   deq([c.width, c.height, c.bitDepth, c.channels.length], [2, 1, 8, 3]);
-  deq(c.channels.map((x) => x.name), ['R', 'G', 'B'], 'the naming of File › New › System Clipboard');
+  assert.equal(c.rgb, true, 'a colour picture is a 24-bit RGB image'); assert.equal(c.bitDepthIJ, 24);
+  deq(c.channels.map((x) => x.name), ['Red', 'Green', 'Blue']);
   deq(c.channels.map((x) => x.color), ['#ff0000', '#00ff00', '#0000ff']);
   deq(c.channels.map((x) => x.display.lut), ['Red', 'Green', 'Blue']);
   deq([arr(await t.pixels(c.docId, 0)), arr(await t.pixels(c.docId, 1)), arr(await t.pixels(c.docId, 2))], [[200, 1], [100, 2], [50, 3]]);

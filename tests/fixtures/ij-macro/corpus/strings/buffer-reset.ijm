@@ -1,0 +1,1 @@
+String.append("x");String.resetBuffer;print("["+String.buffer+"]");

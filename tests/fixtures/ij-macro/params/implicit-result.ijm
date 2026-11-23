@@ -1,0 +1,2 @@
+print("x");
+return "retval";

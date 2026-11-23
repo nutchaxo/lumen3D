@@ -1,0 +1,1 @@
+function f(){print("f");return true;} if(false && f()) print("no"); else print("else");

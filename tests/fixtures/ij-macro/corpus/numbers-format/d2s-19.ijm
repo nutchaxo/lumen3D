@@ -1,0 +1,15 @@
+v = 123456789.123;
+print(d2s(v,0));
+print(d2s(v,1));
+print(d2s(v,2));
+print(d2s(v,3));
+print(d2s(v,4));
+print(d2s(v,6));
+print(d2s(v,9));
+print(d2s(v,10));
+print(d2s(v,-1));
+print(d2s(v,-2));
+print(d2s(v,-3));
+print(d2s(v,-4));
+print(d2s(v,-6));
+print(d2s(v,-9));

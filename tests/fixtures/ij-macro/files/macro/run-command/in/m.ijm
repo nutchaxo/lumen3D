@@ -1,0 +1,1 @@
+print("run from file");

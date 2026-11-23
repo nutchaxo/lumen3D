@@ -88,7 +88,7 @@
   }
 
   R.define('autoThresholdLevel', {
-    kind: 'compute', version: 1, bitDepths: [8, 16], channels: 'one',
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', bitDepths: [8, 16], channels: 'one',
     validate(p) { validateLevelParams(p); if (p.method === undefined) throw ijError('IJ_BAD_ARGS', 'method'); },
     scratchBytes: (info) => (info.bitDepth === 16 ? 65536 * 8 * 4 : 4096),
     async run(view, p, roi, io) {
@@ -109,7 +109,7 @@
 
   // 8-bit, in place: 255 where the pixel is an object, 0 elsewhere.
   R.define('autoThreshold', {
-    kind: 'pixel', version: 1, bitDepths: [8], channels: 'one', preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8], channels: 'one', preview: false,
     validate(p) { validateLevel(p, 255); },
     scratchBytes: () => 0,
     prepare(view, c, p) {
@@ -131,7 +131,7 @@
   // 16-bit in, 8-bit mask out (Fiji turns the image into the 8-bit mask itself; a document cannot change its depth in place
   // here, so the mask is a new document). A selection restricts the objects to its pixels.
   R.define('autoThresholdMask', {
-    kind: 'newdoc', version: 1, bitDepths: [16], channels: 'one',
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: false, bitDepths: [16], channels: 'one',
     validate(p) { validateLevel(p, 65535); },
     scratchBytes: (info) => info.width * info.height,
     async run(view, p, roi, io) {
@@ -203,7 +203,7 @@
   }
 
   R.define('autoThresholdTryAll', {
-    kind: 'newdoc', version: 1, bitDepths: [8, 16], channels: 'one',
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: false, bitDepths: [8, 16], channels: 'one',
     validate(p) { validateLevelParams(p); validateLevels(p.levels, 65535); },
     scratchBytes: (info) => montageBytes(info, FIJI_METHODS.length) + info.width * info.height * 2 + 65536 * 8,
     async run(view, p, roi, io) {
@@ -423,7 +423,7 @@
   }
 
   R.define('autoLocalThreshold', {
-    kind: 'pixel', version: 1, bitDepths: [8], channels: 'one', preview: 'region',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8], channels: 'one', preview: 'region',
     validate(p) { validateLocal(p); for (const k of ['dataMin', 'dataMax']) if (p[k] !== undefined && !isNum(p[k])) throw ijError('IJ_BAD_ARGS', k); },
     resolve(view, p, chans) {
       if (isNum(p.dataMin) && isNum(p.dataMax)) return p;
@@ -453,7 +453,7 @@
   const bandRowsOf = (w) => Math.max(16, Math.floor(BAND_PIXELS / Math.max(1, w)));
 
   R.define('autoLocalThresholdTryAll', {
-    kind: 'newdoc', version: 1, bitDepths: [8], channels: 'one',
+    kind: 'newdoc', version: 1, stack: 'plane', rgb: false, bitDepths: [8], channels: 'one',
     validate(p) {
       if (!Number.isInteger(p.radius) || p.radius < 1 || p.radius > 1000) throw ijError('IJ_BAD_ARGS', 'radius');
       for (const k of ['parameter1', 'parameter2']) if (p[k] !== undefined && !isNum(p[k])) throw ijError('IJ_BAD_ARGS', k);
@@ -502,7 +502,7 @@
 
   // Binary Options offers "Do:" only on such an image (Binary.setup returns NO_IMAGE_REQUIRED for any other: no Do:, no Preview).
   R.define('thrIsBinary', {
-    kind: 'compute', version: 1, bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', bitDepths: [8], channels: 'one', roi: 'ignore', preview: false,
     scratchBytes: () => 4096,
     async run(view, p, roi, io) {
       const c = Number.isInteger(io.channel) ? io.channel : (view.active || 0);
@@ -517,7 +517,7 @@
   //     ip.threshold(128,255);
   // It is NOT a median: the MEAN of the circular kernel, then "pixels less than 128 or greater than 255 → 0, the others 255".
   R.define('binaryMedian', {
-    kind: 'pixel', version: 1, bitDepths: [8], channels: 'each', preview: 'reduced',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [8], channels: 'each', preview: 'reduced',
     validate(p) { if (!isNum(p.radius) || p.radius < 0 || p.radius > 1000) throw ijError('IJ_BAD_ARGS', 'radius'); },
     scratchBytes: (info) => info.width * info.height * 2,
     prepare(view, c, p, ctx) {
@@ -538,5 +538,161 @@
     }
   });
 
-  root.IJThr = { isBinaryData, FIJI_METHODS, LOCAL_METHODS, fijiLevel, tryAllLayout, localThreshold, objectRange };
+  // ── Process › Binary › Convert to Mask / Make Binary on a stack: ij.plugin.Thresholder.convertStack ("Convert Stack to Binary") ───────────────────
+  // Parameters: method + background (the dialog's two lists), calculate ("Calculate threshold for each image"), only ("Only convert current image",
+  // an 8-bit stack only), black ("Black background (of binary masks)": off = the result gets an inverting LUT, the pixels are 255 = objects either way),
+  // threshold = the { lower, upper } range of the image's own Threshold window in pixel units (Thresholder: "thresholdSet = imp.isThreshold()"), invertedLut,
+  // legacy = what a macro does when nothing is set and Calculate is off: Thresholder.autoThreshold, ImageProcessor.setAutoThreshold(ISODATA2), whatever the
+  // method says (the dialog of the page applies method and background through updateThreshold instead).
+  //   calculate      every slice (every channel) is converted to 8 bits with ITS OWN display range (resetMinAndMax, convertToByte(true)) and thresholded
+  //                  there: Default + Default = ImageProcessor.setAutoThreshold(ISODATA2, NO_LUT_UPDATE), else setAutoThreshold(method, background != "Light");
+  //   otherwise      the threshold of the current slice (the image's own when it has one) is applied to every slice in pixel units.
+  const THR_BACKGROUNDS = ['Default', 'Dark', 'Light'];
+
+  /* ImageProcessor.getAutoThreshold(int[] histogram): the original ImageJ iterative inter-means level. UNLIKE AutoThresholder.IJDefault it zeroes the first
+   * and the last bin ("set to zero so erased areas aren't included") before it looks for the range. */
+  function ijLegacyLevel(hist) {
+    const h = Float64Array.from(hist), maxValue = h.length - 1;
+    h[0] = 0; h[maxValue] = 0;
+    let min = 0; while (h[min] === 0 && min < maxValue) min++;
+    let max = maxValue; while (h[max] === 0 && max > 0) max--;
+    if (min >= max) return Math.trunc(h.length / 2);
+    let moving = min, result;
+    do {
+      let sum1 = 0, sum2 = 0, sum3 = 0, sum4 = 0;
+      for (let i = min; i <= moving; i++) { sum1 += i * h[i]; sum2 += h[i]; }
+      for (let i = moving + 1; i <= max; i++) { sum3 += i * h[i]; sum4 += h[i]; }
+      result = (sum1 / sum2 + sum3 / sum4) / 2.0;
+      moving++;
+    } while ((moving + 1) <= result && moving < max - 1);
+    return Math.floor(result + 0.5);
+  }
+
+  /* ImageProcessor.setAutoThreshold(int method, int lutUpdate) with ISODATA2 on an 8-bit histogram → { lower, upper } (bytes).
+   *   ISODATA2: "if (hmax>(maxCount2*2) && maxCount2!=0) { hmax = (int)(maxCount2*1.5); histogram[stats.mode] = hmax; }" before the level
+   *   (ImageProcessor.getAutoThreshold(int[]) = AutoThresholder.IJDefault), the histogram restored, then the SIDE of the objects from the histogram
+   *   smoothed by GaussianBlur.blur1Direction(fp, 2.0, 0.01):  maxCount/avg > 1.5 → "(stats.max-mode)>(mode-stats.min)" objects above (lower = level, upper = 255)
+   *   else below (0, level);  a flat histogram → above for an inverting LUT, else below. */
+  function legacyAutoThreshold(hist, invertedLut) {
+    const T = dep('IJThreshold');
+    const h = Float64Array.from(hist);
+    let mode = 0, maxC = -1;
+    for (let i = 0; i < 256; i++) if (h[i] > maxC) { maxC = h[i]; mode = i; }
+    let lo = 0; while (lo < 255 && h[lo] === 0) lo++;
+    let hi = 255; while (hi > 0 && h[hi] === 0) hi--;
+    let maxCount2 = 0;
+    for (let i = 0; i < 256; i++) if (h[i] > maxCount2 && i !== mode) maxCount2 = h[i];
+    const limited = Float64Array.from(h);
+    if (maxC > maxCount2 * 2 && maxCount2 !== 0) limited[mode] = Math.trunc(maxCount2 * 1.5);
+    const level = ijLegacyLevel(limited);
+    const smooth = dep('IJFilters').gaussian({ width: 256, height: 1, bitDepth: 32, data: Float32Array.from(h) }, 2.0, 0, { accuracy: 0.01 }).data;
+    let maxCount = 0, sum = 0, m2 = 0;
+    for (let i = 0; i < 256; i++) { const c = smooth[i]; sum += c; if (c > maxCount) { maxCount = c; m2 = i; } }
+    const avg = sum / 256.0;
+    if (maxCount / avg > 1.5) return (hi - m2) > (m2 - lo) ? { lower: level, upper: 255 } : { lower: 0, upper: level };
+    return invertedLut ? { lower: level, upper: 255 } : { lower: 0, upper: level };
+  }
+
+  const finiteRange = (d) => {
+    let mn = Infinity, mx = -Infinity;
+    for (let i = 0; i < d.length; i++) { const v = d[i]; if (v === v && v >= -3.4028234663852886e38 && v <= 3.4028234663852886e38) { if (v < mn) mn = v; if (v > mx) mx = v; } }
+    return mn > mx ? { min: 0, max: 0 } : { min: mn, max: mx };
+  };
+  const byteHistogram = (b) => { const h = new Float64Array(256); for (let i = 0; i < b.length; i++) h[b[i]]++; return h; };
+
+  function stackMaskPlanes(view, p, io) {
+    const W = view.width, H = view.height, bd = view.bitDepth, nC = view.channels.length, NP = view.nZ * view.nT;
+    const IJOps = dep('IJOps'), T = dep('IJThreshold');
+    const c0 = Number.isInteger(io.channel) ? io.channel : (view.active || 0);
+    const pi0 = io.pos ? io.pos.t * view.nZ + io.pos.z : 0;
+    if (p.only && bd !== 8) throw ijError('IJ_BAD_TYPE', '8-bit stack required to process a single slice.');
+    const dark = p.background !== 'Light';
+    const legacyNamed = p.method === 'Default' && p.background === 'Default';
+    const toByte = (data, mn, mx) => { const r = IJOps.convert({ width: W, height: H, bitDepth: bd, data }, 8, { min: mn, max: mx, scale: true }); return r && r.data ? r.data : r; };
+    const bytesOf = (data) => { if (bd === 8) return data; const r = finiteRange(data); return toByte(data, r.min, r.max); };
+    // the {lower, upper} of one 8-bit slice for the method of the dialog. A named method: setAutoThreshold(method, background != "Light", NO_LUT_UPDATE) puts
+    // the objects at [level, 255] (dark) or [0, level] (light), the other way round for an inverting LUT (measured on tests/fixtures/ij-stacks/convert: the level
+    // itself belongs to the objects on both sides).
+    const useLegacy = legacyNamed || (p.legacy && !p.calculate);
+    const levelsByte = (b) => {
+      if (useLegacy) return legacyAutoThreshold(byteHistogram(b), !!p.invertedLut);
+      const level = T.levels({ width: W, height: H, bitDepth: 8, data: b }, p.method, { dark, invertedLut: !!p.invertedLut }).level;
+      return dark !== !!p.invertedLut ? { lower: level, upper: 255 } : { lower: 0, upper: level };
+    };
+    // a threshold in pixel units for every slice (not calculated per slice): the image's own, else the current slice's
+    let fixed = null;
+    if (!p.calculate) {
+      if (p.threshold && isNum(p.threshold.lower) && isNum(p.threshold.upper)) fixed = { lower: p.threshold.lower, upper: p.threshold.upper };
+      else {
+        const cur = view.channels[c0].planes[pi0];
+        const l = levelsByte(bytesOf(cur));
+        if (bd === 8) fixed = { lower: l.lower, upper: l.upper };
+        else {
+          // setAutoThreshold on a 16 / 32-bit slice: the level of its 8-bit image, scaled back: "lower = min + (lower/255.0)*(max-min)"
+          const r = finiteRange(cur);
+          fixed = r.max > r.min ? { lower: r.min + (l.lower / 255.0) * (r.max - r.min), upper: r.min + (l.upper / 255.0) * (r.max - r.min) } : { lower: r.min, upper: r.min };
+        }
+      }
+    }
+    const out = view.channels.map(() => new Array(NP));
+    const maskOf = (data, lo, hi) => { const m = new Uint8Array(W * H); for (let i = 0; i < m.length; i++) { const v = data[i]; if (v >= lo && v <= hi) m[i] = 255; } return m; };
+    for (let c = 0; c < nC; c++) {
+      const planes = view.channels[c].planes;
+      for (let pi = 0; pi < NP; pi++) {
+        io.check();
+        if (p.only && !(c === c0 && pi === pi0)) { out[c][pi] = planes[pi]; continue; }   // the other slices keep their pixels
+        if (p.calculate) { const b = bytesOf(planes[pi]); const l = levelsByte(b); out[c][pi] = maskOf(b, l.lower, l.upper); }
+        else out[c][pi] = maskOf(planes[pi], fixed.lower, fixed.upper);
+      }
+    }
+    return out;
+  }
+
+  const MASK_PARAMS = (p) => {
+    if (!p || typeof p !== 'object') throw ijError('IJ_BAD_ARGS', 'params');
+    if (p.method !== undefined && dep('IJThreshold').methods().indexOf(p.method) < 0) throw ijError('IJ_BAD_ARGS', 'method');
+    if (p.background !== undefined && THR_BACKGROUNDS.indexOf(p.background) < 0) throw ijError('IJ_BAD_ARGS', 'background');
+    for (const k of ['calculate', 'only', 'black', 'legacy', 'invertedLut']) if (p[k] !== undefined && typeof p[k] !== 'boolean') throw ijError('IJ_BAD_ARGS', k);
+    if (p.threshold !== undefined && p.threshold !== null && !(isNum(p.threshold.lower) && isNum(p.threshold.upper))) throw ijError('IJ_BAD_ARGS', 'threshold');
+  };
+  const maskDefaults = (p) => Object.assign({ method: 'Default', background: 'Default' }, p);
+  // The display state the conversion reads (an inverting LUT) is not journaled: copied into the params when the step is accepted.
+  const maskResolve = (view, params, chans) => {
+    if (params.invertedLut !== undefined) return params;
+    const ch = view.channels[view.active || 0];
+    return Object.assign({}, params, { invertedLut: !!(ch && ch.display && ch.display.invert) });
+  };
+  const maskChannels = (view, p, planes) => view.channels.map((ch, c) => ({
+    name: ch.name, color: ch.color, planes: planes[c], display: { min: 0, max: 255, lut: ch.display ? ch.display.lut : null, invert: p.black === false }
+  }));
+
+  // In place (undo step): the stack becomes an 8-bit 0 / 255 stack.
+  R.define('stackToMask', {
+    kind: 'size', version: 1, stack: 'whole', rgb: false, channels: 'one', roi: 'ignore',
+    validate: MASK_PARAMS,
+    resolve: maskResolve,
+    scratchBytes: (info) => info.width * info.height * (info.channels || 1) * (info.nSlices || 1) + 4 * info.width * info.height,
+    async run(view, params, roi, io) {
+      const p = maskDefaults(params);
+      io.reserve(view.width * view.height * view.channels.length * view.nZ * view.nT);
+      const planes = stackMaskPlanes(view, p, io);
+      return { width: view.width, height: view.height, bitDepth: 8, nZ: view.nZ, nT: view.nT, hyperstack: view.hyperstack, channels: maskChannels(view, p, planes) };
+    }
+  });
+  // "Create new stack": a new document MASK_<title>, the source untouched.
+  R.define('stackToMaskNew', {
+    kind: 'newdoc', version: 1, stack: 'whole', rgb: false, channels: 'one', roi: 'ignore',
+    validate: MASK_PARAMS,
+    resolve: maskResolve,
+    scratchBytes: (info) => info.width * info.height * (info.channels || 1) * (info.nSlices || 1) + 4 * info.width * info.height,
+    async run(view, params, roi, io) {
+      const p = maskDefaults(params);
+      io.reserve(view.width * view.height * view.channels.length * view.nZ * view.nT);
+      const planes = stackMaskPlanes(view, p, io);
+      return [{ name: 'MASK_' + view.name, width: view.width, height: view.height, bitDepth: 8, nZ: view.nZ, nT: view.nT, hyperstack: view.hyperstack,
+        calibration: view.calibration ? Object.assign({}, view.calibration) : view.calibration, channels: maskChannels(view, p, planes) }];
+    }
+  });
+
+  root.IJThr = { isBinaryData, FIJI_METHODS, LOCAL_METHODS, fijiLevel, tryAllLayout, localThreshold, objectRange, legacyAutoThreshold };
 })(typeof self !== 'undefined' ? self : globalThis);

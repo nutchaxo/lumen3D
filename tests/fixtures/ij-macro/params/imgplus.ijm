@@ -1,0 +1,2 @@
+#@ ImgPlus ip
+print(ip);

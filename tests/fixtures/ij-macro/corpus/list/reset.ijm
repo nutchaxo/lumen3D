@@ -1,0 +1,1 @@
+List.set("a",1);List.reset;print(List.size);

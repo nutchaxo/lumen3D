@@ -1,0 +1,10 @@
+p = "{ROOT}s.txt";
+File.saveString("line1\nline2\nlast without newline", p);
+print("length on disk " + File.length(p));
+s = File.openAsString(p);
+print("string length " + lengthOf(s));
+print("[" + s + "]");
+File.saveString("replaced", p);
+print("overwrite [" + File.openAsString(p) + "] " + File.length(p));
+File.saveString("", "{ROOT}empty.txt");
+print("empty [" + File.openAsString("{ROOT}empty.txt") + "] " + File.length("{ROOT}empty.txt"));

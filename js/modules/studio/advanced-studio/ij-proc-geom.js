@@ -829,7 +829,7 @@
   // ─────────────────────────── the operations ───────────────────────────
 
   R.define('rotate', {
-    kind: 'pixel', version: 1, roi: 'mask', preview: 'reduced',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', roi: 'mask', preview: 'reduced',
     validate(p, info) {
       if (!isNum(p.angle) || M_abs(p.angle) > 36000) throw bad('angle');
       methodOf(p);
@@ -847,7 +847,7 @@
   });
 
   R.define('rotateEnlarge', {
-    kind: 'size', version: 1,
+    kind: 'size', version: 1, stack: 'all', rgb: 'each',
     validate(p) {
       if (!isNum(p.angle) || M_abs(p.angle) > 36000) throw bad('angle');
       methodOf(p);
@@ -884,7 +884,7 @@
   });
 
   R.define('scaleInPlace', {
-    kind: 'pixel', version: 1, roi: 'bounds', outside: true, preview: 'reduced',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', roi: 'bounds', outside: true, preview: 'reduced',
     validate(p, info) {
       if (!isNum(p.xscale) || !isNum(p.yscale) || !(p.xscale > 0) || !(p.yscale > 0)) throw bad('scale');
       methodOf(p);
@@ -910,7 +910,7 @@
   });
 
   R.define('translate', {
-    kind: 'pixel', version: 1, roi: 'bounds', preview: 'reduced',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', roi: 'bounds', preview: 'reduced',
     validate(p) {
       if (!isNum(p.dx) || !isNum(p.dy) || M_abs(p.dx) > 1e6 || M_abs(p.dy) > 1e6) throw bad('offset');
       methodOf(p);
@@ -939,42 +939,84 @@
     void info;
   }
 
+  // Scale... into a new window. `params.stack` ("Process entire stack"): every plane is scaled (the result keeps the dimensions of the stack), else only the plane on screen;
+  // `params.depth` (the Depth field, a stack processed whole): the slices are then resized along z as Size... does (Scaler: "if (newDepth>0 && newDepth!=oldDepth)
+  // imp2 = new Resizer().zScale(imp2, newDepth, interpolationMethod)").
   R.define('scaleNew', {
-    kind: 'newdoc', version: 1,
+    kind: 'newdoc', version: 1, stack: 'whole', rgb: 'each',
     validate(p) {
       validateResize(p);
       if (!isNum(p.xscale) || !isNum(p.yscale) || !(p.xscale > 0) || !(p.yscale > 0)) throw bad('scale');
+      if (p.stack !== undefined && typeof p.stack !== 'boolean') throw bad('stack');
+      if (p.depth !== undefined && p.depth !== null) checkSizeDim(p.depth, 'depth');
     },
     scratchBytes(info, p) {
       const rr = info.roi ? safeRect(info.roi, info.width, info.height) : { x: 0, y: 0, w: info.width, h: info.height };
-      return resizeScratch(info, p.width, p.height, rr, p.averageWhenDownsizing !== false);
+      const planes = p.stack && info.nSlices && info.channels ? Math.max(1, Math.round(info.nSlices / info.channels)) : 1;
+      return resizeScratch(info, p.width, p.height, rr, p.averageWhenDownsizing !== false) * Math.max(planes, p.depth || 1);
     },
     async run(view, p, roi, io) {
       const W = view.width, H = view.height, bd = view.bitDepth, method = methodOf(p), n = view.channels.length;
+      const nZ = view.nZ || 1, nT = view.nT || 1, NP = nZ * nT;
+      const all = p.stack === true && NP > 1;
+      const cur = io.pos ? io.pos.t * nZ + io.pos.z : 0;
+      const list = all ? Array.from({ length: NP }, (_, i) => i) : [cur];
+      const newZ = all && p.depth ? p.depth : nZ;
       const rr = areaRect(roi, W, H);
       const avg = p.averageWhenDownsizing !== false;
-      io.reserve(resizeScratch({ channels: n, bitDepth: bd }, p.width, p.height, rr, avg));
+      io.reserve(resizeScratch({ channels: n, bitDepth: bd }, p.width, p.height, rr, avg) * Math.max(list.length, newZ * nT));
       // Scaler.scale(imp), new window: `if (w==1 || h==1) method = NONE` is the in-place rule; the new window keeps the choice.
       const channels = [];
       for (let i = 0; i < n; i++) {
         const ch = view.channels[i];
-        const hook = (f) => io.tick((i + f) / n, 'op.scaleNew');
-        channels.push({ data: await resizeImage(ch.data, W, H, bd, rr, p.width, p.height, method, avg, hook), name: ch.name, color: ch.color, display: displayOf(ch) });
+        const hook = list.length === 1 ? (f) => io.tick((i + f) / n, 'op.scaleNew') : null;
+        let planes = [];
+        for (const pi of list) planes.push(await resizeImage(ch.planes ? ch.planes[pi] : ch.data, W, H, bd, rr, p.width, p.height, method, avg, hook));
+        if (all && newZ !== nZ) {
+          const next = [];
+          for (let t = 0; t < nT; t++) next.push(await resizeAlong(planes.slice(t * nZ, (t + 1) * nZ), p.width, p.height, bd, newZ, method, avg, io));
+          planes = [].concat(...next);
+        }
+        channels.push(all ? { name: ch.name, color: ch.color, planes, display: displayOf(ch) } : { name: ch.name, color: ch.color, data: planes[0], display: displayOf(ch) });
         await io.tick((i + 1) / n, 'op.scaleNew');
       }
       io.check();
-      // Scaler: if (cal.scaled()) { cal.pixelWidth *= 1.0/xscale; cal.pixelHeight *= 1.0/yscale; }
-      return [{
+      // Scaler: if (cal.scaled()) { cal.pixelWidth *= 1.0/xscale; cal.pixelHeight *= 1.0/yscale; } ; zScale: "pixelDepth *= nSlices/newDepth"
+      const cal = scaledCalibration(view.calibration, 1.0 / p.xscale, 1.0 / p.yscale);
+      if (all && newZ !== nZ && isScaled(view.calibration) && cal.pixelDepth > 0) cal.pixelDepth = cal.pixelDepth * nZ / newZ;
+      const res = {
         name: typeof p.name === 'string' && p.name ? p.name : view.name + '-1', width: p.width, height: p.height, bitDepth: bd,
-        calibration: scaledCalibration(view.calibration, 1.0 / p.xscale, 1.0 / p.yscale), channels, provenance: cleanProvenance(view.provenance)
-      }];
+        calibration: cal, channels, provenance: cleanProvenance(view.provenance)
+      };
+      if (all) { res.nZ = newZ; res.nT = nT; res.hyperstack = view.hyperstack; }
+      return [res];
     }
   });
 
   function safeRect(roi, W, H) { try { return areaRect(roi, W, H); } catch (e) { return { x: 0, y: 0, w: W, h: H }; } }
 
+  /* ij.plugin.Resizer.resizeZ / zScaleHyperstack: the line of every y through the slices is an image width × depth (its rows are the slices), resized to
+   * width × newDepth with the interpolation of the dialog and "Average when downsizing" ("ip.resize(width, newDepth, averageWhenDownsizing)"). `planes` = the
+   * slices (one array each), the answer the new ones. */
+  async function resizeAlong(planes, w, h, bd, newL, method, avg, io) {
+    const L = planes.length;
+    if (newL === L) return planes;
+    const Ctor = planes[0].constructor;
+    const out = Array.from({ length: newL }, () => new Ctor(w * h));
+    const xz = new Ctor(w * L), rect = { x: 0, y: 0, w, h: L };
+    for (let y = 0; y < h; y++) {
+      for (let z = 0; z < L; z++) xz.set(planes[z].subarray(y * w, (y + 1) * w), z * w);
+      const r = await resizeImage(xz, w, L, bd, rect, w, newL, method, avg, null);
+      for (let z = 0; z < newL; z++) out[z].set(r.subarray(z * w, (z + 1) * w), y * w);
+      if ((y & 15) === 15) io.check();
+    }
+    return out;
+  }
+
+  // Size... (Resizer.run): the X / Y part, on EVERY plane of a stack, in place. A change of Depth (images | slices) or Time (frames) does not touch the image
+  // it was asked on: ImageJ resizes that one in X and Y and opens the depth-scaled stack as a NEW image (see resizeDepth below).
   R.define('resize', {
-    kind: 'size', version: 1,
+    kind: 'size', version: 1, stack: 'all', rgb: 'each',
     validate: validateResize,
     scratchBytes(info, p) {
       const rr = info.roi ? safeRect(info.roi, info.width, info.height) : { x: 0, y: 0, w: info.width, h: info.height };
@@ -1001,8 +1043,60 @@
     }
   });
 
+  // Size... / Scale... with another Depth or Time: Resizer.zScale / zScaleHyperstack → a new image (same title) whose slices (frames) are the old ones resized along z (t),
+  // "pixelDepth *= nSlices/newDepth". `depth` = the new number of slices, `time` = the new number of frames (a hyperstack); either may stay as it is.
+  R.define('resizeDepth', {
+    kind: 'newdoc', version: 1, stack: 'whole', rgb: 'each',
+    validate(p) {
+      methodOf(p);
+      if (p.averageWhenDownsizing !== undefined && typeof p.averageWhenDownsizing !== 'boolean') throw bad('averageWhenDownsizing');
+      for (const k of ['depth', 'time']) if (p[k] !== undefined && p[k] !== null) checkSizeDim(p[k], k);
+    },
+    scratchBytes(info, p) {
+      const planes = info.nSlices && info.channels ? Math.max(1, Math.round(info.nSlices / info.channels)) : 1;
+      return info.channels * info.width * info.height * bppOf(info.bitDepth) * Math.max(planes, (p.depth || 1) * (p.time || 1)) * 2;
+    },
+    async run(view, p, roi, io) {
+      const W = view.width, H = view.height, bd = view.bitDepth, method = methodOf(p), n = view.channels.length;
+      const nZ = view.nZ, nT = view.nT;
+      const newZ = p.depth || nZ, newT = p.time || nT;
+      if (newZ === nZ && newT === nT) throw bad('depth');
+      const avg = p.averageWhenDownsizing !== false;
+      io.reserve(n * W * H * bppOf(bd) * Math.max(nZ * nT, newZ * newT) * 2);
+      const channels = [];
+      for (let i = 0; i < n; i++) {
+        const ch = view.channels[i];
+        let planes = ch.planes.slice();
+        if (newZ !== nZ) {
+          const next = [];
+          for (let t = 0; t < nT; t++) next.push(await resizeAlong(planes.slice(t * nZ, (t + 1) * nZ), W, H, bd, newZ, method, avg, io));
+          planes = [].concat(...next);
+        }
+        if (newT !== nT) {
+          const byT = Array.from({ length: newT }, () => new Array(newZ));
+          for (let z = 0; z < newZ; z++) {
+            const line = [];
+            for (let t = 0; t < nT; t++) line.push(planes[t * newZ + z]);
+            const r = await resizeAlong(line, W, H, bd, newT, method, avg, io);
+            for (let t = 0; t < newT; t++) byT[t][z] = r[t];
+          }
+          planes = [].concat(...byT);
+        }
+        channels.push({ name: ch.name, color: ch.color, planes, display: displayOf(ch) });
+        await io.tick((i + 1) / n, 'op.resize');
+      }
+      io.check();
+      const cal = Object.assign({}, view.calibration || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' });
+      if (isScaled(view.calibration)) {
+        if (newZ !== nZ && cal.pixelDepth > 0) cal.pixelDepth = cal.pixelDepth * nZ / newZ;
+        if (newT !== nT && cal.frameInterval > 0) cal.frameInterval = cal.frameInterval * nT / newT;
+      }
+      return [{ name: view.name, width: W, height: H, bitDepth: bd, nZ: newZ, nT: newT, hyperstack: view.hyperstack, calibration: cal, channels, provenance: cleanProvenance(view.provenance) }];
+    }
+  });
+
   R.define('canvasSize', {
-    kind: 'size', version: 1,
+    kind: 'size', version: 1, stack: 'all', rgb: 'each',
     validate(p) {
       checkSizeDim(p.width, 'width'); checkSizeDim(p.height, 'height');
       if (POSITIONS.indexOf(p.position) < 0) throw bad('position');
@@ -1025,8 +1119,34 @@
   });
 
   const BIN_METHODS = ['average', 'median', 'min', 'max', 'sum'];
+  /* Binner.shrinkZ: "ImageProcessor ip = new FloatProcessor(width, size); for each y: ip.setf(x, z, stack.getVoxel(x, y, z)); ip2 = shrink(ip, 1, zshrink, method);
+   * stack2.setVoxel(x, y, z, ip2.getf(x, z))" — the x-z image of every y is binned with the factors (1, zshrink), computed in float, stored with the rounding of
+   * putPixelValue ((int)(v+0.5) clamped for 8 / 16 bits). `planes` = the slices of one channel (and one frame). */
+  async function binAlongZ(planes, w, h, bd, zshrink, method, io) {
+    const L = planes.length, newL = M_floor(L / zshrink);
+    if (newL < 1) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the stack');
+    const Ctor = planes[0].constructor;
+    const out = Array.from({ length: newL }, () => new Ctor(w * h));
+    const xz = new Float32Array(w * L);
+    const maxV = bd === 8 ? 255 : bd === 16 ? 65535 : 0;
+    for (let y = 0; y < h; y++) {
+      for (let z = 0; z < L; z++) xz.set(planes[z].subarray(y * w, (y + 1) * w), z * w);
+      // shrinkZ: "if (method==MEDIAN) method = AVERAGE;" — the median of the slices is their mean
+      const r = await binImage(xz, w, L, 32, 1, zshrink, method === 'median' ? 'average' : method, null);
+      for (let z = 0; z < newL; z++) {
+        const o = z * w, dst = out[z];
+        for (let x = 0; x < w; x++) {
+          const v = r.data[o + x];
+          dst[y * w + x] = bd === 32 ? v : (v > maxV ? maxV : (v < 0 ? 0 : M_floor(v + 0.5)));
+        }
+      }
+      if ((y & 15) === 15) io.check();
+    }
+    return out;
+  }
+
   R.define('bin', {
-    kind: 'size', version: 1,
+    kind: 'size', version: 1, stack: 'whole', rgb: 'each',
     // The display state (inverted LUT, display range) is not journaled: it is copied into the params when the step is
     // accepted (never on a replay), so a reload replays the pixels the operator saw.
     resolve(view, p) {
@@ -1038,47 +1158,75 @@
     },
     validate(p, info) {
       if (!isInt(p.xshrink) || !isInt(p.yshrink) || p.xshrink < 1 || p.yshrink < 1) throw bad('shrink factor');
+      if (p.zshrink !== undefined && (!isInt(p.zshrink) || p.zshrink < 1)) throw bad('shrink factor');
       if (BIN_METHODS.indexOf(p.method) < 0) throw bad('bin method');
       if (info && (M_floor(info.width / p.xshrink) < 1 || M_floor(info.height / p.yshrink) < 1)) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the image');
     },
-    scratchBytes: (info, p) => info.channels * M_floor(info.width / p.xshrink) * M_floor(info.height / p.yshrink) * bppOf(info.bitDepth) + info.width * info.height * bppOf(info.bitDepth),
+    scratchBytes: (info, p) => {
+      const planes = info.nSlices && info.channels ? Math.max(1, Math.round(info.nSlices / info.channels)) : 1;
+      return info.channels * M_floor(info.width / p.xshrink) * M_floor(info.height / p.yshrink) * bppOf(info.bitDepth) * planes + info.width * info.height * bppOf(info.bitDepth)
+        + (p.zshrink > 1 ? M_floor(info.width / p.xshrink) * planes * 4 : 0);
+    },
     async run(view, p, roi, io) {
       const W = view.width, H = view.height, bd = view.bitDepth, n = view.channels.length;
+      const nZ = view.nZ || 1, nT = view.nT || 1, NP = nZ * nT;
+      const zs = p.zshrink || 1;
       const w = M_floor(W / p.xshrink), h = M_floor(H / p.yshrink);
       if (w < 1 || h < 1) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the image');
-      io.reserve(n * w * h * bppOf(bd) + W * H * bppOf(bd));
+      if (zs > 1 && M_floor(nZ / zs) < 1) throw fail('IJ_GEOM_BIN_TOO_LARGE', 'the bin factor is larger than the stack');
+      io.reserve(n * w * h * bppOf(bd) * NP + W * H * bppOf(bd));
       const channels = [];
       for (let i = 0; i < n; i++) {
         const ch = view.channels[i];
         const d = (p.disp && p.disp[i]) || { invert: !!(ch.display && ch.display.invert), min: ch.display ? ch.display.min : 0, max: ch.display ? ch.display.max : 0 };
         const inv = !!d.invert;
-        let src = ch.data;
-        if (inv) {
-          const r = dataRange(src);
-          src = bd === 16 ? invertAbout(src, bd, r.min, r.max) : invertAbout(src, bd, d.min, d.max);
+        let planes = [];
+        for (let pi = 0; pi < NP; pi++) {
+          let src = ch.planes ? ch.planes[pi] : ch.data;
+          if (inv) {
+            const r = dataRange(src);
+            src = bd === 16 ? invertAbout(src, bd, r.min, r.max) : invertAbout(src, bd, d.min, d.max);
+          }
+          const res = await binImage(src, W, H, bd, p.xshrink, p.yshrink, p.method, NP === 1 ? (f) => io.tick((i + f) / n, 'op.bin') : null);
+          let data = res.data;
+          if (inv) {
+            if (bd === 16) { const r = dataRange(data); data = invertAbout(data, bd, r.min, r.max); } else data = invertAbout(data, bd, d.min, d.max);
+          }
+          planes.push(data);
         }
-        const res = await binImage(src, W, H, bd, p.xshrink, p.yshrink, p.method, (f) => io.tick((i + f) / n, 'op.bin'));
-        let data = res.data;
-        if (inv) {
-          if (bd === 16) { const r = dataRange(data); data = invertAbout(data, bd, r.min, r.max); } else data = invertAbout(data, bd, d.min, d.max);
+        // Binner.shrinkZ (per frame of a hyperstack)
+        let outZ = nZ;
+        if (zs > 1) {
+          const next = [];
+          for (let t = 0; t < nT; t++) next.push(await binAlongZ(planes.slice(t * nZ, (t + 1) * nZ), w, h, bd, zs, p.method, io));
+          outZ = next[0].length;
+          planes = [].concat(...next);
         }
         let display = displayOf(ch);
         // Binner.shrink: if (method==SUM && imp2.getBitDepth()>8) ip.setMinAndMax(ip.getMin(), ip.getMax()*xshrink*yshrink*zshrink);
-        if (p.method === 'sum' && bd > 8 && display) display.max = bd === 16 ? M_min(65535, d.max * p.xshrink * p.yshrink) : d.max * p.xshrink * p.yshrink;
-        channels.push({ data, name: ch.name, color: ch.color, display });
+        if (p.method === 'sum' && bd > 8 && display) display.max = bd === 16 ? M_min(65535, d.max * p.xshrink * p.yshrink * zs) : d.max * p.xshrink * p.yshrink * zs;
+        channels.push(planes.length === 1 ? { name: ch.name, color: ch.color, data: planes[0], display, outZ } : { name: ch.name, color: ch.color, planes, display, outZ });
         await io.tick((i + 1) / n, 'op.bin');
       }
       io.check();
+      const outZ = channels[0].outZ;
+      for (const c of channels) delete c.outZ;
       // Binner.shrink: if (cal2.scaled()) { cal2.pixelWidth *= xshrink; cal2.pixelHeight *= yshrink; cal2.pixelDepth *= zshrink; }
-      return { width: w, height: h, bitDepth: bd, calibration: scaledCalibration(view.calibration, p.xshrink, p.yshrink), channels, provenance: cleanProvenance(view.provenance) };
+      const cal = scaledCalibration(view.calibration, p.xshrink, p.yshrink);
+      if (zs > 1 && isScaled(view.calibration) && cal.pixelDepth > 0) cal.pixelDepth = cal.pixelDepth * zs;
+      return { width: w, height: h, bitDepth: bd, nZ: outZ, nT, hyperstack: !!view.hyperstack, calibration: cal, channels, provenance: cleanProvenance(view.provenance) };
     }
   });
 
   R.define('setCalibration', {
-    kind: 'size', version: 1,
+    kind: 'size', version: 1, stack: 'all', rgb: 'each',
     validate(p) {
       if (!isNum(p.pixelWidth) || !isNum(p.pixelHeight) || !(p.pixelWidth > 0) || !(p.pixelHeight > 0)) throw bad('pixel size');
       if (typeof p.unit !== 'string' || p.unit.length > 32) throw bad('unit');
+      // Image > Properties also sets the voxel depth and the frame interval (optional)
+      if (p.pixelDepth !== undefined && (!isNum(p.pixelDepth) || !(p.pixelDepth > 0))) throw bad('pixel depth');
+      for (const k of ['frameInterval', 'fps']) if (p[k] !== undefined && (!isNum(p[k]) || p[k] < 0)) throw bad(k);
+      if (p.timeUnit !== undefined && (typeof p.timeUnit !== 'string' || p.timeUnit.length > 32)) throw bad('time unit');
     },
     async run(view, p) {
       // Calibration only: the very same arrays come back, which the engine records as `changed.calibration`.
@@ -1087,6 +1235,7 @@
       const u0 = sanitizeUnit(p.unit);
       const unit = (u0 === 'pixels' || u0 === 'px') ? 'pixel' : u0;
       const cal = Object.assign({}, view.calibration || {}, { pixelWidth: p.pixelWidth, pixelHeight: p.pixelHeight, unit });
+      for (const k of ['pixelDepth', 'frameInterval', 'fps', 'timeUnit']) if (p[k] !== undefined) cal[k] = p[k];
       return { width: view.width, height: view.height, bitDepth: view.bitDepth, calibration: cal, channels: view.channels.map((c) => ({ data: c.data })) };
     }
   });

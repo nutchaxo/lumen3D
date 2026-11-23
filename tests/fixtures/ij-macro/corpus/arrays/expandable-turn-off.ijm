@@ -1,0 +1,1 @@
+setOption("ExpandableArrays", true);a=newArray(1);a[2]=1;setOption("ExpandableArrays", false);a[5]=1;

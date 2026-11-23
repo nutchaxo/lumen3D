@@ -1,0 +1,1 @@
+print(lengthOf(12345));

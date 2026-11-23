@@ -1,0 +1,1 @@
+print(lengthOf(newArray(1,2,3)));print(newArray(4,5).length);

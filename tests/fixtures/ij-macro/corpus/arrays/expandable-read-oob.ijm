@@ -1,0 +1,1 @@
+setOption("ExpandableArrays", true);a=newArray(1);print(a[5]);

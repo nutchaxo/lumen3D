@@ -1,0 +1,1 @@
+var a=newArray(3);function f(){a[1]=5;}f();Array.print(a);

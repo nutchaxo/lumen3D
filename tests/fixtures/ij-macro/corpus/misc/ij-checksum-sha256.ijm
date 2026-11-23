@@ -1,0 +1,1 @@
+print(IJ.checksum("SHA-256 string","abc"));

@@ -200,6 +200,40 @@
 }
 .ij-channel-label { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); }
 .ij-channel-slider { flex: 1 1 auto; accent-color: var(--ij-accent); }
+/* StackWindow: one row per dimension of a stack (z, t, or the one slider of a plain stack); the play button is on the animated row */
+.ij-stack-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--ij-chrome);
+  border-top: 1px solid var(--ij-border);
+}
+.ij-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px;
+  min-width: 0;
+}
+.ij-stack-letter { flex: 0 0 auto; min-width: 1ch; font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); text-align: center; }
+.ij-stack-slider { flex: 1 1 auto; min-width: 0; accent-color: var(--ij-accent); }
+.ij-stack-count { flex: 0 0 auto; min-width: 5ch; font-family: var(--ij-mono); font-size: 11px; color: var(--ij-muted); text-align: right; }
+.ij-stack-play {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--ij-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ij-text);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ij-stack-play:hover { border-color: var(--ij-accent); }
+.ij-stack-play:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-stack-play.is-running { color: var(--ij-accent); border-color: var(--ij-accent); }
 
 .ij-empty {
   position: absolute;
@@ -257,7 +291,8 @@
 
 /* ── Buttons, inputs ────────────────────────────────────── */
 .ij-btn,
-.ij-cancel {
+.ij-cancel,
+.ij-mac-rec-btn {
   min-height: 24px;
   padding: 2px 12px;
   background: var(--bg-surface-3, var(--bg-active));
@@ -268,9 +303,11 @@
   cursor: pointer;
 }
 .ij-btn:hover,
-.ij-cancel:hover { background: var(--bg-active); border-color: var(--ij-accent); }
+.ij-cancel:hover,
+.ij-mac-rec-btn:hover { background: var(--bg-active); border-color: var(--ij-accent); }
 .ij-btn:focus-visible,
-.ij-cancel:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-cancel:focus-visible,
+.ij-mac-rec-btn:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
 .ij-btn[disabled] { opacity: 0.5; cursor: default; }
 .ij-btn--primary { background: var(--color-primary-strong, #00803f); border-color: var(--color-primary-strong, #00803f); color: #fff; }
 .ij-btn--primary:hover { background: var(--color-primary-strong-hover, #006b35); border-color: var(--color-primary-strong-hover, #006b35); }
@@ -653,3 +690,216 @@
 @media (prefers-reduced-motion: reduce) {
   .ij-card, .ij-chip, .ij-divider { transition: none; }
 }
+
+/* ── Macros (package macro, ij-cmds-macro.js): Macro Editor, Log, Macro Error and text windows ──
+ * The editor's line height is a constant of ij-cmds-macro.js (LINE_PX = 16): the gutter and the text must share it. */
+.ij-mac-editor,
+.ij-mac-logwin,
+.ij-mac-errwin,
+.ij-mac-textwin { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; height: 100%; }
+.ij-mac-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-mac-status { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-status.ij-mac-status-err { color: var(--ij-danger-text); }
+.ij-mac-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 160px;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--ij-panel));
+  overflow: hidden;
+}
+.ij-mac-body:focus-within { border-color: var(--ij-accent); }
+.ij-mac-gutter {
+  flex: 0 0 auto;
+  min-width: 3.5em;
+  padding: 4px 6px 20px 4px;
+  overflow: hidden;
+  background: var(--ij-chrome);
+  border-right: 1px solid var(--ij-border);
+  color: var(--ij-muted);
+  font: 11px/16px var(--ij-mono);
+  text-align: right;
+  user-select: none;
+}
+.ij-mac-gutter-line { height: 16px; white-space: nowrap; }
+.ij-mac-gutter-line.ij-mac-err { color: var(--ij-danger-text); font-weight: 700; box-shadow: inset 3px 0 0 var(--ij-danger); }
+.ij-mac-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 6px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--ij-text);
+  font: 11px/16px var(--ij-mono);
+  white-space: pre;
+  overflow: auto;
+  tab-size: 4;
+}
+.ij-mac-pre {
+  flex: 1 1 auto;
+  min-height: 80px;
+  margin: 0;
+  padding: 4px 6px;
+  overflow: auto;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--ij-panel));
+  color: var(--ij-text);
+  font: 11px/16px var(--ij-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.ij-mac-pre:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
+.ij-mac-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--ij-border); }
+.ij-mac-tab {
+  padding: 2px 10px;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--ij-muted);
+  font: var(--ij-font);
+  cursor: pointer;
+}
+.ij-mac-tab:hover { color: var(--ij-text); background: var(--bg-hover); }
+.ij-mac-tab:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
+.ij-mac-tab.ij-mac-tab-active { border-color: var(--ij-border); border-bottom-color: var(--ij-panel); background: var(--ij-panel); color: var(--ij-text); }
+
+/* ── Macro files (FILES.md): the pause strip of the Macro Editor and its Files section ── */
+.ij-mac-pause {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--ij-accent);
+  border-radius: 4px;
+  background: var(--color-accent-subtle, var(--ij-chrome));
+  color: var(--ij-text);
+}
+.ij-mac-pause[hidden] { display: none; }
+.ij-mac-pause-text { margin: 0; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ij-mac-pause-hint { margin: 0; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-pause-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ij-mac-pause-field { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--ij-muted); }
+.ij-mac-pause-input,
+.ij-mac-files-select {
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--ij-panel));
+  color: var(--ij-text);
+  font: var(--ij-font);
+}
+.ij-mac-pause-input { flex: 1 1 200px; font-family: var(--ij-mono); }
+.ij-mac-pause-input:focus-visible,
+.ij-mac-files-select:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 0; border-color: var(--ij-accent); }
+
+.ij-mac-files {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  max-height: 45%;
+  min-height: 0;
+  border-top: 1px solid var(--ij-border);
+  padding-top: 4px;
+}
+.ij-mac-files-toggle {
+  align-self: flex-start;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ij-text);
+  font: var(--ij-font);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ij-mac-files-toggle::before { content: '\25BE'; display: inline-block; width: 1.2em; color: var(--ij-muted); }
+.ij-mac-files-toggle[aria-expanded='false']::before { content: '\25B8'; }
+.ij-mac-files-toggle:hover { color: var(--ij-accent-text); }
+.ij-mac-files-toggle:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-mac-files-body { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: auto; padding: 2px 2px 4px; }
+.ij-mac-files-body[hidden] { display: none; }
+.ij-mac-files-note { margin: 0; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-files-note.ij-mac-files-warn,
+.ij-mac-files-state.ij-mac-files-warn { color: var(--ij-warn-text); }
+.ij-mac-files-sub { margin: 4px 0 0; color: var(--ij-text); font-weight: 600; }
+.ij-mac-files-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-mac-files-drop {
+  flex: 1 1 160px;
+  padding: 6px 10px;
+  border: 1px dashed var(--ij-border);
+  border-radius: 4px;
+  color: var(--ij-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.ij-mac-files-drop.ij-mac-files-drop-over { border-color: var(--ij-accent); color: var(--ij-text); background: var(--color-accent-subtle, var(--bg-hover)); }
+.ij-mac-files-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.ij-mac-files-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ij-mac-files-row.ij-mac-files-root {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 6px 8px;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--ij-panel);
+}
+.ij-mac-files-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.ij-mac-files-name,
+.ij-mac-files-path { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-text); overflow-wrap: anywhere; }
+.ij-mac-files-name { font-weight: 700; }
+.ij-mac-files-meta,
+.ij-mac-files-state { color: var(--ij-muted); font-size: 11px; }
+.ij-mac-files-controls,
+.ij-mac-files-changes { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-mac-files-field { display: inline-flex; align-items: center; gap: 4px; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-files-need { padding: 4px 0; }
+.ij-btn.ij-mac-files-link { border-color: var(--ij-accent); color: var(--ij-accent-text); }
+.ij-mac-files-queue { display: flex; flex-direction: column; gap: 4px; }
+.ij-mac-files-storage { margin: 0; color: var(--ij-muted); font-size: 11px; text-align: right; }
+
+/* Macros, phase M7/M8 (EXTRAS.md §4.4): Recorder, Startup Macros, Batch Process, Outputs. Colours from the theme tokens only (both themes). */
+.ij-mac-rec,
+.ij-mac-startup,
+.ij-mac-batch { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; height: 100%; }
+.ij-mac-rec-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--ij-muted); }
+.ij-mac-rec-mode:disabled { opacity: 0.7; }
+.ij-mac-rec-name,
+.ij-mac-rec-mode,
+.ij-mac-batch-path,
+.ij-mac-batch-filter,
+.ij-mac-batch select {
+  min-width: 0; padding: 3px 6px; border: 1px solid var(--ij-border); border-radius: 4px;
+  background: var(--bg-input, var(--ij-bg)); color: var(--ij-text); font: inherit; font-size: 12px;
+}
+.ij-mac-rec-name { flex: 0 1 160px; font-family: var(--ij-mono); }
+.ij-mac-rec-text,
+.ij-mac-startup-text,
+.ij-mac-batch-code {
+  flex: 1 1 auto; min-height: 96px; resize: none; padding: 6px 8px; border: 1px solid var(--ij-border); border-radius: 4px;
+  background: var(--ij-bg); color: var(--ij-text); font-family: var(--ij-mono); font-size: 12px; line-height: 16px; white-space: pre; tab-size: 4;
+}
+.ij-mac-rec-text:focus-visible,
+.ij-mac-startup-text:focus-visible,
+.ij-mac-batch-code:focus-visible,
+.ij-mac-rec-name:focus-visible,
+.ij-mac-batch-path:focus-visible,
+.ij-mac-batch-filter:focus-visible,
+.ij-mac-batch select:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 0; border-color: var(--ij-accent); }
+.ij-mac-batch-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ij-mac-batch-path { flex: 1 1 220px; font-family: var(--ij-mono); }
+.ij-mac-batch-filter { flex: 0 1 160px; }
+.ij-mac-batch-field { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--ij-muted); }
+.ij-mac-batch option:disabled { color: var(--ij-muted); }
+.ij-mac-batch-end { justify-content: flex-end; }
+.ij-mac-outputs { display: flex; flex-direction: column; min-width: 0; overflow: auto; border: 1px solid var(--ij-border); border-radius: 4px; background: var(--ij-bg); }
+.ij-mac-out-row { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr); gap: 8px; padding: 3px 8px; border-bottom: 1px solid var(--ij-border); color: var(--ij-text); font-size: 12px; }
+.ij-mac-out-row:last-child { border-bottom: 0; }
+.ij-mac-out-head { color: var(--ij-muted); font-weight: 600; background: var(--ij-panel); }
+.ij-mac-out-value { font-family: var(--ij-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

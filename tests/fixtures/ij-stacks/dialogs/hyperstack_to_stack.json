@@ -1,0 +1,1 @@
+{"imagej":"1.54p","case":"hyperstack_to_stack","op":"dialog","command":"Hyperstack to Stack","image":{"title":"hyp","bitDepth":16,"dims":{"c":2,"z":3,"t":2},"hyperstack":true,"composite":true,"width":24,"height":16,"roi":null},"others":[],"menuClass":"ij.plugin.HyperStackConverter(\"hstostack\")","menuPath":"Image>Hyperstacks","steps":[],"noDialog":true}

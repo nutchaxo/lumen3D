@@ -1,0 +1,1 @@
+a=newArray("1","2");Array.getStatistics(a,min,max,mean);print(min,max,mean);

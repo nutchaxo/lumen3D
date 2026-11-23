@@ -1,0 +1,1 @@
+function f(n){a=newArray(n+1);if(n>0){b=f(n-1);return a.length+b;}return a.length;}print(f(3));

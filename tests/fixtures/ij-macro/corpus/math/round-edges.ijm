@@ -1,0 +1,1 @@
+print(round(-0.5));print(round(0.5));print(round(2.5));print(round(-2.5));print(round(1e20));print(round(NaN));print(floor(-0.5));

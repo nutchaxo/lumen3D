@@ -109,3 +109,6 @@ config/uploads/
 # release build re-runs), never authored. Committing it would add a few MB of binary
 # to history on every version bump; a deployed host gets it from the release zip.
 assets/pipeline/
+
+# Test fixtures are tracked whatever their extension: the ImageJ goldens hold TIFF inputs/outputs and Thumbs.db cases
+!tests/fixtures/**

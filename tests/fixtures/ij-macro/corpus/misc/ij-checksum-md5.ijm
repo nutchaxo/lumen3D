@@ -1,0 +1,1 @@
+print(IJ.checksum("MD5 string","abc"));

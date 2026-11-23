@@ -1,0 +1,1 @@
+print(d2s(1234.5678,-2)); print(d2s(0,-3)); print(d2s(-0.0001,2)); print(d2s(1e20,2)); print(d2s(123456789.123456789, 9)); print(d2s(-1.5,0)); print(d2s(0.045,2)); print(d2s(1/0,2)); print(d2s(0/0,-2));

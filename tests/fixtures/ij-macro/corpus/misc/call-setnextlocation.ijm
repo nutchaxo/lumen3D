@@ -1,0 +1,1 @@
+r=call("ij.gui.ImageWindow.setNextLocation",10,20);print("["+r+"]");

@@ -1,0 +1,1 @@
+print("a");s=getInfo("log");print("["+s+"]");

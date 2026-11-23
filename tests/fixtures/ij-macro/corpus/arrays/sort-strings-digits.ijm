@@ -1,0 +1,1 @@
+a=newArray("x10","x9","x1");Array.sort(a);Array.print(a);

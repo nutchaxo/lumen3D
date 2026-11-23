@@ -1,0 +1,10 @@
+File.makeDirectory("{ROOT}new");
+print("makeDirectory " + File.exists("{ROOT}new") + " " + File.isDirectory("{ROOT}new"));
+File.mkdir("{ROOT}new2");
+print("mkdir " + File.isDirectory("{ROOT}new2"));
+File.makeDirectory("{ROOT}new");
+print("again " + File.isDirectory("{ROOT}new"));
+File.makeDirectory("{ROOT}sub/inner");
+print("inside existing " + File.isDirectory("{ROOT}sub/inner"));
+File.makeDirectory("{ROOT}a.txt");
+print("over a file " + File.isDirectory("{ROOT}a.txt") + " " + File.isFile("{ROOT}a.txt"));

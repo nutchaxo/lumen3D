@@ -1,0 +1,1 @@
+print("["+String.trim("  a b  ")+"]");

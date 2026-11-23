@@ -1,0 +1,1 @@
+print(d2s(1e20,2));print(d2s(NaN,2));print(d2s(1/0,2));print(d2s(-0.0001,2));print(d2s(-0.0001,-2));

@@ -1,0 +1,1 @@
+a=3;a*=4;print(a);a/=8;print(a);a%=1;print(a);

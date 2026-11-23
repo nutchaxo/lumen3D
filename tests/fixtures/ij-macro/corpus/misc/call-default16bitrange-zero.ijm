@@ -1,0 +1,1 @@
+r=call("ij.ImagePlus.setDefault16bitRange",0);print("["+r+"]");

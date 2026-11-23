@@ -1,0 +1,1 @@
+Array.print(Array.sequence(4));

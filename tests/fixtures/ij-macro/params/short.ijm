@@ -1,0 +1,2 @@
+#@ Short s
+print(s);

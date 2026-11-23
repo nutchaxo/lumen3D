@@ -17,6 +17,7 @@
  *   IJTextIo     ij/plugin/TextReader.java, ij/io/TextEncoder.java, ij/plugin/filter/XYWriter.java, ij/plugin/XYCoordinates.java
  *   IJFileKinds  File > Open: the kind of a file, the page's own error codes, a decoded picture as an image
  *   IJLocalTiff  the compressed TIFFs the Download Center writes (deflate 8 / 32946, predictor 1 / 2), read through IJTiffStream.decodeStrip
+ *   IJPng        PNG writing (PNG_Writer's 8-bit / palette / 16-bit grey / RGB files) and the 16-bit greyscale PNG a browser decoder flattens
  *
  * Registry operations (all compute, none previews):
  *   roiSetOp       the ROI Manager's AND / OR (Combine) / XOR / Split on the pixel masks of the ROIs
@@ -207,12 +208,16 @@
     return out;
   }
 
-  /* The entries of a ZIP, in archive order: [{ name, bytes }]. STORED and DEFLATED; `inflateRaw(bytes) → bytes | Promise`
-   * is injected (the page's DecompressionStream('deflate-raw'), node:zlib in the tests). Sizes and CRC-32 are checked. */
+  /* The entries of a ZIP, in archive order: [{ name, bytes }]. STORED and DEFLATED; `inflateRaw(bytes, max) → bytes | Promise`
+   * is injected (the page's DecompressionStream('deflate-raw'), node:zlib in the tests). Sizes and CRC-32 are checked.
+   * o.only(name) → boolean: the entries to inflate (the others are skipped unread); o.maxTotal: the room for the inflated entries,
+   * checked against the central directory's sizes before any is inflated (IJ_IO_TOO_LARGE). An entry inflating past its declared
+   * size stops there (IJ_IO_ZIP_BAD). */
   const ZIP_ENTRY_MAX = 256 * 1048576;
 
   /* The browser's raw-deflate stream (Chrome 103, Firefox 113, Safari 16.4); IJ_IO_ZIP_DEFLATE when there is none. */
-  async function inflateRawStream(bytes) {
+  async function inflateRawStream(bytes, max) {
+    const cap = Number.isInteger(max) && max >= 0 ? Math.min(max, ZIP_ENTRY_MAX) : ZIP_ENTRY_MAX;
     const DS = root.DecompressionStream;
     let ds = null;
     if (typeof DS === 'function') { try { ds = new DS('deflate-raw'); } catch (_) { ds = null; } }
@@ -227,7 +232,10 @@
       const r = await reader.read();
       if (r.done) break;
       chunks.push(r.value); total += r.value.length;
-      if (total > ZIP_ENTRY_MAX) throw ijError('IJ_IO_TOO_LARGE', 'entry');
+      if (total > cap) {
+        try { reader.cancel().catch(() => {}); } catch (_) { /* the stream is dropped anyway */ }
+        throw cap < ZIP_ENTRY_MAX ? ijError('IJ_IO_ZIP_BAD', 'entry larger than declared') : ijError('IJ_IO_TOO_LARGE', 'entry');
+      }
     }
     const out = new Uint8Array(total);
     let at = 0;
@@ -245,6 +253,23 @@
     const count = dv.getUint16(eocd + 10, true);
     let p = dv.getUint32(eocd + 16, true);
     if (count === 0xffff || p === 0xffffffff) throw ijError('IJ_IO_ZIP_BAD', 'zip64');
+    const only = o && typeof o.only === 'function' ? o.only : null;
+    const nameAt = (q) => {
+      const fl = dv.getUint16(q + 8, true), nl = dv.getUint16(q + 28, true);
+      if (q + 46 + nl > zip.length) throw ijError('IJ_IO_ZIP_BAD', 'name');
+      const raw = zip.subarray(q + 46, q + 46 + nl);
+      return (fl & 0x0800) ? new TextDecoder('utf-8').decode(raw) : String.fromCharCode.apply(null, Array.from(raw));
+    };
+    if (o && typeof o.maxTotal === 'number') {
+      let want = 0;
+      for (let k = 0, q = p; k < count; k++) {
+        if (q + 46 > zip.length || dv.getUint32(q, true) !== 0x02014b50) throw ijError('IJ_IO_ZIP_BAD', 'central directory');
+        const nm = nameAt(q);
+        if (!nm.endsWith('/') && (!only || only(nm))) want += dv.getUint32(q + 24, true);
+        q += 46 + dv.getUint16(q + 28, true) + dv.getUint16(q + 30, true) + dv.getUint16(q + 32, true);
+      }
+      if (want > o.maxTotal) throw ijError('IJ_IO_TOO_LARGE', 'zip entries');
+    }
     const out = [];
     for (let k = 0; k < count; k++) {
       if (p + 46 > zip.length || dv.getUint32(p, true) !== 0x02014b50) throw ijError('IJ_IO_ZIP_BAD', 'central directory');
@@ -252,11 +277,10 @@
       const crc = dv.getUint32(p + 16, true), csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true);
       const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
       if (p + 46 + nl > zip.length) throw ijError('IJ_IO_ZIP_BAD', 'name');
-      const rawName = zip.subarray(p + 46, p + 46 + nl);
-      const name = (flags & 0x0800) ? new TextDecoder('utf-8').decode(rawName) : String.fromCharCode.apply(null, Array.from(rawName));
+      const name = nameAt(p);
       p += 46 + nl + el + cl;
+      if (name.endsWith('/') || (only && !only(name))) continue;
       if (flags & 1) throw ijError('IJ_IO_ZIP_BAD', 'encrypted');
-      if (name.endsWith('/')) continue;
       if (usize > ZIP_ENTRY_MAX) throw ijError('IJ_IO_TOO_LARGE', 'entry');
       if (lho + 30 > zip.length || dv.getUint32(lho, true) !== 0x04034b50) throw ijError('IJ_IO_ZIP_BAD', 'local header');
       const ds = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
@@ -265,7 +289,7 @@
       let bytes;
       if (method === 0) bytes = data.slice();
       else if (method === 8) {
-        bytes = toU8(await ((o && typeof o.inflateRaw === 'function') ? o.inflateRaw(data) : inflateRawStream(data)));
+        bytes = toU8(await ((o && typeof o.inflateRaw === 'function') ? o.inflateRaw(data, usize) : inflateRawStream(data, usize)));
       } else throw ijError('IJ_IO_ZIP_BAD', 'method ' + method);
       if (bytes.length !== usize || crc32(bytes) !== crc) throw ijError('IJ_IO_ZIP_BAD', 'checksum');
       out.push({ name, bytes });
@@ -402,7 +426,9 @@
       return {
         name, width,
         stroke: argbOf(st.stroke, false), fill: argbOf(st.fill, true),
-        c: pos && isInt(pos.c) ? pos.c : 0, z: pos && isInt(pos.z) ? pos.z : 0, t: pos && isInt(pos.t) ? pos.t : 0
+        c: pos && isInt(pos.c) ? pos.c : 0, z: pos && isInt(pos.z) ? pos.z : 0, t: pos && isInt(pos.t) ? pos.t : 0,
+        // Roi.getPosition(): the stack slice of a plain stack (Roi.setPosition(int)); a hyperstack position is c / z / t and leaves it 0
+        n: pos && isInt(pos.n) && pos.n > 0 ? pos.n : 0
       };
     }
 
@@ -426,6 +452,7 @@
       if (st.stroke) putInt(dv, O.STROKE_COLOR, st.stroke);
       if (st.fill) putInt(dv, O.FILL_COLOR, st.fill);
       putShort(dv, O.OPTIONS, options);
+      if (st.n > 0) putInt(dv, O.POSITION, st.n);
       const h2 = HEADER + cfg.dataBytes;
       putInt(dv, O.HDR2, h2);
       putInt(dv, h2 + H2.C, st.c); putInt(dv, h2 + H2.Z, st.z); putInt(dv, h2 + H2.T, st.t);
@@ -465,7 +492,8 @@
         case 'rect': case 'oval': {
           const integer = allInt([roi.x, roi.y, roi.w, roi.h]);
           const big = Math.abs(roi.x) > 60000 || Math.abs(roi.y) > 60000 || roi.w > 60000 || roi.h > 60000;
-          const sub = !integer || big;
+          // Roi(double…) / OvalRoi(double…) (what macros' makeRectangle / makeOval build) keep sub-pixel bounds even when integral
+          const sub = !integer || big || roi.subPixel === true;
           const b = sub
             ? { x: trunc(roi.x), y: trunc(roi.y), w: Math.max(1, Math.ceil(roi.w)), h: Math.max(1, Math.ceil(roi.h)) }
             : { x: roi.x, y: roi.y, w: Math.max(1, roi.w), h: Math.max(1, roi.h) };
@@ -556,6 +584,7 @@
       const subPixel = (options & OPT.SUB_PIXEL) !== 0 && version >= 222;
       const subRect = version >= 223 && subPixel && (type === T.rect || type === T.oval);
       let channel = 0, slice = 0, frameT = 0;
+      const stackN = size >= O.POSITION + 4 ? getInt(O.POSITION) : 0;
       if (hdr2 > 0 && hdr2 + H2.IMAGE_SIZE + 4 <= size) { channel = getInt(hdr2 + H2.C); slice = getInt(hdr2 + H2.Z); frameT = getInt(hdr2 + H2.T); }
       const need = (end) => { if (end > size) throw ijError('IJ_IO_BAD_ROI', 'truncated'); };
 
@@ -590,7 +619,7 @@
         switch (type) {
           case T.rect: case T.oval: {
             const t = type === T.rect ? 'rect' : 'oval';
-            if (subRect) roi = { type: t, x: getFloat(O.X1), y: getFloat(O.Y1), w: getFloat(O.X1 + 8), h: getFloat(O.Y1 + 8) };
+            if (subRect) roi = { type: t, x: getFloat(O.X1), y: getFloat(O.Y1), w: getFloat(O.X1 + 8), h: getFloat(O.Y1 + 8), subPixel: true };
             else roi = { type: t, x: left, y: top, w: Math.max(1, width), h: Math.max(1, height) };
             if (type === T.rect) { const arc = getShort(O.ARC); if (arc > 0) roi.arc = arc; }
             break;
@@ -634,7 +663,7 @@
         roi, name: typeof name === 'string' ? name : '',
         stroke: strokeArgb ? strokeOf(strokeArgb) : null, fill: fillArgb ? fillOf(fillArgb) : null,
         width: width2 > 0 && roi.type !== 'line' && roi.type !== 'polyline' ? width2 : (roi.width || 0),
-        position: (channel > 0 || slice > 0 || frameT > 0) ? { c: channel, z: slice, t: frameT } : null
+        position: (channel > 0 || slice > 0 || frameT > 0 || stackN > 0) ? (stackN > 0 && !(channel > 0 || slice > 0 || frameT > 0) ? { c: 0, z: 0, t: 0, n: stackN } : { c: channel, z: slice, t: frameT }) : null
       };
     }
     function decode(bytes, o) { return decodeEntry(bytes, o).roi; }
@@ -670,7 +699,7 @@
     }
 
     async function decodeSet(zip, o) {
-      const entries = await zipRead(zip, o);
+      const entries = await zipRead(zip, Object.assign({}, o || {}, { only: (n) => n.endsWith('.roi') }));
       const out = [];
       for (const e of entries) {
         // RoiManager.openZip: "if (name.endsWith(".roi"))" (case-sensitive) and the list label is "name.substring(0, name.length()-4)";
@@ -741,16 +770,17 @@
     }
 
     /* The vertices Roi.getPolygon() / getFloatPolygon() give XYWriter: { points, sub } — `sub` = the ROI has subpixel
-     * resolution (printed with 4 decimals). */
+     * resolution (printed with 4 decimals): non-integer bounds, or roi.subPixel (a macro's makeRectangle / makeOval build their Roi
+     * from doubles, IJ.makeRectangle(double…), and a .roi of that kind keeps the flag). */
     function xyPolygon(roi) {
       switch (roi.type) {
         case 'rect': {
-          const sub = !allInt([roi.x, roi.y, roi.w, roi.h]);
+          const sub = roi.subPixel === true || !allInt([roi.x, roi.y, roi.w, roi.h]);
           const w = Math.max(sub ? 0 : 1, roi.w), h = Math.max(sub ? 0 : 1, roi.h);
           return { sub, points: [[roi.x, roi.y], [roi.x + w, roi.y], [roi.x + w, roi.y + h], [roi.x, roi.y + h]] };
         }
         case 'oval': {
-          if (allInt([roi.x, roi.y, roi.w, roi.h])) return { sub: false, points: ovalPolygon(roi.x, roi.y, Math.max(1, roi.w), Math.max(1, roi.h)) };
+          if (roi.subPixel !== true && allInt([roi.x, roi.y, roi.w, roi.h])) return { sub: false, points: ovalPolygon(roi.x, roi.y, Math.max(1, roi.w), Math.max(1, roi.h)) };
           return { sub: true, points: ovalFloatPolygon(roi) };
         }
         case 'line': {
@@ -937,7 +967,165 @@
     /* The "Value" column of ImageJ's result table (ResultsTable AUTO_FORMAT, precision 3): an integer without decimals. */
     const autoFormat = (v, places) => (Number.isInteger(v) && Math.abs(v) < 2147483648 ? rtD2s(v, 0) : rtD2s(v, places === undefined ? 3 : places));
 
-    return { parseTextImage, parseTextImageAsync, floatRange, makeSink, encodeTextImage, xyWriterText, autoFormat, floatToString, d2s, MAX_VALUES, MAX_OUT_BYTES };
+    /* Java's String.split(literal): the trailing empty strings are removed (":".split(":") is empty, "".split(":") is [""]). */
+    function javaSplit(s, sep) {
+      if (s === '') return [''];
+      const parts = s.split(sep);
+      while (parts.length && parts[parts.length - 1] === '') parts.pop();
+      return parts;
+    }
+    /* Tools.parseDouble(s, dflt): Double.parseDouble (which trims the characters <= ' ' first), dflt when it throws. */
+    function javaParseDouble(s, dflt) {
+      if (typeof s !== 'string') return dflt;
+      const t = s.replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
+      const v = parseDouble(t);
+      if (v === v || /^[+-]?NaN$/.test(t)) return v;
+      return dflt;
+    }
+    /* IJ.openAsString: BufferedReader.readLine (a line ends at \n, \r or \r\n) and "\n" after every line. */
+    function openAsStringText(input) {
+      const text = typeof input === 'string' ? input : new TextDecoder('utf-8', { ignoreBOM: true }).decode(toU8(input));
+      if (text === '') return '';
+      const lines = text.split(/\r\n|\r|\n/);
+      if (lines[lines.length - 1] === '') lines.pop();
+      return lines.map((l) => l + '\n').join('');
+    }
+    const tableError = (code, text) => Object.assign(ijError(code, text), { ijText: text });
+    const COMMA_SUBSTITUTE = String.fromCharCode(0x08b3);   // ResultsTable.commaSubstitute
+
+    /* ResultsTable.open(path) 1.54p on the file's bytes (or its text): the delimiter from the name (".csv" / ".CSV" = comma, else tab),
+     * quoted commas kept inside their cell, the header line (all-numeric headings = a header-less file: C1, C2…), a leading " " column =
+     * row numbers (skipped), a "Label" second column, numbers vs strings per cell (Tools.parseDouble with -Double.MAX_VALUE as the "not a
+     * number" mark), a missing cell = NaN. → { name, size, headings, columns: { heading: [number | string] }, labels: [string] | null,
+     * labelHeading, showRowNumbers }. The IOExceptions are IJ_IO_TABLE_ERROR / IJ_IO_TABLE_EMPTY / IJ_IO_TABLE_INVALID with ImageJ's text in
+     * `ijText`. o = { name (the file name), path (the path ImageJ tests and prints, default the name) }. */
+    function readTable(input, o) {
+      const name = String((o && o.name) || '');
+      const path = String((o && o.path) || name);
+      let text = openAsStringText(input);
+      if (text.length === 0) return { name, size: 0, headings: [], columns: {}, labels: null, labelHeading: 'Label', showRowNumbers: false };
+      if (text.indexOf('Error:') === 0) throw tableError('IJ_IO_TABLE_ERROR', 'Error opening ' + path);
+      const csv = /\.csv$/.test(path) || /\.CSV$/.test(path);
+      const sep = csv ? ',' : '\t';
+      let commasReplaced = false;
+      if (csv && text.indexOf('"') >= 0) {
+        // replaceQuotedCommas
+        const c = text.split('');
+        let inQuotes = false;
+        for (let i = 0; i < c.length; i++) {
+          if (c[i] === '"') inQuotes = !inQuotes;
+          if (inQuotes && c[i] === ',') c[i] = COMMA_SUBSTITUTE;
+        }
+        text = c.join('');
+        commasReplaced = true;
+      }
+      const lines = javaSplit(text, '\n');
+      if (lines.length === 0 || (lines.length === 1 && lines[0].length === 0)) throw tableError('IJ_IO_TABLE_EMPTY', 'Table is empty or invalid');
+      let headings = javaSplit(lines[0], sep);
+      if (headings.length < 1) throw tableError('IJ_IO_TABLE_INVALID', 'This is not a tab or comma delimited text file.');
+      if (headings[0].charCodeAt(0) === 0xfeff) headings[0] = headings[0].substring(1);
+      const isNum = (x) => { const v = javaParseDouble(x, NaN); return v === v; };
+      let numbers = 0;
+      for (const hd of headings) if (hd === 'NaN' || isNum(hd)) numbers++;
+      const allNumeric = numbers === headings.length;
+      if (allNumeric) headings = headings.map((x, i) => 'C' + (i + 1));
+      let firstColumn = headings.length > 0 && headings[0] === ' ' ? 1 : 0;
+      headings = headings.map((hd) => {
+        let v = hd.trim();
+        if (commasReplaced && v.length >= 1 && v.charAt(0) === '"' && v.charAt(v.length - 1) === '"') v = v.substring(1, v.length - 1);
+        return v;
+      });
+      const firstRow = allNumeric ? 0 : 1;
+      const labels = firstColumn === 1 && headings[1] === 'Label';
+      // getTableType: what the second line holds
+      let type = 0;
+      if (lines.length >= 2) {
+        const items = javaSplit(lines[1], sep);
+        let nonNumeric = 0, at = 0;
+        items.forEach((it, i) => { if (it !== 'NaN' && !isNum(it)) { nonNumeric++; at = i; } });
+        type = nonNumeric === 0 ? 0 : (nonNumeric === 1 && at === 1 ? 1 : (nonNumeric === 1 && at === 0 ? 2 : 3));
+      }
+      const labelsIndex = type === 2 ? 0 : 1;
+      if (lines[0].charAt(0) === '\t') { headings = [' '].concat(headings); firstColumn = 1; }
+      const order = [], columns = {};
+      let lab = null, labelHeading = 'Label';
+      const column = (hd) => { if (!Object.prototype.hasOwnProperty.call(columns, hd)) { order.push(hd); columns[hd] = []; } return columns[hd]; };
+      if (firstRow >= lines.length) {
+        // an empty table: the headings become its columns
+        for (const hd of headings) { if (hd === 'Label') lab = []; else column(hd); }
+        return { name, size: 0, headings: order, columns, labels: lab, labelHeading, showRowNumbers: false };
+      }
+      const MARK = -Number.MAX_VALUE;
+      let size = 0;
+      for (let i = firstRow; i < lines.length; i++) {
+        // incrementCounter: a new row, 0 in every column
+        const row = size++;
+        for (const hd of order) columns[hd].push(0);
+        if (lab) lab.push(null);
+        const items = javaSplit(lines[i], sep);
+        for (let j = firstColumn; j < headings.length; j++) {
+          if (j === labelsIndex && labels) {
+            if (!lab) lab = new Array(row + 1).fill(null);
+            lab[row] = items[labelsIndex] === undefined ? null : items[labelsIndex];
+            labelHeading = headings[labelsIndex];
+            continue;
+          }
+          const value = j < items.length ? javaParseDouble(items[j], MARK) : NaN;
+          const col = column(headings[j]);
+          while (col.length < size) col.push(0);
+          if (value === MARK) {
+            let item = j < items.length ? items[j] : '';
+            if (commasReplaced) {
+              item = item.split(COMMA_SUBSTITUTE).join(',');
+              if (item.length >= 1 && item.charAt(0) === '"' && item.charAt(item.length - 1) === '"') item = item.substring(1, item.length - 1);
+            }
+            col[row] = item;
+          } else col[row] = value;
+        }
+      }
+      return { name, size, headings: order, columns, labels: lab, labelHeading, showRowNumbers: path.indexOf('Results') >= 0 };
+    }
+
+    /* A Results-shaped table as File › Save As › Results writes it (the page's resultsText(sep, 'save'), byte for byte): an optional header
+     * line (" " for the row numbers, "Label", the headings), one line per row, every line ended by "\n"; numbers through
+     * IJAna.cellString(v, precision) (precision negative = scientific), an empty cell "0" (or "NaN" with nanEmpty), a CSV cell holding a
+     * comma, a quote or a newline quoted. o = { sep, headers, rowNumbers, precision, nanEmpty, quoteCommas (default: sep === ','),
+     * decimalColumn(heading) → boolean: the columns whose ResultsTable decimal places are set (every cell, an empty one too, with
+     * `precision` decimals through ResultsTable.d2s) }. */
+    function tableText(table, o) {
+      const opt = o || {};
+      const A = root.IJAna;
+      if (!A || typeof A.cellString !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJAna');
+      const sep = opt.sep === undefined ? '\t' : String(opt.sep);
+      const quote = opt.quoteCommas === undefined ? sep === ',' : !!opt.quoteCommas;
+      const precision = Number.isInteger(opt.precision) ? opt.precision : 3;
+      const numbers = opt.rowNumbers !== false;
+      const q = (v) => {
+        const str = v === undefined || v === null ? '' : String(v);
+        return quote && /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+      };
+      const fixed = typeof opt.decimalColumn === 'function' && typeof A.d2s === 'function' ? opt.decimalColumn : () => false;
+      const cell = (v, dec) => {
+        if (v === undefined || v === null) return opt.nanEmpty ? 'NaN' : (dec ? A.d2s(0, precision) : '0');
+        if (typeof v !== 'number') return String(v);
+        return dec ? A.d2s(v, precision) : A.cellString(v, precision);
+      };
+      const heads = table.headings || [];
+      const hasLabels = Array.isArray(table.labels);
+      const decs = heads.map((hd) => fixed(hd) === true);
+      const lines = [];
+      if (opt.headers !== false) lines.push((numbers ? [' '] : []).concat(hasLabels ? ['Label'] : [], heads).map(q).join(sep));
+      for (let i = 0; i < table.size; i++) {
+        const parts = numbers ? [String(i + 1)] : [];
+        if (hasLabels) parts.push(q(table.labels[i] === undefined || table.labels[i] === null ? '' : String(table.labels[i])));
+        for (let j = 0; j < heads.length; j++) parts.push(q(cell(table.columns[heads[j]] ? table.columns[heads[j]][i] : null, decs[j])));
+        lines.push(parts.join(sep));
+      }
+      return lines.join('\n') + (lines.length ? '\n' : '');
+    }
+
+    return { parseTextImage, parseTextImageAsync, floatRange, makeSink, encodeTextImage, xyWriterText, autoFormat, floatToString, d2s, MAX_VALUES, MAX_OUT_BYTES,
+      readTable, tableText, openAsStringText, javaSplit, javaParseDouble };
   })();
 
   // ====================================================================================== IJFileKinds
@@ -967,8 +1155,8 @@
       return null;
     }
     /* A picture the browser decoded → an image: one grey channel when every pixel has R = G = B (ImageJ turns a grey RGB picture
-     * into an 8-bit image), else three 8-bit channels coloured red, green and blue (ImageJ would open an RGB image, a type this view
-     * does not have). The browser hands over 8 bits per channel; the alpha is ignored. */
+     * into an 8-bit image, Opener.convertGrayJpegTo8Bits), else a 24-bit RGB image (`rgb: true`: three 8-bit planes named Red, Green,
+     * Blue). The browser hands over 8 bits per channel; the alpha is ignored. */
     function imageFromRgba(rgba, w, h, name) {
       const n = w * h;
       let grey = true;
@@ -977,184 +1165,244 @@
       const plane = (k) => { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = rgba[i * 4 + k]; return a; };
       if (grey) return { name, width: w, height: h, bitDepth: 8, calibration, channels: [{ data: plane(0), name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }] };
       const rgb = [['Red', '#ff0000'], ['Green', '#00ff00'], ['Blue', '#0000ff']];
-      return { name, width: w, height: h, bitDepth: 8, calibration, channels: rgb.map(([lut, color], k) => ({ data: plane(k), name: lut, color, display: { min: 0, max: 255, lut, invert: false } })) };
+      return { name, width: w, height: h, bitDepth: 8, calibration, rgb: true, channels: rgb.map(([lut, color], k) => ({ data: plane(k), name: lut, color, display: { min: 0, max: 255, lut, invert: false } })) };
     }
     return { CODES, error, kindOf, imageFromRgba };
   })();
 
-  // ====================================================================================== IJLocalTiff
-  /* A compressed TIFF read from a file on disk (File > Open of a Download Center bundle page, or of anything an ImageJ
-   * writes with deflate): 8 / 16 / 32-bit float, single sample, classic TIFF, strips compressed with Adobe deflate (8) or
-   * 32946, predictor 1 or 2. Every strip goes through IJTiffStream.decodeStrip (inflate, byte order, horizontal predictor).
-   * The planes become channels, as IJTiff.read does; the ImageJ metadata (ranges, LUTs, labels) and the calibration are
-   * read the same way. `needsDecoder(bytes)` says whether the file is one of these (else IJTiff.read / doc.open takes it). */
-  const IJLocalTiff = (() => {
-    const MAGIC = 0x494a494a, T_LABL = 0x6c61626c, T_RANG = 0x72616e67, T_LUTS = 0x6c757473;
-    const TYPE_SIZE = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8 };
-    const unsupported = (m) => ijError('IJ_TIFF_UNSUPPORTED', m || 'unsupported TIFF');
-
-    function parse(bytes) {
-      if (bytes.length < 8) throw unsupported('short');
-      const le = bytes[0] === 0x49 && bytes[1] === 0x49;
-      if (!le && !(bytes[0] === 0x4d && bytes[1] === 0x4d)) throw unsupported('not TIFF');
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      if (dv.getUint16(2, le) !== 42) throw unsupported('version');
-      const inFile = (o, n) => o >= 0 && n >= 0 && o + n <= bytes.length;
-      const ifds = [], seen = new Set();
-      let off = dv.getUint32(4, le);
-      while (off) {
-        if (seen.has(off) || ifds.length > 65536 || !inFile(off, 2)) throw unsupported('bad IFD chain');
-        seen.add(off);
-        const n = dv.getUint16(off, le);
-        if (!inFile(off + 2, n * 12 + 4)) throw unsupported('bad IFD');
-        const tags = {};
-        for (let i = 0; i < n; i++) {
-          const e = off + 2 + i * 12;
-          const tag = dv.getUint16(e, le), type = dv.getUint16(e + 2, le), count = dv.getUint32(e + 4, le);
-          const sz = TYPE_SIZE[type];
-          if (!sz) continue;
-          const bytesLen = sz * count;
-          const at = bytesLen <= 4 ? e + 8 : dv.getUint32(e + 8, le);
-          if (!inFile(at, bytesLen)) throw unsupported('bad tag');
-          tags[tag] = { type, count, at, bytesLen };
-        }
-        ifds.push(tags);
-        off = dv.getUint32(off + 2 + n * 12, le);
-      }
-      if (!ifds.length) throw unsupported('no IFD');
-      const nums = (t) => {
-        const a = new Array(t.count);
-        for (let i = 0; i < t.count; i++) {
-          const p = t.at + i * TYPE_SIZE[t.type];
-          switch (t.type) {
-            case 1: case 7: a[i] = bytes[p]; break;
-            case 3: a[i] = dv.getUint16(p, le); break;
-            case 4: a[i] = dv.getUint32(p, le); break;
-            case 5: { const d = dv.getUint32(p + 4, le); a[i] = d ? dv.getUint32(p, le) / d : 0; break; }
-            case 12: a[i] = dv.getFloat64(p, le); break;
-            default: throw unsupported('tag type');
+  // ====================================================================================== IJPng
+  /* The PNG files ImageJ's PNG_Writer writes and the one picture kind a browser decoder flattens: a 16-bit greyscale PNG
+   * (createImageBitmap hands 8 bits per channel over; ImageJ opens it as a 16-bit image). zlib through the browser's
+   * CompressionStream / DecompressionStream('deflate') (Chrome 80, Firefox 113, Safari 16.4); IJ_IO_ENCODE / IJ_IO_DECODE without one.
+   *
+   *   encode({ width, height, kind, data | planes, palette }) → Promise<Uint8Array>
+   *     kind 'gray8'   data: Uint8Array (colour type 0, 8 bits)            kind 'gray16'  data: Uint16Array (colour type 0, 16 bits, big-endian)
+   *     kind 'palette' data: Uint8Array indices + palette: Uint8Array(768) (colour type 3, PLTE of 256 entries)
+   *     kind 'rgb'     planes: [R, G, B] Uint8Arrays (colour type 2)
+   *     Rows are written with filter 0 (none); ImageIO picks other filters, the decoded pixels are the same.
+   *   decode16(bytes, o) → Promise<image | null>   a 16-bit greyscale PNG (interlaced or not) as a 16-bit image (display range = data range),
+   *     null for any other PNG (and for a file that is not a PNG). o.room(n): called with the bytes the decode will hold (pixels +
+   *     inflated rows, from the header) before anything is inflated; it throws to refuse. */
+  const IJPng = (() => {
+    const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    /* limit (inflate): the size the data must have; more is refused as soon as it is produced (a deflate bomb never lands). */
+    async function zlib(bytes, inflate, limit) {
+      const Ctor = inflate ? root.DecompressionStream : root.CompressionStream;
+      let st = null;
+      if (typeof Ctor === 'function') { try { st = new Ctor('deflate'); } catch (_) { st = null; } }
+      if (!st) throw ijError(inflate ? 'IJ_IO_DECODE' : 'IJ_IO_ENCODE', 'no deflate stream');
+      const writer = st.writable.getWriter();
+      const done = writer.write(bytes).then(() => writer.close());
+      done.catch(() => {});
+      const reader = st.readable.getReader();
+      const chunks = [];
+      let total = 0;
+      try {
+        for (;;) {
+          const r = await reader.read();
+          if (r.done) break;
+          chunks.push(r.value); total += r.value.length;
+          if (limit !== undefined && total > limit) {
+            try { reader.cancel().catch(() => {}); } catch (_) { /* the stream is dropped anyway */ }
+            throw ijError('IJ_IO_DECODE', 'png data larger than its header says');
           }
         }
-        return a;
-      };
-      const one = (tags, id, dflt) => (tags[id] ? nums(tags[id])[0] : dflt);
-      return { le, dv, ifds, nums, one };
+        await done;
+      } catch (err) { if (err && err.code) throw err; throw ijError(inflate ? 'IJ_IO_DECODE' : 'IJ_IO_ENCODE', 'deflate'); }
+      const out = new Uint8Array(total);
+      let at = 0;
+      for (const c of chunks) { out.set(c, at); at += c.length; }
+      return out;
     }
+    function chunk(type, body) {
+      const out = new Uint8Array(12 + body.length);
+      const dv = new DataView(out.buffer);
+      dv.setUint32(0, body.length);
+      for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+      out.set(body, 8);
+      dv.setUint32(8 + body.length, crc32(out.subarray(4, 8 + body.length)));
+      return out;
+    }
+    async function encode(img) {
+      const W = img && img.width, H = img && img.height;
+      if (!isInt(W) || !isInt(H) || W < 1 || H < 1) throw bad('png size');
+      const kind = img.kind;
+      const n = W * H;
+      let bpp, colorType, bitDepth;
+      if (kind === 'gray8') { bpp = 1; colorType = 0; bitDepth = 8; }
+      else if (kind === 'gray16') { bpp = 2; colorType = 0; bitDepth = 16; }
+      else if (kind === 'palette') { bpp = 1; colorType = 3; bitDepth = 8; }
+      else if (kind === 'rgb') { bpp = 3; colorType = 2; bitDepth = 8; }
+      else throw bad('png kind');
+      if (kind === 'rgb') {
+        if (!Array.isArray(img.planes) || img.planes.length !== 3 || img.planes.some((p) => !p || p.length !== n)) throw bad('png planes');
+      } else if (!img.data || img.data.length !== n) throw bad('png data');
+      if (kind === 'palette' && !(img.palette && img.palette.length === 768)) throw bad('png palette');
+      const stride = 1 + W * bpp;
+      if (stride * H > 0x7fffffff) throw ijError('IJ_IO_TOO_LARGE', 'png');
+      const raw = new Uint8Array(stride * H);
+      for (let y = 0; y < H; y++) {
+        let o = y * stride + 1;
+        const r0 = y * W;
+        if (kind === 'gray16') { const d = img.data; for (let x = 0; x < W; x++) { const v = d[r0 + x]; raw[o++] = v >>> 8; raw[o++] = v & 255; } }
+        else if (kind === 'rgb') { const [R, G, B] = img.planes; for (let x = 0; x < W; x++) { raw[o++] = R[r0 + x]; raw[o++] = G[r0 + x]; raw[o++] = B[r0 + x]; } }
+        else raw.set(img.data.subarray(r0, r0 + W), o);
+      }
+      const idat = await zlib(raw, false);
+      const ihdr = new Uint8Array(13);
+      const dv = new DataView(ihdr.buffer);
+      dv.setUint32(0, W); dv.setUint32(4, H);
+      ihdr[8] = bitDepth; ihdr[9] = colorType; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+      const parts = [Uint8Array.from(SIG), chunk('IHDR', ihdr)];
+      if (kind === 'palette') {
+        const plte = new Uint8Array(768);
+        for (let i = 0; i < 256; i++) { plte[i * 3] = img.palette[i * 3]; plte[i * 3 + 1] = img.palette[i * 3 + 1]; plte[i * 3 + 2] = img.palette[i * 3 + 2]; }
+        parts.push(chunk('PLTE', plte));
+      }
+      parts.push(chunk('IDAT', idat), chunk('IEND', new Uint8Array(0)));
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const out = new Uint8Array(total);
+      let at = 0;
+      for (const p of parts) { out.set(p, at); at += p.length; }
+      return out;
+    }
+    /* Undoes the PNG filters of one (sub-)image of w × h with `bpp` bytes per pixel, in place into `out` (rows without the filter byte). */
+    function unfilter(src, off, w, h, bpp, out) {
+      const stride = w * bpp;
+      let prev = null;
+      for (let y = 0; y < h; y++) {
+        const ft = src[off];
+        if (ft > 4) throw ijError('IJ_IO_DECODE', 'png filter');
+        const row = src.subarray(off + 1, off + 1 + stride);
+        const cur = out.subarray(y * stride, (y + 1) * stride);
+        for (let i = 0; i < stride; i++) {
+          const a = i >= bpp ? cur[i - bpp] : 0, b = prev ? prev[i] : 0, c = prev && i >= bpp ? prev[i - bpp] : 0;
+          let v = row[i];
+          if (ft === 1) v += a;
+          else if (ft === 2) v += b;
+          else if (ft === 3) v += (a + b) >>> 1;
+          else if (ft === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : (pb <= pc ? b : c); }
+          cur[i] = v & 255;
+        }
+        prev = cur;
+        off += 1 + stride;
+      }
+      return off;
+    }
+    async function decode16(input, o) {
+      const b = toU8(input);
+      if (b.length < 33) return null;
+      for (let i = 0; i < 8; i++) if (b[i] !== SIG[i]) return null;
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      let p = 8, W = 0, H = 0, depth = 0, ctype = -1, interlace = 0;
+      const idat = [];
+      let idatLen = 0;
+      while (p + 12 <= b.length) {
+        const len = dv.getUint32(p);
+        const type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+        if (p + 12 + len > b.length) throw ijError('IJ_IO_DECODE', 'png chunk');
+        const body = b.subarray(p + 8, p + 8 + len);
+        if (type === 'IHDR') {
+          W = dv.getUint32(p + 8); H = dv.getUint32(p + 12); depth = b[p + 16]; ctype = b[p + 17]; interlace = b[p + 20];
+          if (!(depth === 16 && ctype === 0)) return null;
+          if (W < 1 || H < 1) throw ijError('IJ_IO_DECODE', 'png size');
+          if (W * H > 268435456) throw ijError('IJ_PICTURE_TOO_LARGE', 'png');
+        } else if (type === 'IDAT') { idat.push(body); idatLen += len; }
+        else if (type === 'IEND') break;
+        p += 12 + len;
+      }
+      if (ctype !== 0 || depth !== 16 || !idat.length) return null;
+      const passes = interlace === 1
+        ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]]
+        : [[0, 0, 1, 1]];
+      // the inflated size the header allows: per pass, ph rows of a filter byte + pw 16-bit samples
+      let expected = 0;
+      for (const [x0, y0, dx, dy] of passes) {
+        const pw = Math.ceil((W - x0) / dx), ph = Math.ceil((H - y0) / dy);
+        if (pw > 0 && ph > 0) expected += ph * (1 + pw * 2);
+      }
+      if (o && typeof o.room === 'function') o.room(W * H * 2 + expected + idatLen);
+      const z = new Uint8Array(idatLen);
+      let at = 0;
+      for (const c of idat) { z.set(c, at); at += c.length; }
+      const raw = await zlib(z, true, expected);
+      const data = new Uint16Array(W * H);
+      let off = 0;
+      for (const [x0, y0, dx, dy] of passes) {
+        const pw = Math.ceil((W - x0) / dx), ph = Math.ceil((H - y0) / dy);
+        if (pw <= 0 || ph <= 0) continue;
+        if (off + ph * (1 + pw * 2) > raw.length) throw ijError('IJ_IO_DECODE', 'png data');
+        const sub = new Uint8Array(pw * ph * 2);
+        off = unfilter(raw, off, pw, ph, 2, sub);
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+          const k = (y * pw + x) * 2;
+          data[(y0 + y * dy) * W + x0 + x * dx] = (sub[k] << 8) | sub[k + 1];
+        }
+      }
+      let mn = 65535, mx = 0;
+      for (let i = 0; i < data.length; i++) { const v = data[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+      return { width: W, height: H, bitDepth: 16, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
+        channels: [{ data, name: 'C1', color: '#ffffff', display: { min: mn, max: mx, lut: 'Grays', invert: false } }] };
+    }
+    return { encode, decode16 };
+  })();
+
+  // ====================================================================================== IJLocalTiff
+  /* A compressed TIFF read from a file on disk (File > Open of a Download Center bundle page, or of anything an ImageJ
+   * writes with deflate): 8 / 16 / 32-bit float grey or 8-bit RGB, classic TIFF, strips compressed with Adobe deflate (8) or
+   * 32946, predictor 1 or 2. Every strip goes through IJTiffStream.decodeStrip (inflate, byte order, horizontal predictor).
+   * The directories, the ImageJ description (channels / slices / frames, hyperstack, mode, calibration) and the metadata (labels,
+   * ranges, LUTs) are read by IJTiff.parse / IJTiff.assemble — the same stack image as the uncompressed reader gives.
+   * `needsDecoder(bytes)` says whether the file is one of these (else IJTiff.read / doc.open takes it). */
+  const IJLocalTiff = (() => {
+    const unsupported = (m) => ijError('IJ_TIFF_UNSUPPORTED', m || 'unsupported TIFF');
+    const tiff = () => { const t = root.IJTiff; if (!t || typeof t.parse !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJTiff'); return t; };
 
     /* Does the file need this reader (a compressed or predicted strip)? false for what IJTiff.read already reads;
      * throws IJ_TIFF_UNSUPPORTED when the file is neither. */
     function needsDecoder(input) {
       const bytes = toU8(input);
-      const t = parse(bytes);
+      const t = tiff().parse(bytes);
       return t.ifds.some((tags) => t.one(tags, 259, 1) !== 1 || t.one(tags, 317, 1) !== 1);
     }
 
     async function read(input, name, o) {
+      const T = tiff();
       const bytes = toU8(input);
       const stream = root.IJTiffStream;
       if (!stream || typeof stream.decodeStrip !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJTiffStream');
-      const { le, dv, ifds, nums, one } = parse(bytes);
-      const t0 = ifds[0];
-      let desc = {};
-      if (t0[270] && t0[270].type === 2) {
-        let s = '';
-        for (let i = 0; i < t0[270].count; i++) { const c = bytes[t0[270].at + i]; if (!c) break; s += String.fromCharCode(c); }
-        for (const line of s.split(/\r?\n/)) { const k = line.indexOf('='); if (k > 0) desc[line.slice(0, k)] = line.slice(k + 1); }
-      }
-      const W = one(t0, 256), H = one(t0, 257), bd = one(t0, 258, 1);
-      if (!(W > 0 && H > 0)) throw unsupported('size');
-      if ([8, 16, 32].indexOf(bd) < 0) throw unsupported('bit depth');
-      if ((parseInt(desc.slices, 10) || 1) * (parseInt(desc.frames, 10) || 1) > 1) throw ijError('IJ_IO_STACK', 'z / t stack');
-      const IJLuts = root.IJLuts, IJImage = root.IJImage;
+      const P = T.parse(bytes);
+      const infos = P.ifds.map((tags) => T.ifdInfo(P, tags));
+      const f = infos[0];
+      const W = f.W, H = f.H, bd = f.bd, spp = f.spp;
       const Ctor = bd === 8 ? Uint8Array : bd === 16 ? Uint16Array : Float32Array;
-      const planes = [];
-      const datas = [];
-      for (const tags of ifds) {
-        const compression = one(tags, 259, 1), predictor = one(tags, 317, 1);
-        if (one(tags, 256) !== W || one(tags, 257) !== H || one(tags, 258, 1) !== bd) throw unsupported('mixed planes');
-        if (compression !== 1 && compression !== 8 && compression !== 32946) throw unsupported('compression');
-        if (predictor !== 1 && predictor !== 2) throw unsupported('predictor');
-        if (one(tags, 277, 1) !== 1) throw unsupported('samples per pixel');
-        if (one(tags, 284, 1) !== 1) throw unsupported('planar');
-        if (tags[322] || tags[324]) throw unsupported('tiles');
-        const photo = one(tags, 262, 1);
-        if (photo !== 0 && photo !== 1) throw unsupported('photometric');
-        if (one(tags, 339, 1) !== (bd === 32 ? 3 : 1)) throw unsupported('sample format');
-        if (!tags[273] || !tags[279]) throw unsupported('strips');
-        const so = nums(tags[273]), sc = nums(tags[279]);
-        if (so.length !== sc.length) throw unsupported('strips');
-        let rps = one(tags, 278, H);
-        if (!(rps > 0) || rps > H) rps = H;
-        if (Math.ceil(H / rps) !== so.length) throw unsupported('strip count');
-        planes.push({ photo });
-        const p = { compression, predictor, bitDepth: bd, width: W, spp: 1, littleEndian: le, float: bd === 32 };
-        const plane = new Ctor(W * H);
-        for (let s = 0; s < so.length; s++) {
+      const images = [];
+      for (const info of infos) {
+        if (info.W !== W || info.H !== H || info.bd !== bd || info.spp !== spp) throw unsupported('mixed planes');
+        if (info.compression !== 1 && info.compression !== 8 && info.compression !== 32946) throw unsupported('compression');
+        if (info.predictor !== 1 && info.predictor !== 2) throw unsupported('predictor');
+        const strips = info.so.length;
+        // planar RGB: the strips of the three samples follow one another (spp planes of ceil(H / rps) strips)
+        const split = info.planarConfig === 2 && spp === 3;
+        const per = split ? strips / 3 : strips;
+        if (!Number.isInteger(per) || Math.ceil(H / info.rps) !== per) throw unsupported('strip count');
+        const planes = [];
+        for (let s = 0; s < (split ? 3 : 1); s++) planes.push(spp === 1 || split ? new Ctor(W * H) : [new Ctor(W * H), new Ctor(W * H), new Ctor(W * H)]);
+        const p = { compression: info.compression, predictor: info.predictor, bitDepth: bd, width: W, spp: split ? 1 : spp, littleEndian: P.le, float: bd === 32 };
+        for (let k = 0; k < strips; k++) {
           if (o && o.check) o.check();
-          const rows = Math.min(rps, H - s * rps);
-          if (!(so[s] >= 0 && so[s] + sc[s] <= bytes.length)) throw unsupported('data out of file');
-          const got = await stream.decodeStrip(p, bytes.subarray(so[s], so[s] + sc[s]), rows, o && o.inflate ? { inflate: o.inflate } : undefined);
-          plane.set(got[0], s * rps * W);
+          const sample = split ? Math.floor(k / per) : 0, strip = split ? k % per : k;
+          const rows = Math.min(info.rps, H - strip * info.rps);
+          if (!(info.so[k] >= 0 && info.so[k] + info.sc[k] <= bytes.length)) throw unsupported('data out of file');
+          const got = await stream.decodeStrip(p, bytes.subarray(info.so[k], info.so[k] + info.sc[k]), rows, o && o.inflate ? { inflate: o.inflate } : undefined);
+          if (split) planes[sample].set(got[0], strip * info.rps * W);
+          else if (spp === 1) planes[0].set(got[0], strip * info.rps * W);
+          else for (let c = 0; c < 3; c++) planes[0][c].set(got[c], strip * info.rps * W);
         }
-        datas.push(plane);
+        images.push(spp === 1 ? [planes[0]] : split ? planes : planes[0]);
       }
-      // ImageJ metadata: labels, display ranges, LUTs (identical to IJTiff.read)
-      let labels = null, ranges = null, luts = null;
-      const tc = t0[50838], td = t0[50839];
-      if (tc && td && tc.type === 4) {
-        const counts = nums(tc);
-        let p = td.at;
-        const end = td.at + td.bytesLen;
-        if (counts.length && counts[0] >= 4 && p + counts[0] <= end && dv.getUint32(p, le) === MAGIC) {
-          const nTypes = (counts[0] - 4) / 8;
-          const types = [];
-          for (let i = 0; i < nTypes; i++) types.push({ type: dv.getUint32(p + 4 + i * 8, le), count: dv.getUint32(p + 8 + i * 8, le) });
-          p += counts[0];
-          let ci = 1;
-          for (const t of types) {
-            for (let k = 0; k < t.count; k++) {
-              const n = counts[ci++];
-              if (n === undefined || p + n > end) throw unsupported('metadata');
-              if (t.type === T_RANG) { ranges = []; for (let q = 0; q + 16 <= n; q += 16) ranges.push([dv.getFloat64(p + q, le), dv.getFloat64(p + q + 8, le)]); }
-              else if (t.type === T_LUTS && n === 768) {
-                const tab = new Uint8Array(768);
-                for (let i = 0; i < 256; i++) { tab[i * 3] = bytes[p + i]; tab[i * 3 + 1] = bytes[p + 256 + i]; tab[i * 3 + 2] = bytes[p + 512 + i]; }
-                (luts || (luts = [])).push(tab);
-              } else if (t.type === T_LABL) {
-                let s = '';
-                for (let q = 0; q + 2 <= n; q += 2) s += String.fromCharCode(dv.getUint16(p + q, le));
-                (labels || (labels = [])).push(s);
-              }
-              p += n;
-            }
-          }
-        }
-      }
-      const cal = { pixelWidth: 1, pixelHeight: 1, unit: 'px' };
-      if (t0[282] && t0[283]) {
-        const xr = nums(t0[282])[0], yr = nums(t0[283])[0], ru = one(t0, 296, 2);
-        if (xr > 0 && yr > 0) {
-          if (desc.unit) { cal.unit = /^(micron|um|µm|μm)$/i.test(desc.unit) ? 'µm' : desc.unit; cal.pixelWidth = 1 / xr; cal.pixelHeight = 1 / yr; }
-          else if (ru === 3) { cal.unit = 'µm'; cal.pixelWidth = 10000 / xr; cal.pixelHeight = 10000 / yr; }
-          else if (ru === 2) { cal.unit = 'µm'; cal.pixelWidth = 25400 / xr; cal.pixelHeight = 25400 / yr; }
-        }
-      }
-      const dMin = desc.min !== undefined ? parseFloat(desc.min) : NaN, dMax = desc.max !== undefined ? parseFloat(desc.max) : NaN;
-      const base = { Grays: '#ffffff', Red: '#ff0000', Green: '#00ff00', Blue: '#0000ff', Cyan: '#00ffff', Magenta: '#ff00ff', Yellow: '#ffff00' };
-      const channels = datas.map((data, i) => {
-        const ch = { name: labels && labels[i] ? labels[i] : 'C' + (i + 1), color: '#ffffff', data };
-        const disp = IJImage.defaultDisplay(ch, bd);
-        if (ranges && ranges[i]) { disp.min = ranges[i][0]; disp.max = ranges[i][1]; }
-        else if (dMin === dMin && dMax === dMax) { disp.min = dMin; disp.max = dMax; }
-        if (luts && luts[i]) {
-          const id = IJLuts.identify(luts[i]);
-          disp.lut = id.lut; disp.invert = id.invert;
-          if (typeof id.lut === 'string') ch.color = id.lut.charAt(0) === '#' ? id.lut : (base[id.lut] || '#ffffff');
-        } else if (planes[Math.min(i, planes.length - 1)].photo === 0) disp.invert = true;
-        ch.display = disp;
-        return ch;
-      });
-      return { name: name || 'Untitled', width: W, height: H, bitDepth: bd, channels, calibration: cal, provenance: null };
+      return T.assemble(P, images, name);
     }
     return { needsDecoder, read };
   })();
@@ -1377,4 +1625,5 @@
   root.IJTextIo = IJTextIo;
   root.IJLocalTiff = IJLocalTiff;
   root.IJFileKinds = IJFileKinds;
+  root.IJPng = IJPng;
 })(typeof self !== 'undefined' ? self : globalThis);

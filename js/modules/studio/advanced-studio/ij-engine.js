@@ -37,6 +37,21 @@
  * against the blob store before validation; session.putMeta keeps layout, annotations, sync, luts and ext besides the
  * Results / ROI list (each validated by type and size, what does not fit is dropped and named in the answer).
  *
+ * Stacks, hyperstacks and the RGB type (DOCS/studio-advanced/stacks/API.md): a document is nZ × nT planes per channel
+ * (`channels[c].planes[t * nZ + z]`, every array immutable) and `channels[c].data` is always the plane of the current position
+ * (doc.z, doc.t; setPlane / syncData keep it so). A request names the plane it acts on with `pos` and, for a pixel op, the set
+ * of planes with `planes` ('current' | 'all' | { z:[a,b], t:[a,b] } | [pi…]); the registry specs say what an op is (`stack`:
+ * 'ask' | 'plane' | 'all' | 'whole' | 'each', `rgb`: 'each' | 'gray' | 'whole' | false). A 24-bit RGB document is three 8-bit
+ * channels (Red, Green, Blue; nC = 1 for the page). A single-plane document behaves, and is stored and journaled, exactly as before
+ * stacks existed; records and journal entries written before them restore as 1 × 1 stacks.
+ *
+ * Macro runs (DOCS/studio-advanced/macros/INTEGRATION.md §2.6, §2.7): a worker command opens a run with E.macroGroup.begin; every
+ * image open then, or born during the run, is HELD until E.macroGroup.end — its steps push no undo record and write no journal entry
+ * or snapshot (a crash restores the pre-run state), Undo / Redo refuse IJ_MACRO_GROUP, and the end pushes ONE undo step per image
+ * that changed, back to the state saved at begin (a saved state is the last thing memory pressure gives up: that image then has no
+ * undo for the run). In batch mode (E.macroGroup.setBatch) an image born is hidden and EPHEMERAL: never a session entry, baseline,
+ * journal entry or snapshot, until doc.persist makes it an ordinary image.
+ *
  * Conventions
  *   - A channel's `data` array is IMMUTABLE once published: an operation builds a new
  *     array and swaps the reference at commit. That makes the undo record a plain
@@ -218,8 +233,10 @@ const IJEngine = (() => {
     return { min: d.min, max: d.max, lut: d.lut == null ? null : d.lut, invert: !!d.invert };
   }
 
-  function makeChannel(name, color, data, bd, display) {
-    const ch = { name: name || '', color: color || '#ffffff', data };
+  // A channel owns its stack: `planes[pi]` (pi = t * nZ + z) are IMMUTABLE arrays and `data` is always the plane of the
+  // document's current position (setPlane / syncData keep it so). `planes` given = a stack channel, else one plane.
+  function makeChannel(name, color, data, bd, display, planes) {
+    const ch = { name: name || '', color: color || '#ffffff', data, planes: planes ? planes.slice() : [data] };
     if (display) ch.display = Object.assign({}, display);
     else {
       ch.display = defaultDisplay(ch, bd);
@@ -227,6 +244,73 @@ const IJEngine = (() => {
       try { ch.display.lut = dep('IJLuts').forColor(ch.color); } catch (e) { /* keeps the default LUT */ }
     }
     return ch;
+  }
+
+  // ---- stacks (DOCS/studio-advanced/stacks/API.md §2) --------------------------------------------------------
+  function planeCountOf(doc) { return doc.nZ * doc.nT; }
+  function curPi(doc) { return doc.t * doc.nZ + doc.z; }
+  // channels[c].data === channels[c].planes[t*nZ+z], always: called after anything that moved the position or rebuilt a channel.
+  function syncData(doc) {
+    const pi = curPi(doc);
+    for (const c of doc.channels) c.data = c.planes[pi];
+  }
+  // Swap ONE plane of one channel (the arrays themselves are never written into).
+  function setPlane(doc, c, pi, arr) {
+    const ch = doc.channels[c];
+    ch.planes[pi] = arr;
+    if (pi === curPi(doc)) ch.data = arr;
+  }
+  // The plane index a request position names ({ z, t }; absent = the current one); IJ_BAD_ARGS when out of range.
+  function posToPi(doc, pos) {
+    if (pos === undefined || pos === null) return curPi(doc);
+    if (typeof pos !== 'object') throw ijError('IJ_BAD_ARGS', 'pos');
+    const z = pos.z === undefined || pos.z === null ? doc.z : pos.z;
+    const t = pos.t === undefined || pos.t === null ? doc.t : pos.t;
+    if (!isInt(z) || z < 0 || z >= doc.nZ || !isInt(t) || t < 0 || t >= doc.nT) throw ijError('IJ_BAD_ARGS', 'pos');
+    return t * doc.nZ + z;
+  }
+  function piToPos(doc, pi) { const z = pi % doc.nZ; return { z, t: (pi - z) / doc.nZ }; }
+  // The (z,t) set of a request: 'current' | 'all' | { z:[z0,z1], t:[t0,t1] } (inclusive; a missing axis = all of it) | an explicit
+  // [pi…] (a replayed journal entry) → ascending list of plane indices.
+  function planeSet(doc, planes, pos) {
+    const NP = planeCountOf(doc);
+    if (planes === undefined || planes === null || planes === 'current') return [posToPi(doc, pos)];
+    if (planes === 'all') { const all = []; for (let i = 0; i < NP; i++) all.push(i); return all; }
+    if (Array.isArray(planes)) {
+      if (!planes.length || planes.some((p) => !isInt(p) || p < 0 || p >= NP)) throw ijError('IJ_BAD_ARGS', 'planes');
+      return Array.from(new Set(planes)).sort((a, b) => a - b);
+    }
+    if (typeof planes === 'object') {
+      const rng = (r, n) => {
+        if (r === undefined || r === null) return [0, n - 1];
+        if (!Array.isArray(r) || r.length !== 2 || !isInt(r[0]) || !isInt(r[1]) || r[0] < 0 || r[1] < r[0] || r[1] >= n) throw ijError('IJ_BAD_ARGS', 'planes range');
+        return r;
+      };
+      const zr = rng(planes.z, doc.nZ), tr = rng(planes.t, doc.nT);
+      const out = [];
+      for (let t = tr[0]; t <= tr[1]; t++) for (let z = zr[0]; z <= zr[1]; z++) out.push(t * doc.nZ + z);
+      return out;
+    }
+    throw ijError('IJ_BAD_ARGS', 'planes');
+  }
+  // The ImageJ stack index (1-based) of the plane at pi for the active channel.
+  function stackDims(doc) { return { nC: doc.rgb ? 1 : doc.channels.length, nZ: doc.nZ, nT: doc.nT }; }
+  function labelCount(doc) { const d = stackDims(doc); return d.nC * d.nZ * d.nT; }
+  function labelOf(doc, c, pi) {
+    if (!doc.labels) return null;
+    const p = piToPos(doc, pi);
+    const n = dep('IJStack').stackIndex(stackDims(doc), doc.rgb ? 0 : c, p.z, p.t) - 1;
+    const v = doc.labels[n];
+    return typeof v === 'string' && v !== '' ? v : null;
+  }
+  // `changed.planes` (which planes an edit touched: [pi…] or 'all') is only reported for a document that has more than one: a
+  // single-plane document's answer is what it always was (an absent `planes` means "all of them").
+  function planesField(doc, v) { return planeCountOf(doc) > 1 ? { planes: v } : {}; }
+  // The bytes of every plane of every channel (info.bytes; the budget dedupes by array identity itself).
+  function planeBytes(doc) {
+    let bytes = 0;
+    for (const c of doc.channels) for (const a of c.planes) bytes += a.byteLength;
+    return bytes;
   }
 
   function needNumber(v, what) {
@@ -256,13 +340,68 @@ const IJEngine = (() => {
 
   // The document as an operation sees it (PLAN-wave2 §2.1): the arrays are the live ones, so an op
   // must NEVER write into them. Only the wrappers are frozen (a typed array cannot be).
-  function makeView(doc) {
-    const channels = doc.channels.map((c) => Object.freeze({ data: c.data, name: c.name, color: c.color, display: Object.freeze(Object.assign({}, c.display)) }));
+  // `pi` = the plane the op acts on (default: the document's current one). Every channel carries `data` (that plane) AND
+  // `planes` (a frozen copy of the list of every plane — read-only like `data`); the view says where it stands (z, t).
+  // `active` = the channel the request named (its `channel`, which the journal keeps): it wins over doc.active, which is
+  // display state — never journaled, and lagging the page through the setDisplay coalescer.
+  function makeView(doc, pi, active) {
+    const p = pi === undefined || pi === null ? curPi(doc) : pi;
+    const channels = doc.channels.map((c) => Object.freeze({
+      data: c.planes[p], planes: Object.freeze(c.planes.slice()), name: c.name, color: c.color, display: Object.freeze(Object.assign({}, c.display))
+    }));
+    const z = p % doc.nZ;
     return Object.freeze({
       id: doc.id, name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth,
       calibration: doc.calibration ? Object.freeze(Object.assign({}, doc.calibration)) : doc.calibration,
       provenance: doc.provenance ? Object.freeze(Object.assign({}, doc.provenance)) : doc.provenance,
-      channels: Object.freeze(channels), active: doc.active, mode: doc.mode
+      channels: Object.freeze(channels), active: Number.isInteger(active) && active >= 0 && active < doc.channels.length ? active : doc.active, mode: doc.mode,
+      nC: doc.rgb ? 1 : doc.channels.length, nZ: doc.nZ, nT: doc.nT, z, t: (p - z) / doc.nZ,
+      hyperstack: !!doc.hyperstack, rgb: !!doc.rgb, labels: doc.labels ? Object.freeze(doc.labels.slice()) : null,
+      visible: Array.isArray(doc.visible) ? Object.freeze(doc.visible.slice()) : null
+    });
+  }
+
+  // The luminance of an RGB document's plane (IJStack.grayPlane, ImageJ's TypeConverter.convertRGBToByte). One entry is kept per
+  // document, keyed on its revision, the plane and the weighting, so a measure + a histogram + a preview read one conversion.
+  function grayPlaneOf(doc, pi, weighted) {
+    const key = doc.rev + ':' + pi + ':' + (weighted ? 1 : 0);
+    if (doc.grayCache && doc.grayCache.key === key) return doc.grayCache.data;
+    const ch = doc.channels;
+    const data = dep('IJStack').grayPlane(ch[0].planes[pi], ch[1].planes[pi], ch[2].planes[pi], !!weighted);
+    doc.grayCache = { key, data };
+    return data;
+  }
+  // The same luminance as ColorProcessor.getPixelValue gives it, UNROUNDED: (float)(r*rw + g*gw + b*bw) with the weights of the Conversions option
+  // (1/3 each, or 0.299 / 0.587 / 0.114). ColorStatistics.calculateMoments (Skewness, Kurtosis of an RGB measurement) reads these floats.
+  function grayLumOf(doc, pi, weighted) {
+    const key = doc.rev + ':' + pi + ':' + (weighted ? 1 : 0);
+    if (doc.lumCache && doc.lumCache.key === key) return doc.lumCache.data;
+    const ch = doc.channels, R = ch[0].planes[pi], G = ch[1].planes[pi], B = ch[2].planes[pi];
+    const rw = weighted ? 0.299 : 1 / 3, gw = weighted ? 0.587 : 1 / 3, bw = weighted ? 0.114 : 1 / 3;
+    const data = new Float32Array(R.length);
+    for (let i = 0; i < data.length; i++) data[i] = R[i] * rw + G[i] * gw + B[i] * bw;
+    doc.lumCache = { key, data };
+    return data;
+  }
+  // What a compute / newdoc op with `rgb: 'gray'` (and every measurement) sees on an RGB document: ONE 8-bit grey channel. With
+  // `whole` the channel's `planes` hold the luminance of every plane (not cached, built here), else only the plane at `pi`.
+  function makeGrayView(doc, pi, weighted, whole) {
+    const p = pi === undefined || pi === null ? curPi(doc) : pi;
+    const data = grayPlaneOf(doc, p, weighted);
+    let planes = [data];
+    if (whole) {
+      const S = dep('IJStack'), ch = doc.channels;
+      planes = [];
+      for (let i = 0; i < planeCountOf(doc); i++) planes.push(i === p ? data : S.grayPlane(ch[0].planes[i], ch[1].planes[i], ch[2].planes[i], !!weighted));
+    }
+    const z = p % doc.nZ;
+    return Object.freeze({
+      id: doc.id, name: doc.name, width: doc.width, height: doc.height, bitDepth: 8,
+      calibration: doc.calibration ? Object.freeze(Object.assign({}, doc.calibration)) : doc.calibration,
+      provenance: doc.provenance ? Object.freeze(Object.assign({}, doc.provenance)) : doc.provenance,
+      channels: Object.freeze([Object.freeze({ data, planes: Object.freeze(planes), name: 'Gray', color: '#ffffff', display: Object.freeze({ min: 0, max: 255, lut: null, invert: false }) })]),
+      active: 0, mode: 'gray',
+      nC: 1, nZ: doc.nZ, nT: doc.nT, z, t: (p - z) / doc.nZ, hyperstack: !!doc.hyperstack, rgb: false, labels: doc.labels ? Object.freeze(doc.labels.slice()) : null
     });
   }
 
@@ -276,7 +415,7 @@ const IJEngine = (() => {
     const noApron = () => ({ x: 0, y: 0 });
 
     def('invert', {
-      kind: 'pixel', version: 1,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each',
       // A 32-bit image inverts about its DISPLAY range (FloatProcessor.invert reads getMin()/getMax()); the range is not journaled,
       // so it is copied into the params (a replay gives the same pixels).
       resolve(view, params, chans) {
@@ -299,7 +438,7 @@ const IJEngine = (() => {
       }
     });
     def('math', {
-      kind: 'pixel', version: 1,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each',
       prepare(view, c, p) {
         if (typeof p.op !== 'string') throw ijError('IJ_BAD_ARGS', 'math op');
         if (p.op !== 'abs') needNumber(p.value, 'math value');
@@ -307,19 +446,19 @@ const IJEngine = (() => {
       }
     });
     def('fill', {
-      kind: 'pixel', version: 1,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each',
       prepare(view, c, p) { needNumber(p.value, 'fill value'); return { apron: noApron(), fn: (src) => dep('IJOps').fill(src, null, p.value) }; }
     });
     def('clear', {
-      kind: 'pixel', version: 1,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each',
       prepare(view, c, p) { needNumber(p.value, 'clear value'); return { apron: noApron(), fn: (src) => dep('IJOps').clear(src, null, p.value) }; }
     });
     def('clearOutside', {
-      kind: 'pixel', version: 1, outside: true, needsRoi: true,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', outside: true, needsRoi: true,
       prepare(view, c, p) { needNumber(p.value, 'clear value'); return { apron: noApron(), fn: (src) => dep('IJOps').fill(src, null, p.value) }; }
     });
     def('applyLut', {
-      kind: 'pixel', version: 1, display: true,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', display: true,
       // The display range is not journaled: copy it into the params so a replay gives the same pixels.
       resolve(view, params, chans) {
         const p = Object.assign({}, params);
@@ -339,7 +478,7 @@ const IJEngine = (() => {
       }
     });
     def('gaussian', {
-      kind: 'pixel', version: 1, preview: 'reduced',
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: 'reduced',
       prepare(view, c, p, o) {
         const IJFilters = dep('IJFilters');
         const sigma = needNumber(p.sigma, 'sigma');
@@ -356,7 +495,7 @@ const IJEngine = (() => {
       }
     });
     def('rank', {
-      kind: 'pixel', version: 1, preview: 'reduced',
+      kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: 'reduced',
       prepare(view, c, p, o) {
         const IJFilters = dep('IJFilters');
         const type = String(p.type || '').toLowerCase();
@@ -371,7 +510,7 @@ const IJEngine = (() => {
       }
     });
     def('binary', {
-      kind: 'pixel', version: 1,
+      kind: 'pixel', version: 1, stack: 'ask', rgb: false,
       prepare(view, c, p) {
         if (view.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'binary operations need an 8-bit mask');
         const IJBinary = dep('IJBinary');
@@ -393,12 +532,12 @@ const IJEngine = (() => {
         return { whole: op === 'fillHoles', apron: { x: reach, y: reach }, fn: (src) => IJBinary[op](src, o) };
       }
     });
-    def('flipH', { kind: 'pixel', version: 1, preview: false, prepare() { return { whole: true, apron: noApron(), fn: (src) => dep('IJOps').flipH(src) }; } });
-    def('flipV', { kind: 'pixel', version: 1, preview: false, prepare() { return { whole: true, apron: noApron(), fn: (src) => dep('IJOps').flipV(src) }; } });
+    def('flipH', { kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: false, prepare() { return { whole: true, apron: noApron(), fn: (src) => dep('IJOps').flipH(src) }; } });
+    def('flipV', { kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: false, prepare() { return { whole: true, apron: noApron(), fn: (src) => dep('IJOps').flipV(src) }; } });
 
     // ---- size operations: the document gets new arrays, possibly another shape
     def('crop', {
-      kind: 'size', version: 1,
+      kind: 'size', version: 1, stack: 'all', rgb: 'each',
       scratchBytes: (info, params) => { const b = cropRect(info, params, info.roi); return b.w * b.h * info.channels * (info.bitDepth / 8); },
       async run(view, params, roi, io) {
         const W = view.width, bd = view.bitDepth;
@@ -419,7 +558,7 @@ const IJEngine = (() => {
       }
     });
     def('rotate90', {
-      kind: 'size', version: 1,
+      kind: 'size', version: 1, stack: 'all', rgb: 'each',
       scratchBytes: (info) => info.width * info.height * info.channels * (info.bitDepth / 8),
       async run(view, params, roi, io) {
         const W = view.width, H = view.height, bd = view.bitDepth;
@@ -442,7 +581,7 @@ const IJEngine = (() => {
       }
     });
     def('convert', {
-      kind: 'size', version: 1,
+      kind: 'size', version: 1, stack: 'all', rgb: false,
       resolve(view, params) {
         const p = Object.assign({}, params);
         p.ranges = Object.assign({}, p.ranges);
@@ -472,7 +611,7 @@ const IJEngine = (() => {
 
     // ---- new-document operations
     def('toMask', {
-      kind: 'newdoc', version: 1,
+      kind: 'newdoc', version: 1, stack: 'plane', rgb: 'gray',
       scratchBytes: (info) => info.width * info.height,
       async run(view, params, roi, io) {
         const W = view.width, H = view.height;
@@ -489,7 +628,7 @@ const IJEngine = (() => {
       }
     });
     def('cropToNew', {
-      kind: 'newdoc', version: 1,
+      kind: 'newdoc', version: 1, stack: 'plane', rgb: 'each',
       scratchBytes: (info, params) => { const b = cropRect(info, params, info.roi); return b.w * b.h * info.channels * (info.bitDepth / 8); },
       async run(view, params, roi, io) {
         const W = view.width, bd = view.bitDepth;
@@ -685,23 +824,34 @@ const IJEngine = (() => {
     // A Blob is stored out of line (no such limit), so channel pixels go in as Blobs and come
     // back as typed arrays of the same type and length.
     const TYPED = { Uint8Array, Uint16Array, Float32Array };
+    // One array → its out-of-line form, and back. A record of a stack holds `planes: [{ data } | { sameAsBaseline, baseIndex }]` per
+    // channel, each plane its own Blob (a plane is the unit that stays far below the limit); a single-plane record keeps the
+    // flat `{ data, blob, dataType, length }` channel of the first versions.
+    const blobOf = (o) => (o && o.data
+      ? Object.assign({}, o, { data: null, blob: new ROOT.Blob([o.data]), dataType: o.data.constructor.name, length: o.data.length })
+      : o);
+    async function unblob(c) {
+      if (!c || !c.blob) return;
+      const T = TYPED[c.dataType];
+      if (!T) throw ijError('IJ_STORAGE_FAILED', 'stored channel of unknown type ' + c.dataType);
+      const data = new T(await c.blob.arrayBuffer());
+      if (data.length !== c.length) throw ijError('IJ_STORAGE_FAILED', 'stored channel truncated');
+      c.data = data;
+      delete c.blob;
+    }
     function toStored(snap) {
       return Object.assign({}, snap, {
-        channels: snap.channels.map((c) => (c.data
-          ? Object.assign({}, c, { data: null, blob: new ROOT.Blob([c.data]), dataType: c.data.constructor.name, length: c.data.length })
-          : c))
+        channels: snap.channels.map((c) => {
+          const o = blobOf(c);
+          return Array.isArray(c.planes) ? Object.assign({}, o, { planes: c.planes.map(blobOf) }) : o;
+        })
       });
     }
     async function fromStored(rec) {
       if (!rec || !Array.isArray(rec.channels)) return rec;
       for (const c of rec.channels) {
-        if (!c.blob) continue;
-        const T = TYPED[c.dataType];
-        if (!T) throw ijError('IJ_STORAGE_FAILED', 'stored channel of unknown type ' + c.dataType);
-        const data = new T(await c.blob.arrayBuffer());
-        if (data.length !== c.length) throw ijError('IJ_STORAGE_FAILED', 'stored channel truncated');
-        c.data = data;
-        delete c.blob;
+        await unblob(c);
+        if (Array.isArray(c.planes)) for (const p of c.planes) await unblob(p);
       }
       return rec;
     }
@@ -881,6 +1031,10 @@ const IJEngine = (() => {
     let tileCacheBytes = opts.tileCacheBytes > 0 ? opts.tileCacheBytes : TILE_CACHE_BYTES;
     const blobs = new Map();          // ref → { ref, kind, data, bytes, docs:Set<docId>, at }
     const blobRefOf = new WeakMap();  // typed array → ref, for the arrays the store holds (no re-hash at commit)
+    // The macro run in progress (E.macroGroup, DOCS/studio-advanced/macros/INTEGRATION.md §2.6): one undo step per image it changes.
+    // docs: docId → { pre: fullState | null (dropped for memory), born, dropped, rev0 }. lastMacroRun answers a repeated end().
+    let macroRun = null;
+    let lastMacroRun = null;
 
     // ---- messaging ---------------------------------------------------------
 
@@ -965,16 +1119,21 @@ const IJEngine = (() => {
       const add = (a) => { if (a && !seen.has(a)) { seen.add(a); total += a.byteLength; } };
       const addRec = (r) => {
         if (r.patches) for (const p of r.patches) add(p.data);
-        if (r.full) for (const c of r.full.channels) add(c.data);
+        if (r.full) for (const c of r.full.channels) addChannel(c);
+        if (r.group) for (const g of r.group) addRec(g);
       };
+      const addChannel = (c) => { if (c.planes) for (const a of c.planes) add(a); else add(c.data); };
       for (const d of budgetDocs()) {
-        for (const c of d.channels) add(c.data);
+        for (const c of d.channels) addChannel(c);
         for (const r of d.undo) addRec(r);
         for (const r of d.redo) addRec(r);
         if (d.baselineData) for (const a of d.baselineData) add(a);
+        if (d.grayCache) add(d.grayCache.data);
       }
       for (const t of tiles.map.values()) add(t.img.data);
       for (const b of blobs.values()) add(b.data);
+      // the state a macro run restores on undo: the arrays the documents no longer hold stay in memory until the run ends
+      if (macroRun) for (const e of macroRun.docs.values()) if (e.pre) for (const c of e.pre.channels) addChannel(c);
       for (const p of projects.values()) total += p.estimate;
       return total + transientBytes;
     }
@@ -982,13 +1141,16 @@ const IJEngine = (() => {
     function recBytes(r) {
       let n = 0;
       if (r.patches) for (const p of r.patches) n += p.data.byteLength;
-      if (r.full) for (const c of r.full.channels) n += c.data.byteLength;
+      if (r.full) for (const c of r.full.channels) { if (c.planes) for (const a of c.planes) n += a.byteLength; else n += c.data.byteLength; }
+      if (r.group) for (const g of r.group) n += recBytes(g);
       return n;
     }
 
     function dropTiles() {
       tiles.map.clear();
       tiles.bytes = 0;
+      // the luminance of an RGB plane is a cache too
+      for (const d of budgetDocs()) d.grayCache = null;
     }
 
     // The blobs no document has used yet (nothing refers to them): given up when memory is short. A blob a preview refers to is
@@ -997,9 +1159,11 @@ const IJEngine = (() => {
       for (const [ref, b] of Array.from(blobs)) if (!b.docs.size && !b.pinned) { blobs.delete(ref); }
     }
 
-    function purgeTiles(docId) {
+    // The cached pyramid levels of a document (of the planes `pis` only when given). A cached level is only ever served for the
+    // plane array it was built from (an array is immutable), so a stale entry can never answer; this gives the memory back.
+    function purgeTiles(docId, pis) {
       for (const [k, t] of tiles.map) {
-        if (t.docId === docId) { tiles.map.delete(k); tiles.bytes -= t.img.data.byteLength; }
+        if (t.docId === docId && (!pis || pis === 'all' || pis.indexOf(t.pi) >= 0)) { tiles.map.delete(k); tiles.bytes -= t.img.data.byteLength; }
       }
     }
 
@@ -1012,21 +1176,24 @@ const IJEngine = (() => {
     function reclaimableBytes() {
       const seen = new Set();
       for (const d of budgetDocs()) {
-        for (const c of d.channels) seen.add(c.data);
+        for (const c of d.channels) for (const a of c.planes) seen.add(a);
         if (d.baselineData) for (const a of d.baselineData) seen.add(a);
       }
       let reclaimable = tiles.bytes;
       const add = (a) => { if (a && !seen.has(a)) { seen.add(a); reclaimable += a.byteLength; } };
       // a blob no document has used yet (a preview's clipboard, a cancelled paste) is given up like a cached tile
       for (const b of blobs.values()) if (!b.docs.size && !b.pinned) add(b.data);
+      for (const d of budgetDocs()) if (d.grayCache) add(d.grayCache.data);
       const addRec = (r) => {
         if (r.patches) for (const p of r.patches) add(p.data);
-        if (r.full) for (const c of r.full.channels) add(c.data);
+        if (r.full) for (const c of r.full.channels) { if (c.planes) for (const a of c.planes) add(a); else add(c.data); }
+        if (r.group) for (const g of r.group) addRec(g);
       };
       for (const d of budgetDocs()) {
         for (const r of d.undo) addRec(r);
         for (const r of d.redo) addRec(r);
       }
+      if (macroRun) for (const e of macroRun.docs.values()) if (e.pre) for (const c of e.pre.channels) for (const a of c.planes) add(a);
       return reclaimable;
     }
 
@@ -1061,12 +1228,46 @@ const IJEngine = (() => {
             if (stack.length && (!best || stack[0].at < best.stack[0].at)) best = { stack, doc: d };
           }
         }
-        if (!best) break;
+        if (!best) {
+          // last resort before refusing: the saved state of a macro run, the one that frees most first (its image gets no undo for the run)
+          if (!dropMacroPre()) break;
+          continue;
+        }
         best.stack.shift();
       }
       if (usedBytes() + extra > budgetBytes) {
         throw ijError('IJ_OVER_BUDGET', 'not enough memory for this operation', { needBytes: extra, usedBytes: usedBytes(), budgetBytes });
       }
+    }
+
+    // Gives up the saved pre-run state that frees the most memory (they were all taken at the same moment); false when none is left.
+    function dropMacroPre() {
+      if (!macroRun) return false;
+      const live = new Set();
+      for (const d of budgetDocs()) {
+        for (const c of d.channels) for (const a of c.planes) live.add(a);
+        if (d.baselineData) for (const a of d.baselineData) live.add(a);
+        for (const st of [d.undo, d.redo]) for (const r of st) for (const a of recArrays(r)) live.add(a);
+      }
+      let best = null, bestBytes = -1;
+      for (const e of macroRun.docs.values()) {
+        if (!e.pre) continue;
+        let n = 0;
+        const seen = new Set();
+        for (const c of e.pre.channels) for (const a of c.planes) if (!live.has(a) && !seen.has(a)) { seen.add(a); n += a.byteLength; }
+        if (n > bestBytes) { best = e; bestBytes = n; }
+      }
+      if (!best) return false;
+      best.pre = null;
+      best.dropped = true;
+      return true;
+    }
+    function recArrays(r) {
+      const out = [];
+      if (r.patches) for (const p of r.patches) out.push(p.data);
+      if (r.full) for (const c of r.full.channels) { if (c.planes) for (const a of c.planes) out.push(a); else out.push(c.data); }
+      if (r.group) for (const g of r.group) for (const a of recArrays(g)) out.push(a);
+      return out;
     }
 
     // ---- tasks (cancel + slicing) -----------------------------------------------
@@ -1110,20 +1311,26 @@ const IJEngine = (() => {
     // What the channel layout of a document is: the session meta stamps its display with it and the
     // restore applies that display only when the layout it finds is the one the display was made for
     // (a journaled Arrange whose meta write never happened would otherwise shift every LUT).
+    // A stack's dimensions belong to the layout (a display stamped for 3 planes means nothing on 5); a single-plane document
+    // keeps the signature of the first versions, so the sessions stored before stacks still match.
     function channelSig(doc) {
-      return doc.channels.length + '|' + doc.channels.map((c) => c.name).join('\u0001') + '|' + (doc.layoutRev || 0);
+      return doc.channels.length + '|' + doc.channels.map((c) => c.name).join('\u0001') + '|' + (doc.layoutRev || 0) +
+        (planeCountOf(doc) > 1 ? '|' + doc.nZ + 'x' + doc.nT : '');
     }
 
     function displayStateOf(doc) {
-      return {
+      const st = {
         sig: channelSig(doc),
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
         channels: doc.channels.map((c) => ({ min: c.display.min, max: c.display.max, lut: c.display.lut, invert: c.display.invert }))
       };
+      if (planeCountOf(doc) > 1) st.pos = { z: doc.z, t: doc.t };
+      return st;
     }
 
     function markMeta(doc) {
-      if (!storageOn || doc.held) return;
+      // a document a macro run holds writes its meta when the run ends; a batch image of a run never has a session entry
+      if (!storageOn || doc.held || doc.macroHold || doc.ephemeral) return;
       const s = sessions.get(doc.sessionKey);
       if (!s) return;
       s.docs[doc.id] = { name: doc.name, rev: doc.rev, saved: doc.savedRev === doc.rev };
@@ -1137,22 +1344,44 @@ const IJEngine = (() => {
       }, null);
     }
 
+    // p.channels[c] = { name, color, display, data, planes? } — a channel without `planes` is one plane (nZ = nT = 1). The
+    // planes of every channel are checked here (the one place a document is born), and `data` follows the position.
     function buildDoc(p) {
       const n = p.channels.length;
-      return {
+      const nZ = p.nZ === undefined ? 1 : p.nZ, nT = p.nT === undefined ? 1 : p.nT;
+      if (!isInt(nZ) || nZ < 1 || !isInt(nT) || nT < 1) throw ijError('IJ_BAD_ARGS', 'stack dimensions');
+      const NP = nZ * nT;
+      for (const c of p.channels) {
+        if (!Array.isArray(c.planes)) c.planes = [c.data];
+        if (c.planes.length !== NP) throw ijError('IJ_BAD_ARGS', 'planes of a channel');
+      }
+      if (p.rgb && (n !== 3 || p.bitDepth !== 8)) throw ijError('IJ_BAD_ARGS', 'rgb image');
+      const z = isInt(p.z) ? Math.min(nZ - 1, Math.max(0, p.z)) : 0, t = isInt(p.t) ? Math.min(nT - 1, Math.max(0, p.t)) : 0;
+      const doc = {
         id: p.id, sessionKey: p.sessionKey, name: p.name, width: p.width, height: p.height, bitDepth: p.bitDepth,
         channels: p.channels, calibration: p.calibration, provenance: p.provenance || {},
+        nZ, nT, z, t, labels: Array.isArray(p.labels) ? p.labels.slice() : null, hyperstack: !!p.hyperstack, rgb: !!p.rgb,
         rev: p.rev || 0, savedRev: p.savedRev == null ? -1 : p.savedRev,
-        mode: (p.display && p.display.mode) || (n > 1 ? 'composite' : 'gray'),
+        mode: p.rgb ? 'composite' : ((p.display && p.display.mode) || (n > 1 ? 'composite' : 'gray')),
         active: (p.display && p.display.active) || 0,
-        visible: (p.display && p.display.visible) || new Array(n).fill(true),
-        undo: [], redo: [], chain: Promise.resolve(),
+        visible: p.rgb ? new Array(3).fill(true) : ((p.display && p.display.visible) || new Array(n).fill(true)),
+        undo: [], redo: [], chain: Promise.resolve(), grayCache: null, groupDepth: 0, groupRecs: null,
         baselineIndex: new WeakMap(), baselineData: null, baselineShape: null, baselineMeta: null, baselineProvenance: null, baselineStored: false,
         layoutRev: p.layoutRev || 0, roiWritten: new Set(), blobWritten: new Set(), hidden: !!p.hidden,
         journalSeq: p.journalSeq || 0, snapshotRev: 0, dirty: false, protected: storageOn,
         unjournaledRev: -1, pendingBaseline: null,
         rangeCache: null
       };
+      if (doc.labels && doc.labels.length !== labelCount(doc)) doc.labels = null;
+      syncData(doc);
+      // born during a macro run: held like the images the run started with (no undo of its own, written when the run ends);
+      // in batch mode a hidden, ephemeral image that the page closes at the end unless the macro shows it
+      if (macroRun && !macroRun.closing && !p.restore) {
+        doc.macroHold = true;
+        if (macroRun.batch) { doc.hidden = true; doc.ephemeral = true; }
+        macroRun.docs.set(doc.id, { pre: null, born: true, dropped: false, rev0: doc.rev });
+      }
+      return doc;
     }
 
     function sessionKeyFor(provenance, id) {
@@ -1163,7 +1392,7 @@ const IJEngine = (() => {
       docs.set(doc.id, doc);
       const s = sessionOf(doc.sessionKey, doc.provenance && doc.provenance.datasetId);
       activeSessionKey = doc.sessionKey;
-      if (o && o.baseline) writeBaseline(doc);
+      if (o && o.baseline && !doc.macroHold) writeBaseline(doc);
       markMeta(doc);
       scheduleIdle();
       return s;
@@ -1172,15 +1401,27 @@ const IJEngine = (() => {
     function recordOf(doc, kind) {
       const same = kind === 'snapshot' && doc.baselineStored && doc.baselineShape &&
         doc.baselineShape.w === doc.width && doc.baselineShape.h === doc.height && doc.baselineShape.bd === doc.bitDepth;
+      const NP = planeCountOf(doc);
       return {
         kind, docId: doc.id, rev: doc.rev, journalSeq: doc.journalSeq, savedRev: doc.savedRev, layoutRev: doc.layoutRev,
         name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth, hidden: !!doc.hidden,
+        nZ: doc.nZ, nT: doc.nT, z: doc.z, t: doc.t, labels: doc.labels ? doc.labels.slice() : null, hyperstack: !!doc.hyperstack, rgb: !!doc.rgb,
         calibration: plainClone(doc.calibration), provenance: plainClone(doc.provenance),
         display: displayStateOf(doc),
         // A channel that still IS one of the baseline's arrays is stored as a reference to that
         // baseline channel (baseIndex) — never by its own index: an Arrange / reorder keeps the
-        // arrays but moves them.
+        // arrays but moves them. The baseline's arrays are numbered c * NP + pi (writeBaseline). A single-plane document keeps
+        // the flat channel record of the first versions; a stack stores one entry per plane.
         channels: doc.channels.map((c) => {
+          if (NP > 1) {
+            return {
+              name: c.name, color: c.color, display: Object.assign({}, c.display),
+              planes: c.planes.map((a) => {
+                const k = same ? doc.baselineIndex.get(a) : undefined;
+                return k !== undefined ? { sameAsBaseline: true, baseIndex: k } : { data: a };
+              })
+            };
+          }
           const bi = same ? doc.baselineIndex.get(c.data) : undefined;
           const isBase = bi !== undefined;
           return {
@@ -1194,17 +1435,25 @@ const IJEngine = (() => {
 
     function recDataBytes(rec) {
       let n = 0;
-      for (const c of rec.channels) if (c.data) n += c.data.byteLength;
+      for (const c of rec.channels) {
+        if (c.data) n += c.data.byteLength;
+        if (c.planes) for (const p of c.planes) if (p.data) n += p.data.byteLength;
+      }
       return n;
     }
 
     function writeBaseline(doc) {
+      if (doc.ephemeral) return;
+      // The baseline's arrays are numbered c * NP + pi (NP = nZ * nT): the flat list `baselineData`, and the index a stored record's
+      // `baseIndex` points at.
+      const NP = planeCountOf(doc);
       doc.baselineIndex = new WeakMap();
-      doc.channels.forEach((c, i) => doc.baselineIndex.set(c.data, i));
+      doc.channels.forEach((c, i) => c.planes.forEach((a, pi) => doc.baselineIndex.set(a, i * NP + pi)));
       doc.baselineMeta = doc.channels.map((c) => ({ name: c.name, color: c.color }));
       doc.baselineProvenance = plainClone(doc.provenance);
-      doc.baselineShape = { w: doc.width, h: doc.height, bd: doc.bitDepth };
-      doc.baselineData = doc.channels.map((c) => c.data);
+      doc.baselineShape = { w: doc.width, h: doc.height, bd: doc.bitDepth, nZ: doc.nZ, nT: doc.nT, rgb: !!doc.rgb, hyperstack: !!doc.hyperstack, labels: doc.labels ? doc.labels.slice() : null };
+      doc.baselineData = [];
+      for (const c of doc.channels) for (const a of c.planes) doc.baselineData.push(a);
       doc.baselineDisplays = doc.channels.map((c) => Object.assign({}, c.display));
       doc.baselineCal = plainClone(doc.calibration);
       doc.baselineStored = false;
@@ -1241,6 +1490,8 @@ const IJEngine = (() => {
       // that waits for the answer (doc.close "keep for later") is told nothing was kept.
       if (doc.held) return Promise.resolve(false);
       if (!storageOn || (!force && !docs.has(doc.id))) return queue;
+      // held by a macro run: the stored state stays the pre-run one until the run ends (a crash restores that); a batch image never is
+      if (doc.macroHold || doc.ephemeral) return queue;
       const rec = recordOf(doc, 'snapshot');
       const bytes = recDataBytes(rec);
       // The snapshot drops the stored selections of the entries it covers: the entries committed
@@ -1282,7 +1533,8 @@ const IJEngine = (() => {
     // Documents the stored state cannot restore as they are now (after a flush: the ones whose
     // write failed). Used to tell the page that "keep for later" did not keep anything.
     function unsafeDocs() {
-      return [...docs.values()].filter((d) => d.dirty || !d.protected || (d.pendingBaseline && !d.baselineStored)).map((d) => d.id);
+      // a batch image of a macro is never stored; one a run holds is stored as it was before the run until the run ends
+      return [...docs.values()].filter((d) => !d.ephemeral && !d.macroHold && (d.dirty || !d.protected || (d.pendingBaseline && !d.baselineStored))).map((d) => d.id);
     }
 
     const ROI_REF_BYTES = 65536;
@@ -1384,6 +1636,8 @@ const IJEngine = (() => {
 
     function noteCommit(doc, entry) {
       doc.dirty = true;
+      // a macro run's changes are stored as ONE snapshot when it ends; a batch image of a run never is
+      if (doc.macroHold || doc.ephemeral) return;
       doc.journalSeq++;
       if (entry && entry.kind === 'run' && entry.maskRule == null) entry.maskRule = 2;
       if (entry && storageOn && doc.protected) {
@@ -1419,14 +1673,20 @@ const IJEngine = (() => {
     }
 
     function infoOf(doc) {
-      let bytes = 0;
-      for (const c of doc.channels) bytes += c.data.byteLength;
+      const bytes = planeBytes(doc);
+      const dims = stackDims(doc);
       return {
         docId: doc.id, name: doc.name, width: doc.width, height: doc.height, bitDepth: doc.bitDepth, rev: doc.rev,
+        // stacks (API.md §4): `bitDepth` stays the storage depth (8 for RGB); `bitDepthIJ` is ImageJ's type (24 for RGB)
+        nC: dims.nC, nZ: doc.nZ, nT: doc.nT, z: doc.z, t: doc.t, nSlices: dims.nC * dims.nZ * dims.nT,
+        stackIndex: dep('IJStack').stackIndex(dims, doc.rgb ? 0 : doc.active, doc.z, doc.t),
+        hyperstack: !!doc.hyperstack, rgb: !!doc.rgb, label: labelOf(doc, doc.active, curPi(doc)), bitDepthIJ: doc.rgb ? 24 : doc.bitDepth,
         channels: doc.channels.map((c) => ({ name: c.name, color: c.color, display: Object.assign({}, c.display) })),
         calibration: doc.calibration, provenance: doc.provenance,
+        // the file an image was opened from / saved to by a macro (FILES.md §10.2: virtual strings only)
+        file: fileOf(doc),
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
-        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev, hidden: !!doc.hidden,
+        undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev, hidden: !!doc.hidden, ephemeral: !!doc.ephemeral,
         bytes, levels: levelCount(doc.width, doc.height), tileSize: TILE,
         unsaved: doc.savedRev !== doc.rev || !!doc.held, protected: !!(storageOn && doc.protected),
         loading: false, memory: { usedBytes: usedBytes(), budgetBytes }
@@ -1439,13 +1699,254 @@ const IJEngine = (() => {
       return d;
     }
 
+    function fileOf(doc) {
+      const f = doc.provenance && doc.provenance.file;
+      return f && typeof f === 'object' && typeof f.dir === 'string' && typeof f.name === 'string'
+        ? { dir: f.dir, name: f.name, format: typeof f.format === 'string' ? f.format : null } : null;
+    }
+
+    // ── file codecs of the macro file commands (FILES.md §10.2): decode a file's bytes into a stack image, encode a document ──
+    const PICTURE_MAX_PIXELS = 268435456;
+    const FILE_FORMATS = ['tiff', 'png', 'jpeg', 'gif', 'bmp', 'text', 'zip', 'raw'];
+    const asBytes = (b) => (ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : (b && typeof b.byteLength === 'number' ? new Uint8Array(b) : null));
+    /** Opener.openTiff(path, n): the n-th image of the file (1-based, ImageJ's stack order: channels fastest, then slices, then frames) alone. */
+    function tiffPlane(img, n) {
+      const rgb = img.rgb === true;
+      const nC = rgb ? 1 : img.channels.length;
+      const lists = img.channels.map((c) => (Array.isArray(c.planes) ? c.planes : [c.data]));
+      const nP = lists[0].length;
+      const count = nC * nP;
+      if (!isInt(n) || n < 1 || n > count) throw ijError('IJ_IO_PLANE', 'N out of 1-' + count + ' range', { count, ijText: 'N out of 1-' + count + ' range' });
+      const k = n - 1;
+      const c = rgb ? 0 : k % nC, pi = rgb ? k : Math.floor(k / nC);
+      const pick = (j) => { const ch = img.channels[j]; const o = { data: lists[j][pi], name: ch.name, color: ch.color }; if (ch.display) o.display = Object.assign({}, ch.display); return o; };
+      const channels = rgb ? img.channels.map((ch, j) => pick(j)) : [pick(c)];
+      const out = { name: img.name, width: img.width, height: img.height, bitDepth: img.bitDepth, calibration: img.calibration, channels };
+      if (rgb) out.rgb = true;
+      return out;
+    }
+    /** A picture the browser decodes (PNG / JPEG / GIF / BMP) read in bands of about 1 Mpx through an OffscreenCanvas: grey (every pixel
+     *  R = G = B) → one 8-bit channel, colour → a 24-bit RGB image (Opener: convertGrayJpegTo8Bits; IJFileKinds.imageFromRgba's layout). */
+    async function decodePicture(bytes, name, check) {
+      const cib = ROOT.createImageBitmap, OC = ROOT.OffscreenCanvas;
+      if (typeof cib !== 'function' || typeof OC !== 'function') throw ijError('IJ_IO_DECODE', 'no picture decoder');
+      let bmp;
+      try { bmp = await cib(new Blob([bytes])); } catch (_) { throw ijError('IJ_IO_DECODE', 'picture'); }
+      try {
+        const w = bmp.width, h = bmp.height;
+        if (!(w > 0 && h > 0) || w * h > PICTURE_MAX_PIXELS) throw ijError('IJ_PICTURE_TOO_LARGE', 'picture');
+        ensureRoom(w * h * 3);
+        const n = w * h, bandH = Math.max(1, Math.min(h, Math.floor(1048576 / w)));
+        let g;
+        try { g = new OC(w, bandH).getContext('2d', { willReadFrequently: true }); } catch (_) { throw ijError('IJ_PICTURE_TOO_LARGE', 'picture'); }
+        if (!g) throw ijError('IJ_IO_DECODE', 'picture');
+        const R = new Uint8Array(n), G = new Uint8Array(n), B = new Uint8Array(n);
+        let gray = true;
+        for (let y0 = 0; y0 < h; y0 += bandH) {
+          if (check) check();
+          const bh = Math.min(bandH, h - y0);
+          g.clearRect(0, 0, w, bandH);
+          g.drawImage(bmp, 0, y0, w, bh, 0, 0, w, bh);
+          const px = g.getImageData(0, 0, w, bh).data;
+          const o = y0 * w;
+          for (let i = 0, m = w * bh; i < m; i++) {
+            const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+            R[o + i] = r; G[o + i] = gg; B[o + i] = b;
+            if (r !== gg || gg !== b) gray = false;
+          }
+        }
+        const calibration = { pixelWidth: 1, pixelHeight: 1, unit: 'px' };
+        if (gray) return { name, width: w, height: h, bitDepth: 8, calibration, channels: [{ data: R, name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }] };
+        return { name, width: w, height: h, bitDepth: 8, calibration, rgb: true,
+          channels: [[R, 'Red', '#ff0000'], [G, 'Green', '#00ff00'], [B, 'Blue', '#0000ff']].map(([data, lut, color]) => ({ data, name: lut, color, display: { min: 0, max: 255, lut, invert: false } })) };
+      } finally { if (bmp && bmp.close) bmp.close(); }
+    }
+    /** decodeImage(bytes, { name, kind: 'tiff' | 'picture' | 'text', plane }) → stack image (not yet a document). */
+    async function decodeImage(input, o, check) {
+      const opt = o || {};
+      const bytes = asBytes(input);
+      if (!bytes || !bytes.byteLength) throw ijError('IJ_BAD_ARGS', 'bytes');
+      const name = typeof opt.name === 'string' && opt.name ? opt.name : undefined;
+      let img;
+      if (opt.kind === 'tiff') {
+        ensureRoom(bytes.byteLength * 2);
+        const Local = ROOT.IJLocalTiff;
+        let compressed = false;
+        try { compressed = !!(Local && Local.needsDecoder(bytes)); } catch (_) { compressed = false; }
+        img = compressed ? await Local.read(bytes, name, { check: check || (() => {}) }) : dep('IJTiff').read(bytes, name);
+        if (opt.plane !== undefined && opt.plane !== null) img = tiffPlane(img, opt.plane);
+      } else if (opt.kind === 'picture') {
+        const P = ROOT.IJPng;
+        // a 16-bit PNG is inflated here: the room for its pixels and its inflated rows is taken before the inflation starts
+        const im16 = P && typeof P.decode16 === 'function' ? await P.decode16(bytes, { room: ensureRoom }) : null;
+        img = im16 ? Object.assign(im16, { name }) : await decodePicture(bytes, name, check);
+      } else if (opt.kind === 'text') {
+        const T = dep('IJTextIo');
+        const t = T.parseTextImage(bytes);
+        const r = T.floatRange(t.data);
+        img = { name: name || 'Untitled', width: t.width, height: t.height, bitDepth: 32, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
+          channels: [{ data: t.data, name: 'C1', color: '#ffffff', display: { min: r.min, max: r.max, lut: 'Grays', invert: false } }] };
+      } else throw ijError('IJ_BAD_ARGS', 'kind');
+      ensureRoom(imageBytes(img));
+      return img;
+    }
+
+    /** The picture of one plane as ImageJ's getBufferedImage hands it to a writer (PNG_Writer, JpegWriter): a composite = the RGB of its
+     *  display (CompositeImage), an RGB image its three planes, a single channel its 8-bit levels through the colour model — an 8-bit image's
+     *  display range is baked into the table (ByteProcessor.setMinAndMax), a 16 / 32-bit one is scaled by create8BitImage first. `png16`: a
+     *  16-bit image of the default grey LUT stays 16-bit (PNG_Writer.write16gs). → { kind: 'gray8' | 'gray16' | 'palette' | 'rgb', … }. */
+    function displayedPicture(doc, pi, png16) {
+      const W = doc.width, H = doc.height;
+      const R = dep('IJStkRender');
+      if (doc.rgb) return { kind: 'rgb', width: W, height: H, planes: doc.channels.map((ch) => ch.planes[pi]) };
+      if (doc.channels.length > 1) {
+        const list = [];
+        const mode = doc.mode;
+        if (mode === 'composite') {
+          doc.channels.forEach((ch, c) => { if (doc.visible[c] !== false) list.push(R.renderChannel(ch.planes[pi], doc.bitDepth, ch.display, W, H)); });
+        } else {
+          const ch = doc.channels[Math.min(doc.active, doc.channels.length - 1)];
+          const d = mode === 'gray' ? Object.assign({}, ch.display, { lut: 'Grays', invert: false }) : ch.display;
+          list.push(R.renderChannel(ch.planes[pi], doc.bitDepth, d, W, H));
+        }
+        return { kind: 'rgb', width: W, height: H, planes: R.renderComposite(list, W, H) };
+      }
+      const ch = doc.channels[0];
+      const d = ch.display || {};
+      const plane = ch.planes[pi];
+      const greyLut = (d.lut === undefined || d.lut === null || d.lut === 'Grays') && !d.invert;
+      if (png16 && doc.bitDepth === 16 && greyLut) return { kind: 'gray16', width: W, height: H, data: plane };
+      let table = R.baseTable(d), data;
+      if (doc.bitDepth === 8) { table = R.bakeRange(table, d.min, d.max); data = plane; } else data = R.toByte(plane, doc.bitDepth, d);
+      let identity = true;
+      for (let i = 0; i < 256 && identity; i++) if (table[i * 3] !== i || table[i * 3 + 1] !== i || table[i * 3 + 2] !== i) identity = false;
+      return identity ? { kind: 'gray8', width: W, height: H, data } : { kind: 'palette', width: W, height: H, data, palette: table };
+    }
+    function pictureRgb(pic) {
+      if (pic.kind === 'rgb') return pic.planes;
+      const n = pic.width * pic.height, r = new Uint8Array(n), g = new Uint8Array(n), b = new Uint8Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = pic.data[i];
+        if (pic.kind === 'palette') { const k = v * 3; r[i] = pic.palette[k]; g[i] = pic.palette[k + 1]; b[i] = pic.palette[k + 2]; } else { r[i] = v; g[i] = v; b[i] = v; }
+      }
+      return [r, g, b];
+    }
+    /** JpegWriter on the browser's encoder: the displayed picture as RGBA through an OffscreenCanvas, quality 0..100. */
+    async function encodeJpeg(pic, quality) {
+      const OC = ROOT.OffscreenCanvas;
+      if (typeof OC !== 'function' || typeof OC.prototype.convertToBlob !== 'function') throw ijError('IJ_IO_ENCODE', 'no JPEG encoder');
+      const W = pic.width, H = pic.height;
+      const cv = new OC(W, H);
+      const g = cv.getContext('2d');
+      if (!g) throw ijError('IJ_IO_ENCODE', 'no JPEG encoder');
+      const [r, gg, b] = pictureRgb(pic);
+      const im = g.createImageData(W, H);
+      const px = im.data;
+      for (let i = 0, n = W * H; i < n; i++) { px[i * 4] = r[i]; px[i * 4 + 1] = gg[i]; px[i * 4 + 2] = b[i]; px[i * 4 + 3] = 255; }
+      g.putImageData(im, 0, 0);
+      const q = Number.isFinite(quality) ? Math.max(0, Math.min(100, Math.round(quality))) : 85;
+      let blob;
+      try { blob = await cv.convertToBlob({ type: 'image/jpeg', quality: q / 100 }); } catch (_) { throw ijError('IJ_IO_ENCODE', 'jpeg'); }
+      if (!blob || blob.type !== 'image/jpeg') throw ijError('IJ_IO_ENCODE', 'jpeg');
+      return new Uint8Array(await blob.arrayBuffer());
+    }
+    /** FileSaver.saveAsRaw / ImageWriter: every plane in ImageJ's stack order (channels fastest, then slices, then frames), big-endian
+     *  16-bit, big-endian IEEE 32-bit float, an RGB pixel as its three bytes R, G, B. */
+    function encodeRaw(doc) {
+      const W = doc.width, H = doc.height, n = W * H, NP = doc.nZ * doc.nT;
+      const bpp = doc.rgb ? 3 : doc.bitDepth / 8;
+      const lists = doc.rgb ? [null] : doc.channels;
+      const out = new Uint8Array(n * bpp * lists.length * NP);
+      const dv = new DataView(out.buffer);
+      let at = 0;
+      for (let pi = 0; pi < NP; pi++) {
+        if (doc.rgb) {
+          const [r, g, b] = doc.channels.map((ch) => ch.planes[pi]);
+          for (let i = 0; i < n; i++) { out[at++] = r[i]; out[at++] = g[i]; out[at++] = b[i]; }
+          continue;
+        }
+        for (const ch of doc.channels) {
+          const a = ch.planes[pi];
+          if (doc.bitDepth === 8) { out.set(a, at); at += n; } else if (doc.bitDepth === 16) { for (let i = 0; i < n; i++) { dv.setUint16(at, a[i], false); at += 2; } } else { for (let i = 0; i < n; i++) { dv.setFloat32(at, a[i], false); at += 4; } }
+        }
+      }
+      return out;
+    }
+    /** encodeImage(doc, { format, quality, entryName, pos }) → { bytes, rev } (FILES.md §10.2). */
+    function encodeImage(doc, o, ctx) {
+      const opt = o || {};
+      const format = opt.format;
+      if (['tiff', 'png', 'jpeg', 'zip', 'raw'].indexOf(format) < 0) throw ijError('IJ_BAD_ARGS', 'format');
+      return lockDoc(doc, async () => {
+        const n = planeBytes(doc);
+        const extra = n * (format === 'zip' ? 2 : 1) + 65536;
+        ensureRoomNoEvict(extra);
+        transientBytes += extra;
+        try {
+          const rev = doc.rev;
+          let bytes;
+          if (format === 'tiff' || format === 'zip') {
+            bytes = dep('IJTiff').write(doc);
+            if (format === 'zip') {
+              // FileSaver.saveAsZip: one entry named after the title, ".zip" cut, ".tif" added
+              let entry = typeof opt.entryName === 'string' && opt.entryName ? opt.entryName : doc.name;
+              if (!(typeof opt.entryName === 'string' && opt.entryName)) {
+                if (/\.zip$/.test(entry)) entry = entry.substring(0, entry.length - 4);
+                if (!/\.tif$/.test(entry)) entry += '.tif';
+              }
+              bytes = dep('IJRoiCodec').zipStore([{ name: entry, bytes }]);
+            }
+          } else if (format === 'raw') bytes = encodeRaw(doc);
+          else {
+            const pi = posToPi(doc, opt.pos);
+            const pic = displayedPicture(doc, pi, format === 'png');
+            if (format === 'png') bytes = await dep('IJPng').encode(pic);
+            else bytes = await encodeJpeg(pic, opt.quality);
+          }
+          if (ctx) ctx.task.check();
+          if (bytes.byteOffset !== 0 || bytes.buffer.byteLength !== bytes.byteLength) bytes = bytes.slice();
+          return { bytes, rev };
+        } finally { transientBytes -= extra; }
+      });
+    }
+    /** markSaved(doc, { rev, file }): the revision a file holds is what is saved; `file` = FileOrigin (virtual) becomes provenance.file. */
+    function markSavedFile(doc, o) {
+      const opt = o || {};
+      return lockDoc(doc, async () => {
+        const rev = isInt(opt.rev) && opt.rev >= 0 ? Math.min(opt.rev, doc.rev) : doc.rev;
+        doc.savedRev = rev;
+        if (opt.file !== undefined) {
+          const f = checkFileOrigin(opt.file);
+          const pv = Object.assign({}, doc.provenance || {});
+          if (f) pv.file = f; else delete pv.file;
+          doc.provenance = pv;
+        }
+        markMeta(doc);
+        return infoOf(doc);
+      });
+    }
+    /** A FileOrigin as the engine keeps it: virtual strings only, never a handle or a machine path. null clears. */
+    function checkFileOrigin(f) {
+      if (f === null) return null;
+      if (!f || typeof f !== 'object' || typeof f.dir !== 'string' || typeof f.name !== 'string' || !f.name || f.dir.charAt(0) !== '/' || f.dir.slice(-1) !== '/') throw ijError('IJ_BAD_ARGS', 'file');
+      if (f.format !== undefined && f.format !== null && FILE_FORMATS.indexOf(f.format) < 0) throw ijError('IJ_BAD_ARGS', 'file format');
+      const out = { dir: f.dir, name: f.name };
+      for (const k of ['rootId', 'root', 'rel']) if (typeof f[k] === 'string') out[k] = f[k];
+      if (typeof f.format === 'string') out.format = f.format;
+      return out;
+    }
+
     function getChannel(doc, c) {
       if (!isInt(c) || c < 0 || c >= doc.channels.length) throw ijError('IJ_BAD_ARGS', 'channel');
       return doc.channels[c];
     }
 
-    function channelImage(doc, c) {
-      return chImg(doc.width, doc.height, doc.bitDepth, getChannel(doc, c).data);
+    // `pi` = a plane other than the current one (a request's `pos`).
+    function channelImage(doc, c, pi) {
+      const ch = getChannel(doc, c);
+      const img = chImg(doc.width, doc.height, doc.bitDepth, pi === undefined || pi === null ? ch.data : ch.planes[pi]);
+      if (ch.lum && (pi === undefined || pi === null)) img.lum = ch.lum; // the luminance of an RGB read, unrounded (measureArea: Skewness / Kurtosis)
+      return img;
     }
 
     // ---- ROI -----------------------------------------------------------------------
@@ -1485,10 +1986,11 @@ const IJEngine = (() => {
     // `prepare` returns { fn(src) or region(full, rect), apron: {x,y} } — fn works on a
     // crop that already carries `apron` extra pixels, region reads the full channel.
 
-    function rangeOf(doc, c) {
-      const key = doc.rev + ':' + c;
+    function rangeOf(doc, c, pi) {
+      const p = pi === undefined || pi === null ? curPi(doc) : pi;
+      const key = doc.rev + ':' + c + ':' + p;
       if (!doc.rangeCache || doc.rangeCache.key !== key) {
-        doc.rangeCache = { key, r: dataRange(doc.channels[c].data) };
+        doc.rangeCache = { key, r: dataRange(doc.channels[c].planes[p]) };
       }
       return doc.rangeCache.r;
     }
@@ -1569,6 +2071,8 @@ const IJEngine = (() => {
 
     function checkBitDepth(spec, doc) {
       if (!spec.bitDepths.includes(doc.bitDepth)) throw ijError('IJ_BAD_TYPE', 'this operation does not support ' + doc.bitDepth + '-bit images');
+      // a plugin filter without DOES_RGB (spec.rgb === false) does not open an RGB image
+      if (doc.rgb && spec.rgb === false) throw ijError('IJ_BAD_TYPE', 'this operation does not support RGB images');
     }
 
     function channelList(doc, channel) {
@@ -1578,6 +2082,8 @@ const IJEngine = (() => {
     }
 
     function pixelChannels(doc, spec, channel) {
+      // the three colour planes of an RGB image are one image: a ColorProcessor filter runs on the three (rgb 'each' / 'whole')
+      if (doc.rgb) return doc.channels.map((c, i) => i);
       if (spec.channels === 'all') return doc.channels.map((c, i) => i);
       if (spec.channels === 'one') { const c = isInt(channel) ? channel : doc.active; getChannel(doc, c); return [c]; }
       return channelList(doc, channel);
@@ -1588,6 +2094,7 @@ const IJEngine = (() => {
     function infoFor(doc, chans, reg, others, roi) {
       return {
         width: doc.width, height: doc.height, bitDepth: doc.bitDepth, channels: chans.length, region: reg || null, roi: roi || null,
+        nZ: doc.nZ, nT: doc.nT, rgb: !!doc.rgb,
         docs: (others || []).map((d) => ({ width: d.width, height: d.height, bitDepth: d.bitDepth, channels: d.channels.length }))
       };
     }
@@ -1607,10 +2114,31 @@ const IJEngine = (() => {
     // `commit` false (a preview, doc.compute, a size estimate): a blob it resolves is not held by the document,
     // so a cancelled paste can still give its clipboard up. `pin` (a preview only) keeps the blob out of the memory reclaim while the
     // preview is on screen; engine.unpinBlobs (the page cancelled its preview) or engine.dropBlob ends it.
+    // The view an op's `resolve` / `run` is given at plane `pi`: the document itself, or — a spec with rgb 'gray' on an RGB
+    // document — its luminance (weighted by params.rgbWeighted, resolved below so the journal and a replay agree).
+    function viewFor(doc, spec, pi, params, whole, active) {
+      if (doc.rgb && spec.rgb === 'gray') return makeGrayView(doc, pi, !!(params && params.rgbWeighted), !!whole);
+      return makeView(doc, pi, active);
+    }
+
+    // viewFor for a run: the luminance of EVERY plane of an RGB stack (a `whole` op with rgb 'gray') is a copy of the stack, so its bytes
+    // are reserved (and the budget checked) before it is built and given back by `release()` once the op has run.
+    function runView(doc, spec, pi, params, whole, active) {
+      if (!(whole && doc.rgb && spec.rgb === 'gray')) return { view: viewFor(doc, spec, pi, params, whole, active), release() {} };
+      const bytes = planeCountOf(doc) * doc.width * doc.height;
+      ensureRoom(bytes);
+      transientBytes += bytes;
+      let view;
+      try { view = viewFor(doc, spec, pi, params, true); } catch (e) { transientBytes -= bytes; throw e; }
+      let freed = false;
+      return { view, release() { if (!freed) { freed = true; transientBytes -= bytes; } } };
+    }
+
     function resolvedParams(doc, spec, args, chans, replay, others, commit = true, pin = false) {
       let params = resolveBlobs(Object.assign({}, args.params || {}), liveBlob(commit ? doc : null, pin));
+      if (doc.rgb && spec.rgb === 'gray') params.rgbWeighted = !!params.rgbWeighted;
       if (spec.validate) spec.validate(params, infoFor(doc, chans, null, others));
-      if (spec.resolve && !replay) { const r = spec.resolve(makeView(doc), params, chans); if (r) params = r; }
+      if (spec.resolve && !replay) { const r = spec.resolve(viewFor(doc, spec, posToPi(doc, args.pos), params, false, args.channel), params, chans); if (r) params = r; }
       return params;
     }
 
@@ -1620,18 +2148,23 @@ const IJEngine = (() => {
 
     // Push the undo record of a committed change; the redo stack is dead.
     function pushUndo(doc, rec) {
+      // a macro run makes ONE step of its own per image when it ends: the record of each step inside it is let go
+      if (doc.macroHold) { doc.redo.length = 0; return; }
       rec.bytes = recBytes(rec);
       doc.undo.push(rec);
-      while (doc.undo.length > MAX_UNDO) doc.undo.shift();
+      // inside doc.undoGroup.begin / end the steps are collected and folded into ONE composite record at `end`
+      if (doc.groupRecs) doc.groupRecs.push(rec);
+      else while (doc.undo.length > MAX_UNDO) doc.undo.shift();
       doc.redo.length = 0;
     }
 
-    // Everything a size-kind step changes (arrays are kept by reference).
+    // Everything a size-kind step changes (arrays are kept by reference; the plane LISTS are copied, setPlane writes into them).
     function fullState(doc) {
       return {
         width: doc.width, height: doc.height, bitDepth: doc.bitDepth, calibration: plainClone(doc.calibration),
         name: doc.name, provenance: plainClone(doc.provenance), mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
-        channels: doc.channels.map((c) => ({ data: c.data, display: Object.assign({}, c.display), name: c.name, color: c.color }))
+        nZ: doc.nZ, nT: doc.nT, z: doc.z, t: doc.t, labels: doc.labels ? doc.labels.slice() : null, hyperstack: !!doc.hyperstack, rgb: !!doc.rgb,
+        channels: doc.channels.map((c) => ({ data: c.data, planes: c.planes.slice(), display: Object.assign({}, c.display), name: c.name, color: c.color }))
       };
     }
 
@@ -1659,13 +2192,35 @@ const IJEngine = (() => {
       else if (doc.mode === 'gray' && old.length === 1) doc.mode = 'composite';
     }
 
+    // The shape of a stack image (API.md §3: a size / newdoc result, doc.import, E.createDoc): checks every plane of every channel
+    // and answers { nZ, nT, NP, lists, bytes }. A channel is `{ data }` (one plane) or `{ planes: [...] }`; without nZ / nT the
+    // planes make a z-stack (nZ = their number). `code` is the error the caller wants (IJ_BAD_RESULT / IJ_BAD_ARGS).
+    function stackShape(r, code, what) {
+      const bad = (m) => ijError(code, m + ' of ' + what);
+      const Ctor = ctorFor(r.bitDepth);
+      const lists = r.channels.map((c) => (c && Array.isArray(c.planes) ? c.planes : [c && c.data]));
+      const L = lists[0].length;
+      let nZ = r.nZ, nT = r.nT;
+      if (nZ === undefined && nT === undefined) { nZ = L; nT = 1; }
+      else if (nZ === undefined) nZ = L / nT;
+      else if (nT === undefined) nT = L / nZ;
+      if (!isInt(nZ) || nZ < 1 || !isInt(nT) || nT < 1 || nZ * nT !== L) throw bad('stack dimensions');
+      let bytes = 0;
+      for (const list of lists) {
+        if (list.length !== L) throw bad('planes');
+        for (const a of list) {
+          if (!ArrayBuffer.isView(a) || a.constructor.name !== Ctor.name || a.length !== r.width * r.height) throw bad('channel');
+          bytes += a.byteLength;
+        }
+      }
+      if (r.rgb === true && (r.channels.length !== 3 || r.bitDepth !== 8)) throw bad('rgb image');
+      return { nZ, nT, NP: L, lists, bytes };
+    }
+
     function checkOutput(r, what) {
       if (!r || !isInt(r.width) || r.width < 1 || !isInt(r.height) || r.height < 1 || ![8, 16, 32].includes(r.bitDepth) ||
         !Array.isArray(r.channels) || !r.channels.length) throw ijError('IJ_BAD_RESULT', 'result of ' + what);
-      const Ctor = ctorFor(r.bitDepth);
-      for (const c of r.channels) {
-        if (!c || !ArrayBuffer.isView(c.data) || c.data.constructor.name !== Ctor.name || c.data.length !== r.width * r.height) throw ijError('IJ_BAD_RESULT', 'channel of ' + what);
-      }
+      return stackShape(r, 'IJ_BAD_RESULT', what);
     }
 
     // Test aid (engine option verifyInputs): an op must never write into the arrays it reads. The engine
@@ -1680,7 +2235,7 @@ const IJEngine = (() => {
     function guardInputs(list, what) {
       if (!verifyInputs) return () => {};
       const arrays = [];
-      for (const d of list) for (const c of d.channels) arrays.push(c.data);
+      for (const d of list) for (const c of d.channels) for (const a of c.planes) arrays.push(a);
       const before = arrays.map(hashArray);
       return () => {
         for (let i = 0; i < arrays.length; i++) {
@@ -1701,9 +2256,18 @@ const IJEngine = (() => {
       const declared = Math.max(0, (o && o.scratch) || 0);
       if (declared) { ensureRoom(declared); transientBytes += declared; }
       let held = declared, used = 0;
+      // the plane the op acts on (a request's `pos`, else the current one); `planes` / `planeImage` reach any other
+      const pi0 = o && o.pi !== undefined && o.pi !== null ? o.pi : (primary ? curPi(primary) : 0);
       return {
         channel: o && o.channel !== undefined ? o.channel : null,
         region: (o && o.region) || null,
+        pos: primary ? Object.freeze(piToPos(primary, pi0)) : null,
+        planes(c) { return getChannel(primary, c).planes.slice(); },
+        planeImage(c, z, t) {
+          const ch = getChannel(primary, c);
+          if (!isInt(z) || z < 0 || z >= primary.nZ || !isInt(t) || t < 0 || t >= primary.nT) throw ijError('IJ_BAD_ARGS', 'plane');
+          return chImg(primary.width, primary.height, primary.bitDepth, ch.planes[t * primary.nZ + z]);
+        },
         docIds: docList.map((d) => d.id),
         tick: (f, stepKey, detail) => task.tick(f, stepKey, detail),
         check: () => task.check(),
@@ -1719,14 +2283,16 @@ const IJEngine = (() => {
           if (keep < held) { transientBytes -= held - keep; held = keep; }
         },
         dep,
-        channelImage: (c) => channelImage(primary, c),
-        readDoc(id) {
+        channelImage: (c) => channelImage(primary, c, pi0),
+        readDoc(id, pos) {
           if (!ids.has(id)) throw ijError('IJ_BAD_ARGS', 'document not listed in docIds');
           const d = docs.get(id);
           if (!d) throw ijError('IJ_NO_DOC', 'no such document');
-          return makeView(d);
+          // the plane the page shows for that document (`posOf` of the request) unless the caller names one
+          const named = pos !== undefined && pos !== null ? pos : (o && o.posOf ? o.posOf[id] : undefined);
+          return makeView(d, posToPi(d, named));
         },
-        range: (c) => rangeOf(primary, c),
+        range: (c) => rangeOf(primary, c, pi0),
         roiMask: (roi) => roiMask(roi, primary.width, primary.height),
         transfer: (buf) => { if (o && o.transfer) o.transfer.push(buf); },
         done() { if (held) { transientBytes -= held; held = 0; used = 0; } }
@@ -1734,20 +2300,29 @@ const IJEngine = (() => {
     }
 
     // What a pixel op touches: the channels, the selection as the op sees it, the region that may change.
+    /** The roi mode of one request: spec.roiFor(params) when the op has it, else spec.roi. */
+    function roiModeOf(spec, params) {
+      if (typeof spec.roiFor !== 'function') return spec.roi;
+      const m = spec.roiFor(params || {});
+      return m === 'mask' || m === 'bounds' || m === 'ignore' ? m : spec.roi;
+    }
+
     function planPixel(doc, spec, args) {
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
       checkBitDepth(spec, doc);
       const chans = pixelChannels(doc, spec, args.channel);
       let mask = roiMask(args.roi || null, W, H);
       if (spec.needsRoi && !mask) throw ijError('IJ_NEEDS_ROI', 'this operation needs an area selection');
-      if (spec.roi === 'ignore') mask = null;
-      const passMask = spec.roi === 'bounds' ? null : mask;
+      const selection = mask;
+      const mode = roiModeOf(spec, args.params);
+      if (mode === 'ignore') mask = null;
+      const passMask = mode === 'bounds' ? null : mask;
       const outside = !!spec.outside;
       const reg = outside ? { x: 0, y: 0, w: W, h: H } : boundsOf(mask, W, H);
       const fullReg = reg.x === 0 && reg.y === 0 && reg.w === W && reg.h === H;
       const chBytes = W * H * (bd / 8);
       const patchBytes = fullReg ? 0 : reg.w * reg.h * (bd / 8);
-      return { chans, mask, passMask, outside, reg, fullReg, chBytes, patchBytes };
+      return { chans, mask, passMask, outside, reg, fullReg, chBytes, patchBytes, selection: mode === 'ignore' ? selection : null };
     }
 
     // Bytes of one run: the new arrays, the patch copy of an undo step on a partial region, and
@@ -1774,71 +2349,98 @@ const IJEngine = (() => {
       return runPixel(doc, spec, args, task, replay);
     }
 
+    // Does the baseline kept in RAM (`baselineData`, until its storage write ends) still reference this array?
+    function retainedByBaseline(doc, arr) { return !!(doc.baselineData && doc.baselineIndex.has(arr)); }
+
     async function runPixel(doc, spec, args, task, replay) {
       const op = args.op;
       const roi = args.roi || null;
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
       const plan = planPixel(doc, spec, args);
-      const { chans, passMask, outside, reg, fullReg } = plan;
+      const { chans, passMask, outside, reg, fullReg, selection } = plan;
+      // The (z,t) planes this request processes (DOES_STACKS): resolved to an explicit list, which is what the journal keeps.
+      const pi0 = posToPi(doc, args.pos);
+      const pis = planeSet(doc, args.planes, args.pos);
+      if (spec.stack === 'plane' && pis.length > 1) throw ijError('IJ_BAD_ARGS', 'this operation does not process a stack');
+      const nPl = pis.length, nCh = chans.length, total = nPl * nCh;
       const params = resolvedParams(doc, spec, args, chans, replay);
-      const view = makeView(doc);
       // ctx.check() / ctx.tick(f, stepKey?) are for a whole-image op: f in [0,1] is the progress of the
-      // fn / region call in progress; the engine maps it into the band and the channel and yields.
-      const gates = chans.map(() => ({ lo: 0, hi: 1 }));
-      const preps = chans.map((c, i) => {
-        const gate = gates[i], base = i / chans.length, span = 1 / chans.length;
-        return spec.prepare(view, c, params, {
-          scale: 1, range: (cc) => rangeOf(doc, cc), dep,
-          check: () => task.check(),
-          tick: (f, key) => task.tick(base + span * (gate.lo + (gate.hi - gate.lo) * Math.min(1, Math.max(0, Number(f) || 0))), key || ('op.' + op))
+      // fn / region call in progress; the engine maps it into the band, the channel and the plane and yields.
+      const prepPlane = (pi, k) => {
+        const view = makeView(doc, pi);
+        const gates = chans.map(() => ({ lo: 0, hi: 1 }));
+        const preps = chans.map((c, i) => {
+          const gate = gates[i], idx = k * nCh + i;
+          return spec.prepare(view, c, params, {
+            scale: 1, range: (cc) => rangeOf(doc, cc, pi), dep, selection,
+            check: () => task.check(),
+            tick: (f, key) => task.tick((idx + gate.lo + (gate.hi - gate.lo) * Math.min(1, Math.max(0, Number(f) || 0))) / total, key || ('op.' + op))
+          });
         });
-      });
+        return { gates, preps };
+      };
+      // The first plane is prepared before anything is reserved (a bad parameter fails here, as it always did); the others
+      // when their turn comes, so the closures of a long stack are never all alive at once.
+      const first = prepPlane(pis[0], 0);
       const noUndo = !!args.noUndo;
       // spec.display: true resets the display range of every changed channel; '16/32' only on a 16 / 32-bit image
       const resetsDisplay = spec.display === true || (spec.display === '16/32' && bd !== 8);
       const n = pixelNeed(doc, spec, plan, params);
-      const need = noUndo ? n.oneChannel : n.need;
+      // new arrays + patch copies of EVERY plane stay until the commit (undo path); the scratch of the algorithm is per call
+      const perPlane = nCh * (plan.chBytes + plan.patchBytes);
+      const need = noUndo ? n.oneChannel : perPlane * nPl + Math.max(0, n.need - perPlane);
       ensureRoom(need);
       // Reserved while the operation runs, so an operation on another document sees the
       // headroom this one is about to take; released at commit (the new arrays are counted then).
       transientBytes += need;
       const outs = [];
       let swapped = false;
-      const swappedChans = [];
+      const swappedChans = [], swappedPis = [];
       const guard = guardInputs([doc], op);
-      const swapChannel = (c, out) => {
+      const swapPlane = (c, pi, out) => {
         const ch = doc.channels[c];
-        ch.data = out;
+        setPlane(doc, c, pi, out);
         // A step that resets the display range (resetMinAndMax) keeps the channel's lookup table and its
-        // inverted flag: only min and max come from the new data.
-        if (resetsDisplay) {
+        // inverted flag: only min and max come from the new data (of the plane on show).
+        if (resetsDisplay && pi === curPi(doc)) {
           const d = defaultDisplay(ch, bd), old = ch.display || {};
           ch.display = { min: d.min, max: d.max, lut: old.lut != null ? old.lut : d.lut, invert: old.invert != null ? !!old.invert : d.invert };
         }
       };
       try {
-        for (let i = 0; i < chans.length; i++) {
-          const base = i / chans.length, span = 1 / chans.length;
-          const out = await pixelPass(task, W, H, bd, doc.channels[chans[i]].data, preps[i], passMask, reg, outside,
-            (f) => base + span * f, 'op.' + op, gates[i]);
-          if (noUndo) {
-            // No undo step: each channel replaces its old array at once, which is what lets the
-            // step fit. A cancel after the first one leaves the channels already processed changed.
-            task.check();
-            if (!swapped) { swapped = true; doc.undo.length = 0; doc.redo.length = 0; }
-            swapChannel(chans[i], out);
-            swappedChans.push(chans[i]);
-          } else outs.push(out);
+        for (let k = 0; k < nPl; k++) {
+          const pi = pis[k];
+          const st = k === 0 ? first : prepPlane(pi, k);
+          const row = [];
+          for (let i = 0; i < nCh; i++) {
+            const base = (k * nCh + i) / total, span = 1 / total;
+            const out = await pixelPass(task, W, H, bd, doc.channels[chans[i]].planes[pi], st.preps[i], passMask, reg, outside,
+              (f) => base + span * f, 'op.' + op, st.gates[i]);
+            if (noUndo) {
+              // No undo step: each plane replaces its old array at once, which is what lets the
+              // step fit. A cancel after the first one leaves the planes already processed changed.
+              task.check();
+              // The plane being replaced stays in memory while the baseline still holds it (storage unavailable, or its write not finished):
+              // the new array is then EXTRA bytes that the one-plane reservation does not cover, so every such swap is checked on its own —
+              // BEFORE the history goes, so a refusal at the first plane leaves the document and its undo steps as they were.
+              if (retainedByBaseline(doc, doc.channels[chans[i]].planes[pi])) ensureRoom(out.byteLength);
+              if (!swapped) { swapped = true; doc.undo.length = 0; doc.redo.length = 0; }
+              swapPlane(chans[i], pi, out);
+              if (swappedChans.indexOf(chans[i]) < 0) swappedChans.push(chans[i]);
+              if (swappedPis.indexOf(pi) < 0) swappedPis.push(pi);
+            } else row.push(out);
+          }
+          if (!noUndo) outs.push(row);
         }
         guard();
         task.check();
       } catch (err) {
         if (swapped) {
-          doc.rev++; purgeTiles(doc.id); noteCommit(doc, null); if (storageOn) snapshotNow(doc);
-          // The channels already swapped changed for good and the undo history is gone: the page is told
+          doc.rev++; purgeTiles(doc.id, swappedPis); noteCommit(doc, null); if (storageOn) snapshotNow(doc);
+          // The planes already swapped changed for good and the undo history is gone: the page is told
           // (an invalidate now, the document's info with the error) instead of keeping the old pixels.
-          post({ event: 'invalidate', docId: doc.id, channels: swappedChans.slice(), sizeChanged: false });
-          err.details = Object.assign({}, err.details, { info: infoOf(doc), changed: { channels: swappedChans.slice(), sizeChanged: false } });
+          post({ event: 'invalidate', docId: doc.id, channels: swappedChans.slice(), sizeChanged: false, planes: swappedPis.slice() });
+          err.details = Object.assign({}, err.details, { info: infoOf(doc), changed: Object.assign({ channels: swappedChans.slice(), sizeChanged: false }, planesField(doc, swappedPis.slice())) });
         }
         throw err;
       } finally { transientBytes -= need; }
@@ -1847,85 +2449,177 @@ const IJEngine = (() => {
       // may differ at replay time), the others what the request said ('all' when it said nothing).
       const entry = { kind: 'run', op, version: spec.version, params, roi,
         channel: spec.channels === 'one' ? chans[0] : (args.channel == null ? 'all' : args.channel) };
+      // a stack's entry names the plane the request stood on and the explicit planes it processed (a single-plane document's
+      // entry is what it always was; an entry without them replays on plane 0)
+      if (planeCountOf(doc) > 1) { entry.pos = piToPos(doc, pi0); entry.planes = pis.slice(); }
       if (noUndo) {
         entry.noUndo = true;
         doc.rev++;
-        purgeTiles(doc.id);
+        purgeTiles(doc.id, pis);
         if (!replay) { noteCommit(doc, entry); if (storageOn) snapshotNow(doc); } else doc.journalSeq++;
-        return { changed: { channels: chans, sizeChanged: false }, newDocIds: [] };
+        return { changed: Object.assign({ channels: chans, sizeChanged: false }, planesField(doc, pis.slice())), newDocIds: [] };
       }
       const rec = newRecord(doc, op);
-      rec.patches = chans.map((c) => ({
-        c, rect: Object.assign({}, reg),
-        data: fullReg ? doc.channels[c].data : copyRect(doc.channels[c].data, W, reg.x, reg.y, reg.w, reg.h)
-      }));
+      rec.patches = [];
+      for (let k = 0; k < nPl; k++) {
+        for (let i = 0; i < nCh; i++) {
+          const c = chans[i], pi = pis[k], cur = doc.channels[c].planes[pi];
+          rec.patches.push({ c, pi, rect: Object.assign({}, reg), data: fullReg ? cur : copyRect(cur, W, reg.x, reg.y, reg.w, reg.h) });
+        }
+      }
       if (resetsDisplay) {
         rec.display = {};
         for (const c of chans) rec.display[c] = Object.assign({}, doc.channels[c].display);
       }
-      chans.forEach((c, i) => swapChannel(c, outs[i]));
+      for (let k = 0; k < nPl; k++) for (let i = 0; i < nCh; i++) swapPlane(chans[i], pis[k], outs[k][i]);
       pushUndo(doc, rec);
       doc.rev++;
-      purgeTiles(doc.id);
+      purgeTiles(doc.id, pis);
       if (!replay) noteCommit(doc, entry);
       else doc.journalSeq++;
-      return { changed: { channels: chans, sizeChanged: false }, newDocIds: [] };
+      return { changed: Object.assign({ channels: chans, sizeChanged: false }, planesField(doc, pis.slice())), newDocIds: [] };
+    }
+
+    // The arrays of a stack image the document does not already hold (what an assembled result adds to the memory).
+    function newArrayBytes(doc, lists) {
+      const held = new Set();
+      for (const c of doc.channels) for (const a of c.planes) held.add(a);
+      const seen = new Set();
+      let n = 0;
+      for (const list of lists) for (const a of list) if (!held.has(a) && !seen.has(a)) { seen.add(a); n += a.byteLength; }
+      return n;
+    }
+
+    // The channels of a size step's result: one that omits name / colour / display keeps those of the old channel
+    // holding the very same array (an Arrange moves arrays), else of the old channel at its index. A display is only kept
+    // while the bit depth is unchanged (B&C of a 16-bit range means nothing on 8 bits). `atPi` = the plane `data` shows.
+    // `rgb`: the result is an RGB document — a channel without a display of its own shows in its colour (Red / Green / Blue), as a new one does.
+    function channelsOfResult(old, res, lists, oldByData, bd, atPi, rgb) {
+      return res.channels.map((c, i) => {
+        const list = lists[i];
+        let hit = null;
+        for (const a of list) { const h = oldByData.get(a); if (h) { hit = h; break; } }
+        const prev = hit || old[i];
+        const ch = {
+          name: c.name !== undefined ? c.name : ((prev && prev.name) || ''), color: c.color !== undefined ? c.color : ((prev && prev.color) || '#ffffff'),
+          data: list[atPi], planes: list.slice()
+        };
+        if (c.display) ch.display = Object.assign({}, c.display);
+        else if (prev && hit === prev && res.bitDepth === bd) ch.display = Object.assign({}, prev.display);
+        else {
+          ch.display = defaultDisplay(ch, res.bitDepth);
+          if (rgb) { try { ch.display.lut = dep('IJLuts').forColor(ch.color); } catch (e) { /* keeps the default LUT */ } }
+        }
+        return ch;
+      });
     }
 
     async function runSize(doc, spec, args, task, replay) {
       const op = args.op;
       checkBitDepth(spec, doc);
-      const W = doc.width, H = doc.height, bd = doc.bitDepth;
       const all = doc.channels.map((c, i) => i);
       const params = resolvedParams(doc, spec, args, all, replay);
-      const io = makeIo(task, [doc], { channel: args.channel, scratch: scratchOf(spec, infoFor(doc, all, null, [], args.roi), params) });
-      let res;
+      const NP = planeCountOf(doc), pi0 = posToPi(doc, args.pos), whole = spec.stack === 'whole';
+      // 'all': the op runs once per (z,t), on that plane's view, and the engine assembles the stack; 'whole': one run, every plane in the view.
+      const runs = whole ? [pi0] : Array.from({ length: NP }, (_, i) => i);
+      const results = [];
       const guard = guardInputs([doc]);
-      try { res = await spec.run(makeView(doc), params, args.roi || null, io); } finally { io.done(); }
-      guard();
-      task.check();
-      if (!res) return { changed: { channels: [], sizeChanged: false }, newDocIds: [], noop: true };
-      checkOutput(res, op);
+      let heldOut = 0;
+      try {
+        for (let k = 0; k < runs.length; k++) {
+          const io = makeIo(task, [doc], { channel: args.channel, pi: runs[k], posOf: args.posOf, span: runs.length > 1 ? { k, n: runs.length } : null,
+            scratch: scratchOf(spec, infoFor(doc, all, null, [], args.roi), params) });
+          let r;
+          try { r = await spec.run(makeView(doc, runs[k], args.channel), params, args.roi || null, io); } finally { io.done(); }
+          task.check();
+          results.push(r || null);
+          // the results built so far are memory the next run must see taken (they join the document only at the commit)
+          if (r && runs.length > 1) {
+            const lists = r.channels && Array.isArray(r.channels) ? r.channels.map((c) => [c && c.data].filter((a) => ArrayBuffer.isView(a))) : [];
+            const b = newArrayBytes(doc, lists);
+            transientBytes += b; heldOut += b;
+          }
+        }
+        guard();
+        task.check();
+        const missing = results.filter((r) => !r).length;
+        if (missing === results.length) return { changed: { channels: [], sizeChanged: false }, newDocIds: [], noop: true };
+        if (missing) throw ijError('IJ_SIZE_MISMATCH', 'the planes of the stack do not give the same result');
+        return commitSize(doc, spec, args, params, results, whole ? 0 : pi0, whole, replay, pi0);
+      } finally { transientBytes -= heldOut; }
+    }
+
+    // Commit of a size step: `results[k]` is the result of the run on plane k ('all') or the one stack image ('whole'); `mi` = the
+    // result whose metadata (names, colours, display, document fields) is taken.
+    function commitSize(doc, spec, args, params, results, mi, whole, replay, pi0) {
+      const op = args.op;
+      const W = doc.width, H = doc.height, bd = doc.bitDepth;
+      const NP = planeCountOf(doc);
+      const reqPos = NP > 1 ? piToPos(doc, pi0) : null;
+      const res = results[mi];
+      const shapes = results.map((r) => checkOutput(r, op));
+      let nZ, nT, lists;
+      if (whole) { nZ = shapes[0].nZ; nT = shapes[0].nT; lists = shapes[0].lists; }
+      else {
+        for (let k = 0; k < results.length; k++) {
+          const r = results[k];
+          if (shapes[k].NP !== 1 || r.width !== res.width || r.height !== res.height || r.bitDepth !== res.bitDepth ||
+            r.channels.length !== res.channels.length) throw ijError('IJ_SIZE_MISMATCH', 'the planes of the stack do not give the same result');
+        }
+        nZ = doc.nZ; nT = doc.nT;
+        lists = res.channels.map((c, j) => results.map((r) => r.channels[j].data));
+      }
       const old = doc.channels;
       const oldVisible = doc.visible.slice(), oldActive = doc.active;
+      const sameDims = nZ === doc.nZ && nT === doc.nT;
       // Same shape and the very same arrays: only metadata (calibration, names) changed — the page
       // keeps its selection and its view.
-      const calOnly = res.width === W && res.height === H && res.bitDepth === bd && res.channels.length === old.length &&
-        res.channels.every((c, i) => c.data === old[i].data);
+      const calOnly = res.width === W && res.height === H && res.bitDepth === bd && res.channels.length === old.length && sameDims &&
+        lists.every((list, j) => list.every((a, k) => a === old[j].planes[k]));
       const rec = newRecord(doc, op);
       rec.full = fullState(doc);
       rec.calOnly = calOnly;
       // Undo gives the old name back only when THIS step renamed the document (a later Rename is not undoable).
       rec.nameChanged = res.name !== undefined && String(res.name) !== doc.name;
       pushUndo(doc, rec);
+      const oldByData = new Map();
+      for (const c of old) for (const a of c.planes) if (!oldByData.has(a)) oldByData.set(a, c);
       doc.width = res.width; doc.height = res.height; doc.bitDepth = res.bitDepth;
+      doc.nZ = nZ; doc.nT = nT;
+      doc.z = Math.min(doc.z, nZ - 1); doc.t = Math.min(doc.t, nT - 1);
       if (res.calibration !== undefined) doc.calibration = plainClone(res.calibration);
       if (res.name !== undefined) doc.name = String(res.name);
       if (res.provenance !== undefined) doc.provenance = plainClone(res.provenance);
-      // A result channel that omits name / colour / display keeps those of the old channel holding the very
-      // same array (an Arrange moves arrays), else of the old channel at its index. A display is only kept
-      // while the bit depth is unchanged (B&C of a 16-bit range means nothing on 8 bits).
-      const oldByData = new Map(old.map((c) => [c.data, c]));
-      doc.channels = res.channels.map((c, i) => {
-        const prev = oldByData.get(c.data) || old[i];
-        const ch = { name: c.name !== undefined ? c.name : ((prev && prev.name) || ''), color: c.color !== undefined ? c.color : ((prev && prev.color) || '#ffffff'), data: c.data };
-        if (c.display) ch.display = Object.assign({}, c.display);
-        else if (prev && oldByData.get(c.data) === prev && res.bitDepth === bd) ch.display = Object.assign({}, prev.display);
-        else ch.display = defaultDisplay(ch, res.bitDepth);
-        return ch;
-      });
+      // An RGB document stays one while its result is still three 8-bit channels (a ColorProcessor filter), unless the step says.
+      const rgbOut = res.rgb !== undefined ? !!res.rgb : (rec.full.rgb && res.channels.length === 3 && res.bitDepth === 8);
+      doc.channels = channelsOfResult(old, res, lists, oldByData, bd, curPi(doc), rgbOut);
+      doc.rgb = rgbOut;
+      doc.hyperstack = res.hyperstack !== undefined ? !!res.hyperstack : (sameDims ? !!doc.hyperstack : (nZ > 1 && nT > 1));
+      const labelsOk = (l) => Array.isArray(l) && l.length === labelCount(doc);
+      // a whole-stack result may drop the labels (labels: null) or bring its own; every other step keeps the current ones
+      doc.labels = whole && res.labels === null ? null : (whole && labelsOk(res.labels) ? res.labels.slice() : (labelsOk(doc.labels) ? doc.labels : null));
       remapDisplay(doc, old, oldVisible, oldActive);
+      // the display mode a stack-shaping step asks for (Stack to Hyperstack / Hyperstack to Stack keep a multichannel image composite, colour or grey)
+      if (doc.channels.length > 1 && (res.mode === 'composite' || res.mode === 'color' || res.mode === 'gray')) doc.mode = res.mode;
+      if (doc.rgb) { doc.visible = [true, true, true]; doc.mode = 'composite'; }
       if (Array.isArray(res.visible) && res.visible.length === doc.channels.length) doc.visible = res.visible.map(Boolean);
       if (isInt(res.active) && res.active >= 0 && res.active < doc.channels.length) doc.active = res.active;
       doc.rev++;
       doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
-      // The journal records what `io.channel` was live, so a replay hands the op the same one.
-      if (!replay) noteCommit(doc, { kind: 'run', op, version: spec.version, params, roi: args.roi || null, channel: args.channel === undefined ? null : args.channel });
-      else doc.journalSeq++;
+      // The journal records what `io.channel` was live, so a replay hands the op the same one; a stack's entry also the
+      // position the request stood on (the view of a 'whole' op, io.pos).
+      if (!replay) {
+        const entry = { kind: 'run', op, version: spec.version, params, roi: args.roi || null, channel: args.channel === undefined ? null : args.channel };
+        if (reqPos) entry.pos = reqPos;
+        noteCommit(doc, entry);
+      } else doc.journalSeq++;
       const changed = calOnly
-        ? { channels: [], sizeChanged: false, calibration: true }
-        : { channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: res.width === W && res.height === H && res.bitDepth === bd && res.channels.every((c) => oldByData.has(c.data)) };
+        ? Object.assign({ channels: [], sizeChanged: false, calibration: true }, planesField(doc, []))
+        : Object.assign({
+          channels: doc.channels.map((c, i) => i), sizeChanged: true,
+          sameGeometry: sameDims && res.width === W && res.height === H && res.bitDepth === bd && lists.every((l) => l.every((a) => oldByData.has(a)))
+        }, planesField(doc, 'all'));
       return { changed, newDocIds: [] };
     }
 
@@ -1934,25 +2628,68 @@ const IJEngine = (() => {
       const all = doc.channels.map((c, i) => i);
       const params = resolvedParams(doc, spec, args, all, false, extraDocs);
       const list = [doc].concat(extraDocs);
-      const io = makeIo(task, list, { channel: args.channel, scratch: scratchOf(spec, infoFor(doc, all, null, extraDocs, args.roi), params) });
-      let res;
+      const NP = planeCountOf(doc), pi0 = posToPi(doc, args.pos);
+      // 'each' runs on every plane unless the request says `planes: 'current'` (ImageJ's "Process entire stack" left unticked / answered No)
+      const each = spec.stack === 'each' && args.planes !== 'current', whole = spec.stack === 'whole', gray = doc.rgb && spec.rgb === 'gray';
+      const runs = each ? Array.from({ length: NP }, (_, i) => i) : [pi0];
       const guard = guardInputs(list);
-      try { res = await spec.run(makeView(doc), params, args.roi || null, io); } finally { io.done(); }
-      guard();
-      task.check();
-      if (!Array.isArray(res) || !res.length) throw ijError('IJ_BAD_RESULT', 'result of ' + args.op);
-      for (const r of res) checkOutput(r, args.op);
+      const perRun = [];
       const created = [];
-      for (const r of res) {
-        const channels = r.channels.map((c) => makeChannel(c.name, c.color, c.data, r.bitDepth, c.display));
-        const nd = buildDoc({
-          id: newId(), sessionKey: doc.sessionKey, name: r.name || (doc.name + '-1'), width: r.width, height: r.height, bitDepth: r.bitDepth, channels,
-          calibration: plainClone(r.calibration !== undefined ? r.calibration : doc.calibration),
-          provenance: r.provenance !== undefined ? plainClone(r.provenance) : Object.assign({}, doc.provenance)
-        });
-        registerDoc(nd, { baseline: true });
-        created.push(nd);
-      }
+      let heldOut = 0;
+      try {
+        for (let k = 0; k < runs.length; k++) {
+          const io = makeIo(task, list, { channel: gray ? 0 : args.channel, pi: runs[k], posOf: args.posOf, span: runs.length > 1 ? { k, n: runs.length } : null,
+            scratch: scratchOf(spec, infoFor(doc, all, null, extraDocs, args.roi), params) });
+          let res;
+          let rv = null;
+          try { rv = runView(doc, spec, runs[k], params, whole, gray ? undefined : args.channel); res = await spec.run(rv.view, params, args.roi || null, io); } finally { io.done(); if (rv) rv.release(); }
+          guard();
+          task.check();
+          if (!Array.isArray(res) || !res.length) throw ijError('IJ_BAD_RESULT', 'result of ' + args.op);
+          const shapes = res.map((r) => checkOutput(r, args.op));
+          perRun.push({ res, shapes });
+          if (runs.length > 1) {
+            const b = res.reduce((sum, r, o) => sum + newArrayBytes(doc, shapes[o].lists), 0);
+            transientBytes += b; heldOut += b;
+          }
+        }
+        // 'each': one new stack document per output index, its planes the o-th outputs of the runs
+        let outs;
+        if (each && runs.length > 1) {
+          const m = perRun[0].res.length;
+          outs = [];
+          const mi = runs.indexOf(pi0);
+          for (let o = 0; o < m; o++) {
+            const ref = perRun[mi].res[o];
+            for (const pr of perRun) {
+              const r = pr.res[o];
+              if (pr.res.length !== m || !r || pr.shapes[o].NP !== 1 || r.width !== ref.width || r.height !== ref.height || r.bitDepth !== ref.bitDepth ||
+                r.channels.length !== ref.channels.length) throw ijError('IJ_SIZE_MISMATCH', 'the planes of the stack do not give the same result');
+            }
+            outs.push(Object.assign({}, ref, {
+              nZ: doc.nZ, nT: doc.nT,
+              channels: ref.channels.map((c, j) => Object.assign({}, c, { data: undefined, planes: perRun.map((pr) => pr.res[o].channels[j].data) }))
+            }));
+          }
+        } else outs = perRun[0].res;
+        for (const r of outs) {
+          const sh = checkOutput(r, args.op);
+          const channels = r.channels.map((c, j) => makeChannel(c.name, c.color, sh.lists[j][0], r.bitDepth, c.display, sh.lists[j]));
+          const rgb = r.rgb !== undefined ? !!r.rgb : (doc.rgb && spec.rgb === 'each' && r.channels.length === 3 && r.bitDepth === 8);
+          const sameShape = each && sh.NP === NP;
+          const nd = buildDoc({
+            id: newId(), sessionKey: doc.sessionKey, name: r.name || (doc.name + '-1'), width: r.width, height: r.height, bitDepth: r.bitDepth, channels,
+            nZ: sh.nZ, nT: sh.nT, rgb, labels: Array.isArray(r.labels) ? r.labels : (sameShape ? doc.labels : null),
+            hyperstack: r.hyperstack !== undefined ? !!r.hyperstack : (sameShape ? doc.hyperstack : (sh.nZ > 1 && sh.nT > 1)),
+            z: sameShape ? doc.z : 0, t: sameShape ? doc.t : 0,
+            display: r.mode === 'composite' || r.mode === 'color' || r.mode === 'gray' ? { mode: r.mode, active: isInt(r.active) ? r.active : 0 } : undefined,
+            calibration: plainClone(r.calibration !== undefined ? r.calibration : doc.calibration),
+            provenance: r.provenance !== undefined ? plainClone(r.provenance) : Object.assign({}, doc.provenance)
+          });
+          registerDoc(nd, { baseline: true });
+          created.push(nd);
+        }
+      } finally { transientBytes -= heldOut; }
       return { changed: { channels: [], sizeChanged: false }, newDocIds: created.map((d) => d.id), newInfos: created.map(infoOf) };
     }
 
@@ -1960,13 +2697,28 @@ const IJEngine = (() => {
 
     // Apply a record to the document and return the inverse record (swap semantics).
     function swapRecord(doc, rec) {
+      if (rec.group) {
+        // A composite step (doc.undoGroup): its records were pushed in the order they happened, so they are undone in the reverse
+        // order; the inverse lists the inverses in the order they were produced, so applying IT in reverse re-does them in
+        // the original order.
+        const invs = [];
+        for (let i = rec.group.length - 1; i >= 0; i--) invs.push(swapRecord(doc, rec.group[i]));
+        const g = { op: rec.op, at: Date.now(), replayable: false, patches: null, full: null, display: null, bytes: 0, calOnly: false, group: invs };
+        if (rec.labelKey !== undefined) g.labelKey = rec.labelKey;
+        g.bytes = recBytes(g);
+        return g;
+      }
       const inv = { op: rec.op, at: Date.now(), replayable: rec.replayable, patches: null, full: null, display: null, bytes: 0, calOnly: !!rec.calOnly };
+      if (rec.labelStep) inv.labelStep = true;
+      if (rec.macro) { inv.macro = true; inv.labelKey = rec.labelKey; }
       if (rec.patches) {
         const W = doc.width, H = doc.height;
         inv.patches = [];
         for (const p of rec.patches) {
           const ch = doc.channels[p.c];
-          const cur = ch.data;
+          // a patch without `pi` was made on the only plane there was (a single-plane record of the first versions)
+          const pi = p.pi === undefined ? curPi(doc) : p.pi;
+          const cur = ch.planes[pi];
           const isFull = p.rect.w === W && p.rect.h === H;
           let curPatch, next;
           if (isFull) { curPatch = cur; next = p.data; }
@@ -1975,8 +2727,8 @@ const IJEngine = (() => {
             next = cur.slice();
             pasteRect(next, W, p.rect.x, p.rect.y, p.rect.w, p.rect.h, p.data);
           }
-          ch.data = next;
-          inv.patches.push({ c: p.c, rect: p.rect, data: curPatch });
+          setPlane(doc, p.c, pi, next);
+          inv.patches.push({ c: p.c, pi, rect: p.rect, data: curPatch });
         }
         if (rec.display) {
           inv.display = {};
@@ -1993,52 +2745,92 @@ const IJEngine = (() => {
         const bdBefore = doc.bitDepth;
         doc.width = f.width; doc.height = f.height; doc.bitDepth = f.bitDepth;
         doc.calibration = f.calibration;
+        // The stack the step started from (a record of the first versions has one plane); the position is not part of an edit,
+        // it only has to stay inside the restored dimensions.
+        doc.nZ = f.nZ === undefined ? 1 : f.nZ; doc.nT = f.nT === undefined ? 1 : f.nT;
+        doc.z = Math.min(doc.z, doc.nZ - 1); doc.t = Math.min(doc.t, doc.nT - 1);
+        doc.labels = Array.isArray(f.labels) ? f.labels.slice() : null;
+        doc.hyperstack = !!f.hyperstack; doc.rgb = !!f.rgb;
         // A Rename is not an undo step: the name comes back only when the step itself renamed the document.
         if (f.name !== undefined && rec.nameChanged) { doc.name = f.name; inv.nameChanged = true; }
         if (f.provenance !== undefined) doc.provenance = f.provenance;
         // The channel list is REBUILT: a step may have dropped, added or reordered channels. A channel whose
         // array is one the document holds now keeps its CURRENT display (a Set Scale undone must not undo the
         // brightness the operator set since); the arrays an undo brings back carry the display they had.
-        const curByData = new Map(old.map((c) => [c.data, c]));
+        const curByData = new Map();
+        for (const c of old) for (const a of c.planes) if (!curByData.has(a)) curByData.set(a, c);
         doc.channels = f.channels.map((c, i) => {
-          const cur = curByData.get(c.data);
+          const planes = Array.isArray(c.planes) ? c.planes.slice() : [c.data];
+          let cur = null;
+          for (const a of planes) { const h = curByData.get(a); if (h) { cur = h; break; } }
           return {
             name: c.name !== undefined ? c.name : ((old[i] && old[i].name) || ''),
             color: c.color !== undefined ? c.color : ((old[i] && old[i].color) || '#ffffff'),
-            data: c.data, display: Object.assign({}, cur && f.bitDepth === bdBefore ? cur.display : c.display)
+            data: planes[0], planes, display: Object.assign({}, cur && f.bitDepth === bdBefore ? cur.display : c.display)
           };
         });
+        syncData(doc);
         remapDisplay(doc, old, oldVisible, oldActive, f);
+        if (doc.rgb) { doc.visible = [true, true, true]; doc.mode = 'composite'; }
       }
       inv.bytes = recBytes(inv);
       return inv;
     }
 
     function swapCost(doc, rec) {
+      if (rec.group) return rec.group.reduce((n, g) => n + swapCost(doc, g), 0);
       if (!rec.patches) return 0;
       let n = 0;
       for (const p of rec.patches) {
-        if (!(p.rect.w === doc.width && p.rect.h === doc.height)) n += doc.channels[p.c].data.byteLength + p.data.byteLength;
+        if (!(p.rect.w === doc.width && p.rect.h === doc.height)) n += doc.channels[p.c].planes[p.pi === undefined ? curPi(doc) : p.pi].byteLength + p.data.byteLength;
       }
       return n;
     }
 
-    // Every channel of `now` holds an array that `before` also held: the channels were only reordered or dropped.
+    // Every channel of `now` holds only arrays that `before` also held: the channels were only reordered or dropped.
     function sameArrays(before, now) {
       if (!Array.isArray(before)) return false;
-      const set = new Set(before.map((c) => c.data));
-      return now.every((c) => set.has(c.data));
+      const set = new Set();
+      for (const c of before) for (const a of (c.planes || [c.data])) set.add(a);
+      return now.every((c) => c.planes.every((a) => set.has(a)));
     }
 
     function changedOf(rec, beforeSize, doc) {
+      if (rec.group) {
+        const parts = rec.group.map((g) => changedOf(g, null, doc));
+        if (parts.some((p) => p.sizeChanged)) return Object.assign({ channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: false }, planesField(doc, 'all'));
+        const channels = new Set(), planes = new Set();
+        let calibration = false, labels = false;
+        for (const p of parts) {
+          if (p.labels) labels = true;
+          for (const c of p.channels) channels.add(c);
+          if (p.planes === 'all') for (let i = 0; i < planeCountOf(doc); i++) planes.add(i); else for (const q of p.planes || []) planes.add(q);
+          if (p.calibration) calibration = true;
+        }
+        const out = Object.assign({ channels: Array.from(channels).sort((a, b) => a - b), sizeChanged: false }, planesField(doc, Array.from(planes).sort((a, b) => a - b)));
+        if (calibration) out.calibration = true;
+        if (labels) out.labels = true;
+        return out;
+      }
       if (rec.full) {
-        if (rec.calOnly) return { channels: [], sizeChanged: false, calibration: true };
+        if (rec.calOnly) return Object.assign({ channels: [], sizeChanged: false, calibration: true }, planesField(doc, []), rec.labelStep ? { labels: true } : {});
         // `sameGeometry`: the width, height and bit depth did not move and every array is one the document already held (an Arrange reordered the channels): the page
         // refreshes its channel layout but keeps the selection and the view.
         const f = beforeSize && beforeSize.full;
-        return { channels: doc.channels.map((c, i) => i), sizeChanged: true, sameGeometry: !!(f && f.width === doc.width && f.height === doc.height && f.bitDepth === doc.bitDepth && sameArrays(f.channels, doc.channels)) };
+        // the step of a macro run that left the pixel grid as it was (a filter, a pixel loop): the selection, the overlays and the view stay
+        const sameGrid = !!(f && f.width === doc.width && f.height === doc.height && f.bitDepth === doc.bitDepth && f.nZ === doc.nZ && f.nT === doc.nT);
+        return Object.assign({
+          channels: doc.channels.map((c, i) => i), sizeChanged: true,
+          sameGeometry: sameGrid && (rec.macro === true ? f.channels.length === doc.channels.length : sameArrays(f.channels, doc.channels))
+        }, planesField(doc, 'all'));
       }
-      return { channels: rec.patches.map((p) => p.c), sizeChanged: false };
+      const channels = [], planes = [];
+      for (const p of rec.patches) {
+        if (channels.indexOf(p.c) < 0) channels.push(p.c);
+        const pi = p.pi === undefined ? curPi(doc) : p.pi;
+        if (planes.indexOf(pi) < 0) planes.push(pi);
+      }
+      return Object.assign({ channels, sizeChanged: false }, planesField(doc, planes));
     }
 
     async function doUndoRedo(doc, which, replay) {
@@ -2051,7 +2843,7 @@ const IJEngine = (() => {
       const inv = swapRecord(doc, top);
       to.push(inv);
       doc.rev++;
-      if (top.full) doc.layoutRev = doc.rev;
+      if (top.full || (top.group && top.group.some((g) => g.full))) doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
       const changed = changedOf(top, inv, doc);
       if (replay) { doc.journalSeq++; return changed; }
@@ -2063,23 +2855,36 @@ const IJEngine = (() => {
       return changed;
     }
 
+    // The baseline as a flat list of arrays (numbered c * NP + pi, as a stored record's `baseIndex`) + its shape.
     async function loadBaseline(doc) {
       if (doc.baselineData && doc.baselineShape) {
         const s = doc.baselineShape;
-        return { width: s.w, height: s.h, bitDepth: s.bd, arrays: doc.baselineData, rec: null };
+        return { width: s.w, height: s.h, bitDepth: s.bd, arrays: doc.baselineData, rec: null, stack: { nZ: s.nZ || 1, nT: s.nT || 1, rgb: !!s.rgb, hyperstack: !!s.hyperstack, labels: s.labels || null } };
       }
       if (!storageOn) throw ijError('IJ_NO_BASELINE', 'no baseline to revert to');
       await queue;
       const got = await storage.load(doc.sessionKey, { docId: doc.id, parts: ['baseline'] });
       const b = got && got.docs[doc.id] && got.docs[doc.id].baseline;
       if (!b) throw ijError('IJ_NO_BASELINE', 'no baseline to revert to');
-      return { width: b.width, height: b.height, bitDepth: b.bitDepth, arrays: b.channels.map((c) => c.data), rec: b };
+      return { width: b.width, height: b.height, bitDepth: b.bitDepth, arrays: flatBaseline(b), rec: b, stack: { nZ: b.nZ || 1, nT: b.nT || 1, rgb: !!b.rgb, hyperstack: !!b.hyperstack, labels: b.labels || null } };
+    }
+
+    // The arrays of a stored baseline record, flat (legacy single-plane channels have `data`, a stack's `planes[].data`).
+    function flatBaseline(b) {
+      const out = [];
+      for (const c of b.channels) {
+        if (Array.isArray(c.planes)) for (const p of c.planes) out.push(p.data);
+        else out.push(c.data);
+      }
+      return out;
     }
 
     async function doRevert(doc) {
       const b = await loadBaseline(doc);
       const bytes = b.rec ? b.arrays.reduce((n, a) => n + a.byteLength, 0) : 0;
       ensureRoom(bytes);
+      const NPb = b.stack.nZ * b.stack.nT;
+      const nCh = b.arrays.length / NPb;
       const cal = b.rec ? plainClone(b.rec.calibration) : plainClone(doc.baselineCal);
       const metaOf = (i) => (b.rec ? { name: b.rec.channels[i].name, color: b.rec.channels[i].color } : (doc.baselineMeta && doc.baselineMeta[i]) || {});
       const synthetic = {
@@ -2087,41 +2892,53 @@ const IJEngine = (() => {
         full: {
           width: b.width, height: b.height, bitDepth: b.bitDepth, calibration: cal,
           provenance: b.rec ? plainClone(b.rec.provenance) : plainClone(doc.baselineProvenance),
-          channels: b.arrays.map((a, i) => Object.assign({
-            data: a,
-            display: b.rec ? Object.assign({}, b.rec.channels[i].display) : Object.assign({}, doc.baselineDisplays[i])
-          }, metaOf(i)))
+          nZ: b.stack.nZ, nT: b.stack.nT, labels: b.stack.labels ? b.stack.labels.slice() : null, hyperstack: b.stack.hyperstack, rgb: b.stack.rgb,
+          channels: Array.from({ length: nCh }, (_, i) => {
+            const planes = b.arrays.slice(i * NPb, (i + 1) * NPb);
+            return Object.assign({
+              data: planes[0], planes,
+              display: b.rec ? Object.assign({}, b.rec.channels[i].display) : Object.assign({}, doc.baselineDisplays[i])
+            }, metaOf(i));
+          })
         }
       };
-      if (!b.rec && b.arrays.length === doc.channels.length && b.arrays.every((a, i) => a === doc.channels[i].data)) {
+      const curFlat = [];
+      for (const c of doc.channels) for (const a of c.planes) curFlat.push(a);
+      if (!b.rec && NPb === planeCountOf(doc) && nCh === doc.channels.length && b.arrays.every((a, i) => a === curFlat[i])) {
         return { changed: { channels: [], sizeChanged: false }, noop: true };
       }
       const inv = swapRecord(doc, synthetic);
       inv.replayable = false;
       b.arrays.forEach((a, i) => doc.baselineIndex.set(a, i));
-      doc.undo.push(inv);
+      // inside a macro run the run's own step covers the revert too
+      if (!doc.macroHold) doc.undo.push(inv);
       doc.redo.length = 0;
       doc.rev++;
       doc.layoutRev = doc.rev;
       purgeTiles(doc.id);
       noteCommit(doc, null);
       if (storageOn) snapshotNow(doc);
-      return { changed: { channels: doc.channels.map((c, i) => i), sizeChanged: true } };
+      return { changed: Object.assign({ channels: doc.channels.map((c, i) => i), sizeChanged: true }, planesField(doc, 'all')) };
     }
 
     // ---- tile pyramid --------------------------------------------------------------------------
 
-    function levelImage(doc, c, level) {
-      if (level === 0) return chImg(doc.width, doc.height, doc.bitDepth, doc.channels[c].data);
-      const key = doc.id + ':' + c + ':' + doc.rev + ':' + level;
+    // A level is cached per (document, channel, plane, level) and only served for the very array it was built from: planes are
+    // immutable, so the array IS the version — an edit of another plane, or a calibration-only step, keeps the others valid.
+    function levelImage(doc, c, level, pi) {
+      const p = pi === undefined || pi === null ? curPi(doc) : pi;
+      const src = doc.channels[c].planes[p];
+      if (level === 0) return chImg(doc.width, doc.height, doc.bitDepth, src);
+      const key = doc.id + ':' + c + ':' + p + ':' + level;
       const hit = tiles.map.get(key);
-      if (hit) { tiles.map.delete(key); tiles.map.set(key, hit); return hit.img; }
-      const prev = levelImage(doc, c, level - 1);
+      if (hit && hit.src === src) { tiles.map.delete(key); tiles.map.set(key, hit); return hit.img; }
+      if (hit) { tiles.map.delete(key); tiles.bytes -= hit.img.data.byteLength; }
+      const prev = levelImage(doc, c, level - 1, p);
       const dims = levelDims(doc.width, doc.height, level);
       const img = chImg(dims.w, dims.h, doc.bitDepth, unwrap(dep('IJOps').downsample2(prev), dims.w * dims.h));
       const bytes = img.data.byteLength;
       if (usedBytes() + bytes <= budgetBytes) {
-        tiles.map.set(key, { docId: doc.id, img });
+        tiles.map.set(key, { docId: doc.id, pi: p, src, img });
         tiles.bytes += bytes;
         while (tiles.bytes > tileCacheBytes && tiles.map.size > 1) {
           const first = tiles.map.keys().next().value;
@@ -2142,14 +2959,47 @@ const IJEngine = (() => {
     const BASE_KEYS = ['area', 'mean', 'stdDev', 'mode', 'min', 'max', 'xCentroid', 'yCentroid', 'xCenterOfMass', 'yCenterOfMass',
       'intDen', 'rawIntDen', 'median', 'skewness', 'kurtosis'];
 
+    // The document as a read (measure, histogram, profile, threshold, particles) sees it at the plane of the request's `pos`: a
+    // shallow shim whose channels' `data` is that plane (nothing is copied) and whose position is that plane, so every reader of
+    // `doc.channels[c].data` / `curPi(doc)` agrees. An RGB document reads as its luminance (ImageJ measures the brightness;
+    // `rgbWeighted` = Edit > Options > Conversions > Weighted RGB conversions): ONE 8-bit channel, `gray: true`.
+    function readDoc(doc, a) {
+      const pi = posToPi(doc, a && a.pos);
+      // `readOf`: where the read stands in the real document (the plane, and its stack size) — what a "Redirect to" image of the same
+      // size needs (ImageJ Analyzer.getRedirectImageOrStack sets the redirect to the measured slice).
+      const readOf = { pi, nSlices: planeCountOf(doc) * (doc.rgb ? 1 : doc.channels.length), planes: planeCountOf(doc), posOf: (a && a.posOf) || null };
+      if (doc.rgb) {
+        const data = grayPlaneOf(doc, pi, !!(a && a.rgbWeighted));
+        const ch = { name: 'Gray', color: '#ffffff', data, planes: [data], display: { min: 0, max: 255, lut: null, invert: false }, lum: grayLumOf(doc, pi, !!(a && a.rgbWeighted)) };
+        return Object.assign({}, doc, { bitDepth: 8, channels: [ch], nZ: 1, nT: 1, z: 0, t: 0, active: 0, visible: [true], mode: 'gray', rgb: false, gray: true, labels: null, rangeCache: null, readOf });
+      }
+      // ALWAYS a shim with the plane frozen (even at the current plane): a doc.setPosition that lands while a read is suspended at an
+      // await swaps `channels[c].data` of the live document, and the read must keep the plane it was asked for.
+      const z = pi % doc.nZ;
+      return Object.assign({}, doc, { z, t: (pi - z) / doc.nZ, rangeCache: null, readOf,
+        channels: doc.channels.map((c) => Object.assign({}, c, { data: c.planes[pi], planes: c.planes.slice() })) });
+    }
+    // The channel a read asks for (a gray shim has only channel 0).
+    function readChannel(doc, a) { return isInt(a.channel) ? (doc.gray ? 0 : a.channel) : doc.active; }
+
     // The pixels a measurement reads: the image itself or the "Redirect to" image (same size, ImageJ: "Redirect image
     // is not the same size as the current image").
+    // `read` = the request's `posOf` ({ docId: {z,t} }) and the plane of the measured read (doc.readOf). A redirect of the SAME stack size
+    // is read at the measured plane (Analyzer.getRedirectImageOrStack: "redirect.setSlice(imp.getCurrentSlice())"); another redirect at
+    // the plane the page shows for it (`posOf`), else at its current one.
+    function redirectPlane(doc, src, redirect) {
+      const r = doc.readOf;
+      const srcSlices = planeCountOf(src) * (src.rgb ? 1 : src.channels.length);
+      if (r && srcSlices > 1 && srcSlices === r.nSlices && planeCountOf(src) === r.planes) return r.pi;
+      const p = r && r.posOf ? r.posOf[redirect.docId] : null;
+      return p ? posToPi(src, p) : curPi(src);
+    }
     function measureSource(doc, c, redirect) {
       if (!redirect || redirect.docId === undefined || redirect.docId === null) return { img: channelImage(doc, c), doc };
       const src = getDoc(redirect.docId);
       if (src.width !== doc.width || src.height !== doc.height) throw ijError('IJ_ROI_REDIRECT_SIZE', 'redirect image size');
       const rc = isInt(redirect.channel) ? redirect.channel : 0;
-      return { img: channelImage(src, rc), doc: src };
+      return { img: channelImage(src, rc, redirectPlane(doc, src, redirect)), doc: src };
     }
     function finiteNum(v) { return typeof v === 'number' && isFinite(v); }
 
@@ -2297,30 +3147,57 @@ const IJEngine = (() => {
 
     function finishMutation() { emitBudget(); }
 
+    // A stack image (API.md §3) becomes a document: `data` alone = one plane, `planes` = the (z,t) list of a channel (pi = t*nZ + z).
     function addDocFromImage(img, provenance, sessionKey, hidden) {
       const id = newId();
       const bd = img.bitDepth;
-      const chans = img.channels.map((c) => makeChannel(c.name, c.color, c.data, bd, sanitizeDisplay(c.display)));
+      const sh = stackShape(img, 'IJ_BAD_ARGS', 'image');
+      const chans = img.channels.map((c, j) => makeChannel(c.name, c.color, sh.lists[j][0], bd, sanitizeDisplay(c.display), sh.lists[j]));
       const doc = buildDoc({
         id, sessionKey: sessionKey || sessionKeyFor(provenance, id), name: img.name || 'image',
         width: img.width, height: img.height, bitDepth: bd, channels: chans,
+        nZ: sh.nZ, nT: sh.nT, rgb: img.rgb === true, hyperstack: img.hyperstack === true, labels: Array.isArray(img.labels) ? img.labels : null,
+        // a TIFF's `mode=`; the channels shown (an image handed over with some channels switched off)
+        display: (() => {
+          const d = {};
+          if (img.mode === 'composite' || img.mode === 'color' || img.mode === 'gray') d.mode = img.mode;
+          if (!img.rgb && Array.isArray(img.visible) && img.visible.length === chans.length) d.visible = img.visible.map((v) => v !== false);
+          return Object.keys(d).length ? d : undefined;
+        })(),
         calibration: plainClone(img.calibration) || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' }, provenance, hidden: !!hidden
       });
       registerDoc(doc, { baseline: true });
       return doc;
     }
 
+    // The bytes of the arrays of an image or a stack image (a request not yet checked: only what is there is counted).
+    function imageBytes(img) {
+      let n = 0;
+      for (const c of (img && img.channels) || []) {
+        if (c && Array.isArray(c.planes)) { for (const a of c.planes) if (a && a.byteLength) n += a.byteLength; }
+        else if (c && c.data && c.data.byteLength) n += c.data.byteLength;
+      }
+      return n;
+    }
+
     // The image of doc.import / E.createDoc: checked as a request (IJ_BAD_ARGS), never trusted.
     function checkImageArgs(img) {
       if (!img || typeof img !== 'object' || !isInt(img.width) || img.width < 1 || !isInt(img.height) || img.height < 1 ||
         ![8, 16, 32].includes(img.bitDepth) || !Array.isArray(img.channels) || !img.channels.length || img.channels.length > 64) throw ijError('IJ_BAD_ARGS', 'image');
-      const Ctor = ctorFor(img.bitDepth);
-      let bytes = 0;
       for (const c of img.channels) {
-        if (!c || !ArrayBuffer.isView(c.data) || c.data.constructor.name !== Ctor.name || c.data.length !== img.width * img.height) throw ijError('IJ_BAD_ARGS', 'image channel');
+        if (!c || typeof c !== 'object') throw ijError('IJ_BAD_ARGS', 'image channel');
         if (c.name !== undefined && c.name !== null && (typeof c.name !== 'string' || c.name.length > 255)) throw ijError('IJ_BAD_ARGS', 'channel name');
         if (c.color !== undefined && c.color !== null && !(typeof c.color === 'string' && /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.test(c.color))) throw ijError('IJ_BAD_ARGS', 'channel color');
-        bytes += c.data.byteLength;
+      }
+      // every plane of every channel: of the bit depth, width * height long (a stack image: API.md §3)
+      const sh = stackShape(img, 'IJ_BAD_ARGS', 'image');
+      const bytes = sh.bytes;
+      if (img.hyperstack !== undefined && typeof img.hyperstack !== 'boolean') throw ijError('IJ_BAD_ARGS', 'hyperstack');
+      if (img.rgb !== undefined && typeof img.rgb !== 'boolean') throw ijError('IJ_BAD_ARGS', 'rgb');
+      if (img.labels !== undefined && img.labels !== null) {
+        const nC = img.rgb === true ? 1 : img.channels.length;
+        if (!Array.isArray(img.labels) || img.labels.length !== nC * sh.nZ * sh.nT ||
+          img.labels.some((l) => l !== null && (typeof l !== 'string' || l.length > 4096))) throw ijError('IJ_BAD_ARGS', 'labels');
       }
       const cal = img.calibration;
       if (cal !== undefined && cal !== null) {
@@ -2342,17 +3219,52 @@ const IJEngine = (() => {
 
     const handlers = {};
 
+    // One new plane of NewImage's fill: 'black' (zeros), 'white' (8-bit 255; 16 / 32-bit stay zero and show on an INVERTED lookup
+    // table, as NewImage.createShortImage / createFloatImage do) or 'ramp' (the horizontal ramp of NewImage: floor(x*256/w) on 8 bits,
+    // floor(x*65536/w + 0.5) on 16, x/w on 32).
+    function fillPlane(Ctor, bd, W, H, fill) {
+      const out = new Ctor(W * H);
+      if (fill === 'white' && bd === 8) out.fill(255);
+      else if (fill === 'ramp') {
+        const row = new Ctor(W);
+        for (let x = 0; x < W; x++) row[x] = bd === 8 ? Math.floor(x * 256.0 / W) : (bd === 16 ? Math.floor(x * 65536.0 / W + 0.5) : x / W);
+        for (let y = 0; y < H; y++) out.set(row, y * W);
+      }
+      return out;
+    }
+
+    // doc.create { width, height, bitDepth, channels: [{ name, color }], nZ?, nT?, hyperstack?, rgb?, fill? ('black' | 'white' | 'ramp') }.
+    // rgb: true makes the 24-bit RGB type (8-bit, three channels named Red / Green / Blue whatever `channels` says).
     handlers['doc.create'] = (a) => {
       for (const k of ['width', 'height']) if (!isInt(a[k]) || a[k] < 1) throw ijError('IJ_BAD_ARGS', k);
       const Ctor = ctorFor(a.bitDepth);
-      if (!Array.isArray(a.channels) || !a.channels.length) throw ijError('IJ_BAD_ARGS', 'channels');
-      ensureRoom(a.width * a.height * a.channels.length * (a.bitDepth / 8));
+      const rgb = a.rgb === true;
+      const nZ = a.nZ === undefined || a.nZ === null ? 1 : a.nZ, nT = a.nT === undefined || a.nT === null ? 1 : a.nT;
+      if (!isInt(nZ) || nZ < 1 || !isInt(nT) || nT < 1) throw ijError('IJ_BAD_ARGS', 'stack dimensions');
+      if (a.fill !== undefined && a.fill !== null && !['black', 'white', 'ramp'].includes(a.fill)) throw ijError('IJ_BAD_ARGS', 'fill');
+      if (rgb && a.bitDepth !== 8) throw ijError('IJ_BAD_ARGS', 'rgb image');
+      const specs = rgb
+        ? [{ name: 'Red', color: '#ff0000' }, { name: 'Green', color: '#00ff00' }, { name: 'Blue', color: '#0000ff' }]
+        : a.channels;
+      if (!Array.isArray(specs) || !specs.length) throw ijError('IJ_BAD_ARGS', 'channels');
+      const NP = nZ * nT;
+      ensureRoom(a.width * a.height * specs.length * NP * (a.bitDepth / 8));
       const id = newId();
       const provenance = a.provenance || {};
-      const chans = a.channels.map((c) => makeChannel(c.name, c.color, new Ctor(a.width * a.height), a.bitDepth));
+      const fill = a.fill || null;
+      // an image made with a fill shows as ImageJ's New Image shows it: the full range of its type (white = inverted table)
+      const shown = fill ? { min: 0, max: a.bitDepth === 8 ? 255 : (a.bitDepth === 16 ? 65535 : 1), lut: null, invert: fill === 'white' && a.bitDepth !== 8 } : null;
+      const chans = specs.map((c) => {
+        const planes = [];
+        for (let i = 0; i < NP; i++) planes.push(fillPlane(Ctor, a.bitDepth, a.width, a.height, fill));
+        const ch = makeChannel(c.name, c.color, planes[0], a.bitDepth, shown ? Object.assign({}, shown, { lut: undefined }) : undefined, planes);
+        if (shown) { try { ch.display.lut = dep('IJLuts').forColor(ch.color); } catch (e) { ch.display.lut = null; } }
+        return ch;
+      });
       const doc = buildDoc({
         id, sessionKey: sessionKeyFor(provenance, id), name: a.name || 'image', width: a.width, height: a.height,
-        bitDepth: a.bitDepth, channels: chans, calibration: plainClone(a.calibration) || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' }, provenance
+        bitDepth: a.bitDepth, channels: chans, nZ, nT, rgb, hyperstack: a.hyperstack === true,
+        calibration: plainClone(a.calibration) || { pixelWidth: 1, pixelHeight: 1, unit: 'pixel' }, provenance
       });
       registerDoc(doc, { baseline: true });
       finishMutation();
@@ -2445,9 +3357,7 @@ const IJEngine = (() => {
       let img;
       if (compressed) {
         img = await Local.read(a.bytes, name, { check: () => ctx.task.check() });
-        let bytes = 0;
-        for (const c of img.channels) bytes += c.data.byteLength;
-        ensureRoom(bytes);
+        ensureRoom(imageBytes(img));
       } else img = dep('IJTiff').read(a.bytes, name);
       const doc = addDocFromImage(img, Object.assign({ opened: true }, a.provenance || {}), a.sessionKey);
       // A file just read from disk is what is on disk: nothing is unsaved until it is edited.
@@ -2473,6 +3383,10 @@ const IJEngine = (() => {
       if (pr && !docs.has(a.docId)) { projects.delete(a.docId); finishMutation(); return {}; }
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
+        // closing is never deferred by a macro run (ImageJ closes at once): the image leaves the run, a batch image is never kept
+        if (macroRun) macroRun.docs.delete(doc.id);
+        doc.macroHold = false;
+        if (doc.ephemeral) a = Object.assign({}, a, { discard: true });
         const clean = doc.savedRev === doc.rev && !doc.held;
         const s = sessions.get(doc.sessionKey);
         let ok = true;
@@ -2527,25 +3441,33 @@ const IJEngine = (() => {
       return { info: infoOf(doc) };
     };
 
-    handlers['doc.run'] = (a, ctx) => {
+    // One op request (doc.run, E.runOp): behind the queues of every document it names. `a.pos` / `a.planes` pick the plane(s)
+    // (API.md §3); the page is told which planes changed (`invalidate.planes`: [pi…] or 'all').
+    function runRequest(a, task) {
       const doc = getDoc(a.docId);
       const extraIds = Array.isArray(a.docIds) ? a.docIds.filter((id) => id !== a.docId) : [];
       const extra = extraIds.map(getDoc);
       return lockDocs([doc].concat(extra), async () => {
-        ctx.task.check();
+        task.check();
         // A queued doc.close may have removed one of them while this request waited.
         const live = getDoc(a.docId);
         const others = extraIds.map(getDoc);
         const before = live.rev;
-        const r = await executeRun(live, a, ctx.task, false, others);
-        if (r.newDocIds && r.newDocIds.length) { finishMutation(); return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: r.newDocIds, newInfos: r.newInfos }; }
+        const r = await executeRun(live, a, task, false, others);
+        if (r.newDocIds && r.newDocIds.length) {
+          // a request that did not come from the page (E.runOp: a macro, a package's worker command) announces the documents it made,
+          // so the page adopts them; doc.run's own answer already carries them to the page
+          if (a.announce === true && Array.isArray(r.newInfos)) for (const info of r.newInfos) post({ event: 'docCreated', docId: info.docId, info, source: live.id });
+          finishMutation(); return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: r.newDocIds, newInfos: r.newInfos }; }
         if (live.rev !== before) {
-          post({ event: 'invalidate', docId: live.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged, sameGeometry: !!r.changed.sameGeometry, calibration: !!r.changed.calibration });
+          post({ event: 'invalidate', docId: live.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged, sameGeometry: !!r.changed.sameGeometry, calibration: !!r.changed.calibration, labels: !!r.changed.labels, planes: r.changed.planes === undefined ? 'all' : r.changed.planes });
         }
         finishMutation();
         return { rev: live.rev, info: infoOf(live), changed: r.changed, newDocIds: [] };
       });
-    };
+    }
+
+    handlers['doc.run'] = (a, ctx) => runRequest(a, ctx.task);
 
     // doc.compute { docId, docIds?, op, params, roi, channel, region? } → the op's JSON-able result.
     // Locks every named document, so it runs after any operation already accepted for them.
@@ -2572,12 +3494,15 @@ const IJEngine = (() => {
         checkBitDepth(spec, doc);
         const chans = isInt(a.channel) ? [a.channel] : [];
         const others = live.slice(1);
-        const params = resolvedParams(doc, spec, { params: a.params }, chans, false, others, false);
-        const io = makeIo(ctx.task, live, { channel: a.channel, region: a.region, transfer: ctx.transfer,
+        const params = resolvedParams(doc, spec, { params: a.params, pos: a.pos }, chans, false, others, false);
+        // the plane the op reads (`pos`); with rgb 'gray' an RGB document is seen as its luminance, one channel (index 0)
+        const pi = posToPi(doc, a.pos), whole = spec.stack === 'whole';
+        const io = makeIo(ctx.task, live, { channel: doc.rgb && spec.rgb === 'gray' ? 0 : a.channel, region: a.region, transfer: ctx.transfer, pi, posOf: a.posOf,
           scratch: scratchOf(spec, infoFor(doc, doc.channels.map((c, i) => i), null, others, a.roi), params) });
         const guard = guardInputs(live, a.op);
         let out;
-        try { out = await spec.run(makeView(doc), params, a.roi || null, io); } finally { io.done(); }
+        let rv = null;
+        try { rv = runView(doc, spec, pi, params, whole, a.channel); out = await spec.run(rv.view, params, a.roi || null, io); } finally { io.done(); if (rv) rv.release(); }
         guard();
         return out;
       });
@@ -2594,13 +3519,30 @@ const IJEngine = (() => {
         const plan = planPixel(doc, spec, a);
         const params = resolvedParams(doc, spec, a, plan.chans, false, undefined, false);
         const n = pixelNeed(doc, spec, plan, params);
-        need = n.need; one = n.oneChannel;
+        // the new arrays and patches of every plane of `planes` stay until the commit; the algorithm's scratch is per call
+        const nPl = planeSet(doc, a.planes, a.pos).length;
+        if (spec.stack === 'plane' && nPl > 1) throw ijError('IJ_BAD_ARGS', 'this operation does not process a stack');
+        const perPlane = plan.chans.length * (plan.chBytes + plan.patchBytes);
+        need = perPlane * nPl + Math.max(0, n.need - perPlane); one = n.oneChannel;
+        // without undo each plane replaces its array at once, but one the baseline still holds in RAM is not freed by that: the new
+        // arrays of the processed planes then add up (the run re-checks the budget per plane and fails cleanly when it runs out)
+        if (doc.baselineData) {
+          for (const pi of planeSet(doc, a.planes, a.pos)) for (const c of plan.chans) {
+            const old = doc.channels[c].planes[pi];
+            if (retainedByBaseline(doc, old)) one += old.byteLength;
+          }
+        }
       } else {
         const others = (Array.isArray(a.docIds) ? a.docIds : []).filter((id) => id !== a.docId).map(getDoc);
         const all = doc.channels.map((c, i) => i);
         const params = resolvedParams(doc, spec, a, all, false, others, false);
         need = scratchOf(spec, infoFor(doc, all, null, others, a.roi), params);
         one = need;
+        // an op run once per plane keeps every result until the commit: one more plane of the document's size per further plane
+        if ((spec.kind === 'size' && spec.stack === 'all') || (spec.kind === 'newdoc' && spec.stack === 'each')) {
+          const extra = (planeCountOf(doc) - 1) * all.length * doc.width * doc.height * (doc.bitDepth / 8);
+          need += extra;
+        }
       }
       return { needBytes: need, fits: couldFit(need), fitsWithoutUndo: couldFit(one), usedBytes: usedBytes(), budgetBytes };
     };
@@ -2622,27 +3564,58 @@ const IJEngine = (() => {
       return lockDoc(doc, async () => duplicateDoc(doc, a));
     };
 
+    // doc.duplicate { docId, channels?, roi?, name?, range?: { c: [c0, c1], z: [z0, z1], t: [t0, t1] } } — the ranges are 0-based and
+    // inclusive (a missing axis = all of it); `channels` (a list) wins over range.c. The whole stack by default, as
+    // Image > Duplicate with "Duplicate stack" ticked; the plane on show stays on show when it is in the range.
     function duplicateDoc(doc, a) {
       const W = doc.width, H = doc.height;
-      const sel = Array.isArray(a.channels) ? a.channels : doc.channels.map((c, i) => i);
+      const rg = a.range && typeof a.range === 'object' ? a.range : {};
+      const rng = (r, n, what) => {
+        if (r === undefined || r === null) return [0, n - 1];
+        if (!Array.isArray(r) || r.length !== 2 || !isInt(r[0]) || !isInt(r[1]) || r[0] < 0 || r[1] < r[0] || r[1] >= n) throw ijError('IJ_BAD_ARGS', 'range ' + what);
+        return r;
+      };
+      const cr = rng(rg.c, doc.channels.length, 'c'), zr = rng(rg.z, doc.nZ, 'z'), tr = rng(rg.t, doc.nT, 't');
+      const sel = Array.isArray(a.channels) ? a.channels : Array.from({ length: cr[1] - cr[0] + 1 }, (_, i) => cr[0] + i);
       let box = { x: 0, y: 0, w: W, h: H };
       if (a.roi) {
         const IJRoi = dep('IJRoi');
         IJRoi.validate(a.roi);
         if (IJRoi.isArea(a.roi)) box = cropRect(doc, null, a.roi);
       }
-      ensureRoom(sel.length * box.w * box.h * (doc.bitDepth / 8));
+      const nZ = zr[1] - zr[0] + 1, nT = tr[1] - tr[0] + 1;
+      ensureRoom(sel.length * nZ * nT * box.w * box.h * (doc.bitDepth / 8));
+      const whole = box.w === W && box.h === H;
       const chans = sel.map((c) => {
         const src = getChannel(doc, c);
-        const data = (box.w === W && box.h === H) ? src.data.slice() : copyRect(src.data, W, box.x, box.y, box.w, box.h);
-        return makeChannel(src.name, src.color, data, doc.bitDepth, src.display);
+        const planes = [];
+        for (let t = tr[0]; t <= tr[1]; t++) for (let z = zr[0]; z <= zr[1]; z++) {
+          const pl = src.planes[t * doc.nZ + z];
+          planes.push(whole ? pl.slice() : copyRect(pl, W, box.x, box.y, box.w, box.h));
+        }
+        return makeChannel(src.name, src.color, planes[0], doc.bitDepth, src.display, planes);
       });
+      // RGB stays RGB when its three colour channels all come along, in order
+      const rgb = doc.rgb && sel.length === 3 && sel[0] === 0 && sel[1] === 1 && sel[2] === 2;
+      // the labels of the planes kept (stack order: t, then z, then channel)
+      let labels = null;
+      if (doc.labels) {
+        const S = dep('IJStack'), od = stackDims(doc);
+        labels = [];
+        for (let t = tr[0]; t <= tr[1]; t++) for (let z = zr[0]; z <= zr[1]; z++) {
+          if (rgb || doc.rgb) labels.push(doc.labels[S.stackIndex(od, 0, z, t) - 1] === undefined ? null : doc.labels[S.stackIndex(od, 0, z, t) - 1]);
+          else for (const c of sel) { const l = doc.labels[S.stackIndex(od, c, z, t) - 1]; labels.push(l === undefined ? null : l); }
+        }
+        if (doc.rgb && !rgb) labels = null;
+      }
       const provenance = Object.assign({}, doc.provenance);
       const o = provenance.cropOrigin || { x: 0, y: 0 };
       provenance.cropOrigin = { x: o.x + box.x, y: o.y + box.y };
       const nd = buildDoc({
         id: newId(), sessionKey: doc.sessionKey, name: a.name || (doc.name + '-1'), width: box.w, height: box.h,
-        bitDepth: doc.bitDepth, channels: chans, calibration: plainClone(doc.calibration), provenance
+        bitDepth: doc.bitDepth, channels: chans, calibration: plainClone(doc.calibration), provenance,
+        nZ, nT, rgb, labels, hyperstack: doc.hyperstack,
+        z: Math.min(nZ - 1, Math.max(0, doc.z - zr[0])), t: Math.min(nT - 1, Math.max(0, doc.t - tr[0]))
       });
       registerDoc(nd, { baseline: true });
       finishMutation();
@@ -2652,8 +3625,9 @@ const IJEngine = (() => {
     handlers['doc.undo'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
+        if (doc.macroHold) throw ijError('IJ_MACRO_GROUP', 'a macro run is one undo step: no undo while it runs');
         const changed = await doUndoRedo(doc, 'undo', false);
-        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry });
+        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry, calibration: !!changed.calibration, labels: !!changed.labels, planes: changed.planes === undefined ? 'all' : changed.planes });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed };
       });
@@ -2662,8 +3636,9 @@ const IJEngine = (() => {
     handlers['doc.redo'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
+        if (doc.macroHold) throw ijError('IJ_MACRO_GROUP', 'a macro run is one undo step: no undo while it runs');
         const changed = await doUndoRedo(doc, 'redo', false);
-        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry });
+        post({ event: 'invalidate', docId: doc.id, channels: changed.channels, sizeChanged: changed.sizeChanged, sameGeometry: !!changed.sameGeometry, calibration: !!changed.calibration, labels: !!changed.labels, planes: changed.planes === undefined ? 'all' : changed.planes });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed };
       });
@@ -2673,10 +3648,186 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
         const r = await doRevert(doc);
-        if (!r.noop) post({ event: 'invalidate', docId: doc.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged });
+        if (!r.noop) post({ event: 'invalidate', docId: doc.id, channels: r.changed.channels, sizeChanged: r.changed.sizeChanged, labels: true, planes: r.changed.planes === undefined ? 'all' : r.changed.planes });
         finishMutation();
         return { rev: doc.rev, info: infoOf(doc), changed: r.changed };
       });
+    };
+
+    // ---- stack position, slice labels, composite undo steps (API.md §3, §6) -------------------------------------------
+
+    // Move the document's position: { z?, t?, c? } (0-based, clamped; `c` is the active channel). Not an edit: no undo step, no
+    // journal entry, the position travels with the session meta (display.pos). Returns the position now in force.
+    function applyPosition(doc, p) {
+      const S = dep('IJStack');
+      const want = {
+        c: p && typeof p.c === 'number' ? p.c : doc.active,
+        z: p && typeof p.z === 'number' ? p.z : doc.z,
+        t: p && typeof p.t === 'number' ? p.t : doc.t
+      };
+      const q = S.clampPos({ nC: doc.channels.length, nZ: doc.nZ, nT: doc.nT }, want);
+      doc.z = q.z; doc.t = q.t;
+      doc.active = q.c;
+      syncData(doc);
+      markMeta(doc);
+      scheduleIdle();
+      return { c: doc.active, z: doc.z, t: doc.t };
+    }
+
+    handlers['doc.setPosition'] = (a) => {
+      const doc = getDoc(a.docId);
+      applyPosition(doc, a);
+      return { info: infoOf(doc) };
+    };
+
+    handlers['doc.labels'] = (a) => {
+      const doc = getDoc(a.docId);
+      return { labels: doc.labels ? doc.labels.slice() : null };
+    };
+
+    // The label step: the slice label `n` (ImageJ's 1-based stack index) becomes `label` (null / '' = none). A size-kind record
+    // that only changes metadata (calOnly), journaled as { kind: 'label' } so a replay gives the same labels.
+    function commitLabel(doc, n, label, replay) {
+      const N = labelCount(doc);
+      if (!isInt(n) || n < 1 || n > N) throw ijError('IJ_BAD_ARGS', 'slice');
+      const text = label === null || label === undefined || label === '' ? null : String(label);
+      if (text !== null && text.length > 4096) throw ijError('IJ_BAD_ARGS', 'label');
+      const rec = newRecord(doc, 'setLabel');
+      rec.full = fullState(doc);
+      rec.calOnly = true;
+      rec.labelStep = true;
+      pushUndo(doc, rec);
+      const labels = doc.labels ? doc.labels.slice() : new Array(N).fill(null);
+      labels[n - 1] = text;
+      doc.labels = labels.some((l) => l !== null) ? labels : null;
+      doc.rev++;
+      if (!replay) noteCommit(doc, { kind: 'label', n, label: text });
+      else doc.journalSeq++;
+    }
+
+    handlers['doc.setLabel'] = (a) => {
+      const doc = getDoc(a.docId);
+      return lockDoc(doc, async () => {
+        commitLabel(doc, a.n, a.label, false);
+        post({ event: 'invalidate', docId: doc.id, channels: [], sizeChanged: false, calibration: true, labels: true, planes: [] });
+        finishMutation();
+        return { rev: doc.rev, info: infoOf(doc) };
+      });
+    };
+
+    // doc.undoGroup.begin / end { docId, labelKey? }: every step pushed in between is folded into ONE composite record (undo and
+    // redo apply them all). A composite is never replayed from the journal (its undo forces a snapshot), and begin / end nest.
+    handlers['doc.undoGroup.begin'] = (a) => {
+      const doc = getDoc(a.docId);
+      return lockDoc(doc, async () => {
+        if (!doc.groupDepth) doc.groupRecs = [];
+        doc.groupDepth++;
+        return { depth: doc.groupDepth };
+      });
+    };
+
+    handlers['doc.undoGroup.end'] = (a) => {
+      const doc = getDoc(a.docId);
+      return lockDoc(doc, async () => {
+        if (!doc.groupDepth) throw ijError('IJ_BAD_ARGS', 'no open group');
+        doc.groupDepth--;
+        if (doc.groupDepth) return { depth: doc.groupDepth, steps: 0 };
+        const present = doc.groupRecs.filter((r) => doc.undo.indexOf(r) >= 0);
+        doc.groupRecs = null;
+        if (present.length > 1) {
+          for (const r of present) doc.undo.splice(doc.undo.lastIndexOf(r), 1);
+          const g = { op: typeof a.labelKey === 'string' && a.labelKey ? a.labelKey : 'group', at: Date.now(), replayable: false, patches: null, full: null, display: null, bytes: 0, calOnly: false, group: present };
+          if (typeof a.labelKey === 'string') g.labelKey = a.labelKey;
+          g.bytes = recBytes(g);
+          doc.undo.push(g);
+        }
+        while (doc.undo.length > MAX_UNDO) doc.undo.shift();
+        return { depth: 0, steps: present.length };
+      });
+    };
+
+    // ---- macro runs (E.macroGroup; DOCS/studio-advanced/macros/INTEGRATION.md §2.6) ----------------------------------------------
+    // begin keeps the state of every open image (references: arrays are immutable, the plane lists copied) and HOLDS the image: the
+    // steps of the run push no undo record and write no journal entry, so a crash restores the stored pre-run state. end gives each held
+    // image that changed ONE undo step back to that state (applied like Revert's record), then one snapshot.
+    function macroBegin(runId, labelKey) {
+      if (macroRun) throw ijError('IJ_MACRO_BUSY', 'a macro run is already open');
+      if (typeof runId !== 'string' || !runId) throw ijError('IJ_BAD_ARGS', 'runId');
+      const run = { runId, labelKey: typeof labelKey === 'string' && labelKey ? labelKey : 'macro', batch: false, closing: false, docs: new Map(), ending: null };
+      for (const d of docs.values()) {
+        run.docs.set(d.id, { pre: fullState(d), born: false, dropped: false, rev0: d.rev });
+        d.macroHold = true;
+      }
+      macroRun = run;
+      return { docs: Array.from(run.docs.keys()) };
+    }
+    function macroSetBatch(runId, on) {
+      if (!macroRun || macroRun.runId !== runId || macroRun.closing) throw ijError('IJ_BAD_ARGS', 'no such macro run');
+      macroRun.batch = !!on;
+    }
+    function macroEnd(runId) {
+      if (lastMacroRun && lastMacroRun.runId === runId && lastMacroRun.ending) return lastMacroRun.ending;
+      const run = macroRun;
+      if (!run || run.runId !== runId) return Promise.resolve({ changed: [], dropped: [] });
+      if (run.ending) return run.ending;
+      run.closing = true;
+      run.ending = (async () => {
+        const changed = [], dropped = [];
+        try {
+          for (const [id, e] of Array.from(run.docs)) {
+            const doc0 = docs.get(id);
+            if (!doc0) continue;
+            await lockDoc(doc0, async () => {
+              const doc = docs.get(id);
+              if (!doc || !run.docs.has(id)) return;   // closed while the run waited for it
+              doc.macroHold = false;
+              const moved = doc.rev !== e.rev0;
+              if (moved) changed.push(id);
+              if (moved && e.dropped) {
+                // no undo for the run's changes: the older steps would be applied to a state they were not made from
+                dropped.push(id);
+                doc.undo.length = 0; doc.redo.length = 0;
+              }
+              if (moved && e.pre && !e.born) {
+                const rec = { op: run.labelKey, labelKey: run.labelKey, at: Date.now(), replayable: false, full: e.pre, patches: null, display: null, calOnly: false, macro: true, bytes: 0 };
+                rec.bytes = recBytes(rec);
+                doc.undo.push(rec);
+                while (doc.undo.length > MAX_UNDO) doc.undo.shift();
+                doc.redo.length = 0;
+              }
+              e.pre = null;
+              if (doc.ephemeral) return;
+              if (e.born) writeBaseline(doc);
+              else if (moved) snapshotNow(doc, true);
+              // the meta the run held back (display, position, a shown batch image)
+              markMeta(doc);
+            });
+          }
+        } finally {
+          for (const id of run.docs.keys()) { const d = docs.get(id); if (d) d.macroHold = false; }
+          for (const e of run.docs.values()) e.pre = null;
+          if (macroRun === run) macroRun = null;
+          lastMacroRun = run;
+          finishMutation();
+        }
+        return { changed, dropped };
+      })();
+      return run.ending;
+    }
+
+    // doc.persist { docId } → { info }: a batch image of a macro the macro shows becomes an ordinary one (a view, a session entry, a baseline);
+    // while the run still holds it, its baseline is written when the run ends.
+    handlers['doc.persist'] = (a) => {
+      const doc = getDoc(a.docId);
+      const was = !!doc.ephemeral;
+      doc.ephemeral = false;
+      doc.hidden = false;
+      if (!doc.macroHold) {
+        if (was) writeBaseline(doc);
+        markMeta(doc);
+        scheduleIdle();
+      }
+      return { info: infoOf(doc) };
     };
 
     // Reads of a document's pixels go through the document's queue, behind any operation
@@ -2691,7 +3842,8 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       const red = redirectDoc(a.redirect, doc);
       return lockDocs(red && red !== doc ? [doc, red] : [doc], async () => {
-        const c = isInt(a.channel) ? a.channel : doc.active;
+        const doc = readDoc(getDoc(a.docId), a);
+        const c = readChannel(doc, a);
         getChannel(doc, c);
         // memory: the selection's mask, the threshold-limited mask and the ellipse / hull buffers are box-sized byte
         // arrays (+ the traced vertices of a mask) — declared against the budget before they exist
@@ -2703,7 +3855,9 @@ const IJEngine = (() => {
         ensureRoomNoEvict(need);
         transientBytes += need;
         try {
-          const rows = measureRows(doc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit, invertY: a.invertY === true });
+          // raw (IJ.getValue "<column> raw"): measured with imp.setCalibration(null), the planes and everything else unchanged
+          const mdoc = a.raw === true ? Object.assign(Object.create(doc), { calibration: { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' } }) : doc;
+          const rows = measureRows(mdoc, c, a.roi || null, a.measurements, { redirect: a.redirect, thr: a.threshold, limit: a.limit, invertY: a.invertY === true });
           return { row: rows[0], rows };
         } finally { transientBytes -= need; }
       });
@@ -2712,7 +3866,8 @@ const IJEngine = (() => {
     handlers['doc.histogram'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
-        const c = isInt(a.channel) ? a.channel : doc.active;
+        const doc = readDoc(getDoc(a.docId), a);
+        const c = readChannel(doc, a);
         const mask = roiMask(a.roi || null, doc.width, doc.height);
         const o = { bins: a.bins > 0 ? a.bins : 256 };
         if (a.min != null) o.min = a.min;
@@ -2733,7 +3888,8 @@ const IJEngine = (() => {
     handlers['doc.profile'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
-        const c = isInt(a.channel) ? a.channel : doc.active;
+        const doc = readDoc(getDoc(a.docId), a);
+        const c = readChannel(doc, a);
         const line = a.line || a.roi;
         if (!line || (line.type !== 'line' && line.type !== 'polyline' && line.type !== 'rect')) throw ijError('IJ_BAD_ROI', 'a line or a rectangle selection is needed');
         dep('IJRoi').validate(line);
@@ -2763,7 +3919,8 @@ const IJEngine = (() => {
     handlers['doc.threshold'] = (a) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
-        const c = isInt(a.channel) ? a.channel : doc.active;
+        const doc = readDoc(getDoc(a.docId), a);
+        const c = readChannel(doc, a);
         const mask = roiMask(a.roi || null, doc.width, doc.height);
         const o = { dark: !!a.dark, maskBox: mask };
         // The Threshold window's "16-bit histogram" box (ThresholdAdjuster.java:232, :621): the full 65 536-bin histogram of a
@@ -2789,7 +3946,8 @@ const IJEngine = (() => {
       const doc = getDoc(a.docId);
       const red = redirectDoc(a.redirect, doc);
       return lockDocs(red && red !== doc ? [doc, red] : [doc], async () => {
-        const c = isInt(a.channel) ? a.channel : doc.active;
+        const doc = readDoc(getDoc(a.docId), a);
+        const c = readChannel(doc, a);
         const redirectSrc = a.redirect && a.redirect.docId !== undefined && a.redirect.docId !== null ? measureSource(doc, c, a.redirect) : null;
         if (doc.bitDepth !== 8) throw ijError('IJ_NOT_BINARY', 'particle analysis needs an 8-bit mask');
         const o = Object.assign({}, a.opts || {});
@@ -2897,7 +4055,9 @@ const IJEngine = (() => {
       const x = Math.floor(a.x), y = Math.floor(a.y);
       if (!(x >= 0 && y >= 0 && x < doc.width && y < doc.height)) return { values: [] };
       const i = y * doc.width + x;
-      return { values: doc.channels.map((c) => c.data[i]) };
+      // the value of every channel at the plane of `pos` (an RGB image: its three colour values)
+      const pi = posToPi(doc, a.pos);
+      return { values: doc.channels.map((c) => c.planes[pi][i]) };
     };
 
     handlers['doc.tile'] = (a, ctx) => {
@@ -2910,7 +4070,7 @@ const IJEngine = (() => {
       const x = tx * TILE, y = ty * TILE;
       if (tx < 0 || ty < 0 || x >= d.w || y >= d.h) throw ijError('IJ_BAD_TILE', 'tile');
       const w = Math.min(TILE, d.w - x), h = Math.min(TILE, d.h - y);
-      const img = levelImage(doc, c, level);
+      const img = levelImage(doc, c, level, posToPi(doc, a.pos));
       // A tile is a few MiB: never worth an undo step, so only the cache gives way.
       if (usedBytes() + w * h * (doc.bitDepth / 8) > budgetBytes) dropTiles();
       const data = copyRect(img.data, d.w, x, y, w, h);
@@ -2924,8 +4084,7 @@ const IJEngine = (() => {
     handlers['doc.exportTiff'] = (a, ctx) => {
       const doc = getDoc(a.docId);
       return lockDoc(doc, async () => {
-        let n = 0;
-        for (const c of doc.channels) n += c.data.byteLength;
+        const n = planeBytes(doc);
         ensureRoomNoEvict(n + 65536);
         transientBytes += n + 65536;
         ctx.release = () => { transientBytes -= n + 65536; };
@@ -3103,35 +4262,52 @@ const IJEngine = (() => {
           const src = snap || base;
           if (!src) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
           let missing = false;
-          const arrays = src.channels.map((c, i) => {
+          // The record of a stack holds `planes: [{ data } | { sameAsBaseline, baseIndex }]` per channel; a record made before
+          // stacks (or of a single-plane document) holds the channel's own `data` / `baseIndex`: it restores as a 1 x 1 stack.
+          // The baseline's arrays are numbered c * NP + pi of the BASELINE (flatBaseline).
+          const nZs = src.nZ > 0 ? src.nZ : 1, nTs = src.nT > 0 ? src.nT : 1;
+          const baseFlat = base ? flatBaseline(base) : null;
+          const lists = src.channels.map((c, i) => {
             // A channel that was the baseline's array points at it by baseIndex (never by its own
             // index: a reorder keeps the arrays but moves them); old records carry no baseIndex.
+            if (Array.isArray(c.planes)) {
+              if (c.planes.length !== nZs * nTs) { missing = true; return []; }
+              return c.planes.map((q) => {
+                const d = q.data || (baseFlat && q.baseIndex !== undefined && q.baseIndex !== null ? baseFlat[q.baseIndex] : null);
+                if (!d) missing = true;
+                return d;
+              });
+            }
             const bi = c.baseIndex !== undefined && c.baseIndex !== null ? c.baseIndex : i;
-            const d = c.data || (base && base.channels[bi] && base.channels[bi].data);
+            const d = c.data || (baseFlat && baseFlat[bi]);
             if (!d) missing = true;
-            return d;
+            return [d];
           });
-          if (missing) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
+          if (missing || nZs * nTs !== lists[0].length) { warnings.push({ docId, code: 'IJ_NO_BASELINE' }); continue; }
+          const arrays = [];
+          for (const l of lists) for (const d of l) arrays.push(d);
           const loadedBytes = arrays.reduce((n, d) => n + d.byteLength, 0);
           // The decoded records are in memory while the document is built: counted until then.
           transientBytes += loadedBytes;
           let doc;
           try {
             ensureRoom(loadedBytes);
-            const chans = src.channels.map((c, i) => makeChannel(c.name, c.color, arrays[i], src.bitDepth, c.display));
+            const at = (src.t > 0 ? Math.min(src.t, nTs - 1) : 0) * nZs + (src.z > 0 ? Math.min(src.z, nZs - 1) : 0);
+            const chans = src.channels.map((c, i) => makeChannel(c.name, c.color, lists[i][at], src.bitDepth, c.display, lists[i]));
             doc = buildDoc({
               id: docId, sessionKey: a.key, name: src.name, width: src.width, height: src.height, bitDepth: src.bitDepth,
+              nZ: nZs, nT: nTs, z: src.z, t: src.t, labels: src.labels, hyperstack: !!src.hyperstack, rgb: !!src.rgb,
               channels: chans, calibration: src.calibration, provenance: src.provenance, rev: src.rev,
               savedRev: src.savedRev == null ? -1 : src.savedRev, display: src.display, journalSeq: src.journalSeq || 0,
-              layoutRev: src.layoutRev || 0, hidden: !!src.hidden
+              layoutRev: src.layoutRev || 0, hidden: !!src.hidden, restore: true
             });
           } finally { transientBytes -= loadedBytes; }
           if (base) {
             doc.baselineIndex = new WeakMap();
-            base.channels.forEach((c, i) => doc.baselineIndex.set(c.data, i));
+            baseFlat.forEach((d, k) => doc.baselineIndex.set(d, k));
             doc.baselineMeta = base.channels.map((c) => ({ name: c.name, color: c.color }));
             doc.baselineProvenance = plainClone(base.provenance);
-            doc.baselineShape = { w: base.width, h: base.height, bd: base.bitDepth };
+            doc.baselineShape = { w: base.width, h: base.height, bd: base.bitDepth, nZ: base.nZ || 1, nT: base.nT || 1, rgb: !!base.rgb, hyperstack: !!base.hyperstack, labels: base.labels || null };
             doc.baselineStored = true;
           }
           const entries = (rec.journal || []).filter((e) => e.seq > doc.journalSeq).sort((x, y) => x.seq - y.seq);
@@ -3160,6 +4336,7 @@ const IJEngine = (() => {
               }
               if (e.kind === 'run') await executeRun(doc, e, replayTask, true);
               else if (e.kind === 'undo' || e.kind === 'redo') await doUndoRedo(doc, e.kind, true);
+              else if (e.kind === 'label') commitLabel(doc, e.n, e.label, true);
               doc.journalSeq = e.seq;
             } catch (err) {
               console.error('[IJEngine] journal replay stopped', err);
@@ -3178,7 +4355,10 @@ const IJEngine = (() => {
             if (isInt(ds.active)) doc.active = ds.active;
             if (Array.isArray(ds.visible) && ds.visible.length === doc.channels.length) doc.visible = ds.visible;
             if (Array.isArray(ds.channels)) ds.channels.forEach((d, i) => { if (doc.channels[i] && d) doc.channels[i].display = Object.assign({}, doc.channels[i].display, d); });
+            // the position the operator was looking at (a stack's meta carries it; the layout signature has already vouched for the dimensions)
+            if (ds.pos && isInt(ds.pos.z) && isInt(ds.pos.t) && ds.pos.z >= 0 && ds.pos.z < doc.nZ && ds.pos.t >= 0 && ds.pos.t < doc.nT) { doc.z = ds.pos.z; doc.t = ds.pos.t; }
           }
+          syncData(doc);
           doc.snapshotRev = doc.rev;
           if (held) {
             // Held: the stored baseline, snapshot and journal stay exactly as they are (a later start that
@@ -3201,7 +4381,7 @@ const IJEngine = (() => {
           }
           if (!held) doc.dirty = entries.length > 0;
           markMeta(doc);
-          post({ event: 'invalidate', docId, channels: doc.channels.map((c, i) => i), sizeChanged: true });
+          post({ event: 'invalidate', docId, channels: doc.channels.map((c, i) => i), sizeChanged: true, planes: 'all' });
           await ctx.task.tick(ids.length / Math.max(1, docIds.length), 'session.restore');
         }
       } catch (err) {
@@ -3259,6 +4439,15 @@ const IJEngine = (() => {
       return { name: a.name };
     };
 
+    // engine.ops {} -> [{ name, kind, stack, rgb }]: every registered operation (builtin and packages) with the fields the page decides
+    // with (Process Stack? is asked for a pixel op of `stack: 'ask'`, an RGB document refuses `rgb: false`), so the page keeps no list of its own.
+    handlers['engine.ops'] = () => {
+      const reg = ROOT.IJOpRegistry;
+      const out = [];
+      for (const name of reg.list()) { const sp = reg.get(name); out.push({ name, kind: sp.kind, stack: sp.stack, rgb: sp.rgb }); }
+      return out;
+    };
+
     // engine.putBlob { data: TypedArray } -> { blobRef, kind, bytes }: bytes the page will refer to by { blobRef } in the
     // params of a preview or a run (a clipboard sent once, not with each preview). Counted against the budget; one
     // 64 MiB at most; the same bytes twice are one blob.
@@ -3292,10 +4481,15 @@ const IJEngine = (() => {
 
     // The `E` a package's worker command (IJOpRegistry.defineCommand) receives: the engine's own services, scoped to one
     // request. What it reserved and did not release is given back when the request ends.
+    // The engine reads E.request may run in-process for a worker command (same arguments and result as the page's request).
+    const E_REQUESTS = ['doc.info', 'doc.stats', 'doc.histogram', 'doc.profile', 'doc.threshold', 'doc.compute', 'doc.labels', 'doc.setLabel'];
     function commandContext(ctx) {
       let reserved = 0;
+      let openGroup = null;   // the macro run this request opened and has not ended (ended for it when the request ends)
       const E = {
         budgetBytes,
+        // what would fit once the tile cache and every undo step were given up (no side effect): a macro's file read checks it first
+        freeBytes: () => Math.max(0, budgetBytes - (usedBytes() - reclaimableBytes())),
         ijError,
         check: () => ctx.task.check(),
         tick: (f, stepKey, detail) => ctx.task.tick(f, stepKey, detail),
@@ -3308,20 +4502,108 @@ const IJEngine = (() => {
           transientBytes -= k; reserved -= k;
         },
         // A document the handler built: arrays it reserved become the document's own (the reservation shrinks by their size).
+        // o.clean: an image read from a file is what is on disk (nothing unsaved until it is edited); o.provenance.file = its FileOrigin.
         createDoc(image, o) {
           const opt = o || {};
           const bytes = checkImageArgs(image);
           const covered = Math.min(bytes, reserved);
           if (bytes > covered) ensureRoom(bytes - covered);
           const provenance = Object.assign({}, opt.provenance && typeof opt.provenance === 'object' ? opt.provenance : {});
+          if (provenance.file !== undefined) { const f = checkFileOrigin(provenance.file); if (f) provenance.file = f; else delete provenance.file; }
           const doc = addDocFromImage(image, provenance, typeof opt.sessionKey === 'string' && opt.sessionKey ? opt.sessionKey : undefined, !!opt.hidden);
-          doc.savedRev = -1;
+          doc.savedRev = opt.clean === true ? doc.rev : -1;
           markMeta(doc);
           E.release(bytes);
           finishMutation();
           return infoOf(doc);
         },
-        readDoc: (docId) => makeView(getDoc(docId)),
+        // the frozen view of a document at `pos` ({ z, t }, default the current plane; API.md §6)
+        readDoc: (docId, pos) => { const d = getDoc(docId); return makeView(d, posToPi(d, pos)); },
+        // ---- files of a macro (FILES.md §10.2): a file's bytes → a stack image for createDoc, a document → a file's bytes
+        decodeImage: (bytes, o) => decodeImage(bytes, o, () => ctx.task.check()),
+        encodeImage: (docId, o) => encodeImage(getDoc(docId), o, ctx),
+        markSaved: (docId, o) => markSavedFile(getDoc(docId), o),
+        // ---- stacks: the dimensions, the position (a move posts the `position` event so the page's view follows), the live planes
+        dims(docId) {
+          const d = getDoc(docId);
+          const sd = stackDims(d);
+          return { width: d.width, height: d.height, nC: sd.nC, nZ: d.nZ, nT: d.nT, bitDepth: d.bitDepth, bitDepthIJ: d.rgb ? 24 : d.bitDepth, rgb: !!d.rgb, hyperstack: !!d.hyperstack };
+        },
+        getPosition(docId) { const d = getDoc(docId); return { c: d.active, z: d.z, t: d.t }; },
+        setPosition(docId, pos) {
+          const d = getDoc(docId);
+          const before = { c: d.active, z: d.z, t: d.t };
+          const now = applyPosition(d, pos || {});
+          if (now.c !== before.c || now.z !== before.z || now.t !== before.t) post({ event: 'position', docId: d.id, c: now.c, z: now.z, t: now.t });
+          return now;
+        },
+        // the live immutable arrays: never write into them
+        plane(docId, c, z, t) {
+          const d = getDoc(docId);
+          const ch = getChannel(d, c);
+          if (!isInt(z) || z < 0 || z >= d.nZ || !isInt(t) || t < 0 || t >= d.nT) throw ijError('IJ_BAD_ARGS', 'plane');
+          return ch.planes[t * d.nZ + z];
+        },
+        planes(docId, c) { return getChannel(getDoc(docId), c).planes.slice(); },
+        // ImageJ's slice label of the 1-based stack index `n` (null when none)
+        getLabel(docId, n) {
+          const d = getDoc(docId);
+          if (!isInt(n) || n < 1 || n > labelCount(d)) throw ijError('IJ_BAD_ARGS', 'slice');
+          const v = d.labels ? d.labels[n - 1] : null;
+          return typeof v === 'string' && v !== '' ? v : null;
+        },
+        labels(docId) { const d = getDoc(docId); return d.labels ? d.labels.slice() : null; },
+        // Run a registered op on a document through the ordinary doc.run path (locks the document itself: never call it while
+        // holding lockDocs on the same one). o = { pos, planes, channel, roi, noUndo, docIds }.
+        runOp(docId, op, params, o) {
+          const opt = o || {};
+          return runRequest({ docId, op, params, pos: opt.pos, posOf: opt.posOf, planes: opt.planes, channel: opt.channel, roi: opt.roi, noUndo: opt.noUndo, docIds: opt.docIds, announce: true }, ctx.task)
+            .then((r) => ({ changed: r.changed, newDocIds: r.newDocIds, newInfos: r.newInfos || [] }));
+        },
+        // ONE undo step replacing the planes `list` = [{ c, z, t, data }] (the macro working copy publishes through it). The arrays
+        // become the document's own (reserve() them first and they are not counted twice); the record is not replayable, so the
+        // step forces a snapshot, exactly like a noUndo run. `o.labelKey` names the step; `o.final` skips the cancellation check.
+        commitPlanes(docId, list, o) {
+          const doc0 = getDoc(docId);
+          return lockDocs([doc0], async () => {
+            const doc = getDoc(docId);
+            // o.final: the end-of-run publish of a macro, which an abort must not lose (ImageJ keeps what an aborted macro wrote)
+            if (!(o && o.final === true)) ctx.task.check();
+            if (!Array.isArray(list) || !list.length) throw ijError('IJ_BAD_ARGS', 'planes');
+            const Ctor = ctorFor(doc.bitDepth);
+            const seen = new Set(), items = [];
+            let bytes = 0;
+            const held = new Set();
+            for (const ch of doc.channels) for (const q of ch.planes) held.add(q);
+            for (const it of list) {
+              if (!it || !isInt(it.c) || it.c < 0 || it.c >= doc.channels.length || !isInt(it.z) || it.z < 0 || it.z >= doc.nZ ||
+                !isInt(it.t) || it.t < 0 || it.t >= doc.nT || !ArrayBuffer.isView(it.data) || it.data.constructor.name !== Ctor.name ||
+                it.data.length !== doc.width * doc.height) throw ijError('IJ_BAD_ARGS', 'plane');
+              const pi = it.t * doc.nZ + it.z, key = it.c + ':' + pi;
+              if (seen.has(key)) throw ijError('IJ_BAD_ARGS', 'plane listed twice');
+              seen.add(key);
+              items.push({ c: it.c, pi, data: it.data });
+              if (!held.has(it.data)) { held.add(it.data); bytes += it.data.byteLength; }
+            }
+            const covered = Math.min(bytes, reserved);
+            if (bytes > covered) ensureRoom(bytes - covered);
+            const rec = newRecord(doc, (o && typeof o.labelKey === 'string' && o.labelKey) || 'commitPlanes');
+            rec.replayable = false;
+            rec.patches = items.map((it) => ({ c: it.c, pi: it.pi, rect: { x: 0, y: 0, w: doc.width, h: doc.height }, data: doc.channels[it.c].planes[it.pi] }));
+            for (const it of items) setPlane(doc, it.c, it.pi, it.data);
+            E.release(bytes);
+            pushUndo(doc, rec);
+            const pis = Array.from(new Set(items.map((it) => it.pi))).sort((x, y) => x - y);
+            const chs = Array.from(new Set(items.map((it) => it.c))).sort((x, y) => x - y);
+            doc.rev++;
+            purgeTiles(doc.id, pis);
+            noteCommit(doc, null);
+            if (storageOn) snapshotNow(doc);
+            post({ event: 'invalidate', docId: doc.id, channels: chs, sizeChanged: false, planes: pis });
+            finishMutation();
+            return { changed: { channels: chs, sizeChanged: false, planes: pis } };
+          });
+        },
         lockDocs: (ids, fn) => lockDocs((ids || []).map(getDoc), fn),
         fetch(...args) {
           const f = ROOT.fetch;
@@ -3334,7 +4616,46 @@ const IJEngine = (() => {
           post(Object.assign({}, ev, { event: 'ext:' + ev.event }));
         },
         transfer: (buf) => { ctx.transfer.push(buf); },
-        done() { if (reserved) { transientBytes -= reserved; reserved = 0; } }
+        // ---- the macro run lane (DOCS/studio-advanced/macros/INTEGRATION.md §2.7)
+        macroGroup: Object.freeze({
+          begin(o) {
+            const r = macroBegin(o && o.runId, o && o.labelKey);
+            openGroup = o.runId;
+            return r;
+          },
+          setBatch(runId, on) { macroSetBatch(runId, on); },
+          end(runId) {
+            if (openGroup === runId) openGroup = null;
+            return macroEnd(runId);
+          }
+        }),
+        // fn() runs synchronously when a `cancel` request targets this request (a pending wait can reject at once)
+        onCancel(fn) {
+          if (typeof fn !== 'function') throw ijError('IJ_BAD_ARGS', 'onCancel');
+          ctx.task.onCancel = fn;
+        },
+        // the bytes of the planes of every open document (undo steps, caches and saved states excluded)
+        pixelBytes() {
+          const seen = new Set();
+          let n = 0;
+          for (const d of docs.values()) for (const c of d.channels) for (const a of c.planes) if (!seen.has(a)) { seen.add(a); n += a.byteLength; }
+          return n;
+        },
+        request(cmd, args) {
+          if (E_REQUESTS.indexOf(cmd) < 0) return Promise.reject(ijError('IJ_BAD_ARGS', 'E.request: ' + String(cmd)));
+          const sub = { id: null, task: ctx.task, transfer: [], release: null };
+          return Promise.resolve()
+            .then(() => handlers[cmd](args && typeof args === 'object' ? args : {}, sub))
+            .finally(() => { if (sub.release) sub.release(); });
+        },
+        done() {
+          if (reserved) { transientBytes -= reserved; reserved = 0; }
+          if (openGroup !== null) {
+            const id = openGroup;
+            openGroup = null;
+            macroEnd(id).catch((err) => console.error('[IJEngine] macro run end', err));
+          }
+        }
       };
       return E;
     }
@@ -3344,7 +4665,10 @@ const IJEngine = (() => {
 
     handlers['cancel'] = (a) => {
       const t = tasks.get(a.targetId);
-      if (t) t.cancelled = true;
+      if (t) {
+        t.cancelled = true;
+        if (typeof t.onCancel === 'function') { try { t.onCancel(); } catch (err) { console.error('[IJEngine] cancel hook', err); } }
+      }
       return {};
     };
 
@@ -3373,11 +4697,16 @@ const IJEngine = (() => {
       if (!scalable) level = 0;
       const chans = pixelChannels(doc, spec, a.channel);
       const params = resolvedParams(doc, spec, a, chans, false, undefined, false, true);
-      const view = makeView(doc);
+      const pPi = posToPi(doc, a.pos);
+      const view = makeView(doc, pPi);
       const gates = chans.map(() => ({ lo: 0, hi: 1 }));
+      const roiMode = roiModeOf(spec, params);
+      // an op that ignores the selection (roi mode 'ignore') gets it in level-0 coordinates: only a 'region' preview (level 0) can ask it
+      const selection = roiMode === 'ignore' && !scalable ? roiMask(a.roi || null, W, H) : null;
       const prepareAt = (lv) => chans.map((c, i) => spec.prepare(view, c, params, {
-        scale: 1 << lv, range: (cc) => rangeOf(doc, cc), dep,
-        check: () => ctx.task.check(),
+        scale: 1 << lv, range: (cc) => rangeOf(doc, cc, pPi), dep, selection,
+        // a newer preview of the document stops this one at its next check too (a long per-pixel macro checks without ticking)
+        check: () => { if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded'); ctx.task.check(); },
         tick: async (f, key) => {
           if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded');
           await ctx.task.tick((i + gates[i].lo + (gates[i].hi - gates[i].lo) * Math.min(1, Math.max(0, Number(f) || 0))) / chans.length, key || ('preview.' + a.op));
@@ -3404,8 +4733,10 @@ const IJEngine = (() => {
         level++;
       }
       const s = 1 << level;
-      const full0 = spec.roi === 'ignore' ? null : roiMask(a.roi || null, W, H);
+      const full0 = roiMode === 'ignore' ? null : roiMask(a.roi || null, W, H);
       const result = { event: 'preview', seq: a.seq, docId: doc.id, level, channels: {}, bitDepth: bd };
+      // a stack's preview names the plane it was computed on: the page drops one that arrives after the view moved
+      if (planeCountOf(doc) > 1) result.pi = posToPi(doc, a.pos);
       const transfer = [];
       let outBox = null;
       for (let i = 0; i < chans.length; i++) {
@@ -3421,11 +4752,11 @@ const IJEngine = (() => {
         const ww = wx1 - wx0, wh = wy1 - wy0;
         if (ww * wh > 12e6) throw ijError('IJ_PREVIEW_TOO_LARGE', 'preview region too large');
         let work;
-        if (level === 0) work = copyRect(doc.channels[c].data, W, wx0, wy0, ww, wh);
+        if (level === 0) work = copyRect(doc.channels[c].planes[pPi], W, wx0, wy0, ww, wh);
         else {
           // level-L pixels [wx0,wx1) × [wy0,wy1) = downsample2 applied L times to the aligned level-0 block.
           let img = chImg(Math.min(W, wx1 * s) - wx0 * s, Math.min(H, wy1 * s) - wy0 * s, bd,
-            copyRect(doc.channels[c].data, W, wx0 * s, wy0 * s, Math.min(W, wx1 * s) - wx0 * s, Math.min(H, wy1 * s) - wy0 * s));
+            copyRect(doc.channels[c].planes[pPi], W, wx0 * s, wy0 * s, Math.min(W, wx1 * s) - wx0 * s, Math.min(H, wy1 * s) - wy0 * s));
           for (let l = 0; l < level; l++) {
             const nw = Math.ceil(img.width / 2), nh = Math.ceil(img.height / 2);
             img = chImg(nw, nh, bd, unwrap(dep('IJOps').downsample2(img), nw * nh));
@@ -3453,7 +4784,7 @@ const IJEngine = (() => {
           } else mask = { x: 0, y: 0, w: 1, h: 1, data: new Uint8Array(1) };
         }
         const reg = { x: lx0 - wx0, y: ly0 - wy0, w: Math.min(lx1, wx1) - lx0, h: Math.min(ly1, wy1) - ly0 };
-        const pmask = spec.roi === 'bounds' ? null : mask;
+        const pmask = roiMode === 'bounds' ? null : mask;
         let rreg = reg;
         if (mask && !spec.outside) {
           const x0 = Math.max(reg.x, mask.x), y0 = Math.max(reg.y, mask.y);
@@ -3547,7 +4878,9 @@ const IJEngine = (() => {
       whenIdle: () => queue,
       usedBytes,
       budgetBytes,
-      handle: onMessage
+      handle: onMessage,
+      // test aid: the live document record (the tests check `channels[c].data === planes[t * nZ + z]` and the undo stacks)
+      inspectDoc: (id) => docs.get(id) || null
     };
   }
 

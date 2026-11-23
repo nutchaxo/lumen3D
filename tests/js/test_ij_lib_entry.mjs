@@ -60,7 +60,7 @@ await test('without a library the dialog is the one of wave 2 (no Source), Avera
   deepEq(ids, ['start', 'stop', 'method', 'level', 'note'], 'no source field: ZProjector.java:295-297 (Start slice, Stop slice, Projection type)');
   const method = spec.fields.find((f) => f.id === 'method');
   assert.equal(method.value, 'avg');
-  deepEq(method.options.map((o) => o.value), ['avg', 'max', 'min', 'sum', 'sd', 'median']);
+  deepEq(method.options.map((o) => o.value), ['avg', 'max', 'min', 'sum', 'sd', 'median', 'stack']);   // the projections, then Stack (no projection)
   assert.equal(t.settings.get('lib.method'), 'max', 'the method answered is remembered');
   t.close();
 });

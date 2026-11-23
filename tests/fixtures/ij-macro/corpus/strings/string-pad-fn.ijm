@@ -1,0 +1,1 @@
+print(String.pad(7,3));print(String.pad("ab",5));print(String.pad(12345,3));

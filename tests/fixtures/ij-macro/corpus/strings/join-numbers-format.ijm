@@ -1,0 +1,1 @@
+print(String.join(newArray(1,0.5,1/3),";"));

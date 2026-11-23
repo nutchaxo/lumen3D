@@ -1,0 +1,1 @@
+IJ.redirectErrorMessages();print("ok");

@@ -114,7 +114,10 @@
    *     CONVOLVE    float sum = k1*v1 + k2*v2 + ... + k9*v9;  sum *= scale;  with scale = 1f/4f. */
   const F_NINTH = fround(0.11111111);
 
-  function filter3x3Region(full, rect, type) {
+  /* `rgb`: the plane is one colour of a 24-bit image. ColorProcessor.sharpen() is not ByteProcessor's: convolve3x3 visits the INTERIOR only
+   * (xMin..xMax, yMin..yMax: the border keeps its value) and divides by the kernel sum with Java's truncating int division, no +scale/2:
+   *     sum = 12*p5 - (the other eight);  sum /= 4;  clamp to 0..255 (verified against ImageJ 1.54p, tests/fixtures/ij-stacks/rgb/filter_sharpen). */
+  function filter3x3Region(full, rect, type, rgb) {
     const W = full.width, H = full.height, bd = full.bitDepth, s = full.data;
     const o = typedFor(bd, rect.w * rect.h);
     if (W <= 1) { // "if (width>1)": nothing happens on a one-pixel-wide image
@@ -147,6 +150,9 @@
             t = fround(t + (-p6)); t = fround(t + (-p7)); t = fround(t + (-p8)); t = fround(t + (-p9));
             v = fround(t * 0.25);
           }
+        } else if (rgb && type === 'sharpen') {
+          if (gx === 0 || gx === W - 1 || gy === 0 || gy === H - 1) v = p5;
+          else { v = Math.trunc((12 * p5 - p1 - p2 - p3 - p4 - p6 - p7 - p8 - p9) / 4); v = v > 255 ? 255 : (v < 0 ? 0 : v); }
         } else if (bd === 8) {
           if (type === 'smooth') v = Math.floor((p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + 4) / 9);
           else if (type === 'edges') {
@@ -176,12 +182,12 @@
   }
 
   REG.define('filter3x3', {
-    kind: 'pixel', version: 1, preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: false,
     validate(p) { if (['smooth', 'sharpen', 'edges'].indexOf(p.type) < 0) throw bad('filter3x3 type'); },
     scratchBytes: () => 0,
     prepare(view, c, p) {
       const type = p.type;
-      return { apron: { x: 1, y: 1 }, region: (full, rect) => filter3x3Region(full, rect, type) };
+      return { apron: { x: 1, y: 1 }, region: (full, rect) => filter3x3Region(full, rect, type, !!view.rgb) };
     }
   });
 
@@ -457,7 +463,7 @@
   }
 
   REG.define('unsharpMask', {
-    kind: 'pixel', version: 1, preview: 'reduced',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: 'reduced',
     validate(p) {
       if (!isNum(p.sigma) || p.sigma < 0) throw bad('sigma');
       if (!isNum(p.weight) || p.weight < 0 || p.weight > 0.99) throw bad('weight');
@@ -526,7 +532,7 @@
   }
 
   REG.define('convolve', {
-    kind: 'pixel', version: 1,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each',
     validate(p) {
       if (!Number.isInteger(p.kw) || !Number.isInteger(p.kh) || p.kw < 1 || p.kh < 1 || (p.kw & 1) !== 1 || (p.kh & 1) !== 1) throw bad('kernel size');
       if (p.kw > 31 || p.kh > 31) throw bad('kernel too large');
@@ -977,7 +983,7 @@
    * (dialogItemChanged: int maxRadius = (filterType==MEDIAN || filterType==OUTLIERS || filterType==REMOVE_NAN) ? 100 : 1000;
    * outliers also need threshold >= 0). */
   REG.define('rankExtra', {
-    kind: 'pixel', version: 1,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each',
     validate(p) {
       if (['variance', 'outliersBright', 'outliersDark'].indexOf(p.type) < 0) throw bad('rank type');
       if (!isNum(p.radius) || p.radius < 0 || p.radius > (p.type === 'variance' ? 1000 : 100)) throw bad('radius');
@@ -1026,7 +1032,7 @@
 
   // Remove NaNs
   REG.define('removeNaNs', {
-    kind: 'pixel', version: 1, bitDepths: [32],
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [32],
     validate(p) { if (!isNum(p.radius) || p.radius < 0 || p.radius > 100) throw bad('radius'); },
     scratchBytes(info, p) { const k = rankKernel(p.radius); return bandBytes(info, k.kRadius, k.kRadius, 1) + 4 * (info.region ? info.region.w : info.width) * 2; },
     prepare(view, c, p, ctx) {
@@ -1049,7 +1055,7 @@
    * closed image is the result. The second pass reads the first pass' output, which covers the selection plus the
    * kernel reach (the apron is 2r in all). */
   REG.define('topHat', {
-    kind: 'pixel', version: 1, preview: 'reduced',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: 'reduced',
     validate(p) {
       if (!isNum(p.radius) || p.radius < 0 || p.radius > 1000) throw bad('radius');
       for (const f of ['light', 'dontSubtract']) if (p[f] !== undefined && typeof p[f] !== 'boolean') throw bad(f);
@@ -1202,7 +1208,7 @@
   }
 
   REG.define('math2', {
-    kind: 'pixel', version: 1, preview: 'region',
+    kind: 'pixel', version: 1, stack: 'ask', rgb: 'each', preview: 'region',
     validate(p, info) {
       if (MATH_OPS.indexOf(p.op) < 0) throw bad('math op');
       if (p.op === 'gamma' && !(isNum(p.value) && p.value >= 0.05 && p.value <= 5.0)) throw bad('gamma value');
@@ -1248,7 +1254,7 @@
    * those of the thresholded 32-bit image ("Thresholded 32-bit float image required"); the command takes them from the
    * Threshold window. A NaN stays NaN. */
   REG.define('nanBackground', {
-    kind: 'pixel', version: 1, bitDepths: [32], channels: 'one', roi: 'ignore', preview: false,
+    kind: 'pixel', version: 1, stack: 'ask', rgb: false, bitDepths: [32], channels: 'one', roi: 'ignore', preview: false,
     validate(p) { if (!isNum(p.lower) || !isNum(p.upper) || p.lower > p.upper) throw bad('threshold range'); },
     scratchBytes: () => 0,
     prepare(view, c, p) {
@@ -1268,7 +1274,7 @@
    * minimum and maximum of the whole image (ShortProcessor / FloatProcessor.findMinAndMax; a float ignores NaN and
    * the infinities). A compute helper of the package, not a tool: no histogram bin edges, never the selection. */
   REG.define('fltDataRange', {
-    kind: 'compute', version: 1, channels: 'one', roi: 'ignore', preview: false,
+    kind: 'compute', version: 1, stack: 'plane', rgb: 'gray', channels: 'one', roi: 'ignore', preview: false,
     validate() {},
     scratchBytes: () => 0,
     async run(view, p, roi, io) {

@@ -1,0 +1,1 @@
+var g=1;function f(g){g=5;return g;}print(f(2));print(g);

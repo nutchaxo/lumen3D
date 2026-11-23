@@ -1,8 +1,8 @@
 {
   "id": "advanced-studio",
   "name": "Advanced Studio",
-  "version": "1.2.0",
-  "platformCompat": ">=1.87.1",
+  "version": "1.6.0",
+  "platformCompat": ">=1.88.0",
   "dataTypes": [
     "3d",
     "live"
@@ -14,7 +14,7 @@
   "placement": "studio",
   "icon": "microscope",
   "order": 10,
-  "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then work on the full-precision voxels with the tools of ImageJ 1.54p: brightness and contrast, lookup tables, threshold, selections (including the Wand, segmented line and angle), measurements and particle analysis, background subtraction and contrast enhancement, filters and image math, binary tools (EDM, watershed, skeletons, Find Maxima), Image Calculator and channel split, merge and arrange, rotate, scale, canvas size, bin and calibration, and colocalization (Pearson, Manders, Costes, Li); plus the Fiji tools a browser can run with Fiji's own menus and parameters (Auto Threshold and Auto Local Threshold, CLAHE, Tubeness and Frangi, FFT and Bandpass, Directionality, Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count, Curve Fitting), File › Open from Library (any dataset of the site, as a z-stack projection or an oblique plane, from its original TIFF when there is one) and a panel layout where every image has its own view (split, tabs, dock, float).",
+  "description": "An ImageJ-style Advanced view for the Studio: flatten several slices of the chosen plane into one lossless 16/32-bit slice (Z Project), then work on the full-precision voxels with the tools of ImageJ 1.54p: brightness and contrast, lookup tables, threshold, selections (including the Wand, segmented line and angle), measurements and particle analysis, background subtraction and contrast enhancement, filters and image math, binary tools (EDM, watershed, skeletons, Find Maxima), Image Calculator and channel split, merge and arrange, rotate, scale, canvas size, bin and calibration, and colocalization (Pearson, Manders, Costes, Li); plus the Fiji tools a browser can run with Fiji's own menus and parameters (Auto Threshold and Auto Local Threshold, CLAHE, Tubeness and Frangi, FFT and Bandpass, Directionality, Coloc 2, Cell Counter, Analyze Skeleton, Local Thickness, Fractal Box Count, Curve Fitting), File › Open from Library (any dataset of the site, as a z-stack projection or an oblique plane, from its original TIFF when there is one) a panel layout where every image has its own view (split, tabs, dock, float), and ImageJ image stacks: channels × slices × frames with StackWindow sliders, the Image › Stacks, Hyperstacks, Type and Color menus, 24-bit RGB images, the Process Stack? question, and TIFF stacks and hyperstacks read and written as ImageJ does.",
   "i18nTitle": "mode",
   "i18nLanguages": [
     "en",
@@ -43,6 +43,12 @@
     "ij-proc-edit.js",
     "ij-proc-fiji.js",
     "ij-proc-lib.js",
+    "ij-proc-stk.js",
+    "ij-macro-vfs.js",
+    "ij-proc-macro.js",
+    "ij-macro-cmds.js",
+    "ij-macro-params.js",
+    "ij-macro-rec.js",
     "ij-view.js",
     "ij-layout.js",
     "ij-app.js",
@@ -62,7 +68,9 @@
     "ij-cmds-ana.js",
     "ij-cmds-edit.js",
     "ij-cmds-fiji.js",
-    "ij-cmds-lib.js"
+    "ij-cmds-lib.js",
+    "ij-cmds-stk.js",
+    "ij-cmds-macro.js"
   ],
   "styles": [
     "ij-style.css"

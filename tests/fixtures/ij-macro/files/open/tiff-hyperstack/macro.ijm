@@ -1,0 +1,12 @@
+open("{ROOT}hs.tif");
+getDimensions(w, h, c, z, t);
+print("dimensions " + w + " " + h + " " + c + " " + z + " " + t);
+print("title " + getTitle());
+print("bitDepth " + bitDepth());
+print("isHyperstack " + Stack.isHyperstack);
+Stack.getPosition(ch, sl, fr);
+print("position " + ch + " " + sl + " " + fr);
+Stack.setPosition(2, 3, 2);
+print("pixel at c2 z3 t2 " + getPixel(5, 5));
+Stack.setPosition(1, 1, 1);
+print("pixel at c1 z1 t1 " + getPixel(5, 5));

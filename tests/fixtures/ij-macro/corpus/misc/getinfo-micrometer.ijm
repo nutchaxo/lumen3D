@@ -1,0 +1,1 @@
+print(getInfo("micrometer.abbreviation"));

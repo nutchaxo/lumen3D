@@ -1,0 +1,1 @@
+print(IJ.pad(-5,4));print(IJ.pad(3.7,3));print(IJ.pad("x",0));print(IJ.pad(0,0));print(IJ.pad("abc",5));

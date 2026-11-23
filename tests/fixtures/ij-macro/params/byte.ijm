@@ -1,0 +1,2 @@
+#@ Byte b
+print(b);

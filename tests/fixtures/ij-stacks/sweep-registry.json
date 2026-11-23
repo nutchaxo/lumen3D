@@ -1,0 +1,833 @@
+{
+ "source": "the operation table of DOCS/studio-advanced/stacks/SWEEP.md: op, package, kind, stack, rgb from the ImageJ class flags (DOES_STACKS, IJ.setupDialog, DOES_RGB)",
+ "rows": {
+  "particleImage": {
+   "pkg": "ana",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "enhanceEqualize": {
+   "pkg": "bg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "enhanceNormalize": {
+   "pkg": "bg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "saturatedRange": {
+   "pkg": "bg",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "subtractBackground": {
+   "pkg": "bg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "coloc": {
+   "pkg": "coloc",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "copyRegion": {
+   "pkg": "edit",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "draw": {
+   "pkg": "edit",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "montage": {
+   "pkg": "edit",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "each"
+  },
+  "paste": {
+   "pkg": "edit",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "applyLut": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "binary": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "clear": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "clearOutside": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "convert": {
+   "pkg": "engine",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "false"
+  },
+  "crop": {
+   "pkg": "engine",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "cropToNew": {
+   "pkg": "engine",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "each"
+  },
+  "fill": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "flipH": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "flipV": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "gaussian": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "invert": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "math": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "rank": {
+   "pkg": "engine",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "rotate90": {
+   "pkg": "engine",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "toMask": {
+   "pkg": "engine",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "addNoise": {
+   "pkg": "enh",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "clahe": {
+   "pkg": "enh",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "claheMask": {
+   "pkg": "enh",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "enhDataRange": {
+   "pkg": "enh",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "frangi": {
+   "pkg": "enh",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "saltAndPepper": {
+   "pkg": "enh",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "tubeness": {
+   "pkg": "enh",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "bandpass": {
+   "pkg": "fft",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "bandpassFilter": {
+   "pkg": "fft",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "each"
+  },
+  "directionality": {
+   "pkg": "fft",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "fft": {
+   "pkg": "fft",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "inverseFft": {
+   "pkg": "fft",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "swapQuadrants": {
+   "pkg": "fft",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "analyzeSkeleton": {
+   "pkg": "fiji",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "cellMarkerValues": {
+   "pkg": "fiji",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "curveFit": {
+   "pkg": "fiji",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "fitApply": {
+   "pkg": "fiji",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "fractalBoxCount": {
+   "pkg": "fiji",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "localThickness": {
+   "pkg": "fiji",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "skeletonTagged": {
+   "pkg": "fiji",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "convolve": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "filter3x3": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "fltDataRange": {
+   "pkg": "filters",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "math2": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "nanBackground": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "rankExtra": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "removeNaNs": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "topHat": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "unsharpMask": {
+   "pkg": "filters",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "bin": {
+   "pkg": "geom",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "each"
+  },
+  "canvasSize": {
+   "pkg": "geom",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "resize": {
+   "pkg": "geom",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "resizeDepth": {
+   "pkg": "geom",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "each"
+  },
+  "rotate": {
+   "pkg": "geom",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "rotateEnlarge": {
+   "pkg": "geom",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "scaleInPlace": {
+   "pkg": "geom",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "scaleNew": {
+   "pkg": "geom",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "each"
+  },
+  "setCalibration": {
+   "pkg": "geom",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "translate": {
+   "pkg": "geom",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "each"
+  },
+  "roiSetOp": {
+   "pkg": "io",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "textImage": {
+   "pkg": "io",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "xyCoordinates": {
+   "pkg": "io",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "arrangeChannels": {
+   "pkg": "multi",
+   "kind": "size",
+   "stack": "all",
+   "rgb": "each"
+  },
+  "imageCalculator": {
+   "pkg": "multi",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "each"
+  },
+  "mergeChannels": {
+   "pkg": "multi",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "each"
+  },
+  "splitChannels": {
+   "pkg": "multi",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "paintMask": {
+   "pkg": "ov",
+   "kind": "pixel",
+   "stack": "plane",
+   "rgb": "each"
+  },
+  "convexHull": {
+   "pkg": "roi",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "createMask": {
+   "pkg": "roi",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "createSelection": {
+   "pkg": "roi",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "enlargeRoi": {
+   "pkg": "roi",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "fitEllipse": {
+   "pkg": "roi",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "wand": {
+   "pkg": "roi",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "edm": {
+   "pkg": "seg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "edmOutput": {
+   "pkg": "seg",
+   "kind": "newdoc",
+   "stack": "each",
+   "rgb": "false"
+  },
+  "findMaxima": {
+   "pkg": "seg",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "findMaximaImage": {
+   "pkg": "seg",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "segDisplayRange": {
+   "pkg": "seg",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "segOutline": {
+   "pkg": "seg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "skeletonize": {
+   "pkg": "seg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "ultimatePoints": {
+   "pkg": "seg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "voronoi": {
+   "pkg": "seg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "watershed": {
+   "pkg": "seg",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "lineToArea": {
+   "pkg": "sel",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "makeBand": {
+   "pkg": "sel",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "selTransform": {
+   "pkg": "sel",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "straighten": {
+   "pkg": "sel",
+   "kind": "newdoc",
+   "stack": "each",
+   "rgb": "each"
+  },
+  "stk8BitColor": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stk8BitPalette": {
+   "pkg": "stk",
+   "kind": "compute",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkAddSlice": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkCombine": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "whole"
+  },
+  "stkConcatenate": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "whole"
+  },
+  "stkConvert": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkDeleteRange": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkDeleteSlice": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkGroupedZ": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkHsb32": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkHsbStack": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkHyperToStack": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkImagesToStack": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "whole"
+  },
+  "stkLabStack": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkMakeComposite": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkMontage": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkMontageToStack": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "whole"
+  },
+  "stkProfile": {
+   "pkg": "stk",
+   "kind": "compute",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkReduce": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkReduceDim": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkReduceDimNew": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkRemoveLabels": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkReorder": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkReslice": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkReverse": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkRgbColor": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "stkRgbColorInPlace": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "stkRgbStack": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkStackToImages": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkStackToRgb": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "stkStackToRgbInPlace": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "stkStats": {
+   "pkg": "stk",
+   "kind": "compute",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkSubstack": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkToHyperstack": {
+   "pkg": "stk",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "stkZProject": {
+   "pkg": "stk",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "whole"
+  },
+  "autoLocalThreshold": {
+   "pkg": "thr",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "autoLocalThresholdTryAll": {
+   "pkg": "thr",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "autoThreshold": {
+   "pkg": "thr",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "autoThresholdLevel": {
+   "pkg": "thr",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  },
+  "autoThresholdMask": {
+   "pkg": "thr",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "autoThresholdTryAll": {
+   "pkg": "thr",
+   "kind": "newdoc",
+   "stack": "plane",
+   "rgb": "false"
+  },
+  "binaryMedian": {
+   "pkg": "thr",
+   "kind": "pixel",
+   "stack": "ask",
+   "rgb": "false"
+  },
+  "stackToMask": {
+   "pkg": "thr",
+   "kind": "size",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "stackToMaskNew": {
+   "pkg": "thr",
+   "kind": "newdoc",
+   "stack": "whole",
+   "rgb": "false"
+  },
+  "thrIsBinary": {
+   "pkg": "thr",
+   "kind": "compute",
+   "stack": "plane",
+   "rgb": "gray"
+  }
+ }
+}

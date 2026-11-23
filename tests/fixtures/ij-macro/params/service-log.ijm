@@ -1,0 +1,2 @@
+#@ LogService log
+print("ok");

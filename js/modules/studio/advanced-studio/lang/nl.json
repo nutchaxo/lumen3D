@@ -1,6 +1,7 @@
 {
   "mode": "Geavanceerd",
   "menu": {
+    "Batch": "Batch",
     "File": "Bestand",
     "SaveAs": "Opslaan als",
     "Edit": "Bewerken",
@@ -38,6 +39,13 @@
     "Macros": "Macro's"
   },
   "cmd": {
+    "macInstall": "Installeren...",
+    "macStartup": "Opstartmacro's...",
+    "macRecord": "Opnemen...",
+    "macRemoveInstalled": "Geïnstalleerde macro's verwijderen",
+    "optStartup": "Opstarten...",
+    "batchMacro": "Macro...",
+    "mathMacro": "Macro...",
     "fileOpen": "Openen…",
     "fileSaveTiff": "TIFF…",
     "fileSaveJpeg": "Jpeg…",
@@ -1224,6 +1232,96 @@
       "levelsStatus": "{list}"
     },
     "mac": {
+      "rec": {
+        "title": "Recorder",
+        "record": "Opnemen:",
+        "modeMacro": "Macro",
+        "name": "Naam:",
+        "create": "Maken",
+        "run": "Uitvoeren",
+        "help": "Help",
+        "helpText": "Klik op \"Maken\" om de opgenomen opdrachten in de macro-editor te openen.\n\nKlik op \"Uitvoeren\" (of druk op Ctrl+Enter) om de geselecteerde tekst of de regel met de cursor uit te voeren.\n\nAlleen wat u zelf doet wordt opgenomen, nooit wat een lopende macro doet.",
+        "createEmpty": "Er kan pas een macro worden gemaakt als er minstens één opdracht is opgenomen.",
+        "runHint": "Voert de geselecteerde tekst of de regel met de cursor uit (Ctrl+Enter).",
+        "replaceEditor": "De macro-editor bevat tekst die niet is opgeslagen. Vervangen door de opgenomen macro?",
+        "replace": "Vervangen"
+      },
+      "install": {
+        "title": "Macro's installeren",
+        "keyInUse": "Deze sneltoets is al in gebruik:",
+        "keysInUse": "Deze sneltoetsen zijn al in gebruik:",
+        "keysReserved": "Deze toetsen houdt de browser voor zichzelf; ze zijn niet toegewezen:",
+        "toolsSkipped": "{n} gereedschapsmacro('s) zijn niet geïnstalleerd: werkbalkgereedschappen zijn niet beschikbaar in de Geavanceerde Studio.",
+        "popupSkipped": "De macro \"Popup Menu\" is niet geïnstalleerd: het pop-upmenu van de afbeelding is niet beschikbaar in de Geavanceerde Studio.",
+        "installed": "{n} macro's geïnstalleerd",
+        "installedOne": "1 macro geïnstalleerd"
+      },
+      "editor": {
+        "install": "Installeren"
+      },
+      "startup": {
+        "title": "Opstartmacro's",
+        "note": "Deze macro's worden geïnstalleerd telkens wanneer de Geavanceerde Studio opent; een AutoRun-macro wordt dan uitgevoerd.",
+        "save": "Opslaan",
+        "revert": "Herstellen"
+      },
+      "startupCode": {
+        "title": "Opstartmacro",
+        "note": "De macrocode in dit tekstvak wordt uitgevoerd telkens wanneer de Geavanceerde Studio opent.",
+        "add": "Code toevoegen:",
+        "itemSelect": "[Kies uit de lijst]",
+        "itemBlack": "Zwarte achtergrond",
+        "itemDir": "Standaardmap instellen",
+        "itemOverlay": "Aan overlay toevoegen"
+      },
+      "batch": {
+        "title": "Batchverwerking",
+        "input": "Invoer...",
+        "output": "Uitvoer...",
+        "format": "Uitvoerformaat:",
+        "addCode": "Macrocode toevoegen:",
+        "filter": "Bestandsnaam bevat:",
+        "test": "Testen",
+        "open": "Openen...",
+        "save": "Opslaan...",
+        "process": "Verwerken",
+        "formatNo": "De Geavanceerde Studio kan dit formaat niet schrijven.",
+        "snippetSelect": "[Kies uit de lijst]",
+        "snippetAddBorder": "Rand toevoegen",
+        "snippetToRgb": "Naar RGB omzetten",
+        "snippetCrop": "Bijsnijden",
+        "snippetGaussian": "Gaussiaanse vervaging",
+        "snippetInvert": "Omkeren",
+        "snippetLabel": "Label",
+        "snippetTimestamp": "Tijdstempel",
+        "snippetMaxDim": "Maximale afmeting",
+        "snippetMeasure": "Meten",
+        "snippetPrintIndex": "Index en titel afdrukken",
+        "snippetResize": "Formaat wijzigen",
+        "snippetScale": "Schalen",
+        "snippetFileInfo": "Bestandsinfo tonen",
+        "snippetUnsharp": "Onscherp masker",
+        "errTitle": "Batchverwerker",
+        "noInput": "Kies een invoermap",
+        "badInput": "De invoer bestaat niet of is geen map\n \n{path}",
+        "badOutput": "De uitvoer bestaat niet of is geen map\n \n{path}",
+        "noCode": "Er staat geen macrocode in het tekstvak",
+        "tooLarge": "Het bestand is te groot",
+        "progress": "{n}/{total}: {name}"
+      },
+      "math": {
+        "title": "Expressie-evaluator",
+        "code": "Code:",
+        "help": "v=pixelwaarde, x,y en z=pixelcoördinaten, w=beeldbreedte,\nh=beeldhoogte, a=hoek, d=afstand tot het midden"
+      },
+      "params": {
+        "title": "Scriptparameters"
+      },
+      "outputs": {
+        "title": "Uitvoer",
+        "name": "Naam",
+        "value": "Waarde"
+      },
       "editorTitle": "Macro-editor",
       "logTitle": "Logboek",
       "errorTitle": "Macrofout",
@@ -1315,6 +1413,8 @@
     }
   },
   "op": {
+    "macBatch": "Batchverwerking",
+    "mathMacro": "Macro",
     "invert": "Omkeren",
     "math": "Berekenen",
     "fill": "Vullen",
@@ -1583,6 +1683,18 @@
     "keepFailed": "De browser kon niet al uw werk opslaan. Sla het op als TIFF of gooi het weg."
   },
   "err": {
+    "macInstallExt": "De bestandsnaam moet eindigen op \".txt\" of \".ijm\".",
+    "macMathHost": "{name}() kan in de browser niet worden gebruikt in Process › Math › Macro.",
+    "macMathFailed": "De rekenmacro is mislukt.",
+    "macParamService": "#@ {type} {name}: services zijn niet beschikbaar in de browser.",
+    "macParamType": "#@ {type} {name}: dit parametertype is niet beschikbaar in de browser.",
+    "macParamPassword": "#@ String {name}: wachtwoordvelden zijn niet beschikbaar in de Geavanceerde Studio.",
+    "macParamNoImage": "#@ {type} {name}: er moet een afbeelding geopend zijn.",
+    "macParamSyntax": "Regel {line}: deze parameterregel kan niet worden gelezen: {text}",
+    "macReasonStartup": "het wijzigt wat er wordt uitgevoerd telkens wanneer de Studio opent.",
+    "macReasonRecorder": "een macro mag de recorder niet aansturen.",
+    "macReasonInstalled": "het wijzigt de geïnstalleerde macro's.",
+    "macInstallFailed": "Het macrobestand kon niet worden gelezen.",
     "title": "Geavanceerde weergave",
     "unknown": "Er ging iets mis. Uw werk blijft bewaard; probeer het opnieuw.",
     "overBudget": "Dit past niet in het geheugen dat dit apparaat aan de pagina geeft. Kies een lagere resolutie of minder kanalen.",
@@ -1770,6 +1882,7 @@
     "ioTableEmpty": "De tabel is leeg of ongeldig."
   },
   "warn": {
+    "macNotStored": "Deze tekst is te lang om na herladen bewaard te blijven.",
     "unprotected": "Uw werk is niet beschermd: de browser weigerde het op te slaan.",
     "held": "Sommige afbeeldingen zijn maar gedeeltelijk hersteld: uw wijzigingen eraan worden niet opgeslagen.",
     "lowStorage": "Er is weinig opslag over in deze browser: sla een TIFF op.",

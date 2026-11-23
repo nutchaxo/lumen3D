@@ -2300,20 +2300,29 @@ const IJEngine = (() => {
     }
 
     // What a pixel op touches: the channels, the selection as the op sees it, the region that may change.
+    /** The roi mode of one request: spec.roiFor(params) when the op has it, else spec.roi. */
+    function roiModeOf(spec, params) {
+      if (typeof spec.roiFor !== 'function') return spec.roi;
+      const m = spec.roiFor(params || {});
+      return m === 'mask' || m === 'bounds' || m === 'ignore' ? m : spec.roi;
+    }
+
     function planPixel(doc, spec, args) {
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
       checkBitDepth(spec, doc);
       const chans = pixelChannels(doc, spec, args.channel);
       let mask = roiMask(args.roi || null, W, H);
       if (spec.needsRoi && !mask) throw ijError('IJ_NEEDS_ROI', 'this operation needs an area selection');
-      if (spec.roi === 'ignore') mask = null;
-      const passMask = spec.roi === 'bounds' ? null : mask;
+      const selection = mask;
+      const mode = roiModeOf(spec, args.params);
+      if (mode === 'ignore') mask = null;
+      const passMask = mode === 'bounds' ? null : mask;
       const outside = !!spec.outside;
       const reg = outside ? { x: 0, y: 0, w: W, h: H } : boundsOf(mask, W, H);
       const fullReg = reg.x === 0 && reg.y === 0 && reg.w === W && reg.h === H;
       const chBytes = W * H * (bd / 8);
       const patchBytes = fullReg ? 0 : reg.w * reg.h * (bd / 8);
-      return { chans, mask, passMask, outside, reg, fullReg, chBytes, patchBytes };
+      return { chans, mask, passMask, outside, reg, fullReg, chBytes, patchBytes, selection: mode === 'ignore' ? selection : null };
     }
 
     // Bytes of one run: the new arrays, the patch copy of an undo step on a partial region, and
@@ -2348,7 +2357,7 @@ const IJEngine = (() => {
       const roi = args.roi || null;
       const W = doc.width, H = doc.height, bd = doc.bitDepth;
       const plan = planPixel(doc, spec, args);
-      const { chans, passMask, outside, reg, fullReg } = plan;
+      const { chans, passMask, outside, reg, fullReg, selection } = plan;
       // The (z,t) planes this request processes (DOES_STACKS): resolved to an explicit list, which is what the journal keeps.
       const pi0 = posToPi(doc, args.pos);
       const pis = planeSet(doc, args.planes, args.pos);
@@ -2363,7 +2372,7 @@ const IJEngine = (() => {
         const preps = chans.map((c, i) => {
           const gate = gates[i], idx = k * nCh + i;
           return spec.prepare(view, c, params, {
-            scale: 1, range: (cc) => rangeOf(doc, cc, pi), dep,
+            scale: 1, range: (cc) => rangeOf(doc, cc, pi), dep, selection,
             check: () => task.check(),
             tick: (f, key) => task.tick((idx + gate.lo + (gate.hi - gate.lo) * Math.min(1, Math.max(0, Number(f) || 0))) / total, key || ('op.' + op))
           });
@@ -4691,9 +4700,13 @@ const IJEngine = (() => {
       const pPi = posToPi(doc, a.pos);
       const view = makeView(doc, pPi);
       const gates = chans.map(() => ({ lo: 0, hi: 1 }));
+      const roiMode = roiModeOf(spec, params);
+      // an op that ignores the selection (roi mode 'ignore') gets it in level-0 coordinates: only a 'region' preview (level 0) can ask it
+      const selection = roiMode === 'ignore' && !scalable ? roiMask(a.roi || null, W, H) : null;
       const prepareAt = (lv) => chans.map((c, i) => spec.prepare(view, c, params, {
-        scale: 1 << lv, range: (cc) => rangeOf(doc, cc, pPi), dep,
-        check: () => ctx.task.check(),
+        scale: 1 << lv, range: (cc) => rangeOf(doc, cc, pPi), dep, selection,
+        // a newer preview of the document stops this one at its next check too (a long per-pixel macro checks without ticking)
+        check: () => { if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded'); ctx.task.check(); },
         tick: async (f, key) => {
           if (superseded()) throw ijError('IJ_SUPERSEDED', 'superseded');
           await ctx.task.tick((i + gates[i].lo + (gates[i].hi - gates[i].lo) * Math.min(1, Math.max(0, Number(f) || 0))) / chans.length, key || ('preview.' + a.op));
@@ -4720,7 +4733,7 @@ const IJEngine = (() => {
         level++;
       }
       const s = 1 << level;
-      const full0 = spec.roi === 'ignore' ? null : roiMask(a.roi || null, W, H);
+      const full0 = roiMode === 'ignore' ? null : roiMask(a.roi || null, W, H);
       const result = { event: 'preview', seq: a.seq, docId: doc.id, level, channels: {}, bitDepth: bd };
       // a stack's preview names the plane it was computed on: the page drops one that arrives after the view moved
       if (planeCountOf(doc) > 1) result.pi = posToPi(doc, a.pos);
@@ -4771,7 +4784,7 @@ const IJEngine = (() => {
           } else mask = { x: 0, y: 0, w: 1, h: 1, data: new Uint8Array(1) };
         }
         const reg = { x: lx0 - wx0, y: ly0 - wy0, w: Math.min(lx1, wx1) - lx0, h: Math.min(ly1, wy1) - ly0 };
-        const pmask = spec.roi === 'bounds' ? null : mask;
+        const pmask = roiMode === 'bounds' ? null : mask;
         let rreg = reg;
         if (mask && !spec.outside) {
           const x0 = Math.max(reg.x, mask.x), y0 = Math.max(reg.y, mask.y);

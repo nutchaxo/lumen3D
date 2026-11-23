@@ -1,0 +1,1407 @@
+{
+  "imagej": "1.54p",
+  "generator": "tools/ij_fixtures/macro/BatchGolden.java",
+  "note": "input = the folder the jar read (fixtures, relative to tests/fixtures/ij-macro); files = what the driver wrote in it (kind tif8/tif16/tif32/rgb = an ImageJ TIFF of 16x12 pixels from BatchGolden.plane(kind, seed), png = 8-bit PNG, dir = a sub-folder holding inner.tif, txt / bytes = not images); outputs = every file saved in the output folder (copied to batch/<id>/out/), pixels = ImageJ's read-back of it (MathGolden layout). processed = the titles the macro's i-th run saw, recovered from the Log when the code prints them, else from the saved files; storedAfter = what ImageJ stored at the end (Prefs + macros/BatchMacro.ijm). mode: macro = IJ.run(\"Macro... \", optionString); runMacro = a macro calling it; operator = Executer + the real dialog, Process pressed, Recorder on; test = the Test button",
+  "timeStamp": "batch/TimeStamp.ijm",
+  "cases": {
+    "invert-tiff": {
+      "input": "batch/invert-tiff/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "7ba15023c3eaecbee17368cbeefdba6782d80a8e09aac884c6381eee5a7a3823",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "b.tif": {
+          "sha256": "65f3ac775db6d690778456e87c352859b21da46aea6447eed88d3462731cf4cc",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "32c4a14443b4497a873b469715453ad55c1e65198462346f7160a191c4a4ba26"}
+        },
+        "c.tif": {
+          "sha256": "f80283a51b18141f32f77bb1aa950f1d49e695c10d84d9422d4e2efbe469eeb4",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "3cf9067bb85a01f1722ccfcae8cd49758a7aeb7d217c420f791e0ccc17413f4e"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/invert-tiff/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "filter-contains": {
+      "input": "batch/filter-contains/in",
+      "files": [
+        {"name": "a1.tif", "kind": "tif8", "seed": 1},
+        {"name": "b2.tif", "kind": "tif8", "seed": 2},
+        {"name": "a3.png", "kind": "png", "seed": 3},
+        {"name": "ba.tif", "kind": "tif8", "seed": 4}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "a",
+        "code": "print(i+\" \"+getTitle());"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[a] text1=[print(i+\" \"+getTitle());]",
+      "log": ["0 a1.tif", "1 a3.png", "2 ba.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a1.tif": {
+          "sha256": "ee71e3b072f38d7589a72a6b065309efd00c4964bf16f43954db3366370edd78",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "31ec0db608008be9e928ccffe350c91b68f78f034035a60f0c7649c1fc6aa841"}
+        },
+        "a3.tif": {
+          "sha256": "93059a6cfb4aa531c792e3e1344b93aedd5524ef7c955a615c034d8528eaa53d",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "ebd87ad36a59281cd021a20f1102cf3755064154ba1158a017f0a3437ec53e10"}
+        },
+        "ba.tif": {
+          "sha256": "7bd7cf0a03263eedc38b77bf7906f043b42951590553cd05d2d015b3714ae33b",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "347c8ec342e2a4c6295d595b76db58240d727d98c02d9eb53d721c3ec72bacb8"}
+        }
+      },
+      "processed": {
+        "from": "log",
+        "names": ["a1.tif", "a3.png", "ba.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/filter-contains/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "filter-regex": {
+      "input": "batch/filter-regex/in",
+      "files": [
+        {"name": "img1.tif", "kind": "tif8", "seed": 1},
+        {"name": "img22.tif", "kind": "tif8", "seed": 2},
+        {"name": "imgx.tif", "kind": "tif8", "seed": 3},
+        {"name": "d.png", "kind": "png", "seed": 4}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "(img\\d+)",
+        "code": "print(i+\" \"+getTitle());"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[(img\\d+)] text1=[print(i+\" \"+getTitle());]",
+      "log": ["0 img1.tif", "1 img22.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "img1.tif": {
+          "sha256": "ee71e3b072f38d7589a72a6b065309efd00c4964bf16f43954db3366370edd78",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "31ec0db608008be9e928ccffe350c91b68f78f034035a60f0c7649c1fc6aa841"}
+        },
+        "img22.tif": {
+          "sha256": "adf8a327473ba5af8f6624ea28f787cb6656b40035d9e2771b2418ca8dffd09c",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "cb6a5a7719090a91f1b3589683dc86dc2db9864426670a3de71139fbc1d861b7"}
+        }
+      },
+      "processed": {
+        "from": "log",
+        "names": ["img1.tif", "img22.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/filter-regex/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "filter-regex-literal-fallback": {
+      "input": "batch/filter-regex-literal-fallback/in",
+      "files": [
+        {"name": "a+b.tif", "kind": "tif8", "seed": 1},
+        {"name": "aab.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "(a+b)",
+        "code": "print(getTitle());"
+      },
+      "output": false,
+      "mode": "macro",
+      "note": "a name the regular expression does not match is still kept when it contains the text between the parentheses literally",
+      "optionString": "output_format=TIFF file=[(a+b)] text1=[print(getTitle());]",
+      "log": ["a+b.tif", "aab.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a+b.tif", "aab.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/filter-regex-literal-fallback/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "filter-none": {
+      "input": "batch/filter-none/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "zz",
+        "code": "print(getTitle());"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[zz] text1=[print(getTitle());]",
+      "log": [],
+      "error": null,
+      "dialogs": [
+        {"title": "Batch Processor", "text": "None of the 3 files contain 'zz' in the name."}
+      ],
+      "thrown": "java.lang.RuntimeException: Macro canceled",
+      "outputs": {},
+      "processed": {
+        "from": "none",
+        "names": []
+      },
+      "storedAfter": {
+        "batch.input": "batch/filter-none/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "filter-regex-none": {
+      "input": "batch/filter-regex-none/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "(q+)",
+        "code": "print(getTitle());"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[(q+)] text1=[print(getTitle());]",
+      "log": [],
+      "error": null,
+      "dialogs": [
+        {"title": "Batch Processor", "text": "None of the file names contain the regular expression 'q+'."}
+      ],
+      "thrown": "java.lang.RuntimeException: Macro canceled",
+      "outputs": {},
+      "processed": {
+        "from": "none",
+        "names": []
+      },
+      "storedAfter": {
+        "batch.input": "batch/filter-regex-none/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "filter-star": {
+      "input": "batch/filter-star/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "*",
+        "code": "print(getTitle());"
+      },
+      "output": false,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[*] text1=[print(getTitle());]",
+      "log": ["a.tif", "b.tif", "c.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/filter-star/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "no-output-log": {
+      "input": "batch/no-output-log/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "print(i+\": \"+getTitle()+\" \"+getWidth()+\"x\"+getHeight()+\" \"+bitDepth());"
+      },
+      "output": false,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[print(i+\": \"+getTitle()+\" \"+getWidth()+\"x\"+getHeight()+\" \"+bitDepth());]",
+      "log": ["0: a.tif 16x12 8", "1: b.tif 16x12 8", "2: c.tif 16x12 8"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/no-output-log/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "new-image-output": {
+      "input": "batch/new-image-output/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Duplicate...\", \"title=dup\");\nrun(\"Invert\");\nprint(getTitle()+\" \"+nImages);"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[run(\"Duplicate...\", \"title=dup\");\nrun(\"Invert\");\nprint(getTitle()+\" \"+nImages);]",
+      "log": ["dup 2", "dup 2", "dup 2"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "c9c23bb1d2879f88a07dc527cc1f288d7c1709b2ce38db5859f5222905c9db48",
+          "size": 428,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "b.tif": {
+          "sha256": "882f0717fd4882cf43a010bf77fd6a7b608497af90925b4b5fc9157e49af212a",
+          "size": 428,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "32c4a14443b4497a873b469715453ad55c1e65198462346f7160a191c4a4ba26"}
+        },
+        "c.tif": {
+          "sha256": "6d1e82a4375fd8d5f923e6c502f2713ccb16dc9fb9f09963245b92954ae7e21e",
+          "size": 428,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "3cf9067bb85a01f1722ccfcae8cd49758a7aeb7d217c420f791e0ccc17413f4e"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/new-image-output/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "new-image-close": {
+      "input": "batch/new-image-close/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Duplicate...\", \"title=dup\");\nrun(\"Invert\");\nclose();"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[run(\"Duplicate...\", \"title=dup\");\nrun(\"Invert\");\nclose();]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "ee71e3b072f38d7589a72a6b065309efd00c4964bf16f43954db3366370edd78",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "31ec0db608008be9e928ccffe350c91b68f78f034035a60f0c7649c1fc6aa841"}
+        },
+        "b.tif": {
+          "sha256": "adf8a327473ba5af8f6624ea28f787cb6656b40035d9e2771b2418ca8dffd09c",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "cb6a5a7719090a91f1b3589683dc86dc2db9864426670a3de71139fbc1d861b7"}
+        },
+        "c.tif": {
+          "sha256": "93059a6cfb4aa531c792e3e1344b93aedd5524ef7c955a615c034d8528eaa53d",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "ebd87ad36a59281cd021a20f1102cf3755064154ba1158a017f0a3437ec53e10"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/new-image-close/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "save-batch-output-false": {
+      "input": "batch/save-batch-output-false/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "setOption(\"SaveBatchOutput\", i!=1);\nrun(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[setOption(\"SaveBatchOutput\", i!=1);\nrun(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "7ba15023c3eaecbee17368cbeefdba6782d80a8e09aac884c6381eee5a7a3823",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "c.tif": {
+          "sha256": "f80283a51b18141f32f77bb1aa950f1d49e695c10d84d9422d4e2efbe469eeb4",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "3cf9067bb85a01f1722ccfcae8cd49758a7aeb7d217c420f791e0ccc17413f4e"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/save-batch-output-false/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "8bit-tiff-from-16": {
+      "input": "batch/8bit-tiff-from-16/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif16", "seed": 1},
+        {"name": "b.tif", "kind": "tif16", "seed": 2},
+        {"name": "c.tif", "kind": "rgb", "seed": 3}
+      ],
+      "options": {
+        "output_format": "8-bit TIFF",
+        "file": "",
+        "code": "run(\"Add...\", \"value=7\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=[8-bit TIFF] file=[] text1=[run(\"Add...\", \"value=7\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "0854b8afdd016fd70470ba2001f90019f2ac7a9c78d1d6ae134bd049b41b51a0",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "cffe69bc47e73c122b47bae7b72f047872def3a1692428bfe4d3719545573743"}
+        },
+        "b.tif": {
+          "sha256": "0854b8afdd016fd70470ba2001f90019f2ac7a9c78d1d6ae134bd049b41b51a0",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "cffe69bc47e73c122b47bae7b72f047872def3a1692428bfe4d3719545573743"}
+        },
+        "c.tif": {
+          "sha256": "5201de18b1b96e9f7841d95fb2a776b3e968e3d4c705a33f57c69fc88e5c6ae4",
+          "size": 1915,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "cfb820c00b9d8c5dd08b545560a093223f266d795fae9fb6189d0e9e7ffe071a"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/8bit-tiff-from-16/in/",
+        "batch.output": "<output>/",
+        "batch.format": "8-bit TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "8bit-tiff-output-image": {
+      "input": "batch/8bit-tiff-output-image/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif16", "seed": 1}
+      ],
+      "options": {
+        "output_format": "8-bit TIFF",
+        "file": "",
+        "code": "run(\"Duplicate...\", \"title=d\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "note": "8-bit conversion applies to the input image, the saved image is the duplicate (still 16-bit)",
+      "optionString": "output_format=[8-bit TIFF] file=[] text1=[run(\"Duplicate...\", \"title=d\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "7b33ba8bc8ad0955d3fed8be30f18d52d25c6e535d64f0ba588a00b24ff73fa8",
+          "size": 643,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 16, "sha256": "ac1a791ec487092dcc408280db4381c71345fa47b0669744df8bd286e2eb5c2f"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/8bit-tiff-output-image/in/",
+        "batch.output": "<output>/",
+        "batch.format": "8-bit TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "png-extension": {
+      "input": "batch/png-extension/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif16", "seed": 2},
+        {"name": "c.tif", "kind": "rgb", "seed": 3}
+      ],
+      "options": {
+        "output_format": "PNG",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=PNG file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.png": {
+          "sha256": "fea9fd44b21087acdddcd3054f7684861b2bb40fcd4aa7dd67acee3074053499",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "b.png": {
+          "sha256": "12fe3ddd5a9886061982d7a61958ad0ec6d76afde36264efbe1cd000cb467b26",
+          "size": 464,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 16, "sha256": "b18cb770b7d6abb59003f71ad5a69015e8f61a75383930c5f67ad88a937b4006"}
+        },
+        "c.png": {
+          "sha256": "93595f4cb55c081c666bd6c8e01d171bb2f4f1aad84429c921eed19ebd92a24e",
+          "size": 590,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 24, "sha256": "66630f4d448f6f26583ea6d3b30ede9d32b3d0a2327e19dd776520fc2cc2e356"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/png-extension/in/",
+        "batch.output": "<output>/",
+        "batch.format": "PNG",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "jpeg": {
+      "input": "batch/jpeg/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "c.tif", "kind": "rgb", "seed": 3}
+      ],
+      "options": {
+        "output_format": "JPEG",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=JPEG file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.jpg": {
+          "sha256": "0e49ba1f404adef27c99b1f9600ea6ed7b3d1ae6e46f0a68253d872a75f2dab3",
+          "size": 429,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "bc797ccb34de224d16f50fcb2b4c939fad9537c4e38179a9679ca58da0a26c88"}
+        },
+        "c.jpg": {
+          "sha256": "f7199f429b0a10d0a81e58ce28217648d1980edb1a96420adc05856bbdcf849d",
+          "size": 718,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 24, "sha256": "6789d27740adc1f69e3daf4618993e37704f2590c8b5f803fd0a7e005b0d36d3"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/jpeg/in/",
+        "batch.output": "<output>/",
+        "batch.format": "JPEG",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "text-image": {
+      "input": "batch/text-image/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "f.tif", "kind": "tif32", "seed": 2}
+      ],
+      "options": {
+        "output_format": "Text Image",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=[Text Image] file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.txt": {
+          "sha256": "828700c9921c36fa8f7f7b02e47ed96e27e65cdc294a45d0bb1c0691494d8ed7",
+          "size": 678,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 32, "sha256": "07c8adcc1b89cc54d80bd30ac8f1cdea8b73b4640eb361e106d395db38cc68a8"}
+        },
+        "f.txt": {
+          "sha256": "b24d3b00f123e68e93173915bb0a6c96a0dcf252ac58325a3d1a19f6ff7ce26f",
+          "size": 1276,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 32, "sha256": "4d72473292602e04e4cd721f9942e1596c6b0523acd1447422b80020b8901d5c"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "f.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/text-image/in/",
+        "batch.output": "<output>/",
+        "batch.format": "Text Image",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "zip": {
+      "input": "batch/zip/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1}
+      ],
+      "options": {
+        "output_format": "ZIP",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=ZIP file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.zip": {
+          "sha256": "c35b43062b5123d4c1dbe3be0feba69a1b96ae119da331174dcf2ef0dfd3b5a4",
+          "size": 407,
+          "reproducible": false,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/zip/in/",
+        "batch.output": "<output>/",
+        "batch.format": "ZIP",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "raw": {
+      "input": "batch/raw/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif16", "seed": 1}
+      ],
+      "options": {
+        "output_format": "Raw",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=Raw file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {"sha256": "7378fd15e9e87dec2beb3f12635ab0b76b6f06fb2a181998e2a59caa951f81e2", "size": 384}
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/raw/in/",
+        "batch.output": "<output>/",
+        "batch.format": "Raw",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "tiff-32bit": {
+      "input": "batch/tiff-32bit/in",
+      "files": [
+        {"name": "f.tif", "kind": "tif32", "seed": 1}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Square\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[run(\"Square\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "f.tif": {
+          "sha256": "21d526ba7c4cefd29e01a36d34ea78f4e1eb777bb85f26a6a8e564e329c765ba",
+          "size": 959,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 32, "sha256": "9da27a3d65ffbe934f4549c7b3c8552dce1acfdbc396e430b8c9db33ec993fac"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["f.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/tiff-32bit/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "error-stops": {
+      "input": "batch/error-stops/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "if (i==1) x=undefinedVariable;\nrun(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[if (i==1) x=undefinedVariable;\nrun(\"Invert\");]",
+      "log": [],
+      "error": {
+        "message": "Undefined variable",
+        "line": 1,
+        "excerpt": "i = 1 ; if ( i == 1 ) x = <undefinedVariable> ; ",
+        "dialog": "Undefined variable in line 1\n \ni = 1 ; if ( i == 1 ) x = <undefinedVariable> ; "
+      },
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "7ba15023c3eaecbee17368cbeefdba6782d80a8e09aac884c6381eee5a7a3823",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/error-stops/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "exit-stops": {
+      "input": "batch/exit-stops/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "if (i==1) exit;\nrun(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[if (i==1) exit;\nrun(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "7ba15023c3eaecbee17368cbeefdba6782d80a8e09aac884c6381eee5a7a3823",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/exit-stops/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "index-values": {
+      "input": "batch/index-values/in",
+      "files": [
+        {"name": ".hidden.tif", "kind": "tif8", "seed": 1},
+        {"name": "sub", "kind": "dir", "seed": 0},
+        {"name": "notes.txt", "kind": "txt", "seed": 0},
+        {"name": "x.avi", "kind": "bytes", "seed": 0},
+        {"name": "Thumbs.db", "kind": "bytes", "seed": 0},
+        {"name": "a.tif", "kind": "tif8", "seed": 2},
+        {"name": "b.png", "kind": "png", "seed": 3},
+        {"name": "junk.bin", "kind": "bytes", "seed": 0}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "print(\"i=\"+i+\" \"+getTitle());"
+      },
+      "output": false,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[print(\"i=\"+i+\" \"+getTitle());]",
+      "log": ["i=0 a.tif", "i=1 b.png", "Opener: Unsupported format or file not found:", "<input>/junk.bin", "openImage() and openUsingBioFormats() returned null: <input>/junk.bin", "i=2 notes.txt"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a.tif", "b.png", "notes.txt"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/index-values/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "sort-order": {
+      "input": "batch/sort-order/in",
+      "files": [
+        {"name": "b10.tif", "kind": "tif8", "seed": 1},
+        {"name": "b2.tif", "kind": "tif8", "seed": 2},
+        {"name": "B1.tif", "kind": "tif8", "seed": 3},
+        {"name": "a.tif", "kind": "tif8", "seed": 4},
+        {"name": "_c.tif", "kind": "tif8", "seed": 5},
+        {"name": "Z.tif", "kind": "tif8", "seed": 6}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "print(i+\" \"+getTitle());"
+      },
+      "output": false,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[print(i+\" \"+getTitle());]",
+      "log": ["0 B1.tif", "1 Z.tif", "2 _c.tif", "3 a.tif", "4 b10.tif", "5 b2.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["B1.tif", "Z.tif", "_c.tif", "a.tif", "b10.tif", "b2.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/sort-order/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "snippet-crop": {
+      "input": "batch/snippet-crop/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "makeRectangle(getWidth/4, getHeight/4, getWidth/2, getHeight/2);\nrun(\"Crop\");\n"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[makeRectangle(getWidth/4, getHeight/4, getWidth/2, getHeight/2);\nrun(\"Crop\");\n]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "f4e8e23044d8b59f808d28e2c085d585f6b2b5ad9035e12f6c333fb366b83cd9",
+          "size": 208,
+          "pixels": {"width": 8, "height": 6, "bitDepth": 8, "sha256": "35beab9c3627a2c4d6179896999bcfdc20a8b16c50dcf2435fb2f038abf9cbf6"}
+        },
+        "b.tif": {
+          "sha256": "88df8f55a8d5e2d0b5ab285ab92c970e1da0cb398d13c8f4781fbac5223143e6",
+          "size": 208,
+          "pixels": {"width": 8, "height": 6, "bitDepth": 8, "sha256": "1da0a2886de3089d83f1812b32ef18b318d2ed758abd21f312446f150833e5e2"}
+        },
+        "c.tif": {
+          "sha256": "c168d7e3e4c10c5426369fa4625d7da4669db6ccd7cbd3574edeb7bc8d0c30a1",
+          "size": 208,
+          "pixels": {"width": 8, "height": 6, "bitDepth": 8, "sha256": "26f492e86be69e844b97ec38814e07fb5db010417f68cd6e9cea626fce686c7a"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/snippet-crop/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "snippet-add-border": {
+      "input": "batch/snippet-add-border/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "border=25;\nw=getWidth+border*2; h=getHeight+border*2;\nrun(\"Canvas Size...\", \"width=w height=h position=Center zero\");\n"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[border=25;\nw=getWidth+border*2; h=getHeight+border*2;\nrun(\"Canvas Size...\", \"width=w height=h position=Center zero\");\n]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "67ad3c7b698a681ff305eb644b453d28b39d594a5378e04f5ffc03e8f6adaaa4",
+          "size": 4252,
+          "pixels": {"width": 66, "height": 62, "bitDepth": 8, "sha256": "d3ae04f7af421ad9b39bb6ccc20deaf3ec97bda526125a92ce47d2a175d8a4da"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/snippet-add-border/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "snippet-print-index": {
+      "input": "batch/snippet-print-index/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "if (i==0) print(\"\\\\Clear\"); print(IJ.pad(i,4)+\": \"+getTitle());\n"
+      },
+      "output": false,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[if (i==0) print(\"\\\\Clear\"); print(IJ.pad(i,4)+\": \"+getTitle());\n]",
+      "log": ["0000: a.tif", "0001: b.tif", "0002: c.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/snippet-print-index/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "batchmode-show": {
+      "input": "batch/batchmode-show/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "print(is(\"Batch Mode\")+\" \"+nImages+\" \"+getTitle()+\" \"+getInfo(\"image.filename\"));"
+      },
+      "output": false,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[print(is(\"Batch Mode\")+\" \"+nImages+\" \"+getTitle()+\" \"+getInfo(\"image.filename\"));]",
+      "log": ["1 1 a.tif a.tif", "1 1 b.tif b.tif", "1 1 c.tif c.tif"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/batchmode-show/in/",
+        "batch.output": "",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "selection-kept": {
+      "input": "batch/selection-kept/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "makeRectangle(2,2,4,4);\nrun(\"Invert\");"
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[makeRectangle(2,2,4,4);\nrun(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.tif": {
+          "sha256": "357e9514b21ed152e2642edef008784703c4c0d4781a4e99ecccb5fadd74446e",
+          "size": 524,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "6c639066e46797078606a1035c4df9f87140f15a4420b09beedaea9172f87a05"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/selection-kept/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "run-from-macro": {
+      "input": "batch/run-from-macro/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "PNG",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "runMacro",
+      "macro": "run(\"Macro... \", \"output_format=PNG file=[] text1=[run(\\\"Invert\\\");]\");\nprint(\"after batch\");",
+      "log": ["after batch"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.png": {
+          "sha256": "fea9fd44b21087acdddcd3054f7684861b2bb40fcd4aa7dd67acee3074053499",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "b.png": {
+          "sha256": "5801db11f6d0a44e2ed3202651e4b1f811a43678f8636fd62957db4bff285d03",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "32c4a14443b4497a873b469715453ad55c1e65198462346f7160a191c4a4ba26"}
+        },
+        "c.png": {
+          "sha256": "dc854adafe1e92fc6ded69f15f6f834f3f01686e7f2fd8cb514ffa16c6977153",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "3cf9067bb85a01f1722ccfcae8cd49758a7aeb7d217c420f791e0ccc17413f4e"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/run-from-macro/in/",
+        "batch.output": "<output>/",
+        "batch.format": "PNG",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "stored-macro-default": {
+      "input": "batch/stored-macro-default/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": null,
+        "file": "",
+        "code": null
+      },
+      "output": true,
+      "mode": "macro",
+      "note": "options give only file=[]: the stored format (Prefs batch.format = PNG here) and macros/BatchMacro.ijm are used",
+      "storedMacro": "run(\"Invert\");\nprint(\"stored \"+i);\n",
+      "optionString": "file=[]",
+      "log": ["stored 0", "stored 1", "stored 2"],
+      "error": null,
+      "dialogs": [],
+      "outputs": {
+        "a.png": {
+          "sha256": "fea9fd44b21087acdddcd3054f7684861b2bb40fcd4aa7dd67acee3074053499",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "b.png": {
+          "sha256": "5801db11f6d0a44e2ed3202651e4b1f811a43678f8636fd62957db4bff285d03",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "32c4a14443b4497a873b469715453ad55c1e65198462346f7160a191c4a4ba26"}
+        },
+        "c.png": {
+          "sha256": "dc854adafe1e92fc6ded69f15f6f834f3f01686e7f2fd8cb514ffa16c6977153",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "3cf9067bb85a01f1722ccfcae8cd49758a7aeb7d217c420f791e0ccc17413f4e"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/stored-macro-default/in/",
+        "batch.output": "<output>/",
+        "batch.format": "PNG",
+        "BatchMacro.ijm": "run(\"Invert\");\nprint(\"stored \"+i);\n"
+      },
+      "openImagesAfter": []
+    },
+    "bad-input": {
+      "input": "batch/bad-input/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "badInput",
+      "optionString": "output_format=TIFF file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [
+        {"title": "Batch Processor", "text": "Input does not exist or is not a folder\n \n<input>/missing/"}
+      ],
+      "thrown": "java.lang.RuntimeException: Macro canceled",
+      "outputs": {},
+      "processed": {
+        "from": "none",
+        "names": []
+      },
+      "storedAfter": {
+        "batch.input": "batch/bad-input/in/missing/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "bad-output": {
+      "input": "batch/bad-output/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "badOutput",
+      "optionString": "output_format=TIFF file=[] text1=[run(\"Invert\");]",
+      "log": [],
+      "error": null,
+      "dialogs": [
+        {"title": "Batch Processor", "text": "Output does not exist or is not a folder\n \n<output>/missing/"}
+      ],
+      "thrown": "java.lang.RuntimeException: Macro canceled",
+      "outputs": {},
+      "processed": {
+        "from": "none",
+        "names": []
+      },
+      "storedAfter": {
+        "batch.input": "batch/bad-output/in/",
+        "batch.output": "<output>/missing/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "no-code": {
+      "input": "batch/no-code/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": ""
+      },
+      "output": true,
+      "mode": "macro",
+      "optionString": "output_format=TIFF file=[] text1=[]",
+      "log": [],
+      "error": null,
+      "dialogs": [
+        {"title": "Batch Processor", "text": "There is no macro code in the text area"}
+      ],
+      "thrown": "java.lang.RuntimeException: Macro canceled",
+      "outputs": {},
+      "processed": {
+        "from": "none",
+        "names": []
+      },
+      "storedAfter": {
+        "batch.input": "batch/no-code/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": []
+    },
+    "recorded": {
+      "input": "batch/recorded/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Invert\");"
+      },
+      "output": true,
+      "mode": "operator",
+      "log": [],
+      "error": null,
+      "dialogs": [],
+      "recorded": "run(\"Macro... \", \"output_format=TIFF file=[] text1=run(\\\"Invert\\\");\");\n",
+      "outputs": {
+        "a.tif": {
+          "sha256": "7ba15023c3eaecbee17368cbeefdba6782d80a8e09aac884c6381eee5a7a3823",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"}
+        },
+        "b.tif": {
+          "sha256": "65f3ac775db6d690778456e87c352859b21da46aea6447eed88d3462731cf4cc",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "32c4a14443b4497a873b469715453ad55c1e65198462346f7160a191c4a4ba26"}
+        },
+        "c.tif": {
+          "sha256": "f80283a51b18141f32f77bb1aa950f1d49e695c10d84d9422d4e2efbe469eeb4",
+          "size": 352,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "3cf9067bb85a01f1722ccfcae8cd49758a7aeb7d217c420f791e0ccc17413f4e"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["a.tif", "b.tif", "c.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/recorded/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": "run(\"Invert\");"
+      },
+      "openImagesAfter": []
+    },
+    "recorded-filter": {
+      "input": "batch/recorded-filter/in",
+      "files": [
+        {"name": "a.tif", "kind": "tif8", "seed": 1},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "c.tif", "kind": "tif8", "seed": 3}
+      ],
+      "options": {
+        "output_format": "PNG",
+        "file": "b",
+        "code": "run(\"Invert\");\nprint(i);"
+      },
+      "output": true,
+      "mode": "operator",
+      "log": ["0"],
+      "error": null,
+      "dialogs": [],
+      "recorded": "run(\"Macro... \", \"output_format=PNG file=b text1=run(\\\"Invert\\\");\\nprint(i);\");\n",
+      "outputs": {
+        "b.png": {
+          "sha256": "5801db11f6d0a44e2ed3202651e4b1f811a43678f8636fd62957db4bff285d03",
+          "size": 272,
+          "pixels": {"width": 16, "height": 12, "bitDepth": 8, "sha256": "32c4a14443b4497a873b469715453ad55c1e65198462346f7160a191c4a4ba26"}
+        }
+      },
+      "processed": {
+        "from": "outputs",
+        "names": ["b.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/recorded-filter/in/",
+        "batch.output": "<output>/",
+        "batch.format": "PNG",
+        "BatchMacro.ijm": "run(\"Invert\");\nprint(i);"
+      },
+      "openImagesAfter": []
+    },
+    "test-button": {
+      "input": "batch/test-button/in",
+      "files": [
+        {"name": ".DS_Store", "kind": "bytes", "seed": 0},
+        {"name": "b.tif", "kind": "tif8", "seed": 2},
+        {"name": "a.tif", "kind": "tif8", "seed": 1}
+      ],
+      "options": {
+        "output_format": "TIFF",
+        "file": "",
+        "code": "run(\"Invert\");\nprint(\"test \"+i+\" \"+getTitle());"
+      },
+      "output": true,
+      "mode": "test",
+      "log": ["test 0 a.tif"],
+      "error": null,
+      "dialogs": [],
+      "recorded": "run(\"Macro... \");\n",
+      "asyncActivationStripped": ["selectImage(\"a.tif\");"],
+      "testImage": {
+        "title": "a.tif",
+        "width": 16,
+        "height": 12,
+        "bitDepth": 8,
+        "sha256": "1cbe729185a04f1dcdef61c31ebb68ded39765ca6e2b9126dd59e3fa18fb30c1"
+      },
+      "outputs": {},
+      "processed": {
+        "from": "log",
+        "names": ["a.tif"]
+      },
+      "storedAfter": {
+        "batch.input": "batch/test-button/in/",
+        "batch.output": "<output>/",
+        "batch.format": "TIFF",
+        "BatchMacro.ijm": null
+      },
+      "openImagesAfter": ["a.tif"]
+    }
+  }
+}

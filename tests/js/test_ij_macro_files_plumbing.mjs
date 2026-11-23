@@ -96,9 +96,9 @@ function readPng(u8) {
 await test('loading: PACKAGE_PRE = language + file system, one importScripts call before ij-proc-macro.js; plugin.json lists ij-macro-vfs.js before ij-proc-macro.js', async () => {
   const t = await bootF();
   const A = t.IJApp;
-  deq(Array.from(A.PACKAGE_PRE.macro), ['ij-macro-lang.js', 'ij-macro-vfs.js']);
+  deq(Array.from(A.PACKAGE_PRE.macro), ['ij-macro-lang.js', 'ij-macro-vfs.js', 'ij-macro-params.js', 'ij-macro-math.js']);
   const mac = A.workerInit({ fileUrl: (f) => 'u:' + f }).packages.find((p) => p.pkg === 'macro');
-  deq(mac.pre, ['u:ij-macro-lang.js', 'u:ij-macro-vfs.js']);
+  deq(mac.pre, ['u:ij-macro-lang.js', 'u:ij-macro-vfs.js', 'u:ij-macro-params.js', 'u:ij-macro-math.js']);
   const w = await t.spawn();
   assert.equal(t.failedPackages().size, 0, 'no package failed');
   assert.equal(w.far.__vfsLoaded, true, 'the file system ran in the worker');

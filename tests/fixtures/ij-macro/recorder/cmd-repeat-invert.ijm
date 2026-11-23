@@ -1,0 +1,2 @@
+run("Invert");
+run("Invert");

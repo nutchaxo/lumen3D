@@ -1,0 +1,2748 @@
+{
+  "imagej": "1.54p",
+  "generator": "tools/ij_fixtures/macro/RecorderGolden.java",
+  "note": "text = the Recorder's whole text after the actions (the setup's own lines cleared first); lines = text split at newlines (a line ImageJ writes without its newline joins the next one, as in the text). Recorder state is fresh for each case (no foreground / background / black-background line written yet). setup.images fills: see fills; actions use the Studio tool ids and ImageJ command names; values are keyed by the dialog's label (ImageJ's own text); <dir> = the folder of the file cases (forward slashes, Recorder.fixPath), a granted folder's vpath in the Studio",
+  "fills": {
+    "ramp": "8-bit (x + 2*y + 30*z + 60*c) & 255; 16-bit (150*x + 37*y + 5000*z + 900*c) % 65536; 32-bit 0.125*x - 0.03125*y + z + 0.5*c",
+    "squares": "0, except 200 in x 40..99 / y 30..79 and 120 in x 120..159 / y 60..99 (16-bit x100, 32-bit x0.05)",
+    "black": "0"
+  },
+  "cases": {
+    "rect": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[20, 30], [90, 80]],
+          "action": "draw"
+        }
+      ],
+      "text": "makeRectangle(20, 30, 70, 50);\n",
+      "lines": ["makeRectangle(20, 30, 70, 50);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "rect-move": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[20, 30], [90, 80]],
+          "action": "draw"
+        },
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[50, 50], [70, 60]],
+          "action": "move"
+        }
+      ],
+      "text": "makeRectangle(20, 30, 70, 50);\nmakeRectangle(40, 40, 70, 50);\n",
+      "lines": ["makeRectangle(20, 30, 70, 50);", "makeRectangle(40, 40, 70, 50);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "rect-resize": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[20, 30], [90, 80]],
+          "action": "draw"
+        },
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[90, 80], [120, 100]],
+          "action": "resize"
+        }
+      ],
+      "text": "makeRectangle(20, 30, 70, 50);\nmakeRectangle(20, 30, 100, 70);\n",
+      "lines": ["makeRectangle(20, 30, 70, 50);", "makeRectangle(20, 30, 100, 70);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "oval": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "oval",
+          "points": [[30, 20], [110, 90]],
+          "action": "draw"
+        }
+      ],
+      "text": "makeOval(30, 20, 80, 70);\n",
+      "lines": ["makeOval(30, 20, 80, 70);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "oval-move": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "oval",
+          "points": [[30, 20], [110, 90]],
+          "action": "draw"
+        },
+        {
+          "do": "tool",
+          "tool": "oval",
+          "points": [[70, 55], [80, 65]],
+          "action": "move"
+        }
+      ],
+      "text": "makeOval(30, 20, 80, 70);\nmakeOval(40, 30, 80, 70);\n",
+      "lines": ["makeOval(30, 20, 80, 70);", "makeOval(40, 30, 80, 70);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "line": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "line",
+          "points": [[10, 20], [150, 100]],
+          "action": "draw"
+        }
+      ],
+      "text": "makeLine(10, 20, 150, 100);\n",
+      "lines": ["makeLine(10, 20, 150, 100);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "line-move": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "line",
+          "points": [[10, 20], [150, 100]],
+          "action": "draw"
+        },
+        {
+          "do": "tool",
+          "tool": "line",
+          "points": [[80, 60], [90, 70]],
+          "action": "move"
+        }
+      ],
+      "text": "makeLine(10, 20, 150, 100);\nmakeLine(20, 30, 160, 110);\n",
+      "lines": ["makeLine(10, 20, 150, 100);", "makeLine(20, 30, 160, 110);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "line-width5": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "lineWidth", "width": 5},
+        {
+          "do": "tool",
+          "tool": "line",
+          "points": [[10, 20], [150, 100]],
+          "action": "draw"
+        }
+      ],
+      "text": "run(\"Line Width...\", \"line=5\");\nmakeLine(10, 20, 150, 100);\n",
+      "lines": ["run(\"Line Width...\", \"line=5\");", "makeLine(10, 20, 150, 100);"],
+      "driven": "line width: Edit > Options > Line Width... through Executer, its dialog answered; selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "polyline": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "polyline",
+          "points": [[10, 10], [60, 40], [100, 20], [140, 90]],
+          "action": "draw"
+        }
+      ],
+      "text": "makeLine(10,10,60,40,100,20,140,90);\n",
+      "lines": ["makeLine(10,10,60,40,100,20,140,90);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "polygon": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "polygon",
+          "points": [[20, 20], [120, 30], [100, 110], [30, 90]],
+          "action": "draw"
+        }
+      ],
+      "text": "makePolygon(20,20,120,30,100,110,30,90);\n",
+      "lines": ["makePolygon(20,20,120,30,100,110,30,90);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "polygon-move": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "polygon",
+          "points": [[20, 20], [120, 30], [100, 110], [30, 90]],
+          "action": "draw"
+        },
+        {
+          "do": "tool",
+          "tool": "polygon",
+          "points": [[70, 60], [80, 70]],
+          "action": "move"
+        }
+      ],
+      "text": "makePolygon(20,20,120,30,100,110,30,90);\n",
+      "lines": ["makePolygon(20,20,120,30,100,110,30,90);"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)",
+      "note": "the move of a polygon adds nothing (only the construction is recorded)"
+    },
+    "freehand": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "freehand",
+          "points": [[20, 20], [60, 25], [90, 60], [70, 100], [30, 80]],
+          "action": "draw"
+        }
+      ],
+      "text": "",
+      "lines": [],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "angle": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "angle",
+          "points": [[20, 100], [80, 40], [150, 90]],
+          "action": "draw"
+        }
+      ],
+      "text": "makeSelection(\"angle\",newArray(20,80,150),newArray(100,40,90));\n",
+      "lines": ["makeSelection(\"angle\",newArray(20,80,150),newArray(100,40,90));"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "point": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "point",
+          "points": [[42, 37]],
+          "action": "draw"
+        }
+      ],
+      "text": "makePoint(42, 37, \"small yellow hybrid\");\n",
+      "lines": ["makePoint(42, 37, \"small yellow hybrid\");"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "point-shift-add": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "point",
+          "points": [[42, 37]],
+          "action": "draw"
+        },
+        {
+          "do": "tool",
+          "tool": "point",
+          "points": [[100, 80]],
+          "action": "draw",
+          "shift": true
+        }
+      ],
+      "text": "makePoint(42, 37, \"small yellow hybrid\");\n",
+      "lines": ["makePoint(42, 37, \"small yellow hybrid\");"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)"
+    },
+    "wand-8-tol0": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "wandOptions", "tolerance": 0, "connectivity": 8}
+        ]
+      },
+      "actions": [
+        {"do": "wand", "x": 60, "y": 50, "tolerance": 0, "connectivity": 8}
+      ],
+      "text": "doWand(60, 50, 0.0, \"8-connected\");\n",
+      "lines": ["doWand(60, 50, 0.0, \"8-connected\");"],
+      "driven": "wand: Wand Tool options set before the case, Toolbar.setTool(WAND), a click dispatched to the ImageCanvas"
+    },
+    "wand-4-tol10": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "wandOptions", "tolerance": 10, "connectivity": 4}
+        ]
+      },
+      "actions": [
+        {"do": "wand", "x": 130, "y": 70, "tolerance": 10, "connectivity": 4}
+      ],
+      "text": "doWand(130, 70, 10.0, \"4-connected\");\n",
+      "lines": ["doWand(130, 70, 10.0, \"4-connected\");"],
+      "driven": "wand: Wand Tool options set before the case, Toolbar.setTool(WAND), a click dispatched to the ImageCanvas"
+    },
+    "activate": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "black"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "activate", "title": "b"}
+      ],
+      "text": "selectImage(\"b\");\n",
+      "lines": ["selectImage(\"b\");"],
+      "driven": "activation: WindowManager.setCurrentWindow(window), what ImageWindow.windowActivated calls when the operator clicks a window"
+    },
+    "activate-back": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "black"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "activate", "title": "b"},
+        {"do": "activate", "title": "a"}
+      ],
+      "text": "selectImage(\"b\");\nselectImage(\"a\");\n",
+      "lines": ["selectImage(\"b\");", "selectImage(\"a\");"],
+      "driven": "activation: WindowManager.setCurrentWindow(window), what ImageWindow.windowActivated calls when the operator clicks a window"
+    },
+    "window-results": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "command", "name": "Measure"}
+        ]
+      },
+      "actions": [
+        {"do": "window", "title": "Results"}
+      ],
+      "text": "selectWindow(\"Results\");\n",
+      "lines": ["selectWindow(\"Results\");"],
+      "driven": "Window menu: WindowManager.activateWindow(label, item), the handler of the Window menu's rows (package-private, by reflection)"
+    },
+    "choose-tool-oval": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "chooseTool", "tool": "oval"}
+      ],
+      "text": "//setTool(\"oval\");\n",
+      "lines": ["//setTool(\"oval\");"],
+      "driven": "tool choice: Toolbar.setTool(id) on the shown toolbar (the toolbar click path)"
+    },
+    "choose-tool-several": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "chooseTool", "tool": "polygon"},
+        {"do": "chooseTool", "tool": "wand"},
+        {"do": "chooseTool", "tool": "hand"},
+        {"do": "chooseTool", "tool": "rect"}
+      ],
+      "text": "//setTool(\"polygon\");\n//setTool(\"wand\");\n//setTool(\"hand\");\n//setTool(\"rectangle\");\n",
+      "lines": ["//setTool(\"polygon\");", "//setTool(\"wand\");", "//setTool(\"hand\");", "//setTool(\"rectangle\");"],
+      "driven": "tool choice: Toolbar.setTool(id) on the shown toolbar (the toolbar click path)"
+    },
+    "thr-open-8bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-method-otsu-dark": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "method", "method": "Otsu"},
+        {"do": "threshold", "op": "dark", "dark": true}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetAutoThreshold(\"Otsu no-reset\");\nsetAutoThreshold(\"Otsu dark no-reset\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setAutoThreshold(\"Otsu no-reset\");", "setAutoThreshold(\"Otsu dark no-reset\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-set-8bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "set", "lower": "50", "upper": "150"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetThreshold(50, 150, \"raw\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setThreshold(50, 150, \"raw\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-set-16bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 16, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "set", "lower": "1000", "upper": "20000"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetThreshold(1000, 20000, \"raw\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setThreshold(1000, 20000, \"raw\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-set-32bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 32, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "set", "lower": "0.5", "upper": "10.25"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetThreshold(0.5000, 10.2500);\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setThreshold(0.5000, 10.2500);"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-reset": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "reset"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nresetThreshold;\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "resetThreshold;"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-auto": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "set", "lower": "50", "upper": "150"},
+        {"do": "threshold", "op": "auto"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetThreshold(50, 150, \"raw\");\nsetAutoThreshold(\"Default no-reset\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setThreshold(50, 150, \"raw\");", "setAutoThreshold(\"Default no-reset\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-mode-bw": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "mode", "mode": "B&W"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\ncall(\"ij.plugin.frame.ThresholdAdjuster.setMode\", \"B&W\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "call(\"ij.plugin.frame.ThresholdAdjuster.setMode\", \"B&W\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-apply-8bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "apply"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\n//setThreshold(0, 160);\nsetOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "//setThreshold(0, 160);", "setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-apply-8bit-set": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "set", "lower": "100", "upper": "255"},
+        {"do": "threshold", "op": "apply"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetThreshold(100, 255, \"raw\");\n//setThreshold(100, 255);\nsetOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setThreshold(100, 255, \"raw\");", "//setThreshold(100, 255);", "setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-apply-16bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 16, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "apply"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "thr-apply-32bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 32, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "threshold", "op": "open"},
+        {"do": "threshold", "op": "apply", "answer": "Convert to Mask"}
+      ],
+      "text": "setAutoThreshold(\"Default no-reset\");\n//run(\"Threshold...\");\nsetOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\n",
+      "lines": ["setAutoThreshold(\"Default no-reset\");", "//run(\"Threshold...\");", "setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");"],
+      "driven": "Threshold window: Image > Adjust > Threshold... through Executer; its buttons / choices / check boxes by dispatched AWT events"
+    },
+    "bc-open": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"}
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\n",
+      "lines": ["//run(\"Brightness/Contrast...\");"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered"
+    },
+    "bc-set-8bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"},
+        {"do": "bc", "op": "set", "min": "10", "max": "200"}
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\nsetMinAndMax(10, 200);\n",
+      "lines": ["//run(\"Brightness/Contrast...\");", "setMinAndMax(10, 200);"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered"
+    },
+    "bc-set-16bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 16, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"},
+        {"do": "bc", "op": "set", "min": "100", "max": "30000"}
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\nsetMinAndMax(100, 30000);\n",
+      "lines": ["//run(\"Brightness/Contrast...\");", "setMinAndMax(100, 30000);"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered"
+    },
+    "bc-set-32bit-fraction": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 32, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"},
+        {"do": "bc", "op": "set", "min": "0.25", "max": "7.5"},
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[20, 30], [90, 80]],
+          "action": "draw"
+        }
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\nsetMinAndMax(0.25, 7.50);makeRectangle(20, 30, 70, 50);\n",
+      "lines": ["//run(\"Brightness/Contrast...\");", "setMinAndMax(0.25, 7.50);makeRectangle(20, 30, 70, 50);"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered; selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released)",
+      "note": "ImageJ writes the fractional setMinAndMax without its newline: the next line follows on the same line"
+    },
+    "bc-reset": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"},
+        {"do": "bc", "op": "set", "min": "10", "max": "200"},
+        {"do": "bc", "op": "reset"}
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\nsetMinAndMax(10, 200);\nresetMinAndMax;\n",
+      "lines": ["//run(\"Brightness/Contrast...\");", "setMinAndMax(10, 200);", "resetMinAndMax;"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered"
+    },
+    "bc-auto": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"},
+        {"do": "bc", "op": "auto"}
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\nrun(\"Enhance Contrast\", \"saturated=0.35\");\n",
+      "lines": ["//run(\"Brightness/Contrast...\");", "run(\"Enhance Contrast\", \"saturated=0.35\");"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered"
+    },
+    "bc-apply-8bit": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "bc", "op": "open"},
+        {"do": "bc", "op": "set", "min": "10", "max": "200"},
+        {"do": "bc", "op": "apply", "confirm": "OK"}
+      ],
+      "text": "//run(\"Brightness/Contrast...\");\nsetMinAndMax(10, 200);\nrun(\"Apply LUT\");\n",
+      "lines": ["//run(\"Brightness/Contrast...\");", "setMinAndMax(10, 200);", "run(\"Apply LUT\");"],
+      "driven": "B&C window: Image > Adjust > Brightness/Contrast... through Executer; its buttons by dispatched ActionEvents, the Set dialog answered"
+    },
+    "rm-add": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"}
+        ]
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[20, 30], [90, 80]],
+          "action": "draw"
+        },
+        {"do": "rm", "op": "Add"}
+      ],
+      "text": "makeRectangle(20, 30, 70, 50);\nroiManager(\"Add\");\n",
+      "lines": ["makeRectangle(20, 30, 70, 50);", "roiManager(\"Add\");"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released); ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-select-one": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {
+          "do": "rm",
+          "op": "Select",
+          "indices": [0]
+        }
+      ],
+      "text": "roiManager(\"Select\", 0);\n",
+      "lines": ["roiManager(\"Select\", 0);"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-select-many": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {
+          "do": "rm",
+          "op": "Select",
+          "indices": [0, 1]
+        }
+      ],
+      "text": "roiManager(\"Select\", 0);\nroiManager(\"Select\", newArray(0,1));\n",
+      "lines": ["roiManager(\"Select\", 0);", "roiManager(\"Select\", newArray(0,1));"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents",
+      "note": "row 0 clicked, then row 1 added to the selection (Shift+click): ImageJ records each list change"
+    },
+    "rm-delete": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [1]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Delete"}
+      ],
+      "text": "roiManager(\"Delete\");\n",
+      "lines": ["roiManager(\"Delete\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-delete-none": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Delete", "confirm": "Yes"}
+      ],
+      "text": "roiManager(\"Delete\");\n",
+      "lines": ["roiManager(\"Delete\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents",
+      "note": "Delete with no row selected: ImageJ asks whether to delete all"
+    },
+    "rm-rename": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [0]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Rename", "name": "first"}
+      ],
+      "text": "roiManager(\"Rename\", \"first\");\n",
+      "lines": ["roiManager(\"Rename\", \"first\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-measure": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Measure"}
+      ],
+      "text": "roiManager(\"Measure\");\n",
+      "lines": ["roiManager(\"Measure\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-deselect": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [0]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Deselect"}
+      ],
+      "text": "roiManager(\"Deselect\");\n",
+      "lines": ["roiManager(\"Deselect\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-update": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [0]
+          }
+        ]
+      },
+      "actions": [
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[40, 40], [50, 45]],
+          "action": "move"
+        },
+        {"do": "rm", "op": "Update"}
+      ],
+      "text": "makeRectangle(30, 35, 70, 50);\nroiManager(\"Update\");\n",
+      "lines": ["makeRectangle(30, 35, 70, 50);", "roiManager(\"Update\");"],
+      "driven": "selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released); ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-show-all": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Show All"}
+      ],
+      "text": "roiManager(\"Show All\");\n",
+      "lines": ["roiManager(\"Show All\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-show-none": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {"do": "rm", "op": "Show All"}
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Show None"}
+      ],
+      "text": "roiManager(\"Show None\");\n",
+      "lines": ["roiManager(\"Show None\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-labels": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {"do": "rm", "op": "Show All"}
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Show All with labels"},
+        {"do": "rm", "op": "Show All without labels"}
+      ],
+      "text": "roiManager(\"Show All with labels\");\nroiManager(\"Show All without labels\");\n",
+      "lines": ["roiManager(\"Show All with labels\");", "roiManager(\"Show All without labels\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "rm-sort": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Sort"}
+      ],
+      "text": "roiManager(\"Sort\");\n",
+      "lines": ["roiManager(\"Sort\");"],
+      "driven": "ROI Manager More>> menu: RoiManager.actionPerformed with the menu item's label (the listener of the popup menu)"
+    },
+    "rm-or": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [0, 1]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "OR (Combine)"}
+      ],
+      "text": "roiManager(\"Combine\");\n",
+      "lines": ["roiManager(\"Combine\");"],
+      "driven": "ROI Manager More>> menu: RoiManager.actionPerformed with the menu item's label (the listener of the popup menu)"
+    },
+    "rm-and": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "rect", "x": 60, "y": 50, "width": 70, "height": 50}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [0, 1]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "AND"}
+      ],
+      "text": "roiManager(\"AND\");\n",
+      "lines": ["roiManager(\"AND\");"],
+      "driven": "ROI Manager More>> menu: RoiManager.actionPerformed with the menu item's label (the listener of the popup menu)"
+    },
+    "rm-fill": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "ROI Manager"},
+          {
+            "do": "rmAddRois",
+            "rois": [
+              {"type": "rect", "x": 20, "y": 30, "width": 70, "height": 50},
+              {"type": "oval", "x": 110, "y": 60, "width": 50, "height": 40}
+            ]
+          },
+          {
+            "do": "rm",
+            "op": "Select",
+            "indices": [0]
+          }
+        ]
+      },
+      "actions": [
+        {"do": "rm", "op": "Fill"}
+      ],
+      "text": "roiManager(\"Deselect\");\nroiManager(\"Fill\");\n",
+      "lines": ["roiManager(\"Deselect\");", "roiManager(\"Fill\");"],
+      "driven": "ROI Manager: its buttons by dispatched ActionEvents (RoiManager.actionPerformed), list rows by JList selection, check boxes by ItemEvents"
+    },
+    "close": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "black"}
+        ],
+        "current": "b",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Close"}
+      ],
+      "text": "close;\n",
+      "lines": ["close;"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"a\");"]
+    },
+    "cmd-invert": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Invert"}
+      ],
+      "text": "run(\"Invert\");\n",
+      "lines": ["run(\"Invert\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-fill-first": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {
+            "do": "setRoi",
+            "roi": {"type": "rect", "x": 10, "y": 10, "width": 40, "height": 30}
+          }
+        ]
+      },
+      "actions": [
+        {"do": "command", "name": "Fill"}
+      ],
+      "text": "setForegroundColor(255, 255, 255);\nrun(\"Fill\", \"slice\");\n",
+      "lines": ["setForegroundColor(255, 255, 255);", "run(\"Fill\", \"slice\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-fill-second": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {
+            "do": "setRoi",
+            "roi": {"type": "rect", "x": 10, "y": 10, "width": 40, "height": 30}
+          }
+        ]
+      },
+      "actions": [
+        {"do": "command", "name": "Fill"},
+        {"do": "command", "name": "Fill"}
+      ],
+      "text": "setForegroundColor(255, 255, 255);\nrun(\"Fill\", \"slice\");\nrun(\"Fill\", \"slice\");\n",
+      "lines": ["setForegroundColor(255, 255, 255);", "run(\"Fill\", \"slice\");", "run(\"Fill\", \"slice\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-draw": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {
+            "do": "setRoi",
+            "roi": {"type": "rect", "x": 10, "y": 10, "width": 40, "height": 30}
+          }
+        ]
+      },
+      "actions": [
+        {"do": "command", "name": "Draw"}
+      ],
+      "text": "setForegroundColor(255, 255, 255);\nrun(\"Draw\", \"slice\");\n",
+      "lines": ["setForegroundColor(255, 255, 255);", "run(\"Draw\", \"slice\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-clear": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {
+            "do": "setRoi",
+            "roi": {"type": "rect", "x": 10, "y": 10, "width": 40, "height": 30}
+          }
+        ]
+      },
+      "actions": [
+        {"do": "command", "name": "Clear"}
+      ],
+      "text": "setBackgroundColor(0, 0, 0);\nrun(\"Clear\", \"slice\");\n",
+      "lines": ["setBackgroundColor(0, 0, 0);", "run(\"Clear\", \"slice\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-clear-outside": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {
+            "do": "setRoi",
+            "roi": {"type": "rect", "x": 10, "y": 10, "width": 40, "height": 30}
+          }
+        ]
+      },
+      "actions": [
+        {"do": "command", "name": "Clear Outside"},
+        {"do": "command", "name": "Clear"}
+      ],
+      "text": "setBackgroundColor(0, 0, 0);\nrun(\"Clear Outside\");\nrun(\"Clear\", \"slice\");\n",
+      "lines": ["setBackgroundColor(0, 0, 0);", "run(\"Clear Outside\");", "run(\"Clear\", \"slice\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-convert-mask": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Convert to Mask"}
+      ],
+      "text": "setOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\n",
+      "lines": ["setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-make-binary-single": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Make Binary"}
+      ],
+      "text": "setOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\n",
+      "lines": ["setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-erode-after-mask": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Convert to Mask"},
+        {"do": "command", "name": "Erode"}
+      ],
+      "text": "setOption(\"BlackBackground\", false);\nrun(\"Convert to Mask\");\nrun(\"Erode\");\n",
+      "lines": ["setOption(\"BlackBackground\", false);", "run(\"Convert to Mask\");", "run(\"Erode\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-new-image-default": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Image..."}
+      ],
+      "text": "newImage(\"Untitled\", \"8-bit black\", 512, 512, 1);\n",
+      "lines": ["newImage(\"Untitled\", \"8-bit black\", 512, 512, 1);"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"Untitled\");"]
+    },
+    "cmd-new-image": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Image...",
+          "values": {"name": "fresh", "width": "64", "height": "48"},
+          "fieldLabels": {"Name:": "fresh", "Width:": "64", "Height:": "48"}
+        }
+      ],
+      "text": "newImage(\"fresh\", \"8-bit black\", 64, 48, 1);\n",
+      "lines": ["newImage(\"fresh\", \"8-bit black\", 64, 48, 1);"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"fresh\");"]
+    },
+    "cmd-image-calculator": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Image Calculator...",
+          "values": {"image1": "a", "operation": "Subtract", "image2": "b", "create": true, "32-bit": false},
+          "fieldLabels": {"Image1:": "a", "Operation:": "Subtract", "Image2:": "b", "Create new window": true, "32-bit (float) result": false}
+        }
+      ],
+      "text": "imageCalculator(\"Subtract create\", \"a\",\"b\");\n",
+      "lines": ["imageCalculator(\"Subtract create\", \"a\",\"b\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"Result of a\");"]
+    },
+    "cmd-image-calculator-32": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "squares"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Image Calculator...",
+          "values": {"image1": "b", "operation": "Divide", "image2": "a", "create": true, "32-bit": true},
+          "fieldLabels": {"Image1:": "b", "Operation:": "Divide", "Image2:": "a", "Create new window": true, "32-bit (float) result": true}
+        }
+      ],
+      "text": "imageCalculator(\"Divide create 32-bit\", \"b\",\"a\");\n",
+      "lines": ["imageCalculator(\"Divide create 32-bit\", \"b\",\"a\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"Result of b\");"]
+    },
+    "cmd-rename": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Rename...",
+          "values": {"title": "my \"new\" name"},
+          "fieldLabels": {"Title:": "my \"new\" name"}
+        }
+      ],
+      "text": "rename(\"my \\\"new\\\" name\");\n",
+      "lines": ["rename(\"my \\\"new\\\" name\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-set-slice": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "st", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 3, "t": 1, "fill": "ramp"}
+        ],
+        "current": "st",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Set Slice...",
+          "values": {"slice": "2"},
+          "fieldLabels": {"Slice (1-3):": "2"}
+        }
+      ],
+      "text": "setSlice(2);\n",
+      "lines": ["setSlice(2);"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-duplicate-default": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Duplicate..."}
+      ],
+      "text": "run(\"Duplicate...\", \" \");\n",
+      "lines": ["run(\"Duplicate...\", \" \");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"a-1\");"]
+    },
+    "cmd-duplicate-title": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Duplicate...",
+          "values": {"title": "copy"},
+          "fieldLabels": {"Title:": "copy"}
+        }
+      ],
+      "text": "run(\"Duplicate...\", \"title=copy\");\n",
+      "lines": ["run(\"Duplicate...\", \"title=copy\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"copy\");"]
+    },
+    "cmd-duplicate-stack": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "st", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 3, "t": 1, "fill": "ramp"}
+        ],
+        "current": "st",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Duplicate..."}
+      ],
+      "text": "run(\"Duplicate...\", \" \");\n",
+      "lines": ["run(\"Duplicate...\", \" \");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "asyncActivationStripped": ["selectImage(\"st-1\");"]
+    },
+    "cmd-gaussian": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Gaussian Blur...",
+          "values": {"sigma": "3"},
+          "fieldLabels": {"Sigma (Radius):": "3"}
+        }
+      ],
+      "text": "run(\"Gaussian Blur...\", \"sigma=3\");\n",
+      "lines": ["run(\"Gaussian Blur...\", \"sigma=3\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-gaussian-stack-yes": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "st", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 3, "t": 1, "fill": "ramp"}
+        ],
+        "current": "st",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Gaussian Blur...",
+          "values": {"sigma": "2"},
+          "stack": "all",
+          "fieldLabels": {"Sigma (Radius):": "2"}
+        }
+      ],
+      "text": "run(\"Gaussian Blur...\", \"sigma=2 stack\");\n",
+      "lines": ["run(\"Gaussian Blur...\", \"sigma=2 stack\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-gaussian-stack-no": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "st", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 3, "t": 1, "fill": "ramp"}
+        ],
+        "current": "st",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Gaussian Blur...",
+          "values": {"sigma": "2"},
+          "stack": "current",
+          "fieldLabels": {"Sigma (Radius):": "2"}
+        }
+      ],
+      "text": "run(\"Gaussian Blur...\", \"sigma=2 slice\");\n",
+      "lines": ["run(\"Gaussian Blur...\", \"sigma=2 slice\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-invert-stack-yes": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "st", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 3, "t": 1, "fill": "ramp"}
+        ],
+        "current": "st",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Invert", "stack": "all"}
+      ],
+      "text": "run(\"Invert\", \"stack\");\n",
+      "lines": ["run(\"Invert\", \"stack\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-cancel": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Gaussian Blur...", "cancel": true}
+      ],
+      "text": "run(\"Gaussian Blur...\");\n",
+      "lines": ["run(\"Gaussian Blur...\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-repeat": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Gaussian Blur...",
+          "values": {"sigma": "1.5"},
+          "fieldLabels": {"Sigma (Radius):": "1.5"}
+        },
+        {"do": "command", "name": "Repeat Command"}
+      ],
+      "text": "run(\"Gaussian Blur...\", \"sigma=1.5\");\nrun(\"Gaussian Blur...\", \"sigma=1.50\");\n",
+      "lines": ["run(\"Gaussian Blur...\", \"sigma=1.5\");", "run(\"Gaussian Blur...\", \"sigma=1.50\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-repeat-invert": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Invert"},
+        {"do": "command", "name": "Repeat Command"}
+      ],
+      "text": "run(\"Invert\");\nrun(\"Invert\");\n",
+      "lines": ["run(\"Invert\");", "run(\"Invert\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-measure": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Measure"}
+      ],
+      "text": "run(\"Measure\");\n",
+      "lines": ["run(\"Measure\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-properties-units": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Properties...",
+          "values": {"": "micron", "pixel_width": "0.5", "pixel_height": "0.5"},
+          "fieldLabels": {"#text:4": "micron", "Pixel width:": "0.5", "Pixel height:": "0.5"}
+        }
+      ],
+      "text": "Stack.setXUnit(\"micron\");\nrun(\"Properties...\", \"channels=1 slices=1 frames=1 pixel_width=0.5 pixel_height=0.5 voxel_depth=0.5\");\n",
+      "lines": ["Stack.setXUnit(\"micron\");", "run(\"Properties...\", \"channels=1 slices=1 frames=1 pixel_width=0.5 pixel_height=0.5 voxel_depth=0.5\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-scale-bar": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 200, "height": 150, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "calibrate", "pixelWidth": 0.5, "pixelHeight": 0.5, "unit": "micron"}
+        ]
+      },
+      "actions": [
+        {"do": "command", "name": "Scale Bar..."}
+      ],
+      "text": "run(\"Scale Bar...\", \"width=20 height=20 horizontal bold overlay\");\n",
+      "lines": ["run(\"Scale Bar...\", \"width=20 height=20 horizontal bold overlay\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-8bit-from-16": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 16, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "8-bit"}
+      ],
+      "text": "setOption(\"ScaleConversions\", true);\nrun(\"8-bit\");\n",
+      "lines": ["setOption(\"ScaleConversions\", true);", "run(\"8-bit\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-add-value": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Add...",
+          "values": {"value": "25"},
+          "fieldLabels": {"Value:": "25"}
+        }
+      ],
+      "text": "run(\"Add...\", \"value=25\");\n",
+      "lines": ["run(\"Add...\", \"value=25\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-enhance-contrast": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Enhance Contrast..."}
+      ],
+      "text": "run(\"Enhance Contrast...\", \"saturated=0.35\");\n",
+      "lines": ["run(\"Enhance Contrast...\", \"saturated=0.35\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-non-ascii-title": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {
+          "do": "command",
+          "name": "Rename...",
+          "values": {"title": "été µm"},
+          "fieldLabels": {"Title:": "été µm"}
+        }
+      ],
+      "text": "rename(\"été µm\");\n",
+      "lines": ["rename(\"été µm\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-select-all": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Select All"},
+        {"do": "command", "name": "Select None"}
+      ],
+      "text": "run(\"Select All\");\nrun(\"Select None\");\n",
+      "lines": ["run(\"Select All\");", "run(\"Select None\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "cmd-put-behind": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "black"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Put Behind [tab]"}
+      ],
+      "text": "run(\"Put Behind [tab]\");\n",
+      "lines": ["run(\"Put Behind [tab]\");"],
+      "driven": "commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons"
+    },
+    "channels-mode": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "c3", "bitDepth": 8, "width": 64, "height": 48, "c": 3, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "c3",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "Channels"}
+        ]
+      },
+      "actions": [
+        {"do": "channels", "op": "mode", "mode": "color"}
+      ],
+      "text": "Property.set(\"CompositeProjection\", \"null\");\nStack.setDisplayMode(\"color\");\n",
+      "lines": ["Property.set(\"CompositeProjection\", \"null\");", "Stack.setDisplayMode(\"color\");"],
+      "driven": "Channels tool: its mode Choice and channel check boxes by dispatched ItemEvents"
+    },
+    "channels-active": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "c3", "bitDepth": 8, "width": 64, "height": 48, "c": 3, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "c3",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "Channels"}
+        ]
+      },
+      "actions": [
+        {"do": "channels", "op": "active", "channel": 2, "on": false}
+      ],
+      "text": "Stack.setActiveChannels(\"101\");\n",
+      "lines": ["Stack.setActiveChannels(\"101\");"],
+      "driven": "Channels tool: its mode Choice and channel check boxes by dispatched ItemEvents"
+    },
+    "channels-channel": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "c3", "bitDepth": 8, "width": 64, "height": 48, "c": 3, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "c3",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "Channels"},
+          {"do": "channels", "op": "mode", "mode": "color"}
+        ]
+      },
+      "actions": [
+        {"do": "channels", "op": "channel", "channel": 3}
+      ],
+      "text": "Stack.setChannel(3);\n",
+      "lines": ["Stack.setChannel(3);"],
+      "driven": "Channels tool: its mode Choice and channel check boxes by dispatched ItemEvents",
+      "note": "in Color mode a channel check box moves to that channel"
+    },
+    "file-open": {
+      "source": "Recorder.java",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Open...", "file": "in.tif"}
+      ],
+      "text": "open(\"<dir>/in.tif\");\n",
+      "lines": ["open(\"<dir>/in.tif\");"],
+      "driven": "not driven (format-only)",
+      "why": "File > Open shows the native picker (or JFileChooser), which cannot be driven; with the path given as macro options OpenDialog keeps no title (OpenDialog.java:36-60), so Recorder.recordPath(null, path) records nothing. After a pick, getFileName (:209-216) calls Recorder.recordPath(\"Open\", dir+name) -> options open=<path>; Recorder.saveCommand :585-586 then recordOpen(strip(options)) :484-498 writes open(\"<path>\"); with the path through fixPath (forward slashes)"
+    },
+    "file-saveas-tiff": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Tiff...", "file": "out.tif"}
+      ],
+      "text": "saveAs(\"Tiff\", \"<dir>/out.tif\");\n",
+      "lines": ["saveAs(\"Tiff\", \"<dir>/out.tif\");"],
+      "driven": "files: Executer on a Run$_ thread with Recorder.recordInMacros on and options naming the file (in place of the file picker)"
+    },
+    "file-saveas-png": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "PNG...", "file": "out.png"}
+      ],
+      "text": "saveAs(\"PNG\", \"<dir>/out.png\");\n",
+      "lines": ["saveAs(\"PNG\", \"<dir>/out.png\");"],
+      "driven": "files: Executer on a Run$_ thread with Recorder.recordInMacros on and options naming the file (in place of the file picker)"
+    },
+    "file-saveas-jpeg": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "command", "name": "Jpeg...", "file": "out.jpg"}
+      ],
+      "text": "saveAs(\"Jpeg\", \"<dir>/out.jpg\");\n",
+      "lines": ["saveAs(\"Jpeg\", \"<dir>/out.jpg\");"],
+      "driven": "files: Executer on a Run$_ thread with Recorder.recordInMacros on and options naming the file (in place of the file picker)"
+    },
+    "channels-grayscale": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "c3", "bitDepth": 8, "width": 64, "height": 48, "c": 3, "z": 1, "t": 1, "fill": "ramp"}
+        ],
+        "current": "c3",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        },
+        "prep": [
+          {"do": "openWindow", "title": "Channels"}
+        ]
+      },
+      "actions": [
+        {"do": "channels", "op": "mode", "mode": "grayscale"}
+      ],
+      "text": "Property.set(\"CompositeProjection\", \"null\");\nStack.setDisplayMode(\"grayscale\");\n",
+      "lines": ["Property.set(\"CompositeProjection\", \"null\");", "Stack.setDisplayMode(\"grayscale\");"],
+      "driven": "Channels tool: its mode Choice and channel check boxes by dispatched ItemEvents"
+    },
+    "macro-paused-select": {
+      "source": "jar",
+      "setup": {
+        "images": [
+          {"title": "a", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "ramp"},
+          {"title": "b", "bitDepth": 8, "width": 120, "height": 90, "c": 1, "z": 1, "t": 1, "fill": "black"}
+        ],
+        "current": "a",
+        "settings": {
+          "blackBackground": false,
+          "foreground": [255, 255, 255],
+          "background": [0, 0, 0],
+          "selectionColor": "yellow",
+          "lineWidth": 1
+        }
+      },
+      "actions": [
+        {"do": "macroWait", "macro": "waitForUser(\"Waiting\");"},
+        {"do": "activate", "title": "b"},
+        {
+          "do": "tool",
+          "tool": "rect",
+          "points": [[10, 10], [50, 40]],
+          "action": "draw"
+        },
+        {"do": "command", "name": "Invert"}
+      ],
+      "text": "makeRectangle(10, 10, 40, 30);\nrun(\"Invert\");\n",
+      "lines": ["makeRectangle(10, 10, 40, 30);", "run(\"Invert\");"],
+      "driven": "a macro (IJ.runMacro in its own thread) blocked in waitForUser; the operator acts, then presses OK in the WaitForUser window; activation: WindowManager.setCurrentWindow(window), what ImageWindow.windowActivated calls when the operator clicks a window; selection tools: Toolbar.setTool + MouseEvents dispatched on the event thread to the ImageCanvas (pressed / dragged / released); commands: Executer (IJ.doCommand, the menu path) with the Recorder on; dialogs answered by setting fields (by label) and pressing their buttons",
+      "note": "waitForUser holds a macro: the operator selects another image, draws a selection, runs Invert, then presses OK"
+    }
+  }
+}

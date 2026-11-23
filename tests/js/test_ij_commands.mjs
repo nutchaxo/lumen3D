@@ -71,8 +71,9 @@ assert.deepEqual(pj.i18nLanguages, LANGS);
 // PLAN-wave3 §2.8: the final order — the 19 packages (7 of wave 2, 9 tool packages, the library, the stacks, the macros), the run() bridge
 // tables (ij-macro-cmds.js, DOCS/studio-advanced/macros/INTEGRATION.md §1.2), the view, the layout, the controller, the commands
 const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
-// the macro package's virtual file system (FILES.md §10.1) loads on the page right before ij-proc-macro.js
-assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => (k === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${k}.js`])).flat(), 'ij-macro-cmds.js', 'ij-view.js', 'ij-layout.js', 'ij-app.js',
+// the macro package's virtual file system (FILES.md §10.1) loads on the page right before ij-proc-macro.js; the #@ parser and the Recorder
+// right after the macro command table (EXTRAS.md §2)
+assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => (k === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${k}.js`])).flat(), 'ij-macro-cmds.js', 'ij-macro-params.js', 'ij-macro-rec.js', 'ij-view.js', 'ij-layout.js', 'ij-app.js',
   ...PKGS.map((k) => `ij-cmds-${k}.js`)], 'plugin.json#scripts: the final order');
 for (const f of pj.scripts) assert.ok(existsSync(path.join(DIR, f)), `${f} exists`);
 same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...PKGS.map((k) => `ij-proc-${k}.js`)],
@@ -489,7 +490,7 @@ for (const m of createCall[1].matchAll(/(?:^|[\s,{])(commands|getState|t|tools|o
 assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW), 'the shell exposes its windows');
 
 // ── the error codes the controller maps are codes the engine / pure modules really throw ──
-const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
+const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-macro-math.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
 // IJ_SIZE_MISMATCH is mapped by W0 for the packages that compare two images (Image Calculator, Coloc): they throw it.
 // the client raises its own crash code; File › Open of a picture (ij-app.js) raises the other; pickFile / saveFile inside a command a macro
 // started raise IJ_MACRO_FILE_DIRECT (ij-app.js, FILES.md §9.4)

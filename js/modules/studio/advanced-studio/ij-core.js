@@ -986,12 +986,12 @@
       const hmax = i;
       const dataMin = o.dataMin !== undefined ? o.dataMin : histMin;
       const dataMax = o.dataMax !== undefined ? o.dataMax : histMin + (n - 1) * binWidth;
-      let min, max;
+      let min, max, reset = false;
       if (hmax >= hmin) {
         min = histMin + hmin * binWidth; max = histMin + hmax * binWidth;
         if (min === max) { min = dataMin; max = dataMax; }
-      } else { min = dataMin; max = dataMax; }
-      return { min, max, nextAutoThreshold: t };
+      } else { min = dataMin; max = dataMax; reset = true; }   // ContrastAdjuster: "reset(imp, ip); return;" — nothing recorded, the halving starts over
+      return { min, max, nextAutoThreshold: t, reset };
     }
 
     /* Apply the display range to the pixel data (ImageJ ContrastAdjuster.apply,
@@ -2224,6 +2224,9 @@
       if (['each', 'one', 'all'].indexOf(spec.channels) < 0) throw bad('op channels ' + name);
       if (spec.roi === undefined) spec.roi = 'mask';
       if (['mask', 'bounds', 'ignore'].indexOf(spec.roi) < 0) throw bad('op roi ' + name);
+      // roiFor(params) → 'mask' | 'bounds' | 'ignore': the roi mode of one request when it depends on the parameters; an op that answers
+      // 'ignore' gets the selection's mask as ctx.selection in prepare and applies it itself
+      if (spec.roiFor !== undefined && typeof spec.roiFor !== 'function') throw bad('op roiFor ' + name);
       if (spec.preview === undefined) spec.preview = spec.kind === 'pixel' ? 'region' : false;
       if (spec.preview !== false && spec.preview !== 'region' && spec.preview !== 'reduced') throw bad('op preview ' + name);
       if (spec.kind !== 'pixel' && spec.preview !== false) throw bad('only a pixel op previews ' + name);

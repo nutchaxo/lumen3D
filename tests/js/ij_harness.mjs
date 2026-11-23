@@ -73,7 +73,7 @@ export function langPart(pkg) {
 export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
 // The files of the macro phase, written by several builders at once (DOCS/studio-advanced/macros/INTEGRATION.md §1.3): the page skips one that
 // is not on disk yet (the worker does not: a missing package file fails the package there, which is what production does).
-export const MACRO_FILES = ['ij-macro-lang.js', 'ij-macro-vfs.js', 'ij-proc-macro.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js'];
+export const MACRO_FILES = ['ij-macro-lang.js', 'ij-macro-vfs.js', 'ij-proc-macro.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js', 'ij-macro-params.js', 'ij-macro-rec.js', 'ij-macro-math.js'];
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function until(fn, what, ms = 8000) {
   const t0 = Date.now();
@@ -349,7 +349,9 @@ export async function boot(opts = {}) {
   const runPage = (f) => vm.runInContext(readSrc(f, o.pageSources), page, { filename: f });
   // plugin.json's order: the ij-proc files (the page copy of ij-proc-macro.js registers the specs of its worker commands), then the pure
   // run() bridge tables (ij-macro-cmds.js), all before ij-app.js
-  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PACKAGES.map((p) => (p === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${p}.js`])).flat(), 'ij-macro-cmds.js']) if (pageHas(f, o.pageSources)) runPage(f);
+  // (plugin.json: ij-macro-params.js and ij-macro-rec.js right after ij-macro-cmds.js; absent = skipped, the page runs without them)
+  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PACKAGES.map((p) => (p === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${p}.js`])).flat(), 'ij-macro-cmds.js',
+    'ij-macro-params.js', 'ij-macro-rec.js']) if (pageHas(f, o.pageSources)) runPage(f);
 
   // The view's pure helpers and the plot module, from the real file (its own context: no DOM is touched at load).
   const viewCtx = vm.createContext({ console, setTimeout, clearTimeout });
@@ -514,6 +516,68 @@ export async function boot(opts = {}) {
   const root = fakeEl('div'); root.classList = { add() {}, remove() {}, contains: () => false };
   const api = { exits: 0, closes: 0, async exit() { api.exits++; return true; }, async close() { api.closes++; return true; }, getDocument: () => null, token: () => 1 };
 
+  // ── the tool windows' REAL controls (EXTRAS.md §4.9): found by their translated text, fired with the event their handler reads ──
+  const walkEl = (node, pred, out = []) => { if (!node) return out; if (pred(node)) out.push(node); for (const k of node.children || []) walkEl(k, pred, out); return out; };
+  async function fireEl(node, type, ev) {
+    assert.ok(node, 'control for ' + type);
+    const pending = (node.listeners[type] || []).slice().map((f) => f(Object.assign({ target: node, type, shiftKey: false, ctrlKey: false, metaKey: false, preventDefault() {}, stopPropagation() {} }, ev || {})));
+    await Promise.all(pending.map((x) => Promise.resolve(x)));
+    await sleep(0);
+  }
+  const elByText = (rootEl, text, tag) => walkEl(rootEl, (n) => n.textContent === text && (!tag || n.tagName === tag))[0] || null;
+  const checkByText = (rootEl, text) => { const lab = walkEl(rootEl, (n) => n.tagName === 'LABEL' && (n.children || []).some((k) => k.textContent === text))[0]; return lab ? walkEl(lab, (n) => n.tagName === 'INPUT')[0] : null; };
+  const selectWith = (rootEl, value) => walkEl(rootEl, (n) => n.tagName === 'SELECT' && (n.children || []).some((k) => String(k.value) === String(value)))[0] || null;
+  const RM_MORE = { Open: 'open', Save: 'save', Fill: 'fill', Draw: 'draw', AND: 'and', OR: 'or', XOR: 'xor', Split: 'split', 'Multi Measure': 'multiMeasure', 'Multi Plot': 'multiPlot', Sort: 'sort' };
+  const RM_BUTTONS = { Add: 'addT', Update: 'update', Delete: 'delete', Rename: 'rename', Measure: 'measure', Deselect: 'deselect', Properties: 'properties' };
+  /** The control's handler may go on asynchronously (a worker request): a round trip through the worker lets it land first. */
+  async function toolAction(id, op, a) {
+    await toolActionRaw(id, op, a);
+    await t.engine('doc.list').catch(() => {});
+    await sleep(0);
+  }
+  async function toolActionRaw(id, op, a) {
+    const api = IJApp.apiFor(null);
+    if (!t.shell.windows.floats.get(id)) await api.openTool(id);
+    await sleep(0);
+    const rootEl = t.panel(id);
+    assert.ok(rootEl, 'tool window ' + id);
+    if (Array.isArray(a.dialogs)) for (const d of a.dialogs) script.dialogs.push(d);
+    const click = (text) => { const b = elByText(rootEl, text, 'BUTTON'); assert.ok(b, id + ': button ' + text); return fireEl(b, 'click'); };
+    const setSelect = (sel, v) => { sel.value = String(v); return fireEl(sel, 'change'); };
+    const setCheck = (input, on) => { input.checked = !!on; return fireEl(input, 'change'); };
+    if (id === 'threshold') {
+      if (op === 'auto') return click(EN.thr.auto);
+      if (op === 'method') return setSelect(selectWith(rootEl, a.method), a.method);
+      if (op === 'mode') return setSelect(selectWith(rootEl, 'overunder'), a.mode);
+      if (op === 'dark') return setCheck(checkByText(rootEl, EN.thr.dark), a.dark);
+      if (op === 'hist16') return setCheck(checkByText(rootEl, EN.dlg.thr.hist16), a.hist16);
+      if (op === 'set') { script.dialogs.push({ lower: a.lower, upper: a.upper }); return click(EN.thr.setBtn); }
+      if (op === 'reset') return click(EN.thr.reset);
+      if (op === 'apply') return click(EN.thr.apply);
+    } else if (id === 'bc') {
+      if (op === 'auto') return click(EN.bc.auto);
+      if (op === 'reset') return click(EN.bc.reset);
+      if (op === 'set') { script.dialogs.push({ min: a.min, max: a.max }); return click(EN.bc.setBtn); }
+      if (op === 'apply') return click(EN.bc.apply);
+    } else if (id === 'roiManager') {
+      if (op === 'Select') {
+        // the list is redrawn by the tool refresh timer after an Add
+        const rowsOf = () => walkEl(rootEl, (n) => String(n.className).split(/\s+/).includes('ij-list-row'));
+        await until(() => rowsOf().length > a.index, 'ROI Manager row ' + a.index);
+        return fireEl(rowsOf()[a.index], 'click', { shiftKey: !!a.shift, ctrlKey: !!a.ctrl });
+      }
+      if (op === 'Show All') return setCheck(checkByText(rootEl, EN.roi.showAll), a.on !== false);
+      if (op === 'Labels') return setCheck(checkByText(rootEl, EN.roi.labels), a.on !== false);
+      if (RM_BUTTONS[op]) return click(EN.roi[RM_BUTTONS[op]]);
+      if (RM_MORE[op]) return fireEl(elByText(rootEl, EN.roi[RM_MORE[op]], 'BUTTON'), 'click');
+    } else if (id === 'channels') {
+      if (op === 'mode') return setSelect(selectWith(rootEl, 'gray'), a.mode);
+      if (op === 'channel') return fireEl(walkEl(rootEl, (n) => n.tagName === 'INPUT' && n.type === 'radio')[a.channel - 1], 'change');
+      if (op === 'active') { const boxes = walkEl(rootEl, (n) => n.tagName === 'INPUT' && n.type === 'checkbox'); return setCheck(boxes[a.channel - 1], a.on); }
+    }
+    throw new Error('toolAction: ' + id + ' ' + op);
+  }
+
   let seq = 900000;
   const t = {
     IJApp, IJViewPure, vol, log, script, shells, workers, ctx, api, root, page, store: workerStorage,
@@ -612,6 +676,68 @@ export async function boot(opts = {}) {
       const P = vm.runInContext('typeof IJMacroPage !== "undefined" ? IJMacroPage : null', page);
       if (!P) throw new Error('IJMacroPage is not loaded (ij-cmds-macro.js)');
       return P.logLines();
+    },
+    // ── EXTRAS.md §4.9: the operator's actions through the REAL handlers (shell callbacks, tool windows), and the macro page's extras ──
+    /** A selection finished with a tool: the stand-in's onRoi with { final: true, source: action } (the tool is chosen first, silently). */
+    toolRoi(roi, o2) {
+      const oo = o2 || {};
+      if (oo.tool) IJApp.apiFor(null).setTool(oo.tool);
+      const docId = oo.docId !== undefined ? oo.docId : t.shell.activeDocId();
+      t.shell.opts.onRoi(roi, { final: true, source: oo.action || 'draw', docId });
+    },
+    wandClick(x, y, mods) { return Promise.resolve(t.shell.opts.onWand(x, y, { shift: !!(mods && mods.shift), alt: !!(mods && mods.alt) })); },
+    activate(docId) { t.shell.clickTab(docId); },
+    async windowMenu(title) {
+      t.shell.opts.onMenuOpen('Window');
+      const c = t.shell.opts.commands.find((x) => x.menu[0] === 'Window' && x.dynamic && x.label === title);
+      assert.ok(c, 'Window menu row ' + title);
+      await t.shell.opts.onCommand(c, { source: 'menu' });
+    },
+    chooseTool(id) { t.shell.opts.onTool(id); },
+    async lineWidth(w) {
+      script.dialogs.push({ w });
+      t.shell.opts.onToolOptions('line');
+      await until(() => !script.dialogs.length, 'line width dialog');
+      await sleep(0);
+    },
+    async thresholdAction(op, args) { return toolAction('threshold', op, args || {}); },
+    async bcAction(op, args) { return toolAction('bc', op, args || {}); },
+    async rmAction(op, args) { return toolAction('roiManager', op, args || {}); },
+    async channelsAction(op, args) { return toolAction('channels', op, args || {}); },
+    extras() {
+      const P = vm.runInContext('typeof IJMacroPage !== "undefined" ? IJMacroPage : null', page);
+      if (!P || !P._internals.extras) throw new Error('IJMacroPage extras are not loaded (ij-cmds-macro.js)');
+      return P._internals.extras;
+    },
+    recorder() {
+      const X = t.extras();
+      return {
+        open: async () => { await t.runCommand('macRecord'); },
+        close: () => { const w = t.shell.windows.floats.get('macroRecorder'); if (w) w.close(); },
+        model: () => X.recorder(),
+        text: () => { const m = X.recorder(); return m ? m.text() : ''; },
+        setText: (s) => X.recorder().setText(s),
+        name: () => X.recorder().name(),
+        create: () => X.recorderCreate(),
+        run: (text) => t.runMacro(text)
+      };
+    },
+    install: (source, o2) => t.extras().install(source, Object.assign({}, o2 && o2.name ? { fileName: o2.name } : null, o2 || {})),
+    installed: () => t.extras().installed(),
+    async runInstalled(label) {
+      t.shell.opts.onMenuOpen('Plugins');
+      const c = t.shell.opts.commands.find((x) => x.dynamic && /^macInst[0-9]/.test(x.id) && x.label === label);
+      assert.ok(c, 'installed row ' + label);
+      await t.shell.opts.onCommand(c, { source: 'menu' });
+      await until(() => !IJApp.apiFor('macro').macro.running(), 'installed macro run', 20000).catch(() => {});
+    },
+    batch: (b) => t.extras().batch({ input: b.input, output: b.output || '', format: b.format || 'TIFF', filter: b.filter || '', code: b.code }, !!b.test),
+    /** Stores the startup texts, then runs what a fresh Studio open runs (EXTRAS.md §7.6). */
+    async startup(s) {
+      const X = t.extras();
+      if (s && typeof s.startupMacros === 'string') await X.put('macros', { id: 'startup', source: s.startupMacros, at: Date.now() });
+      if (s && typeof s.runAtStartup === 'string') await X.settingWrite('startup.code', s.runAtStartup);
+      await X.startup();
     },
     /** Stops this boot (the stored sessions stay) and boots a new page on the same storage. */
     async reload(more) {

@@ -18,20 +18,22 @@ const done = (o) => Object.assign({ ok: true, aborted: false, exited: false, err
   const s = t.spec;
   assert.equal(s.pkg, 'macro');
   const byId = Object.fromEntries(s.commands.map((c) => [c.id, c]));
-  deq(Object.keys(byId).sort(), ['macEdit', 'macRun', 'windowLog']);
+  // + the commands of the macro extras (EXTRAS.md §4.3), checked by test_ij_macro_extras_page.mjs
+  deq(Object.keys(byId).sort(), ['batchMacro', 'macEdit', 'macInstall', 'macRecord', 'macRemoveInstalled', 'macRun', 'macStartup', 'mathMacro', 'optStartup', 'windowLog']);
   deq(byId.macRun.menu, ['Plugins', 'Macros']); assert.equal(byId.macRun.order, 20);
   deq(byId.macEdit.menu, ['Plugins', 'Macros']); assert.equal(byId.macEdit.order, 30);
   deq(byId.windowLog.menu, ['Window']); assert.equal(byId.windowLog.order, 52);
-  for (const c of s.commands) {
+  for (const c of s.commands.filter((x) => ['macEdit', 'macRun', 'windowLog'].includes(x.id))) {
     assert.equal(c.enabled({ busy: false, doc: null }), true, c.id + ' is enabled without an image');
     assert.equal(c.labelKey, undefined, c.id + ' uses its cmd.<id> label');
     assert.equal(c.shortcut, undefined, c.id + ': Ctrl+R is the browser reload, no shortcut (PLAN D12)');
   }
-  deq(Object.keys(s.panels).sort(), ['macroEditor', 'macroError', 'macroLog', 'macroText']);
+  deq(Object.keys(s.panels).sort(), ['batchProcess', 'macroEditor', 'macroError', 'macroLog', 'macroOutputs', 'macroRecorder', 'macroStartup', 'macroText']);
   const titles = { macroEditor: 'dlg.mac.editorTitle', macroLog: 'dlg.mac.logTitle', macroError: 'dlg.mac.errorTitle', macroText: 'dlg.mac.textTitle' };
   for (const id of Object.keys(titles)) { assert.equal(s.panels[id].titleKey, titles[id]); assert.equal(s.panels[id].persist, true, id + ' persists'); }
   deq(s.errors, { IJ_MACRO_BUSY: 'err.macBusy', IJ_MACRO_STEP_BUSY: 'err.macStepBusy', IJ_MACRO_GROUP: 'err.macUndoDuringRun',
-    IJ_MACRO_VFS_QUOTA: 'err.macZipQuota', IJ_MACRO_VFS_BUSY: 'err.macWorkspaceBusy', IJ_MACRO_VFS_NO_STORAGE: 'err.macNoStorageUi', IJ_MACRO_FILE_DIRECT: 'err.macFileDirect' });
+    IJ_MACRO_VFS_QUOTA: 'err.macZipQuota', IJ_MACRO_VFS_BUSY: 'err.macWorkspaceBusy', IJ_MACRO_VFS_NO_STORAGE: 'err.macNoStorageUi', IJ_MACRO_FILE_DIRECT: 'err.macFileDirect',
+    IJ_MACRO_MATH: 'err.macMathFailed', IJ_MACRO_INSTALL: 'err.macInstallFailed' });
   assert.equal(typeof t.page.run, 'function'); assert.equal(typeof t.page.abort, 'function'); assert.equal(typeof t.page.logLines, 'function');
 }
 

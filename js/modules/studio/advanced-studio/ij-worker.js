@@ -5,7 +5,8 @@
  * first; everything else is IJEngine.
  *
  * The four `scripts` are mandatory. Each package is loaded in its own try/catch, its `pre` files (urls
- * loaded just before it, in the same try: the macro language and its virtual file system before ij-proc-macro.js) first; importScripts
+ * loaded just before it, in the same try: the macro language, its virtual file system, the #@ script parameters and the Process › Math › Macro
+ * op before ij-proc-macro.js) first; importScripts
  * stops at the first file that throws, so a package file never runs without what it needs. A package that
  * cannot load (a syntax error, a missing file) is reported as { event: 'packageFailed', pkg } and the ops
  * and worker commands it had already registered (IJOpRegistry.defineCommand) are withdrawn, so its

@@ -1,6 +1,7 @@
 {
   "mode": "Avancé",
   "menu": {
+    "Batch": "Traitement par lot",
     "File": "Fichier",
     "SaveAs": "Enregistrer sous",
     "Edit": "Édition",
@@ -38,6 +39,13 @@
     "Macros": "Macros"
   },
   "cmd": {
+    "macInstall": "Installer...",
+    "macStartup": "Macros de démarrage...",
+    "macRecord": "Enregistrer...",
+    "macRemoveInstalled": "Retirer les macros installées",
+    "optStartup": "Démarrage...",
+    "batchMacro": "Macro...",
+    "mathMacro": "Macro...",
     "fileOpen": "Ouvrir…",
     "fileSaveTiff": "TIFF…",
     "fileSaveJpeg": "Jpeg…",
@@ -1224,6 +1232,96 @@
       "levelsStatus": "{list}"
     },
     "mac": {
+      "rec": {
+        "title": "Enregistreur",
+        "record": "Enregistrer :",
+        "modeMacro": "Macro",
+        "name": "Nom :",
+        "create": "Créer",
+        "run": "Exécuter",
+        "help": "Aide",
+        "helpText": "Cliquez sur « Créer » pour ouvrir les commandes enregistrées dans l'éditeur de macros.\n\nCliquez sur « Exécuter » (ou Ctrl+Entrée) pour exécuter le texte sélectionné ou la ligne qui contient le curseur.\n\nSeul ce que vous faites vous-même est enregistré, jamais ce que fait une macro en cours.",
+        "createEmpty": "Une macro ne peut être créée qu'après l'enregistrement d'au moins une commande.",
+        "runHint": "Exécute le texte sélectionné ou la ligne qui contient le curseur (Ctrl+Entrée).",
+        "replaceEditor": "L'éditeur de macros contient un texte non enregistré. Le remplacer par la macro enregistrée ?",
+        "replace": "Remplacer"
+      },
+      "install": {
+        "title": "Installer des macros",
+        "keyInUse": "Ce raccourci clavier est déjà utilisé :",
+        "keysInUse": "Ces raccourcis clavier sont déjà utilisés :",
+        "keysReserved": "Ces touches sont réservées par le navigateur et n'ont pas été attribuées :",
+        "toolsSkipped": "{n} macro(s) d'outil n'ont pas été installées : les outils de la barre d'outils ne sont pas disponibles dans le Studio avancé.",
+        "popupSkipped": "La macro « Popup Menu » n'a pas été installée : le menu contextuel de l'image n'est pas disponible dans le Studio avancé.",
+        "installed": "{n} macros installées",
+        "installedOne": "1 macro installée"
+      },
+      "editor": {
+        "install": "Installer"
+      },
+      "startup": {
+        "title": "Macros de démarrage",
+        "note": "Ces macros sont installées à chaque ouverture du Studio avancé ; une macro AutoRun s'exécute alors.",
+        "save": "Enregistrer",
+        "revert": "Rétablir"
+      },
+      "startupCode": {
+        "title": "Macro de démarrage",
+        "note": "Le code de macro de cette zone de texte s'exécute à chaque ouverture du Studio avancé.",
+        "add": "Ajouter du code :",
+        "itemSelect": "[Choisir dans la liste]",
+        "itemBlack": "Fond noir",
+        "itemDir": "Définir le dossier par défaut",
+        "itemOverlay": "Ajouter à la superposition"
+      },
+      "batch": {
+        "title": "Traitement par lot",
+        "input": "Entrée...",
+        "output": "Sortie...",
+        "format": "Format de sortie :",
+        "addCode": "Ajouter du code de macro :",
+        "filter": "Le nom de fichier contient :",
+        "test": "Tester",
+        "open": "Ouvrir...",
+        "save": "Enregistrer...",
+        "process": "Traiter",
+        "formatNo": "Le Studio avancé ne sait pas écrire ce format.",
+        "snippetSelect": "[Choisir dans la liste]",
+        "snippetAddBorder": "Ajouter une bordure",
+        "snippetToRgb": "Convertir en RVB",
+        "snippetCrop": "Rogner",
+        "snippetGaussian": "Flou gaussien",
+        "snippetInvert": "Inverser",
+        "snippetLabel": "Étiquette",
+        "snippetTimestamp": "Horodatage",
+        "snippetMaxDim": "Dimension maximale",
+        "snippetMeasure": "Mesurer",
+        "snippetPrintIndex": "Afficher l'indice et le titre",
+        "snippetResize": "Redimensionner",
+        "snippetScale": "Mettre à l'échelle",
+        "snippetFileInfo": "Afficher les infos du fichier",
+        "snippetUnsharp": "Masque flou",
+        "errTitle": "Traitement par lot",
+        "noInput": "Veuillez choisir un dossier d'entrée",
+        "badInput": "L'entrée n'existe pas ou n'est pas un dossier\n \n{path}",
+        "badOutput": "La sortie n'existe pas ou n'est pas un dossier\n \n{path}",
+        "noCode": "La zone de texte ne contient aucun code de macro",
+        "tooLarge": "Le fichier est trop volumineux",
+        "progress": "{n}/{total} : {name}"
+      },
+      "math": {
+        "title": "Évaluateur d'expression",
+        "code": "Code :",
+        "help": "v=valeur du pixel, x,y et z=coordonnées du pixel, w=largeur de l'image,\nh=hauteur de l'image, a=angle, d=distance au centre"
+      },
+      "params": {
+        "title": "Paramètres du script"
+      },
+      "outputs": {
+        "title": "Sorties",
+        "name": "Nom",
+        "value": "Valeur"
+      },
       "editorTitle": "Éditeur de macro",
       "logTitle": "Journal",
       "errorTitle": "Erreur de macro",
@@ -1315,6 +1413,8 @@
     }
   },
   "op": {
+    "macBatch": "Traitement par lot",
+    "mathMacro": "Macro",
     "invert": "Inversion",
     "math": "Calcul",
     "fill": "Remplissage",
@@ -1583,6 +1683,18 @@
     "keepFailed": "Le navigateur n’a pas pu enregistrer tout votre travail. Enregistrez un TIFF ou abandonnez-le."
   },
   "err": {
+    "macInstallExt": "Le nom du fichier doit se terminer par « .txt » ou « .ijm ».",
+    "macMathHost": "{name}() ne peut pas être utilisée dans Process › Math › Macro dans le navigateur.",
+    "macMathFailed": "La macro mathématique a échoué.",
+    "macParamService": "#@ {type} {name} : les services ne sont pas disponibles dans le navigateur.",
+    "macParamType": "#@ {type} {name} : ce type de paramètre n'est pas disponible dans le navigateur.",
+    "macParamPassword": "#@ String {name} : les champs de mot de passe ne sont pas disponibles dans le Studio avancé.",
+    "macParamNoImage": "#@ {type} {name} : une image doit être ouverte.",
+    "macParamSyntax": "Ligne {line} : cette ligne de paramètre est illisible : {text}",
+    "macReasonStartup": "elle modifie ce qui s'exécute à chaque ouverture du Studio.",
+    "macReasonRecorder": "une macro ne peut pas piloter l'enregistreur.",
+    "macReasonInstalled": "elle modifie les macros installées.",
+    "macInstallFailed": "Le fichier de macro n'a pas pu être lu.",
     "title": "Vue avancée",
     "unknown": "Une erreur s’est produite. Votre travail est conservé ; réessayez.",
     "overBudget": "Cela ne tient pas dans la mémoire que cet appareil accorde à la page. Choisissez une résolution plus grossière ou moins de canaux.",
@@ -1770,6 +1882,7 @@
     "ioTableEmpty": "Le tableau est vide ou invalide."
   },
   "warn": {
+    "macNotStored": "Ce texte est trop long pour être conservé après un rechargement.",
     "unprotected": "Votre travail n’est pas protégé : le navigateur a refusé de le stocker.",
     "held": "Certaines images n’ont été restaurées qu’en partie : vos modifications sur elles ne sont pas enregistrées.",
     "lowStorage": "Il reste peu d’espace dans ce navigateur : enregistrez un TIFF.",

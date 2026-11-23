@@ -29,6 +29,13 @@
  *                abortable nor sliced, and it overflows a worker's native stack near 550 levels instead of ImageJ's 1000).
  *     abortFlag: Int32Array (SharedArrayBuffer): non-zero stops a stretch that cannot yield; host.syncFunctions: Set of
  *                host built-in names ('getPixel', 'List.get') that never return a Promise.
+ *   IJMacro.prepare(source) -> Prepared { program, macros: [{ name, start, line }], needsGlobals }   (MacroInstaller.install)
+ *   IJMacro.run(prepared, { ..., entry: { start, name } })   start -1 = the var statements only, 0 = the whole set, > 0 = the
+ *       block of a macro "Name" entry (Interpreter.runMacro); the var values of a Prepared persist between its runs.
+ *   IJMacro.run(..., { readVars: [name] }) -> result.vars { name: { n } | { s } | { a } | null }, read after the run ends.
+ *   IJMacro.pixelProgram(code, { host, onLog, signal, sliceMs }) -> Promise<{ ok, error } | { ok, hasX, hasA, hasD, hasGetPixel,
+ *       needsDrive, set, get, runSync, runAsync, dispose }>   the per-pixel program of Process > Math > Macro (ImageMath.applyMacro,
+ *       PC_START = 23); needsDrive = the code holds a loop: run each pixel with runAsync (sliced, stopped by the signal).
  *   IJMacro.analyze(source, { host, syncLoops, syncRecursion }) -> { statements: [{ line, class: 'twin'|'loop'|'gen' }], functions: { name: { suspends, loops, recursive } } }
  *   IJMacro.tokenize(source) -> Program { code, lineNumbers, table, hasVars, hasFunctions, ... }
  *   IJMacro.compile(source)  -> { program, macros: [labels], functions: [names], tokens: [{...}] }
@@ -7940,20 +7947,18 @@ async function drive(gen, ctx) {
   }
 }
 
-/* IJMacro.run: interprets `source`; resolves, never rejects. */
-async function run(source, opts) {
-  opts = opts || {};
+/* The run context of a driver: the host, the abort wiring and the callbacks a built-in reaches through interp.ctx. */
+function runContext(opts, onAbortSet) {
   const host = opts.host || null;
   const onLog = typeof opts.onLog === 'function' ? opts.onLog : null;
   const signal = opts.signal || null;
-  let onAbort = null;
-  const ctx = {
+  return {
     host,
     signal,
     /* resolves with ABORTED when the signal fires, so a pending wait or host promise stops the macro at once */
     abortPromise: signal ? new Promise((resolve) => {
       if (signal.aborted) resolve(ABORTED);
-      else { onAbort = () => resolve(ABORTED); signal.addEventListener('abort', onAbort, { once: true }); }
+      else { const f = () => resolve(ABORTED); onAbortSet(f); signal.addEventListener('abort', f, { once: true }); }
     }) : null,
     sliceMs: typeof opts.sliceMs === 'number' ? opts.sliceMs : 50,
     fastPath: opts.fastPath !== false,
@@ -7970,11 +7975,104 @@ async function run(source, opts) {
       if (host && typeof host.showMessage === 'function') return host.showMessage('Macro Error', text);
     },
   };
+}
+
+function errorOf(interp) {
+  return { message: interp.errorMessage, line: interp.lineNumber, lineText: interp.errorLine, excerpt: interp.errorLine,
+    calledFrom: interp.errorStack || [], silent: interp.errorSilent === true,
+    dialogText: interp.errorSilent === true ? null : interp.errorDialogText() };
+}
+
+const PREPARED = Symbol('IJMacro.prepared');
+const isPrepared = (x) => x !== null && typeof x === 'object' && x[PREPARED] === true;
+
+/* IJMacro.prepare: MacroInstaller.install's view of a set (:71-98): the program tokenized once, the start of every
+ * macro "Name" block (token index of the MACRO token + 2, the block's left brace) and whether the top-level var
+ * statements must run before an entry (hasVars && macroCount > 0, MacroInstaller.install :78). */
+function prepare(source) {
+  const program = tokenize(String(source));
+  const macros = [];
+  const code = program.code;
+  for (let i = 0; i < code.length; i++) {
+    const t = code[i] & TOK_MASK;
+    if (t === K_MACRO && (code[i + 1] & TOK_MASK) === STRING_CONSTANT)
+      macros.push(Object.freeze({ name: program.table[code[i + 1] >> TOK_SHIFT].str, start: i + 2, line: program.lineNumbers[i] }));
+    if (t === EOF) break;
+  }
+  return Object.freeze({ program, macros: Object.freeze(macros), needsGlobals: !!(program.hasVars && program.macroCount > 0), [PREPARED]: true });
+}
+
+/* new Interpreter().saveGlobals(pgm): the top-level var statements of a set, run once; their Variable objects are then
+ * shared by every run of the set (pushGlobals), which is how an installed set's globals persist between entries. */
+function* saveGlobalsOnce(ctx, pgm) {
+  if (pgm.globals !== null) return;
+  const g = new Interpreter(ctx);
+  yield* g.saveGlobals2(pgm);
+}
+
+/* Interpreter.runMacro(pgm, macroLoc, name) (:175-192), and run(Program) for a prepared set without an entry. */
+function* runPrepared(interp, P, entry) {
+  const pgm = P.program;
+  if (!entry) {
+    if (pgm.hasVars && pgm.hasFunctions) yield* saveGlobalsOnce(interp.ctx, pgm);
+    yield* interp.runProgram(pgm);
+    return;
+  }
+  if (P.needsGlobals) yield* saveGlobalsOnce(interp.ctx, pgm);
+  if (entry.start === -1) return;
+  interp.calledMacro = true;
+  interp.pgm = pgm;
+  interp.pc = entry.start - 1;
+  interp.callDepth = 0;
+  interp.syncReset();
+  interp.pushGlobals();
+  if (interp.func === null) interp.func = new Functions(interp, pgm); else interp.func.pgm = pgm;
+  interp.done = false;
+  interp.errorMessage = null;
+  if (entry.start === 0) yield* interp.doStatements(); else yield* interp.doBlock();
+  interp.finishUp();
+}
+
+/* L5: a variable as the stack holds it after a run, top-down (Interpreter.getVariable2 order); null = absent. */
+function readVariable(interp, name) {
+  if (!interp.stack || !interp.pgm) return null;
+  const table = interp.pgm.table;
+  for (let i = interp.topOfStack; i >= 0; i--) {
+    const v = interp.stack[i];
+    if (!v || !table[v.symTabIndex] || table[v.symTabIndex].str !== name) continue;
+    const arr = v.getArray();
+    if (arr !== null) {
+      const out = [];
+      const n = v.getArraySize();
+      for (let k = 0; k < n; k++) {
+        const e = arr[k];
+        out.push(e === null || e === undefined ? 0 : e.getString() !== null ? e.getString() : e.getValue());
+      }
+      return { a: out };
+    }
+    if (v.getString() !== null) return { s: v.getString() };
+    return { n: v.getValue() };
+  }
+  return null;
+}
+
+/* IJMacro.run: interprets `source` (text, or a Prepared of IJMacro.prepare with an optional entry); resolves, never rejects. */
+async function run(source, opts) {
+  opts = opts || {};
+  const signal = opts.signal || null;
+  let onAbort = null;
+  const ctx = runContext(opts, (f) => { onAbort = f; });
   const interp = new Interpreter(ctx);
   interp.argument = opts.arg === undefined ? null : opts.arg;
   let aborted = false, exited = false, internal = null;
   try {
-    await drive(interp.run(String(source)), ctx);
+    if (isPrepared(source)) {
+      const e = opts.entry || null;
+      if (e !== null && (typeof e.start !== 'number' || (e.start | 0) !== e.start || e.start < -1 || e.start >= source.program.code.length))
+        throw new JavaException('Internal error: bad macro entry');
+      await drive(runPrepared(interp, source, e), ctx);
+    } else
+      await drive(interp.run(String(source)), ctx);
   } catch (e) {
     if (e instanceof MacroCancel) {
       if (e.kind === 'abort') aborted = true;
@@ -7991,13 +8089,115 @@ async function run(source, opts) {
   }
   if (signal && onAbort) signal.removeEventListener('abort', onAbort);
   let error = null;
-  if (interp.wasError)
-    error = { message: interp.errorMessage, line: interp.lineNumber, lineText: interp.errorLine, excerpt: interp.errorLine,
-      calledFrom: interp.errorStack || [], silent: interp.errorSilent === true,
-      dialogText: interp.errorSilent === true ? null : interp.errorDialogText() };
+  if (interp.wasError) error = errorOf(interp);
   else if (internal !== null)
     error = { message: internal, line: interp.lineNumber, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: null };
-  return { ok: error === null && !aborted, error, aborted, exited, returnValue: interp.returnValue };
+  const vars = {};
+  if (Array.isArray(opts.readVars)) for (const n of opts.readVars) vars[String(n)] = readVariable(interp, String(n));
+  return { ok: error === null && !aborted, error, aborted, exited, returnValue: interp.returnValue, vars };
+}
+
+/* Program.hasWord (:265-276): a symbol token whose string is the word, scanning to EOF (string constants count). */
+function hasWord(pgm, word) {
+  const code = pgm.code;
+  for (let i = 0; i < code.length; i++) {
+    const t = code[i];
+    if (t <= 127) continue;
+    if (t === EOF) return false;
+    const sym = pgm.table[t >> TOK_SHIFT];
+    if (sym && sym.str !== null && sym.str === word) return true;
+  }
+  return false;
+}
+
+const PIXEL_PREFIX = 'var v,x,y,z,w,h,d,a;\nfunction dummy() {}\n';
+const PC_START = 23;
+
+/* IJMacro.pixelProgram: ImageMath.applyMacro (:230-260): the code runs once as Interpreter.run(code, null) (its side effects
+ * happen there), then each pixel sets v / x / y / a / d and runs the statements from PC_START (the first token after the
+ * prefix). The first run goes through the driver (time-sliced, stopped by opts.signal). A pixel runs in the synchronous twin
+ * (runSync) unless the code holds a loop (`needsDrive`): a loop can be endless, and a twin loop neither yields nor sees the
+ * signal, so such a code runs each pixel through the driver (runAsync, sliced every opts.sliceMs, default 50). Recursion needs
+ * no driver: it ends at ImageJ's stack limit. */
+async function pixelProgram(code, opts) {
+  opts = opts || {};
+  code = String(code);
+  const head = tokenize(code);
+  let needsDrive = false;
+  for (let i = 0; i < head.code.length; i++) {
+    const t = head.code[i] & TOK_MASK;
+    if (t === EOF) break;
+    if (t === K_WHILE || t === K_FOR || t === K_DO) { needsDrive = true; break; }
+  }
+  let onAbort = null;
+  const ctx = runContext({ host: opts.host || null, onLog: opts.onLog, signal: opts.signal || null, sliceMs: typeof opts.sliceMs === 'number' ? opts.sliceMs : 50 },
+    (f) => { onAbort = f; });
+  const interp = new Interpreter(ctx);
+  interp.calledMacro = true;
+  let internal = null;
+  try { await drive(interp.run(PIXEL_PREFIX + code + ';\n'), ctx); }
+  catch (e) {
+    if (e instanceof MacroCancel) { if (!interp.wasError && e.kind === 'abort') internal = MACRO_CANCELED; }
+    else if (e instanceof JavaException) internal = e.message;
+    else throw e;
+  }
+  // the listener stays while the program lives (runAsync reads the same context); dispose() removes it
+  if ((interp.wasError || internal !== null) && opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+  if (interp.wasError) return { ok: false, error: errorOf(interp) };
+  if (internal !== null)
+    return { ok: false, error: { message: internal, line: interp.lineNumber, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: null } };
+  const stack = interp.stack;
+  const table = interp.pgm.table;
+  /* Interpreter.setVariable / getVariable: the first slot of the stack (bottom-up) whose name matches; the globals' slots never
+   * move between pixels, so the slot found once is kept. */
+  const slots = new Map();
+  const find = (name) => {
+    const k = slots.get(name);
+    if (k !== undefined && k <= interp.topOfStack) return stack[k];
+    for (let i = 0; i <= interp.topOfStack; i++) {
+      const s = stack[i];
+      if (s && table[s.symTabIndex].str === name) { if (i <= interp.topOfGlobals) slots.set(name, i); return s; }
+    }
+    return null;
+  };
+  const hostText = () => {
+    const h = opts.host;
+    return h && h.texts && typeof h.texts['err.macMathHost'] === 'string' ? h.texts['err.macMathHost'] : 'err.macMathHost';
+  };
+  const plain = (message) => ({ message, line: interp.lineNumber, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: message });
+  const failure = (e) => {
+    if (e instanceof MacroCancel) {
+      if (interp.wasError) return errorOf(interp);
+      return e.kind === 'abort' ? Object.assign(plain(MACRO_CANCELED), { silent: true, dialogText: null, aborted: true }) : null;
+    }
+    if (e instanceof SyncViolation) return plain(hostText());
+    if (e instanceof JavaException) return plain(e.message);
+    throw e;
+  };
+  const rewind = () => {
+    interp.topOfStack = interp.topOfGlobals;
+    interp.done = false;
+    interp.pc = PC_START - 1;
+  };
+  return {
+    ok: true,
+    hasX: hasWord(head, 'x'), hasA: hasWord(head, 'a'), hasD: hasWord(head, 'd'), hasGetPixel: hasWord(head, 'getPixel'), needsDrive,
+    set(name, value) { const v = find(name); if (v !== null) v.setValue(value); },
+    get(name) { const v = find(name); return v === null ? NaN : v.getValue(); },
+    runSync() {
+      rewind();
+      try { interp.doStatements$s(); }
+      catch (e) { return failure(e); }
+      return interp.wasError ? errorOf(interp) : null;
+    },
+    async runAsync() {
+      rewind();
+      try { await drive(interp.doStatements(), ctx); }
+      catch (e) { return failure(e); }
+      return interp.wasError ? errorOf(interp) : null;
+    },
+    dispose() { slots.clear(); if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort); },
+  };
 }
 
 /* IJMacro.compile: the tokenized program and a summary of what it declares. */
@@ -8059,6 +8259,6 @@ function coverage() {
   return out;
 }
 
-return { run, tokenize, compile, define, coverage, analyze, BUILTINS, K, NAME_OF, d2s, d2s3, numToString, javaDouble, parseJavaDouble,
+return { run, prepare, pixelProgram, PC_START, PIXEL_PREFIX, hasWord, tokenize, compile, define, coverage, analyze, BUILTINS, K, NAME_OF, d2s, d2s3, numToString, javaDouble, parseJavaDouble,
   Interpreter, Functions, Variable, Program, MacroCancel, SLICE };
 })();

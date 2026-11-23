@@ -65,7 +65,12 @@ for (const [id, e] of Object.entries(T)) {
 
 // ── fixed classifications (INTEGRATION.md §5.4)
 const byCls = (cls) => Object.keys(T).filter((id) => T[id].cls === cls).sort();
-assert.deepEqual(byCls('E'), ['editRedo', 'editUndo', 'fileCloseStudio', 'fileOpenLibrary', 'fileRecover', 'fileSimple']);
+// + the macro extras the operator alone uses (EXTRAS.md §4.3): the Recorder, the startup texts, Remove Installed Macros
+assert.deepEqual(byCls('E'), ['editRedo', 'editUndo', 'fileCloseStudio', 'fileOpenLibrary', 'fileRecover', 'fileSimple', 'macRecord', 'macRemoveInstalled', 'macStartup', 'optStartup']);
+assert.equal(T.macRecord.refuse, 'err.macReasonRecorder');
+assert.equal(T.macStartup.refuse, 'err.macReasonStartup');
+assert.equal(T.optStartup.refuse, 'err.macReasonStartup');
+assert.equal(T.macRemoveInstalled.refuse, 'err.macReasonInstalled');
 assert.equal(T.fileOpenLibrary.refuse, 'err.macReasonLibrary');
 assert.equal(T.fileSimple.refuse, 'err.macReasonHost');
 assert.equal(T.fileCloseStudio.refuse, 'err.macReasonHost');
@@ -73,7 +78,7 @@ assert.equal(T.fileRecover.refuse, 'err.macReasonRecover');
 assert.equal(T.editUndo.refuse, 'err.macReasonUndo');
 assert.equal(T.editRedo.refuse, 'err.macReasonUndo');
 assert.deepEqual(byCls('F'), ['fileImportLut', 'fileImportResults', 'fileImportTextImage', 'fileOpen', 'fileSaveJpeg', 'fileSaveLut', 'fileSavePng',
-  'fileSaveResults', 'fileSaveSelection', 'fileSaveTextImage', 'fileSaveTiff', 'fileSaveXY', 'macRun', 'toolsSaveXY'], 'every command that reads or writes a file of the user is class F');
+  'fileSaveResults', 'fileSaveSelection', 'fileSaveTextImage', 'fileSaveTiff', 'fileSaveXY', 'macRun', 'toolsSaveXY'].concat(['batchMacro', 'macInstall']).sort(), 'every command that reads or writes a file of the user is class F');
 // a command that calls pickFile / saveFile from its run is in that list (static scan of the command modules)
 const DIR = path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio');
 for (const f of fs.readdirSync(DIR).filter((x) => /^ij-cmds-.*\.js$/.test(x) && x !== 'ij-cmds-macro.js')) {
@@ -98,7 +103,7 @@ const IJ = fixture('ij-dialogs.json'), FJ = fixture('fiji-macro-keys.json');
 if (IJ) {
   const fijiOnly = new Set(['16 colors', 'HiLo']);
   for (const [id, e] of Object.entries(T)) {
-    if (e.cls === 'A' || e.cls === 'F' || (e.cls === 'E' && !['Recover...', 'Back to Simple view', 'Close Studio', 'Open from Library...', 'Redo'].includes(e.name))) {
+    if (e.cls === 'A' || e.cls === 'F' || (e.cls === 'E' && !['Recover...', 'Back to Simple view', 'Close Studio', 'Open from Library...', 'Redo', 'Remove Installed Macros'].includes(e.name))) {
       assert.ok(Object.prototype.hasOwnProperty.call(IJ.commands, e.name), id + ': "' + e.name + '" is no ImageJ 1.54p command');
     }
     if (e.cls === 'B' && FJ) assert.ok(Object.prototype.hasOwnProperty.call(FJ.commands, e.name), id + ': "' + e.name + '" is not in the Fiji capture');

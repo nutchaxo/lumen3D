@@ -1,0 +1,1021 @@
+{
+  "imagej": "1.54p",
+  "generator": "tools/ij_fixtures/macro/MathGolden.java",
+  "layout": "each file = the image's planes in stack order, little-endian: 8-bit 1 byte, 16-bit uint16, 32-bit float32, 24-bit RGB = for each slice the R plane, then G, then B (1 byte each)",
+  "fillFormula": {
+    "8": "(x*5 + y*3 + z*40) & 255",
+    "16": "(x*701 + y*263 + z*9001) % 65536",
+    "32": "(float)((x-7)*13.25 + (y-3)*0.5 - z*2.75)",
+    "24": "r = (x*7 + z*50) & 255, g = (y*11 + 30) & 255, b = (x*3 + y*5 + 200) & 255"
+  },
+  "note": "z = 0-based slice index; currentSlice = the slice shown when the command ran (1-based); probe = a few output values read back by the jar (x, y, z, value) to check the layout by hand",
+  "cases": {
+    "v-times-2-8bit": {
+      "image": {
+        "bitDepth": 8,
+        "width": 64,
+        "height": 48,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v*2",
+      "log": [],
+      "error": null,
+      "input": "v-times-2-8bit.in.bin",
+      "inputSha256": "49eb476d94d565faa420d82693b1b7079798cb987fc9ad3e88c09f1090ea9dfd",
+      "data": "v-times-2-8bit.out.bin",
+      "sha256": "92d06679e54ed136b47cc532dcbba9855ea2b8e336744538e32f41e38baffcc6",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [63, 0, 0, 118], [32, 24, 0, 255], [63, 47, 0, 255]]
+    },
+    "default-sin-d": {
+      "image": {
+        "bitDepth": 8,
+        "width": 64,
+        "height": 48,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v+50*sin(d/10)",
+      "log": [],
+      "error": null,
+      "input": "default-sin-d.in.bin",
+      "inputSha256": "49eb476d94d565faa420d82693b1b7079798cb987fc9ad3e88c09f1090ea9dfd",
+      "data": "default-sin-d.out.bin",
+      "sha256": "8ab463815e2c03dc9aed200769d2cffc690ed105cdf2100c12ed22568a4c7078",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [63, 0, 0, 23], [32, 24, 0, 232], [63, 47, 0, 167]]
+    },
+    "x-clamp": {
+      "image": {
+        "bitDepth": 8,
+        "width": 40,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=x*10",
+      "log": [],
+      "error": null,
+      "input": "x-clamp.in.bin",
+      "inputSha256": "64602431f29f27d65e42c82e0653df556194652a66f47e014bb599087cedb6d1",
+      "data": "x-clamp.out.bin",
+      "sha256": "b611ea31bd1dd66c390ca0ad645812b9b3c02a48f0b939c335993c0fe65f3715",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [39, 0, 0, 255], [20, 4, 0, 200], [39, 7, 0, 255]]
+    },
+    "angle-a": {
+      "image": {
+        "bitDepth": 32,
+        "width": 17,
+        "height": 13,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=a",
+      "log": [],
+      "error": null,
+      "input": "angle-a.in.bin",
+      "inputSha256": "b35c8cf78d1e397340db5564d749f5b2bf1b43fa735f945618e473075604100a",
+      "data": "angle-a.out.bin",
+      "sha256": "7f0dedd047ed9b78e38b14718ec8a99627ec1834db452593b872031804b619a6",
+      "changed": true,
+      "probe": [[0, 0, 0, 2.498091459274292], [16, 0, 0, 0.6435011029243469], [8, 6, 0, 0], [16, 12, 0, 5.639684200286865]]
+    },
+    "angle-a-8bit": {
+      "image": {
+        "bitDepth": 8,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=a*40",
+      "log": [],
+      "error": null,
+      "input": "angle-a-8bit.in.bin",
+      "inputSha256": "5712fadfd3e8bb34d2302729a39e40fcae7d12419b7c4e056c67db264abcde8e",
+      "data": "angle-a-8bit.out.bin",
+      "sha256": "e36b42f4d982b93017c4b752910af5daa4ce0ee378dcd3cff171a25c8d6b6324",
+      "changed": true,
+      "probe": [[0, 0, 0, 101], [31, 0, 0, 25], [16, 12, 0, 188], [31, 23, 0, 224]]
+    },
+    "distance-d": {
+      "image": {
+        "bitDepth": 32,
+        "width": 17,
+        "height": 13,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=d",
+      "log": [],
+      "error": null,
+      "input": "distance-d.in.bin",
+      "inputSha256": "b35c8cf78d1e397340db5564d749f5b2bf1b43fa735f945618e473075604100a",
+      "data": "distance-d.out.bin",
+      "sha256": "f31e26dbd5303cefb04031fa1396c2d67204b07b95bbaf138717df085e98bf38",
+      "changed": true,
+      "probe": [[0, 0, 0, 10], [16, 0, 0, 10], [8, 6, 0, 0], [16, 12, 0, 10]]
+    },
+    "distance-d-odd-even": {
+      "image": {
+        "bitDepth": 32,
+        "width": 16,
+        "height": 11,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=d+a/100",
+      "log": [],
+      "error": null,
+      "input": "distance-d-odd-even.in.bin",
+      "inputSha256": "aad38e673fe453743d033c33df965bd8e5e06abd6e2fd2007068b803e5a6d7a1",
+      "data": "distance-d-odd-even.out.bin",
+      "sha256": "c74d1642e11fab072167e017da50ed39dfebdf3ee6609dbdd0310dfd88a5bf43",
+      "changed": true,
+      "probe": [[0, 0, 0, 9.459811210632324], [15, 0, 0, 8.608528137207031], [8, 5, 0, 0], [15, 10, 0, 8.658954620361328]]
+    },
+    "16bit-times-100": {
+      "image": {
+        "bitDepth": 16,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v*100",
+      "log": [],
+      "error": null,
+      "input": "16bit-times-100.in.bin",
+      "inputSha256": "794b507570f76e1605344ae4359632eb8d5157bd559eb99d4fe3334904d246c1",
+      "data": "16bit-times-100.out.bin",
+      "sha256": "5a4758a131d321ef743f2c7676e9156d1fae6f84a0465740430e0ed148ac24a8",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [31, 0, 0, 65535], [16, 12, 0, 65535], [31, 23, 0, 65535]]
+    },
+    "32bit-sqrt": {
+      "image": {
+        "bitDepth": 32,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=sqrt(v)",
+      "log": [],
+      "error": null,
+      "input": "32bit-sqrt.in.bin",
+      "inputSha256": "bbd83bd237958cf2b67303ca33c6ba8b9aa4caa5e1b7f178e8368525103cc333",
+      "data": "32bit-sqrt.out.bin",
+      "sha256": "de05ca00e27f051f0fc2975e771489c6761a8e801284fbaa6a9844fde1ed942c",
+      "changed": true,
+      "probe": [[0, 0, 0, "NaN"], [31, 0, 0, 17.790447235107422], [16, 12, 0, 11.124298095703125], [31, 23, 0, 18.11077117919922]]
+    },
+    "32bit-x-over-w": {
+      "image": {
+        "bitDepth": 32,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=x/w+y/h",
+      "log": [],
+      "error": null,
+      "input": "32bit-x-over-w.in.bin",
+      "inputSha256": "bbd83bd237958cf2b67303ca33c6ba8b9aa4caa5e1b7f178e8368525103cc333",
+      "data": "32bit-x-over-w.out.bin",
+      "sha256": "2d9b606a50f13c21c5f0e4d478cfa36170b1a362da325244126832733822d276",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [31, 0, 0, 0.96875], [16, 12, 0, 1], [31, 23, 0, 1.9270833730697632]]
+    },
+    "32bit-negative-nan": {
+      "image": {
+        "bitDepth": 32,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=log(v-100)",
+      "log": [],
+      "error": null,
+      "input": "32bit-negative-nan.in.bin",
+      "inputSha256": "795f85de21dccd3a89744cd46a72a291444a54d06dd6f79d381f77f8564d8282",
+      "data": "32bit-negative-nan.out.bin",
+      "sha256": "46b4c723f07c84e4f5c20ad663a3ed4a696fb310b19328854f427de9902a048d",
+      "changed": true,
+      "probe": [[0, 0, 0, "NaN"], [15, 0, 0, 1.504077434539795], [8, 4, 0, "NaN"], [15, 7, 0, 2.079441547393799]]
+    },
+    "rgb-invert": {
+      "image": {
+        "bitDepth": 24,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=255-v",
+      "log": [],
+      "error": null,
+      "input": "rgb-invert.in.bin",
+      "inputSha256": "43985a1aa36f4ad82a976bf3fbad8572d23229b6491b608a5753ae81a7f43274",
+      "data": "rgb-invert.out.bin",
+      "sha256": "ece0e1f8220e275930363f1f481cfcb94231b6c8d33d4651586e0120aeb24ad1",
+      "changed": true,
+      "probe": [[0, 0, 0, "#ffe137"], [31, 0, 0, "#26e1da"], [16, 12, 0, "#8f5dcb"], [31, 23, 0, "#26e467"]]
+    },
+    "rgb-getpixel-packed": {
+      "image": {
+        "bitDepth": 24,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=getPixel(w-1-x,y)",
+      "log": [],
+      "error": null,
+      "input": "rgb-getpixel-packed.in.bin",
+      "inputSha256": "43985a1aa36f4ad82a976bf3fbad8572d23229b6491b608a5753ae81a7f43274",
+      "data": "rgb-getpixel-packed.out.bin",
+      "sha256": "d0627a6d13fc082fc36ea325765c4bc57052f7ac9e128245180c6e272a131f60",
+      "changed": true,
+      "probe": [[0, 0, 0, "#d91e25"], [31, 0, 0, "#001ec8"], [16, 12, 0, "#69a231"], [31, 23, 0, "#001b3b"]]
+    },
+    "rgb-getpixel-arith": {
+      "image": {
+        "bitDepth": 24,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=getPixel(x,y)+1",
+      "log": [],
+      "error": null,
+      "input": "rgb-getpixel-arith.in.bin",
+      "inputSha256": "3a4a08fd7eb3179dceba473326a4c579f98ccec6297b65d45d5f8b7f5d82fb64",
+      "data": "rgb-getpixel-arith.out.bin",
+      "sha256": "df99b9245b84e267d08986b62e1754520f7c905d27698ba154c77d16d1d59204",
+      "changed": true,
+      "probe": [[0, 0, 0, "#001ec9"], [15, 0, 0, "#691ef6"], [8, 4, 0, "#384af5"], [15, 7, 0, "#696b19"]]
+    },
+    "rgb-x": {
+      "image": {
+        "bitDepth": 24,
+        "width": 40,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v+x*8",
+      "log": [],
+      "error": null,
+      "input": "rgb-x.in.bin",
+      "inputSha256": "87912b83fa2860a052575c7654f92e1da9a048cf0b0fabd6fb66d51a7a39f77d",
+      "data": "rgb-x.out.bin",
+      "sha256": "6ac50bf7bf566b4db11af82b3af91662432c9fabcb28e7344c838051597f4850",
+      "changed": true,
+      "probe": [[0, 0, 0, "#001ec8"], [39, 0, 0, "#ffffff"], [20, 4, 0, "#ffeab8"], [39, 7, 0, "#ffffff"]]
+    },
+    "getpixel-neighbour": {
+      "image": {
+        "bitDepth": 8,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=getPixel(x+1,y)",
+      "log": [],
+      "error": null,
+      "input": "getpixel-neighbour.in.bin",
+      "inputSha256": "5712fadfd3e8bb34d2302729a39e40fcae7d12419b7c4e056c67db264abcde8e",
+      "data": "getpixel-neighbour.out.bin",
+      "sha256": "e265b919dcd61bc5c81cb0121f312be8fb6eaa180f134af895e8a1f84c607e84",
+      "changed": true,
+      "probe": [[0, 0, 0, 5], [31, 0, 0, 0], [16, 12, 0, 121], [31, 23, 0, 0]]
+    },
+    "getpixel-16bit": {
+      "image": {
+        "bitDepth": 16,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=getPixel(x,y+1)*3",
+      "log": [],
+      "error": null,
+      "input": "getpixel-16bit.in.bin",
+      "inputSha256": "794b507570f76e1605344ae4359632eb8d5157bd559eb99d4fe3334904d246c1",
+      "data": "getpixel-16bit.out.bin",
+      "sha256": "74e4ec4a5f61dbf3d345d893eacfc256f46cf41088a6b5a9507193f48c86cfb6",
+      "changed": true,
+      "probe": [[0, 0, 0, 789], [31, 0, 0, 65535], [16, 12, 0, 43905], [31, 23, 0, 0]]
+    },
+    "getpixel-32bit": {
+      "image": {
+        "bitDepth": 32,
+        "width": 16,
+        "height": 12,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=(getPixel(x-1,y)+getPixel(x+1,y))/2",
+      "log": [],
+      "error": null,
+      "input": "getpixel-32bit.in.bin",
+      "inputSha256": "3bac75eb63a40f403dd4aa682ae3d70a060f3c104e21c176383843421cd3a14b",
+      "data": "getpixel-32bit.out.bin",
+      "sha256": "68000a20f9e32a6745e0944a137f24b2bdbe9682c8f4b0dfdbc1078a5c9adb2b",
+      "changed": true,
+      "probe": [[0, 0, 0, "NaN"], [15, 0, 0, "NaN"], [8, 6, 0, 14.75], [15, 11, 0, "NaN"]]
+    },
+    "oval-mask": {
+      "image": {
+        "bitDepth": 8,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "oval", "x": 6, "y": 5, "width": 30, "height": 22}
+      },
+      "options": "code=v=255",
+      "log": [],
+      "error": null,
+      "input": "oval-mask.in.bin",
+      "inputSha256": "5bf79241141a3066f1016050174d0d1c12661fd84bcc9e05f0d583e78b7cb717",
+      "data": "oval-mask.out.bin",
+      "sha256": "173756977eaf0e7606c002534369087daccf0fc627a6af843eda231013325fec",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [47, 0, 0, 235], [24, 20, 0, 255], [47, 39, 0, 96]]
+    },
+    "rect-roi": {
+      "image": {
+        "bitDepth": 8,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "rect", "x": 10, "y": 7, "width": 20, "height": 15}
+      },
+      "options": "code=v=v+100",
+      "log": [],
+      "error": null,
+      "input": "rect-roi.in.bin",
+      "inputSha256": "5bf79241141a3066f1016050174d0d1c12661fd84bcc9e05f0d583e78b7cb717",
+      "data": "rect-roi.out.bin",
+      "sha256": "778260d1bf803211a34bb37073a11878907ae21495da37be308476b2953ef2e8",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [47, 0, 0, 235], [24, 20, 0, 255], [47, 39, 0, 96]]
+    },
+    "rect-roi-xd": {
+      "image": {
+        "bitDepth": 32,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "rect", "x": 10, "y": 7, "width": 20, "height": 15}
+      },
+      "options": "code=v=x*1000+y+d/1000",
+      "log": [],
+      "error": null,
+      "input": "rect-roi-xd.in.bin",
+      "inputSha256": "904909d72f70b83a13e924f51e1d333c8eaf0eb17f173d67607625a56b7955c5",
+      "data": "rect-roi-xd.out.bin",
+      "sha256": "705c91e602becf4586beb75bd96b296ccfcae9067b8d3a7f4491ad8fa8793214",
+      "changed": true,
+      "probe": [[0, 0, 0, -94.25], [47, 0, 0, 528.5], [24, 20, 0, 24020], [47, 39, 0, 548]]
+    },
+    "oval-rgb": {
+      "image": {
+        "bitDepth": 24,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "oval", "x": 4, "y": 3, "width": 20, "height": 16}
+      },
+      "options": "code=v=0",
+      "log": [],
+      "error": null,
+      "input": "oval-rgb.in.bin",
+      "inputSha256": "43985a1aa36f4ad82a976bf3fbad8572d23229b6491b608a5753ae81a7f43274",
+      "data": "oval-rgb.out.bin",
+      "sha256": "39cb1d8628a513300f11f38942fba6ec11049659b273c958a94a736bcc91715c",
+      "changed": true,
+      "probe": [[0, 0, 0, "#001ec8"], [31, 0, 0, "#d91e25"], [16, 12, 0, "#000000"], [31, 23, 0, "#d91b98"]]
+    },
+    "roi-getpixel-first-rect": {
+      "image": {
+        "bitDepth": 8,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "rect", "x": 10, "y": 7, "width": 20, "height": 15}
+      },
+      "options": "code=v=getPixel(x,y)+1",
+      "log": [],
+      "error": null,
+      "input": "roi-getpixel-first-rect.in.bin",
+      "inputSha256": "5bf79241141a3066f1016050174d0d1c12661fd84bcc9e05f0d583e78b7cb717",
+      "data": "roi-getpixel-first-rect.out.bin",
+      "sha256": "a2357f4569839d0a6cf1f799625eab7b1ec8b0e3f117549e41dc38fdf6c3db72",
+      "changed": true,
+      "probe": [[0, 0, 0, 1], [47, 0, 0, 236], [24, 20, 0, 181], [47, 39, 0, 97]]
+    },
+    "roi-getpixel-first-oval": {
+      "image": {
+        "bitDepth": 8,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "oval", "x": 6, "y": 5, "width": 30, "height": 22}
+      },
+      "options": "code=v=getPixel(x,y)+1",
+      "log": [],
+      "error": null,
+      "input": "roi-getpixel-first-oval.in.bin",
+      "inputSha256": "5bf79241141a3066f1016050174d0d1c12661fd84bcc9e05f0d583e78b7cb717",
+      "data": "roi-getpixel-first-oval.out.bin",
+      "sha256": "a2357f4569839d0a6cf1f799625eab7b1ec8b0e3f117549e41dc38fdf6c3db72",
+      "changed": true,
+      "probe": [[0, 0, 0, 1], [47, 0, 0, 236], [24, 20, 0, 181], [47, 39, 0, 97]]
+    },
+    "roi-getpixel-later-rect": {
+      "image": {
+        "bitDepth": 8,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "rect", "x": 10, "y": 7, "width": 20, "height": 15}
+      },
+      "options": "code=[if (x>0) v=getPixel(x-1,y)+1; else v=7;]",
+      "log": [],
+      "error": null,
+      "input": "roi-getpixel-later-rect.in.bin",
+      "inputSha256": "5bf79241141a3066f1016050174d0d1c12661fd84bcc9e05f0d583e78b7cb717",
+      "data": "roi-getpixel-later-rect.out.bin",
+      "sha256": "3e9b6386d31071b4a8ee990a1c624ef4406ee582435f9fe07215a47c79de8b59",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [47, 0, 0, 0], [24, 20, 0, 176], [47, 39, 0, 0]]
+    },
+    "roi-getpixel-later-oval": {
+      "image": {
+        "bitDepth": 16,
+        "width": 48,
+        "height": 40,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "oval", "x": 6, "y": 5, "width": 30, "height": 22}
+      },
+      "options": "code=[if (x>0) v=getPixel(x-1,y)+1; else v=7;]",
+      "log": [],
+      "error": null,
+      "input": "roi-getpixel-later-oval.in.bin",
+      "inputSha256": "29ea213a3b7bd0b086b2e824f15d8114b02e809c1e7679d729830f8bcb8dc867",
+      "data": "roi-getpixel-later-oval.out.bin",
+      "sha256": "0172bb7719f1d2c00e21e99f2f977fb60569568eca1aaa26231391b46b5f70e9",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [47, 0, 0, 0], [24, 20, 0, 21384], [47, 39, 0, 0]]
+    },
+    "roi-getpixel-later-rgb": {
+      "image": {
+        "bitDepth": 24,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": {"type": "rect", "x": 5, "y": 4, "width": 12, "height": 10}
+      },
+      "options": "code=[if (x>0) v=getPixel(x-1,y); else v=0;]",
+      "log": [],
+      "error": null,
+      "input": "roi-getpixel-later-rgb.in.bin",
+      "inputSha256": "43985a1aa36f4ad82a976bf3fbad8572d23229b6491b608a5753ae81a7f43274",
+      "data": "roi-getpixel-later-rgb.out.bin",
+      "sha256": "adce4afe411978c95ee0df6c45308006be472521b6c0f25b2115694074ca7abb",
+      "changed": true,
+      "probe": [[0, 0, 0, "#000000"], [31, 0, 0, "#000000"], [16, 12, 0, "#69a231"], [31, 23, 0, "#000000"]]
+    },
+    "stack-z": {
+      "image": {
+        "bitDepth": 8,
+        "width": 24,
+        "height": 16,
+        "slices": 3,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=z*10 stack",
+      "log": [],
+      "error": null,
+      "input": "stack-z.in.bin",
+      "inputSha256": "42947e1d9be7fc22a3ed92212c6a2989bf407e752c5a4d8beefbbb5b30a88eac",
+      "data": "stack-z.out.bin",
+      "sha256": "9b2fa976df0c2a4b35d56805bdab7093f3cc9d04411c1a0f19ca3ca9214c1b05",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [23, 0, 0, 0], [12, 8, 0, 0], [23, 15, 0, 0], [0, 0, 1, 10], [23, 0, 1, 10], [12, 8, 1, 10], [23, 15, 1, 10], [0, 0, 2, 20], [23, 0, 2, 20], [12, 8, 2, 20], [23, 15, 2, 20]]
+    },
+    "stack-z-16bit": {
+      "image": {
+        "bitDepth": 16,
+        "width": 24,
+        "height": 16,
+        "slices": 3,
+        "currentSlice": 2,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v+z*1000 stack",
+      "log": [],
+      "error": null,
+      "input": "stack-z-16bit.in.bin",
+      "inputSha256": "407ac2a6baaa147483c66593fea643dce44f58ce276d59bdac763a7f169c10a0",
+      "data": "stack-z-16bit.out.bin",
+      "sha256": "734757c3e253fc810e98b082308a27686354875d424d4789c8414b81fd5f241f",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [23, 0, 0, 16123], [12, 8, 0, 10516], [23, 15, 0, 20068], [0, 0, 1, 10001], [23, 0, 1, 26124], [12, 8, 1, 20517], [23, 15, 1, 30069], [0, 0, 2, 20002], [23, 0, 2, 36125], [12, 8, 2, 30518], [23, 15, 2, 40070]]
+    },
+    "slice-only": {
+      "image": {
+        "bitDepth": 8,
+        "width": 24,
+        "height": 16,
+        "slices": 3,
+        "currentSlice": 2,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=255+z slice",
+      "log": [],
+      "error": null,
+      "input": "slice-only.in.bin",
+      "inputSha256": "42947e1d9be7fc22a3ed92212c6a2989bf407e752c5a4d8beefbbb5b30a88eac",
+      "data": "slice-only.out.bin",
+      "sha256": "63aa8a9736e422cfd0a6c3ceb38557ac816c304b984b006b7c1d1034a14714c6",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [23, 0, 0, 115], [12, 8, 0, 84], [23, 15, 0, 160], [0, 0, 1, 255], [23, 0, 1, 255], [12, 8, 1, 255], [23, 15, 1, 255], [0, 0, 2, 80], [23, 0, 2, 195], [12, 8, 2, 164], [23, 15, 2, 240]]
+    },
+    "stack-no-word": {
+      "image": {
+        "bitDepth": 8,
+        "width": 24,
+        "height": 16,
+        "slices": 3,
+        "currentSlice": 3,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=z*10",
+      "log": [],
+      "error": null,
+      "input": "stack-no-word.in.bin",
+      "inputSha256": "42947e1d9be7fc22a3ed92212c6a2989bf407e752c5a4d8beefbbb5b30a88eac",
+      "data": "stack-no-word.out.bin",
+      "sha256": "8ef4cef396d74ad5f53c7949bba2ccc29bc73a51bbce92c2facc1061c9e57a34",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [23, 0, 0, 115], [12, 8, 0, 84], [23, 15, 0, 160], [0, 0, 1, 40], [23, 0, 1, 155], [12, 8, 1, 124], [23, 15, 1, 200], [0, 0, 2, 20], [23, 0, 2, 20], [12, 8, 2, 20], [23, 15, 2, 20]]
+    },
+    "no-equals": {
+      "image": {
+        "bitDepth": 8,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v*2",
+      "log": [],
+      "error": null,
+      "input": "no-equals.in.bin",
+      "inputSha256": "5712fadfd3e8bb34d2302729a39e40fcae7d12419b7c4e056c67db264abcde8e",
+      "data": "no-equals.out.bin",
+      "sha256": "659a740cd8fd441581e858384b1bf6cec006a981e5b4a3646b437d5a54f7131d",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [31, 0, 0, 255], [16, 12, 0, 232], [31, 23, 0, 255]]
+    },
+    "nan-8bit": {
+      "image": {
+        "bitDepth": 8,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=NaN",
+      "log": [],
+      "error": null,
+      "input": "nan-8bit.in.bin",
+      "inputSha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "data": "nan-8bit.out.bin",
+      "sha256": "38723a2e5e8a17aa7950dc008209944e898f69a7bd10a23c839d341e935fd5ca",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 0], [8, 4, 0, 0], [15, 7, 0, 0]]
+    },
+    "nan-16bit": {
+      "image": {
+        "bitDepth": 16,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=0/0",
+      "log": [],
+      "error": null,
+      "input": "nan-16bit.in.bin",
+      "inputSha256": "b60b7bc4d68fdb477e7e77bc36b423115b29c400b7cd4223bed662b479099ba4",
+      "data": "nan-16bit.out.bin",
+      "sha256": "5341e6b2646979a70e57653007a1f310169421ec9bdd9f1a5648f75ade005af1",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 0], [8, 4, 0, 0], [15, 7, 0, 0]]
+    },
+    "negative-trunc": {
+      "image": {
+        "bitDepth": 8,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[if (x%2==0) v=-5.7; else v=5.7+v/10;]",
+      "log": [],
+      "error": null,
+      "input": "negative-trunc.in.bin",
+      "inputSha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "data": "negative-trunc.out.bin",
+      "sha256": "633851958f8e44793197eaaaeafdec16ad30069f19220917503dfb8ce275e999",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 13], [8, 4, 0, 0], [15, 7, 0, 15]]
+    },
+    "negative-trunc-16bit": {
+      "image": {
+        "bitDepth": 16,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[if (x%2==0) v=-5.7; else v=5.7+v/10;]",
+      "log": [],
+      "error": null,
+      "input": "negative-trunc-16bit.in.bin",
+      "inputSha256": "b60b7bc4d68fdb477e7e77bc36b423115b29c400b7cd4223bed662b479099ba4",
+      "data": "negative-trunc-16bit.out.bin",
+      "sha256": "f1dff50bf3f2b3f12e882e34d9fba9698c349cb771626188cd8b98ee22f2f090",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 1057], [8, 4, 0, 0], [15, 7, 0, 1241]]
+    },
+    "16bit-clamp-70000": {
+      "image": {
+        "bitDepth": 16,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[if (x<5) v=70000; else v=-3;]",
+      "log": [],
+      "error": null,
+      "input": "16bit-clamp-70000.in.bin",
+      "inputSha256": "b60b7bc4d68fdb477e7e77bc36b423115b29c400b7cd4223bed662b479099ba4",
+      "data": "16bit-clamp-70000.out.bin",
+      "sha256": "d5036d75477e2433edd9c610fe43f1f7ed18d7e4064949dcef45e1efdc816ed9",
+      "changed": true,
+      "probe": [[0, 0, 0, 65535], [15, 0, 0, 0], [8, 4, 0, 0], [15, 7, 0, 0]]
+    },
+    "8bit-huge": {
+      "image": {
+        "bitDepth": 8,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=1e12*(x-8)",
+      "log": [],
+      "error": null,
+      "input": "8bit-huge.in.bin",
+      "inputSha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "data": "8bit-huge.out.bin",
+      "sha256": "05c1b134a66e9c801a3589f7b7fd5b555a175dd5e274d586152af089c71a6dc6",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 255], [8, 4, 0, 0], [15, 7, 0, 255]]
+    },
+    "if-else": {
+      "image": {
+        "bitDepth": 8,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[if (v>100) v=255; else v=0;]",
+      "log": [],
+      "error": null,
+      "input": "if-else.in.bin",
+      "inputSha256": "5712fadfd3e8bb34d2302729a39e40fcae7d12419b7c4e056c67db264abcde8e",
+      "data": "if-else.out.bin",
+      "sha256": "e73f54ae35c1c5ecc21bb246f27f5f9a18aff0a3aa88f81e613cbf173ff9ac2e",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [31, 0, 0, 255], [16, 12, 0, 255], [31, 23, 0, 255]]
+    },
+    "print-count-2x2": {
+      "image": {
+        "bitDepth": 8,
+        "width": 2,
+        "height": 2,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[print(v); v=v+1;]",
+      "log": ["0", "0", "5", "3", "8"],
+      "error": null,
+      "input": "print-count-2x2.in.bin",
+      "inputSha256": "3d688ac24096aa2be73aa899b21499ef9fa5a1c0e472aeb908cfa7191237dca5",
+      "data": "print-count-2x2.out.bin",
+      "sha256": "4c6bbd2a7f7353693e95190c59446c73d3b10e0e8c84f7f1b74b23fbbda95a3d",
+      "changed": true,
+      "probe": [[0, 0, 0, 1], [1, 0, 0, 6], [1, 1, 0, 9], [1, 1, 0, 9]]
+    },
+    "print-no-equals": {
+      "image": {
+        "bitDepth": 8,
+        "width": 3,
+        "height": 2,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[print(x+\",\"+y+\":\"+v);]",
+      "log": [],
+      "error": {
+        "message": "Number or numeric function expected",
+        "line": 3,
+        "excerpt": "v = <print> ( x + \",\" + y + \":\" + v ) ; ; ",
+        "dialog": "Number or numeric function expected in line 3\n \nv = <print> ( x + \",\" + y + \":\" + v ) ; ; "
+      },
+      "input": "print-no-equals.in.bin",
+      "inputSha256": "0c07cd9e0eb5e7e81b16a548ecc5a4f1afb26e5ad293e6932fe76426b8779762",
+      "data": "print-no-equals.out.bin",
+      "sha256": "0c07cd9e0eb5e7e81b16a548ecc5a4f1afb26e5ad293e6932fe76426b8779762",
+      "changed": false,
+      "probe": [[0, 0, 0, 0], [2, 0, 0, 10], [1, 1, 0, 8], [2, 1, 0, 13]]
+    },
+    "print-xy": {
+      "image": {
+        "bitDepth": 8,
+        "width": 3,
+        "height": 2,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[v=v; print(x+\",\"+y+\":\"+v);]",
+      "log": ["0,0:0", "0,0:0", "1,0:5", "2,0:10", "0,1:3", "1,1:8", "2,1:13"],
+      "error": null,
+      "input": "print-xy.in.bin",
+      "inputSha256": "0c07cd9e0eb5e7e81b16a548ecc5a4f1afb26e5ad293e6932fe76426b8779762",
+      "data": "print-xy.out.bin",
+      "sha256": "0c07cd9e0eb5e7e81b16a548ecc5a4f1afb26e5ad293e6932fe76426b8779762",
+      "changed": false,
+      "probe": [[0, 0, 0, 0], [2, 0, 0, 10], [1, 1, 0, 8], [2, 1, 0, 13]]
+    },
+    "error-unknown-var": {
+      "image": {
+        "bitDepth": 8,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v*k",
+      "log": [],
+      "error": {
+        "message": "Undefined variable",
+        "line": 3,
+        "excerpt": "v = v * <k> ; ",
+        "dialog": "Undefined variable in line 3\n \nv = v * <k> ; "
+      },
+      "input": "error-unknown-var.in.bin",
+      "inputSha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "data": "error-unknown-var.out.bin",
+      "sha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "changed": false,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 75], [8, 4, 0, 52], [15, 7, 0, 96]]
+    },
+    "error-syntax": {
+      "image": {
+        "bitDepth": 8,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[v=v*(2;]",
+      "log": [],
+      "error": {
+        "message": "')' expected",
+        "line": 3,
+        "excerpt": "v = v * ( 2 <;> ; ",
+        "dialog": "')' expected in line 3\n \nv = v * ( 2 <;> ; "
+      },
+      "input": "error-syntax.in.bin",
+      "inputSha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "data": "error-syntax.out.bin",
+      "sha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "changed": false,
+      "probe": [[0, 0, 0, 0], [15, 0, 0, 75], [8, 4, 0, 52], [15, 7, 0, 96]]
+    },
+    "options-v-prefix": {
+      "image": {
+        "bitDepth": 8,
+        "width": 16,
+        "height": 8,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "v=v+1",
+      "log": [],
+      "error": null,
+      "input": "options-v-prefix.in.bin",
+      "inputSha256": "56288ed908640fd972d5361f468fbea46115c251381228caaff5ed2b59da6cff",
+      "data": "options-v-prefix.out.bin",
+      "sha256": "b673bf319d3e5e2fabfb4988d50e5b577698c2c919af04bda1e028cf27f1b1ab",
+      "changed": true,
+      "probe": [[0, 0, 0, 1], [15, 0, 0, 76], [8, 4, 0, 53], [15, 7, 0, 97]]
+    },
+    "functions-and-vars": {
+      "image": {
+        "bitDepth": 8,
+        "width": 32,
+        "height": 24,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=[t=floor(x/8); v=t*40+round(y/4);]",
+      "log": [],
+      "error": null,
+      "input": "functions-and-vars.in.bin",
+      "inputSha256": "5712fadfd3e8bb34d2302729a39e40fcae7d12419b7c4e056c67db264abcde8e",
+      "data": "functions-and-vars.out.bin",
+      "sha256": "c0dadce83b8a16c8bd8bc0a63c7457019db248d4b151d1c8d9c3116a68a4ad12",
+      "changed": true,
+      "probe": [[0, 0, 0, 0], [31, 0, 0, 120], [16, 12, 0, 83], [31, 23, 0, 126]]
+    },
+    "width-height": {
+      "image": {
+        "bitDepth": 8,
+        "width": 20,
+        "height": 12,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=w*10+h",
+      "log": [],
+      "error": null,
+      "input": "width-height.in.bin",
+      "inputSha256": "6330430ef4326c12a3b84e8e088818587185999c6eaee77ff90f1af18574cc0e",
+      "data": "width-height.out.bin",
+      "sha256": "5c3341e7f847774fe66c13f811984ecfbb31e4661c7f3139a9a07e0190f372a9",
+      "changed": true,
+      "probe": [[0, 0, 0, 212], [19, 0, 0, 212], [10, 6, 0, 212], [19, 11, 0, 212]]
+    },
+    "getwidth-host": {
+      "image": {
+        "bitDepth": 8,
+        "width": 20,
+        "height": 12,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=getWidth()+getHeight()",
+      "log": [],
+      "error": null,
+      "input": "getwidth-host.in.bin",
+      "inputSha256": "6330430ef4326c12a3b84e8e088818587185999c6eaee77ff90f1af18574cc0e",
+      "data": "getwidth-host.out.bin",
+      "sha256": "6d83d3271e1184efcbe6b59351fbeb9adf187ab4b76d9ece8d737ebd7d5858a4",
+      "changed": true,
+      "probe": [[0, 0, 0, 32], [19, 0, 0, 32], [10, 6, 0, 32], [19, 11, 0, 32]]
+    },
+    "perf-512": {
+      "image": {
+        "bitDepth": 8,
+        "width": 512,
+        "height": 512,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v+50*sin(d/10)",
+      "timingOnly": true,
+      "jarMs": 81,
+      "log": [],
+      "error": null
+    },
+    "perf-512-times2": {
+      "image": {
+        "bitDepth": 8,
+        "width": 512,
+        "height": 512,
+        "slices": 1,
+        "currentSlice": 1,
+        "fill": "ramp",
+        "roi": null
+      },
+      "options": "code=v=v*2",
+      "timingOnly": true,
+      "jarMs": 30,
+      "log": [],
+      "error": null
+    }
+  }
+}

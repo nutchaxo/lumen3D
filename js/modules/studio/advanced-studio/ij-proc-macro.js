@@ -11,6 +11,10 @@
  *                     (event `macro.rpc` → passive command `macro.reply`), a write-behind queue, a mirror of the page state, the
  *                     working copies of the planes a macro writes (published through E.commitPlanes), the Log stream, and every
  *                     built-in of the phase that needs the Studio (image model, stacks, page state, call(), the refusals).
+ *                     Phase M7 + M8 (DOCS/studio-advanced/macros/EXTRAS.md §7, §8, §10): an installed macro set's entries (`entry`: one
+ *                     Program per set, its globals kept between runs; run("<installed name>") nested), Process › Batch › Macro
+ *                     (`batch`: BatchProcessor.processFolder / Test; run("Macro... ") nested), readVars / returnValue,
+ *                     and the host of a Process › Math › Macro program (ij-macro-math.js).
  *
  * The built-ins are installed lazily, once, the first time a run starts (installBuiltins): this file never reads IJMacro at load
  * time, so its page copy is inert and a worker whose language file failed never half-installs.
@@ -38,7 +42,10 @@
     // files (FILES.md §12.1)
     'err.macFolderNotGranted', 'err.macFolderStale', 'err.macReadOnly', 'err.macWriteRefused', 'err.macRootDelete', 'err.macPermission',
     'err.macQuota', 'err.macNoStorage', 'err.macFileGone', 'err.macFileBusy', 'err.macFileTooLarge', 'err.macSaveFormat',
-    'err.macReasonSequence', 'dlg.mac.files.readme', 'dlg.mac.files.readmeManual', 'dlg.mac.files.readmeDelete', 'dlg.mac.files.readmeRename'
+    'err.macReasonSequence', 'dlg.mac.files.readme', 'dlg.mac.files.readmeManual', 'dlg.mac.files.readmeDelete', 'dlg.mac.files.readmeRename',
+    // Math macro, Install, Batch (EXTRAS.md §10.7)
+    'err.macMathHost', 'err.macInstallExt', 'dlg.mac.batch.noInput', 'dlg.mac.batch.badInput', 'dlg.mac.batch.badOutput', 'dlg.mac.batch.noCode',
+    'dlg.mac.batch.errTitle'
   ]);
 
   /** The closed list of page methods the worker calls (§4.1). interactive = no timeout (it waits for the operator). */
@@ -68,18 +75,21 @@
     'vfs.confirm': Object.freeze({ interactive: true }),
     'vfs.regrant': Object.freeze({ interactive: true }),
     'text.open': Object.freeze({ interactive: false }),
-    'window.text': Object.freeze({ interactive: false })
+    'window.text': Object.freeze({ interactive: false }),
+    // Batch / Install (EXTRAS.md §10.2)
+    'batch.prefs': Object.freeze({ interactive: false }),
+    'install.set': Object.freeze({ interactive: false })
   });
 
   /** The closed list of run() file operations the worker executes (FILES.md §9.2): what a CmdResult `status: 'file'` may name. */
   const FILE_OPS = Object.freeze(['open', 'importTextImage', 'importLut', 'importResults', 'importTable', 'importTextFile', 'importXY', 'importRaw', 'save', 'saveTiff',
     'saveJpeg', 'savePng', 'saveZip', 'saveRaw', 'saveTextImage', 'saveLut', 'saveSelection', 'saveXY', 'saveXYCoordinates',
-    'saveResults', 'saveText', 'runMacro']);
+    'saveResults', 'saveText', 'runMacro', 'install', 'batchMacro']);
 
   /** The closed list of write-behind operations (§4.2), applied by the page in order before the method of the next request. */
   const WRITE_OPS = Object.freeze(['roi.set', 'display.set', 'display.lut', 'display.mode', 'display.visible', 'thr.set', 'thr.reset',
     'thr.mode', 'table.replace', 'table.remove', 'table.rename', 'table.show', 'rm.set', 'rm.select', 'rm.show', 'setting.set',
-    'measurements.set', 'colors.set', 'tool.set', 'status.show', 'progress.show']);
+    'measurements.set', 'colors.set', 'tool.set', 'status.show', 'progress.show', 'batch.save']);
 
   /**
    * setOption(name, state) names with a Studio meaning, from Functions.setOption 1.54p (the order of its if/else chain, lower-cased
@@ -88,6 +98,7 @@
    *   { measurement: group } a Set Measurements group (Analyzer.setMeasurement), written with measurements.set
    *   { noop: true }         a host option without a browser meaning (accepted, nothing happens)
    *   { rmShow: true }       "Show All" of the ROI Manager;  { changes: true } the image's `changes` flag
+   *   { batchOutput: true }  BatchProcessor.saveOutput(state): whether the batch saves the image being processed
    * A name that matches none is ImageJ's "Invalid option".
    */
   const OPTION_SETTINGS = Object.freeze({
@@ -118,7 +129,7 @@
     'jfilechooser': Object.freeze({ noop: true, match: 'start' }),
     'auto': Object.freeze({ noop: true, match: 'start' }),
     'antialiasedtext': Object.freeze({ noop: true, match: 'eq' }),
-    'savebatchoutput': Object.freeze({ noop: true, match: 'eq' }),
+    'savebatchoutput': Object.freeze({ batchOutput: true, match: 'eq' }),
     'converttomicrons': Object.freeze({ noop: true, match: 'start' }),
     'supportmacroundo': Object.freeze({ noop: true, match: 'start' }),
     'inverty': Object.freeze({ measurement: 'invertY', match: 'eq' }),
@@ -235,10 +246,43 @@
     return v === null || v !== v ? -1 : d2i(v);
   }
 
+  // ---------------------------------------------------------------- Process › Batch › Macro (BatchProcessor 1.54p), pure parts
+  /** BatchProcessor.formats, in its order. */
+  const BATCH_FORMATS = Object.freeze(['TIFF', '8-bit TIFF', 'JPEG', 'GIF', 'PNG', 'PGM', 'BMP', 'FITS', 'Text Image', 'ZIP', 'Raw']);
+  /** BatchProcessor.validateFormat: an unknown format is the first one. */
+  function validateBatchFormat(format) { return BATCH_FORMATS.indexOf(format) >= 0 ? format : BATCH_FORMATS[0]; }
+  /* FolderOpener.containsRegex (not legacy): name.replaceAll(regex, "").length() != name.length(); a bad pattern counts as a match. */
+  function containsRegex(name, regex) {
+    let rx;
+    try { rx = new RegExp(regex, 'g'); } catch (_) { return true; }
+    return name.replace(rx, '').length !== name.length;
+  }
+  /**
+   * FolderOpener.getFilteredList(list, filter, title): '' or '*' = no filter; "(…)" = a regular expression; else a substring.
+   * → { list } (a new array, the input order kept) or { list: null, message } (ImageJ's IJ.error text, shown titled `title`).
+   */
+  function filteredList(list, filter) {
+    let f = filter;
+    if (f !== null && f !== undefined && (f === '' || f === '*')) f = null;
+    if (!list || f === null || f === undefined) return { list: list ? list.slice() : list };
+    let isRegex = false;
+    if (f.length >= 2 && f.startsWith('(') && f.endsWith(')')) { f = f.substring(1, f.length - 1); isRegex = true; }
+    const out = [];
+    for (const name of list) if ((isRegex && containsRegex(name, f)) || name.indexOf(f) >= 0) out.push(name);
+    if (!out.length) {
+      return { list: null, message: isRegex ? "None of the file names contain the regular expression '" + f + "'."
+        : 'None of the ' + list.length + " files contain '" + f + "' in the name." };
+    }
+    return { list: out };
+  }
+
   root.IJMacroProto = Object.freeze({
     TEXT_KEYS, RPC_METHODS, WRITE_OPS, OPTION_SETTINGS, FILE_OPS,
     log: Object.freeze({ MAX_LINES: LOG_MAX_LINES, apply: logApply, text: logText }),
-    optionFor
+    optionFor,
+    BATCH_FORMATS, validateBatchFormat, filteredList,
+    /** Worker: installs the Studio built-ins in the language (also what a Process › Math › Macro step calls, ij-macro-math.js). */
+    ensureBuiltins() { installBuiltins(); }
   });
 
   // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -708,25 +752,40 @@
   async function macroRun(a, E) {
     const IJMacro = LANG();
     if (!IJMacro || typeof IJMacro.run !== 'function') throw ijError('IJ_MODULE_MISSING', 'the macro language did not load');
-    if (!a || typeof a.runId !== 'string' || !a.runId || typeof a.source !== 'string') throw ijError('IJ_BAD_ARGS', 'macro.run');
+    if (!a || typeof a.runId !== 'string' || !a.runId) throw ijError('IJ_BAD_ARGS', 'macro.run');
+    const entry = a.entry && typeof a.entry === 'object' ? checkEntry(a.entry) : null;
+    const batch = a.batch && typeof a.batch === 'object' ? checkBatch(a.batch) : null;
+    if (!entry && typeof a.source !== 'string') throw ijError('IJ_BAD_ARGS', 'macro.run');
     if (RUNS.size) throw ijError('IJ_MACRO_BUSY', 'a macro is already running');
     installBuiltins();
     const M = new Run(a, E);
     RUNS.set(a.runId, M);
     const opt = a.options && typeof a.options === 'object' ? a.options : {};
-    let groupOpen = false, poll = null, res = null, endError = null, files = { error: null, changedRoots: [] };
+    M.runOpts = { fastPath: opt.fastPath !== false, syncLoops: opt.syncLoops === true, syncRecursion: opt.syncRecursion === true };
+    const readVars = Array.isArray(a.readVars) ? a.readVars.filter((n) => typeof n === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n)).slice(0, 256) : null;
+    let groupOpen = false, poll = null, res = null, endError = null, files = { error: null, changedRoots: [] }, batchOut = null;
+    const MM = root.IJMacroMath;
+    let oldSink = null;
+    if (MM) { MM.setTexts(M.texts); oldSink = MM.setLogSink((s) => M.log(s)); }
     try {
       await openRunFiles(M, a);
       if (E.macroGroup && typeof E.macroGroup.begin === 'function') { E.macroGroup.begin({ runId: a.runId, labelKey: 'op.macRun' }); groupOpen = true; }
       if (typeof E.onCancel === 'function') E.onCancel(() => M.abort());
       // the cancel of the request also reaches a run whose engine has no onCancel hook (E.check throws once the task is cancelled)
       poll = setInterval(() => { try { E.check(); } catch (_) { M.abort(); } }, CANCEL_POLL_MS);
-      res = await IJMacro.run(a.source, {
-        host: M.host, signal: M.ctrl.signal, onLog: (s) => M.log(s), arg: typeof a.arg === 'string' ? a.arg : '',
-        fastPath: opt.fastPath !== false, syncLoops: opt.syncLoops === true, syncRecursion: opt.syncRecursion === true, sliceMs: 50
-      });
+      const o = Object.assign({ host: M.host, signal: M.ctrl.signal, onLog: (s) => M.log(s), arg: typeof a.arg === 'string' ? a.arg : '', sliceMs: 50 }, M.runOpts);
+      if (readVars) o.readVars = readVars;
+      if (batch) {
+        const out = await runBatch(M, batch, a.source, false);
+        res = out.res; batchOut = out.batch;
+      } else if (entry) {
+        const pe = preparedEntry(IJMacro, entry);
+        o.entry = { start: pe.start, name: entry.name };
+        res = await IJMacro.run(pe.prepared, o);
+      } else res = await IJMacro.run(a.source, o);
     } finally {
       if (poll) clearInterval(poll);
+      if (MM) MM.setLogSink(oldSink);
       // the writers reach their files before the end of the run is published (F15), also after an error or an abort
       try { files = await endRunFiles(M); } catch (err) { console.error('[advanced-studio] macro files', err); }
       M.ending = true;
@@ -755,12 +814,333 @@
     // a buffered write that failed after the last statement (quota, permission) is the run's error
     const filesError = !error && !!files.error && !M.ctrl.signal.aborted;
     if (filesError) error = { message: files.error, line: 0, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: null };
+    // a batch that ran no macro (an empty folder, a failed check) has no interpreter result of its own
+    const ranOk = batchOut && !res ? !M.ctrl.signal.aborted : !!(res && res.ok);
     return {
-      ok: !!(res && res.ok) && !endError && !filesError, aborted: !!(res && res.aborted) || M.ctrl.signal.aborted, exited: !!(res && res.exited),
+      ok: ranOk && !endError && !filesError, aborted: !!(res && res.aborted) || M.ctrl.signal.aborted, exited: !!(res && res.exited),
       error, prefsWrites, changedDocs, undo: { changed: undo && Array.isArray(undo.changed) ? undo.changed : [], dropped: undo && Array.isArray(undo.dropped) ? undo.dropped : [] },
-      vfs: { needs: M.vfsNeeds.slice(), changedRoots: files.changedRoots || [] }
+      vfs: { needs: M.vfsNeeds.slice(), changedRoots: files.changedRoots || [] },
+      vars: res && res.vars && typeof res.vars === 'object' ? res.vars : {},
+      returnValue: res && typeof res.returnValue === 'string' ? res.returnValue : null,
+      batch: batchOut
     };
   }
+
+  // ---------------------------------------------------------------- installed macro sets (MacroInstaller + MacroRunner, EXTRAS.md §7, §10.1)
+  /* set key ('installed' | 'startup') -> { hash, source, prepared }: the program of an installed set and its globals, which persist between
+   * the runs of its entries (ImageJ keeps one Program per installed set); a new text is prepared afresh. */
+  const PREPARED = new Map();
+  function checkEntry(e) {
+    if (e.kind !== 'installed' || (e.set !== 'installed' && e.set !== 'startup') || typeof e.hash !== 'string' || !/^[0-9a-f]{1,16}$/.test(e.hash) ||
+      typeof e.source !== 'string' || typeof e.name !== 'string' || !(e.index === undefined || e.index === null || (Number.isInteger(e.index) && e.index >= 0)) ||
+      !(e.start === undefined || e.start === null || e.start === -1 || e.start === 0)) throw ijError('IJ_BAD_ARGS', 'entry');
+    return e;
+  }
+  /** -> { prepared, start }: start -1 = the globals only, 0 = the whole set (an anonymous one), else the token where the entry's block starts. */
+  function preparedEntry(IJMacro, e) {
+    if (typeof IJMacro.prepare !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJMacro.prepare');
+    let c = PREPARED.get(e.set);
+    // the hash is a 32-bit FNV-1a of the text: two texts can share it, so the text itself decides
+    if (!c || c.hash !== e.hash || c.source !== e.source) {
+      c = { hash: e.hash, source: e.source, prepared: IJMacro.prepare(e.source) };
+      PREPARED.set(e.set, c);
+    }
+    const macros = c.prepared.macros || [];
+    if (e.start === -1) return { prepared: c.prepared, start: -1 };
+    if (e.start === 0 || !macros.length) return { prepared: c.prepared, start: 0 };
+    const m = macros[e.index | 0];
+    // the page found the entry with IJMacroParams.scanMacros: the same names at the same ranks as the language
+    if (!m || m.name !== e.name) throw ijError('IJ_INTERNAL', 'installed entry ' + e.name);
+    return { prepared: c.prepared, start: m.start };
+  }
+  /** run("<installed name>") (Executer -> MacroInstaller.runMacroCommand -> MacroRunner.run on the current thread): the entry runs in a new
+   *  interpreter inside this run (same lane, undo group and host). Its error shows the Macro Error window and the calling macro goes on
+   *  (MacroRunner.run catches the interpreter's MACRO_CANCELED); its exit() ends the entry only; an abort ends everything. */
+  async function runInstalledNested(M, inst) {
+    const IJMacro = LANG();
+    const e = checkEntry(Object.assign({ kind: 'installed', start: null }, inst));
+    const pe = preparedEntry(IJMacro, e);
+    const res = await IJMacro.run(pe.prepared, Object.assign({ host: M.host, signal: M.ctrl.signal, onLog: (s) => M.log(s), arg: '', sliceMs: 50,
+      entry: { start: pe.start, name: e.name } }, M.runOpts));
+    M.P = null;
+    if (res.aborted || M.ctrl.signal.aborted) throw new MacroCancel('abort');
+    if (res.error && !res.error.silent) {
+      if (res.error.dialogText) await M.host.showError(res.error.dialogText);
+      else throw macroError(res.error.message);
+    }
+  }
+
+
+  // ---------------------------------------------------------------- Process › Batch › Macro (BatchProcessor 1.54p: run, processFolder, run() = Test)
+  // BatchProcessor's static saveOutput: setOption("SaveBatchOutput", b) sets it, processFolder puts it back to true after each image
+  const BATCH = { saveOutput: true };
+  const BATCH_EVENT_MS = 100;
+  function checkBatch(b) {
+    if (typeof b.input !== 'string' || typeof b.output !== 'string' || typeof b.format !== 'string' ||
+      !(b.filter === undefined || b.filter === null || typeof b.filter === 'string') || b.input.length > 4096 || b.output.length > 4096) throw ijError('IJ_BAD_ARGS', 'batch');
+    return { input: b.input, output: b.output, format: validateBatchFormat(b.format), filter: typeof b.filter === 'string' ? b.filter : '', test: b.test === true };
+  }
+  /* BatchProcessor.addSeparator */
+  function addSep(p) { return p === '' || p.endsWith('/') || p.endsWith('\\') ? p : p + '/'; }
+  /* new File(path).exists() && isDirectory(): anything the folders granted to macros cannot answer is "does not exist". */
+  async function isFolder(M, p) {
+    try {
+      return !!(await attempt(M, norm(p), () => { const r = resolveIn(M, p, HOME); return mp(statOf(M, r), (st) => !!st && st.kind === 'dir'); }, () => false));
+    } catch (e) {
+      if (e instanceof MacroCancel) throw e;
+      return false;
+    }
+  }
+  /* new File(dir).list(): every name of the folder (files, folders, dot files) in the order the file system gives them. */
+  function folderEntries(M, dir) {
+    return attempt(M, norm(dir), () => {
+      const r = resolveIn(M, dir, HOME);
+      return mp(M.vfs.list(r.vpath), (list) => (list || []).filter((e) => e && typeof e.name === 'string').map((e) => ({ name: e.name, kind: e.kind })));
+    }, () => []);
+  }
+  function batchBox(M, key, params) {
+    return M.rpc('dialog.message', { title: M.tr('dlg.mac.batch.errTitle'), text: M.tr(key, params) }).then(() => false);
+  }
+  /** BatchProcessor.run's checks (and run()'s, for Test): the first failing one shows its box (IJ.error "Batch Processor") → false. */
+  async function batchCheck(M, b, code) {
+    if (b.test) {
+      if (code === '') return batchBox(M, 'dlg.mac.batch.noCode');
+      const input = addSep(b.input);
+      return (await isFolder(M, input)) ? true : batchBox(M, 'dlg.mac.batch.badInput', { path: input });
+    }
+    if (b.input === '') return batchBox(M, 'dlg.mac.batch.noInput');
+    const input = addSep(b.input);
+    if (!(await isFolder(M, input))) return batchBox(M, 'dlg.mac.batch.badInput', { path: input });
+    const output = addSep(b.output);
+    if (output !== '' && !(await isFolder(M, output))) return batchBox(M, 'dlg.mac.batch.badOutput', { path: output });
+    if (code === '') return batchBox(M, 'dlg.mac.batch.noCode');
+    return true;
+  }
+  function batchMode(M, on) {
+    M.batch = on;
+    M.batchDocs = [];
+    if (M.E.macroGroup && typeof M.E.macroGroup.setBatch === 'function') M.E.macroGroup.setBatch(M.runId, on);
+  }
+  /* What a new Interpreter (and its Functions) starts with: the drawing state, Dialog.create, setKeyDown, setRGBWeights. */
+  function freshInterpreterState(M) {
+    M.draw = { color: null, value: NaN, lineWidth: 0, x: 0, y: 0, autoUpdate: true };
+    M.dialog = null;
+    M.keys = { alt: false, shift: false };
+    M.rgbWeights = null;
+    M.redirectErrors = false;
+    M.P = null;
+  }
+  function batchState(M) {
+    return { current: M.current, batch: M.batch, batchDocs: M.batchDocs.slice(), draw: M.draw, dialog: M.dialog, keys: M.keys, rgbWeights: M.rgbWeights,
+      redirectErrors: M.redirectErrors };
+  }
+  function restoreBatchState(M, st) {
+    M.current = M.images.has(st.current) ? st.current : M.current;
+    M.batch = st.batch; M.batchDocs = st.batchDocs;
+    if (M.E.macroGroup && typeof M.E.macroGroup.setBatch === 'function') M.E.macroGroup.setBatch(M.runId, st.batch);
+    M.draw = st.draw; M.dialog = st.dialog; M.keys = st.keys; M.rgbWeights = st.rgbWeights; M.redirectErrors = st.redirectErrors;
+    M.P = null;
+  }
+  /** IJ.openImage(path) with IJ.redirectErrorMessages(true): a hidden batch image (batch mode is on), or null when the Studio cannot read
+   *  the file as an image (a text file, a ROI set, a format without a decoder, a broken file). */
+  async function batchOpen(M, path) {
+    const V = VFSLIB();
+    let r;
+    try { r = resolveIn(M, path, HOME); } catch (e) { return fsFail(M, e, norm(path)); }
+    const name = V.javaName(r.vpath);
+    // Opener.openImage: OpenDialog's last directory and name are the file's (File.directory / File.name in the batch macro)
+    MOUNT.lastDir = dirOfVpath(r.vpath); MOUNT.lastName = name;
+    const probe = await attempt(M, r.vpath, () => mp(statOf(M, r), (st) => {
+      if (!st || st.kind !== 'file') return null;
+      return mp(M.vfs.read(r.vpath, { offset: 0, length: Math.min(132, st.size) }), (head) => ({ st, head }));
+    }), () => null);
+    if (!probe) return null;
+    const type = fileTypeOf(probe.head, name);
+    const KIND = { TIFF: ['tiff', 'tiff'], JPEG: ['picture', 'jpeg'], GIF: ['picture', 'gif'], PNG: ['picture', 'png'], BMP: ['picture', 'bmp'], JAVA_OR_TEXT: ['text', 'text'] };
+    // Opener.openImage: an unknown file goes to Bio-Formats and HandleExtraFileTypes, then IJ.error("Opener", …) — redirected to the Log
+    if (type === 'UNKNOWN') { M.log('Opener: Unsupported format or file not found:\n' + r.vpath); return null; }
+    // JAVA_OR_TEXT: a .txt is read as a text image (Opener.openTextImage), any other source file is no image
+    if (type === 'JAVA_OR_TEXT' && !name.endsWith('.txt')) return null;
+    if (!KIND[type] && type !== 'ZIP') return null;
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath, 2), () => null);
+    if (!bytes) return null;
+    const tooLarge = (err) => { const c = err && err.code; return c === 'IJ_IO_TOO_LARGE' || c === 'IJ_PICTURE_TOO_LARGE' || c === 'IJ_BUDGET' || c === 'IJ_TOO_LARGE' || c === 'IJ_OVER_BUDGET'; };
+    let image, title = name, format;
+    try {
+      if (type === 'ZIP') {
+        // Opener.openZip: the first entry of the archive, when it is a TIFF
+        const first = firstZipName(bytes);
+        if (typeof first !== 'string' || !first.endsWith('.tif')) return null;
+        const entries = await zipEntries(M, bytes, (n) => n === first);
+        if (!entries[0]) return null;
+        image = await decodeFile(M, entries[0].bytes, { name: entries[0].name, kind: 'tiff' });
+        title = entries[0].name; format = 'zip';
+      } else {
+        image = await decodeFile(M, bytes, { name, kind: KIND[type][0] });
+        format = KIND[type][1];
+      }
+    } catch (err) {
+      if (tooLarge(err)) throw macroError(M.tr('err.macFileTooLarge', { path: r.vpath }));
+      if (err instanceof MacroCancel || (err && err.macroText !== undefined)) throw err;
+      return null;
+    }
+    return showOpened(M, image, originOf(r, name, format), title);
+  }
+  /* The documents born while one image was processed that are still hidden or ephemeral (Interpreter.finishUp drops the batch table;
+   * BatchProcessor closes the input image): closed now. An image the macro showed stays open. */
+  async function closeBatchLeftovers(M, before, imp) {
+    const ids = [];
+    for (const [id, im] of M.images) if ((!before.has(id) || id === imp) && (im.hidden || im.ephemeral)) ids.push(id);
+    if (ids.length) await M.rpc('image.close', { docIds: ids });
+  }
+  /* At most one event per BATCH_EVENT_MS; an event held back is sent when the loop ends (flush), so the last image always shows. */
+  function batchProgress(M, st, i, total, name) {
+    const t = now();
+    if (t - st.last < BATCH_EVENT_MS) { st.held = { i, total, name }; return; }
+    st.last = t;
+    st.held = null;
+    try { M.E.postEvent({ event: 'macro.batch', runId: M.runId, index: i, total, name }); } catch (err) { console.error('[advanced-studio] macro batch event', err); }
+  }
+  function batchProgressFlush(M, st) {
+    const h = st.held;
+    if (!h) return;
+    st.held = null;
+    try { M.E.postEvent({ event: 'macro.batch', runId: M.runId, index: h.i, total: h.total, name: h.name }); } catch (err) { console.error('[advanced-studio] macro batch event', err); }
+  }
+  /* A batch image's macro: "i=<index>;" + code in a NEW interpreter with the image current and batch mode on (Interpreter.runBatchMacro);
+   * its #@ parameters take their defaults (EXTRAS.md P5). → the IJMacro.run result. */
+  async function runBatchMacro(M, imp, index, code) {
+    freshInterpreterState(M);
+    M.current = imp;
+    const IJMacro = LANG();
+    return IJMacro.run('i=' + index + ';' + code, Object.assign({ host: M.host, signal: M.ctrl.signal, onLog: (s) => M.log(s), arg: '', sliceMs: 50 }, M.runOpts));
+  }
+  /* The result of a macro.run whose batch stopped on a failure outside any interpreter (a save the browser cannot make). */
+  function failedRes(err) {
+    if (err instanceof MacroCancel) return { ok: false, error: null, aborted: err.kind === 'abort', exited: err.kind === 'exit', returnValue: null };
+    const text = err && typeof err.macroText === 'string' ? err.macroText : null;
+    if (text === null) throw err;
+    return { ok: false, error: { message: text, line: 0, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: text }, aborted: false, exited: false, returnValue: null };
+  }
+  /**
+   * One batch (EXTRAS.md §8.3–8.6). nested: run("Macro... ") inside a macro — a failing image shows its Macro Error window and the
+   * calling macro goes on (BatchProcessor.runMacro returns false, run() returns), an abort ends everything; otherwise the failing image's
+   * result is the run's. → { res, batch: { processed, saved, skipped, stoppedAt, testDocId }, refused } (refused: an IJ.error box ended it).
+   */
+  async function runBatch(M, b, code, nested) {
+    const out = { processed: [], saved: [], skipped: [], stoppedAt: null, testDocId: null };
+    if (!(await batchCheck(M, b, code))) return { res: null, batch: out, refused: true };
+    if (b.test) return batchTest(M, b, code, out);
+    const input = addSep(b.input), output = addSep(b.output);
+    const entries = await folderEntries(M, input);
+    const kinds = new Map(entries.map((e) => [e.name, e.kind]));
+    const fl = filteredList(entries.map((e) => e.name), b.filter);
+    if (fl.list === null) {
+      await M.rpc('dialog.message', { title: 'Batch Processor', text: fl.message });
+      return { res: null, batch: out, refused: true };
+    }
+    // StringSorter.sort: String.compareTo, the order of UTF-16 code units (the default order of Array.prototype.sort)
+    const list = fl.list.slice().sort();
+    const ev = { last: -Infinity, held: null };
+    let index = 0, res = null;
+    for (let i = 0; i < list.length; i++) {
+      const name = list[i], path = input + name;
+      if (M.ctrl.signal.aborted) { out.stoppedAt = name; break; }
+      if (kinds.get(name) === 'dir' || name.startsWith('.') || name.endsWith('.avi') || name.endsWith('.AVI') || name === 'Thumbs.db') { out.skipped.push(name); continue; }
+      batchProgress(M, ev, i, list.length, name);
+      const before = new Set(M.images.keys());
+      let imp = null, stop = false;
+      try {
+        batchMode(M, true);
+        imp = await batchOpen(M, path);
+        if (imp === null) {
+          M.log('openImage() and openUsingBioFormats() returned null: ' + path);
+          out.skipped.push(name);
+          continue;
+        }
+        let outputImage = null;
+        if (code !== '') {
+          const r = await runBatchMacro(M, imp, index++, code);
+          res = r;
+          if (r.aborted || M.ctrl.signal.aborted) throw new MacroCancel('abort');
+          if (r.error || r.exited) {
+            stop = true;
+            if (nested && r.error && !r.error.silent && r.error.dialogText) await M.host.showError(r.error.dialogText);
+          } else outputImage = M.current;
+        }
+        if (stop) { out.stoppedAt = name; break; }
+        if (BATCH.saveOutput && output !== '') {
+          if (!M.images.has(imp)) throw macroError('There are no images open');
+          if (b.format === '8-bit TIFF' || b.format === 'GIF') {
+            const im = M.images.get(imp);
+            const conv = await M.rpc('run', { name: im && im.rgb ? '8-bit Color' : '8-bit', options: im && im.rgb ? 'number=256' : '', vars: {}, current: imp,
+              alt: false, shift: false, rgbWeights: null });
+            if (!conv || conv.status !== 'ok') throw macroError(conv && typeof conv.text === 'string' && conv.text ? conv.text : 'Unrecognized command: "8-bit"');
+          }
+          const target = outputImage !== null && outputImage !== imp && M.images.has(outputImage) ? outputImage : imp;   // BatchProcessor.java:221-224, any current image
+          M.current = target;
+          M.P = null;
+          const saved = await saveAsBuiltin(null, M, b.format, output + name);
+          if (saved && typeof saved.vpath === 'string') out.saved.push(saved.vpath);
+        }
+        BATCH.saveOutput = true;
+        out.processed.push(name);
+      } catch (err) {
+        out.stoppedAt = name;
+        if (nested) throw err;
+        res = failedRes(err);
+        break;
+      } finally {
+        if (imp !== null || M.batch) {
+          try { await closeBatchLeftovers(M, before, imp); } catch (err) { if (!(err instanceof MacroCancel)) console.error('[advanced-studio] batch close', err); }
+        }
+        batchMode(M, false);
+      }
+    }
+    batchProgressFlush(M, ev);
+    return { res, batch: out, refused: false };
+  }
+  /** Test (BatchProcessor.run()): the first name of the folder as it lists it (the second when the first starts with "."), "i=0;" + code,
+   *  then the INPUT image is shown; nothing is saved. */
+  async function batchTest(M, b, code, out) {
+    const input = addSep(b.input);
+    const entries = await folderEntries(M, input);
+    let res = null;
+    if (!entries.length) { M.log('IJ.openImage() returned null'); return { res, batch: out, refused: false }; }
+    let name = entries[0].name;
+    if (name.startsWith('.') && entries.length > 1) name = entries[1].name;
+    const path = input + name;
+    // setDirAndName: File.directory / File.name name the test image's file
+    MOUNT.lastDir = input; MOUNT.lastName = name;
+    const before = new Set(M.images.keys());
+    let imp = null;
+    try {
+      batchMode(M, true);
+      imp = entries.find((e) => e.name === name).kind === 'dir' ? null : await batchOpen(M, path);
+      if (imp === null) { M.log('IJ.openImage() returned null'); return { res, batch: out, refused: false }; }
+      res = await runBatchMacro(M, imp, 0, code);
+      if (res.aborted || M.ctrl.signal.aborted) throw new MacroCancel('abort');
+      if (!res.error && !res.exited) out.processed.push(name); else out.stoppedAt = name;
+    } catch (err) {
+      res = failedRes(err);
+    } finally {
+      const keep = imp !== null && M.images.has(imp) ? imp : null;
+      try {
+        const ids = [];
+        for (const [id, im] of M.images) if (!before.has(id) && id !== keep && (im.hidden || im.ephemeral)) ids.push(id);
+        if (ids.length) await M.rpc('image.close', { docIds: ids });
+      } catch (err) { if (!(err instanceof MacroCancel)) console.error('[advanced-studio] batch close', err); }
+      batchMode(M, false);
+      if (keep !== null && !M.ctrl.signal.aborted) {
+        try { await M.rpc('image.show', { docIds: [keep] }); out.testDocId = keep; } catch (err) { if (!(err instanceof MacroCancel)) throw err; }
+      }
+    }
+    return { res, batch: out, refused: false };
+  }
+
+  // #@ lines of a macro file run by runMacro() or of a batch's code are NOT processed (Fiji, golden params nested-runmacro: the IJ1
+  // interpreter stops on line 1 with "Statement cannot begin with '#'"): only the Macro Editor, Run… and Plugins › Macros › Run… ask
+  // for parameters (EXTRAS.md §6.5, P5 decided by the golden).
 
   // ════════════════════════════════════════════════════════════════════════════════════════════════
   //  Built-ins
@@ -1448,6 +1828,7 @@
     if (r && r.current !== undefined) M.current = r.current;
     const status = r && r.status;
     if (status === 'file') { await runFileOp(f, M, r.file || {}, { viaMacroRun: true }); return; }
+    if (status === 'installed') { await runInstalledNested(M, r.installed || {}); return; }
     if (status === 'ok') {
       const ip = r.inPlace;
       if (ip && typeof ip === 'object' && M.images.has(ip.docId) && M.images.has(ip.resultId)) {
@@ -1562,6 +1943,7 @@
       M.write('measurements.set', { groups: M.measurements.groups });
     } else if (o.rmShow) { M.rm.showAll = state; M.write('rm.show', { showAll: state, labels: M.rm.labels }); }
     else if (o.changes) { const im = M.images.get(M.current); if (im) im.changes = state; else throw macroError('There are no images open'); }
+    else if (o.batchOutput) BATCH.saveOutput = state;
     return null;
   }
   /* List.setMeasurements: every measurement of the current image and selection, as Measure would compute it (Analyzer.measure with
@@ -1607,12 +1989,81 @@
     WORD = K.WORD; NUMBER = K.NUMBER;
     Variable = IJMacro.Variable;
     MacroCancel = IJMacro.MacroCancel;
-    installImageModel();
-    installStacks();
-    installPageState();
-    installCallAndRefusals();
-    installFiles();
+    // Every built-in of this file also serves a Process › Math › Macro program (ij-macro-math.js), whose host is a plane, not a run:
+    // define() is wrapped while they install so each one answers such a host first (PIXEL_BUILTINS, else err.macMathHost).
+    const define = IJMacro.define;
+    IJMacro.define = (kind, name, gen, opts) => define.call(IJMacro, kind, name, pixelGuardGen(kind, name, gen), pixelGuardOpts(kind, name, opts));
+    try {
+      installImageModel();
+      installStacks();
+      installPageState();
+      installCallAndRefusals();
+      installFiles();
+    } finally { IJMacro.define = define; }
     installed = true;
+  }
+
+  // ---------------------------------------------------------------- the host of a Math macro program (ImageMath.applyMacro)
+  /* ImageJ runs the per-pixel code with a temp current image new ImagePlus("", ip): one slice of the plane being processed. The host
+   * (ij-macro-math.js) carries { pixel: { P, bitDepth, nSlices, slice, M: { rgbWeights } }, texts }; P is the source plane. */
+  const PIXEL_BUILTINS = {
+    // getPixelCalled: ImageMath reads whether the code's first run called getPixel (ImagePlus.getProcessor resets the processor's roi)
+    getPixel: { sig: 'n?n', fn: (f, a, px) => { px.getPixelCalled = true; return pixelValueOf(f, a, px.M, px.P); } },
+    getWidth: { sig: '', fn: (f, a, px) => px.P.W },
+    getHeight: { sig: '', fn: (f, a, px) => px.P.H },
+    bitDepth: { sig: '', fn: (f, a, px) => px.bitDepth },
+    nSlices: { sig: '', fn: (f, a, px) => px.nSlices },
+    getSliceNumber: { sig: '', fn: (f, a, px) => px.slice }
+  };
+  function pixelRefusal(f, name) {
+    const h = f.interp.ctx.host;
+    const t = h && h.texts && typeof h.texts['err.macMathHost'] === 'string' ? h.texts['err.macMathHost'] : 'err.macMathHost';
+    f.interp.error(t.replace(/\{name\}/g, name));
+    return null;
+  }
+  function pixelGuardGen(kind, name, gen) {
+    if (typeof gen !== 'function') return gen;
+    const pb = kind === 'num' && Object.prototype.hasOwnProperty.call(PIXEL_BUILTINS, name) ? PIXEL_BUILTINS[name] : null;
+    return function* (f) {
+      const h = f.interp.ctx.host;
+      if (h && h.pixel) {
+        if (!pb) return pixelRefusal(f, name);
+        return pb.fn(f, yield* readArgs(f, pb.sig), h.pixel);
+      }
+      return yield* gen(f);
+    };
+  }
+  function pixelGuardOpts(kind, name, opts) {
+    if (!opts || typeof opts.sync !== 'function') return opts;
+    const sync = opts.sync;
+    const pb = kind === 'num' && Object.prototype.hasOwnProperty.call(PIXEL_BUILTINS, name) ? PIXEL_BUILTINS[name] : null;
+    return Object.assign({}, opts, {
+      sync(f) {
+        const h = f.interp.ctx.host;
+        if (h && h.pixel) {
+          if (!pb) return pixelRefusal(f, name);
+          return pb.fn(f, readArgs$s(f, pb.sig), h.pixel);
+        }
+        return sync(f);
+      }
+    });
+  }
+
+  /* Functions.getPixel on the processor P: getPixel(x, y) (integral = the pixel, 0 / NaN outside; else interpolated) or getPixel(index). */
+  function pixelValueOf(f, a, M, P) {
+    if (a.length === 2) {
+      const x = a[0], y = a[1], ix = d2i(x), iy = d2i(y);
+      if (x === ix && y === iy) {
+        if (ix < 0 || ix >= P.W || iy < 0 || iy >= P.H) return P.bd === 32 && !P.rgb ? NaN : 0;
+        const i = iy * P.W + ix;
+        return P.rgb ? rgbGet(P, i) : P.data[i];
+      }
+      return P.rgb ? rgbInterpolated(P, x, y) : interpolatedValue(M, P, x, y);
+    }
+    const i = d2i(a[0]);
+    if (i < 0 || i >= P.W * P.H) f.interp.error('Index ' + i + ' out of bounds for length ' + (P.W * P.H));
+    if (P.rgb) return rgbGet(P, i);
+    return P.data[i];
   }
 
   // ---------------------------------------------------------------- image model
@@ -1620,22 +2071,7 @@
     const IJMacro = LANG();
 
     // getPixel(x, y) / getPixel(index)  (Functions.getPixel)
-    const getPixelBody = (f, a, M) => {
-      const P = proc(f, M);
-      if (a.length === 2) {
-        const x = a[0], y = a[1], ix = d2i(x), iy = d2i(y);
-        if (x === ix && y === iy) {
-          if (ix < 0 || ix >= P.W || iy < 0 || iy >= P.H) return P.bd === 32 && !P.rgb ? NaN : 0;
-          const i = iy * P.W + ix;
-          return P.rgb ? rgbGet(P, i) : P.data[i];
-        }
-        return P.rgb ? rgbInterpolated(P, x, y) : interpolatedValue(M, P, x, y);
-      }
-      const i = d2i(a[0]);
-      if (i < 0 || i >= P.W * P.H) f.interp.error('Index ' + i + ' out of bounds for length ' + (P.W * P.H));
-      if (P.rgb) return rgbGet(P, i);
-      return P.data[i];
-    };
+    const getPixelBody = (f, a, M) => pixelValueOf(f, a, M, proc(f, M));
     defSync('num', 'getPixel', 'n?n', getPixelBody);
 
     // setPixel(x, y, v) / putPixel / setPixel(index, v)  (Functions.setPixel: putPixel / putPixelValue / set / setf)
@@ -5500,6 +5936,44 @@
       const src = await macroFileSource(M, p, null);
       if (src === null) return null;
       M.pendingNested = { source: src.text, arg: '', path: src.vpath };
+      return null;
+    },
+    /* run("Install...", "install=<path>"): MacroInstaller.run → showDialog (OpenDialog "Install Macros" in macro mode) → open → install.
+     * A macro's install never runs the AutoRun macro (!IJ.isMacro()); the page installs the set and shows ImageJ's boxes. */
+    async install(f, M, req, ctx) {
+      void ctx;
+      const p = await openPathFor(f, M, req, 'Install Macros', 'command');
+      const s = norm(p);
+      const name = VFSLIB().javaName(s);
+      if (!(name.endsWith('.txt') || name.endsWith('.ijm'))) { await M.rpc('dialog.message', { title: 'Macro Installer', text: M.tr('err.macInstallExt') }); return null; }
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      let failed = null;
+      const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { failed = code; return null; });
+      // MacroInstaller.open: IJ.error(e.getMessage()) and nothing installed
+      if (bytes === null) return errorBoxContinue(M, javaIoText(failed, r.vpath));
+      const text = utf8Text(bytes).split(/\r\n|\r|\n/);
+      if (text.length && text[text.length - 1] === '') text.pop();
+      await M.rpc('install.set', { name, path: r.vpath, source: text.map((l) => l + '\n').join('') });
+      return null;
+    },
+    /* run("Macro... ", options) (BatchProcessor.run in macro mode): the dialog's own fields from the options, the folders as stored. */
+    async batchMacro(f, M, req) {
+      // the page's fileRequest names the values by the table's field ids (ij-macro-cmds.js batchMacro extra: format = output_format,
+      // filter = file, code = text1); null = the key is absent from the options
+      const v = req && req.values && typeof req.values === 'object' ? req.values : {};
+      const prefs = (await M.rpc('batch.prefs', {})) || {};
+      const format = validateBatchFormat(typeof v.format === 'string' ? v.format : String(prefs.format || ''));
+      const code = typeof v.code === 'string' ? v.code : String(prefs.macro || '');
+      const b = { input: String(prefs.input || ''), output: String(prefs.output || ''), format, filter: typeof v.filter === 'string' ? v.filter : '', test: false };
+      const st = batchState(M);
+      let r;
+      try { r = await runBatch(M, b, code, true); } finally { restoreBatchState(M, st); }
+      // IJ.error in a macro aborts it (Macro.abort), before BatchProcessor.run stores anything
+      if (r.refused) throw new MacroCancel('abort');
+      // Prefs.set of the dialog's text fields (unchanged in macro mode) and of the format; BatchMacro.ijm is the text area's own text,
+      // which the options do not reach in macro mode (golden: nothing new stored)
+      M.write('batch.save', { input: b.input, output: b.output, format });
       return null;
     }
   };

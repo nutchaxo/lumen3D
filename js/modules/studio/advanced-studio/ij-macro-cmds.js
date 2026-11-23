@@ -262,7 +262,158 @@
     return o ? optLabel(o) : String(v);
   }
 
-  const IJMacroOptions = { normalize, trimKey, keyOf, getValue, isMatch, hasWord, setupDialogStack, build, javaDouble, javaToString, parseHex, fixString };
+  /* IJ.d2s(n, places): DecimalFormat("0.00…") with its default HALF_EVEN applied to the EXACT binary value of the double (same
+   * algorithm as IJOv.d2s): toFixed already rounds the exact value, except that an exact tie goes up, so an exact tie (found with
+   * BigInt on the mantissa) whose rounded last digit is odd is stepped down to the even neighbour. Places are capped at 9; a negative
+   * value (−0 included) keeps its sign, "-0.00" as DecimalFormat writes it. */
+  function isExactTie(x, d) {
+    const dv = new DataView(new ArrayBuffer(8));
+    dv.setFloat64(0, Math.abs(x));
+    const hi = dv.getUint32(0), lo = dv.getUint32(4);
+    const e = (hi >>> 20) & 0x7ff;
+    let mant = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+    let exp;
+    if (e === 0) exp = -1074; else { mant |= 1n << 52n; exp = e - 1075; }
+    // |x|·10^d has the fractional part 1/2 exactly  ⟺  2·mant·10^d·2^exp is an odd integer
+    if (exp >= 0) return false;
+    const num = mant * (10n ** BigInt(d)) * 2n;
+    const k = BigInt(-exp);
+    if ((num & ((1n << k) - 1n)) !== 0n) return false;
+    return ((num >> k) & 1n) === 1n;
+  }
+  function decrementDigits(s) {
+    const a = s.split('');
+    for (let i = a.length - 1; i >= 0; i--) {
+      if (a[i] === '.') continue;
+      if (a[i] === '0') { a[i] = '9'; continue; }
+      a[i] = String.fromCharCode(a[i].charCodeAt(0) - 1);
+      break;
+    }
+    return a.join('').replace(/^0+(?=\d)/, '');
+  }
+  function d2s(n, places) {
+    if (Number.isNaN(n)) return 'NaN';
+    if (n === Infinity) return 'Infinity';
+    if (n === -Infinity) return '-Infinity';
+    if (n === 3.4028234663852886e38) return '3.4e38';      // IJ.d2s: Float.MAX_VALUE
+    const p = Math.min(9, Math.max(0, places | 0));
+    let s = Math.abs(n).toFixed(p);
+    // IJ's df[0] alone is set to HALF_UP, which is what toFixed does on an exact tie
+    if (p > 0 && isExactTie(n, p) && (s.charCodeAt(s.length - 1) - 48) % 2 === 1) s = decrementDigits(s);
+    return (n < 0 || Object.is(n, -0) ? '-' : '') + s;
+  }
+  /**
+   * The text GenericDialog records for a number field: GenericDialog.trim of the field's text (getNextNumber). The text of an untouched field is
+   * IJ.d2s(default, digits) with the plugin's digits (DialogEntry.decimals[fieldId]: a number, a function of the offered value, or 'text' = the
+   * shortest text of the value, ImageJ's string fields that hold a number); a value the operator typed is recorded as typed (its shortest text).
+   */
+  function shortestText(v) {
+    if (!Number.isFinite(v)) return javaToString(v);
+    return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(10)));
+  }
+  function digitsOf(f, de, offered) {
+    const d = de && de.decimals && Object.prototype.hasOwnProperty.call(de.decimals, f.id) ? de.decimals[f.id] : undefined;
+    if (typeof d === 'function') return d(offered);
+    if (d !== undefined) return d;
+    if (f.integer) return 0;
+    return Number.isInteger(f.decimals) ? f.decimals : null;
+  }
+  function numberRecordText(v, f, de, offered) {
+    // GenericDialog.java:194: a NaN default is an empty field, which an untouched field records as "[]"
+    if (typeof offered === 'number' && Number.isNaN(offered) && Number.isNaN(v)) return '';
+    const digits = digitsOf(f, de, offered);
+    const shown = offered !== undefined && offered !== null && Number(offered) === v;
+    if (!shown || digits === null || digits === 'text') return trimNumber(shortestText(v));
+    return trimNumber(d2s(v, digits));
+  }
+  const MERGE_NONE = '*None*';
+
+  /**
+   * GenericDialog's recording, field by field, in the order the plugin reads them (EXTRAS.md §4.6): what each getNext* call adds to the
+   * Recorder's option string. `spec.fields[i].value` is the value the dialog offered (smart recording compares against it).
+   * → [{ t: 'opt', key, value } | { t: 'flag', key } | { t: 'blank' }]
+   */
+  function recordTokens(values, de, spec) {
+    const vals = values || {};
+    const keys = (de && de.keys) || {};
+    const fields = ((spec && spec.fields) || []).filter(Boolean);
+    let order = fields;
+    if (de && Array.isArray(de.recordOrder)) {
+      const byId = new Map(fields.map((f) => [f.id, f]));
+      order = de.recordOrder.map((id) => byId.get(id)).filter(Boolean);
+    }
+    // GenericDialog.setSmartRecording around one getNext* call (Scaler's title, ScaleDialog's aspect ratio, Binary's EDM output)
+    const smartOf = (f) => {
+      if (de && de.smart) return true;
+      const sf = de && de.smartFields;
+      if (Array.isArray(sf)) return sf.indexOf(f.id) >= 0;
+      if (sf && typeof sf === 'object' && Object.prototype.hasOwnProperty.call(sf, f.id)) return typeof sf[f.id] === 'function' ? !!sf[f.id](f.value) : !!sf[f.id];
+      return false;
+    };
+    const out = [];
+    let textAreas = 0;
+    for (const f of order) {
+      if (f.type === 'message' || !Object.prototype.hasOwnProperty.call(vals, f.id)) continue;
+      let key = Object.prototype.hasOwnProperty.call(keys, f.id) ? keys[f.id] : (f.ijKey || (f.id === 'all' && f.type === 'check' ? 'stack' : null));
+      if (!key) continue;
+      key = trimKey(fixString(key));
+      const v = vals[f.id];
+      const smart = smartOf(f);
+      switch (f.type) {
+        case 'number': case 'slider': {
+          const text = numberRecordText(Number(v), f, de, f.value);
+          if (smart && f.value !== undefined && f.value !== null && text === numberRecordText(Number(f.value), f, de, f.value)) break;
+          out.push({ t: 'opt', key, value: text === '' ? '[]' : text });
+          break;
+        }
+        case 'check':
+          out.push(v ? { t: 'flag', key } : { t: 'blank' });
+          break;
+        case 'textarea':
+          textAreas++;
+          out.push({ t: 'opt', key: textAreas === 1 ? 'text1' : 'text2', value: fixString(String(v === undefined || v === null ? '' : v)) });
+          break;
+        case 'choice': case 'doc': case 'channel': {
+          if (smart && String(v) === String(f.value)) break;
+          let text = itemTextOf(f, v, de);
+          // a Studio choice that stands for part of an ImageJ field (Set Measurements' switch + image = ImageJ's one "Redirect to:" choice)
+          if (de && de.recordText && typeof de.recordText[f.id] === 'function') text = String(de.recordText[f.id](vals, text));
+          if (text === MERGE_NONE && de && de.ij === 'Merge Channels...#0') break;
+          out.push({ t: 'opt', key, value: text });
+          break;
+        }
+        case 'radio':
+          out.push({ t: 'opt', key, value: itemTextOf(f, v, de) });
+          break;
+        default: {
+          const s = fixString(String(v === undefined || v === null ? '' : v));
+          if (smart && s === fixString(String(f.value === undefined || f.value === null ? '' : f.value))) { out.push({ t: 'blank' }); break; }
+          out.push({ t: 'opt', key, value: s === '' ? '[]' : s });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Recorder.recordOption / recordString: the accumulator ImageJ's commandOptions follows (Recorder.java:472-532). */
+  function foldTokens(tokens, start) {
+    let options = start === undefined ? null : start;
+    for (const tk of tokens || []) {
+      if (!tk) continue;
+      if (tk.t === 'opt') {
+        const value = addQuotes(String(tk.value));
+        options = options === null ? tk.key + '=' + value : options + ' ' + tk.key + '=' + value;
+      } else if (tk.t === 'flag') {
+        options = options === null || options === ' ' ? tk.key : options + ' ' + tk.key;
+      } else if (tk.t === 'blank') {
+        if (options === null) options = ' ';
+      }
+    }
+    return options;
+  }
+
+  const IJMacroOptions = { normalize, trimKey, keyOf, getValue, isMatch, hasWord, setupDialogStack, build, javaDouble, javaToString, parseHex, fixString,
+    recordTokens, foldTokens, d2s, trimNumber, addQuotes };
 
   // ═══════════════════════════════════════ the command table ═══════════════════════════════════════
 
@@ -296,6 +447,7 @@
     }
     return o.endsWith(' ') ? o : o + ' ';
   }
+  const PROP_DIGITS = (o) => (Number(o) < 1 ? 7 : 4);
   const PROJ = { 'Average Intensity': 'avg', 'Max Intensity': 'max', 'Min Intensity': 'min', 'Sum Slices': 'sum', 'Standard Deviation': 'sd', Median: 'median' };
   const DISPLAY = { Composite: 'composite', Color: 'color', Grayscale: 'gray' };
   const COLORS13 = same(['red', 'green', 'blue', 'magenta', 'cyan', 'yellow', 'orange', 'black', 'white', 'gray', 'lightgray', 'darkgray', 'pink']);
@@ -304,11 +456,17 @@
   const ALL = 'stack';   // the Studio's "Process all channels" = PlugInFilterRunner's `stack` word in macro mode (INTEGRATION.md §5.3)
   const STACK_TO_BINARY = (cap) => dlg(cap, 'Convert Stack to Binary',
     { method: 'method', background: 'background', calculate: 'calculate', only: 'only', black: 'black', list: 'list', create: 'create' },
-    { items: { method: BIN_METHODS, background: same(['Default', 'Dark', 'Light']) } });
-  const MATH = (cap, title) => dlg(cap, title, { value: 'value', all: ALL }, { setup: true });
+    // Thresholder.convertStackToBinary :90-97: setSmartRecording(method.equals("Default")) around each choice (the offered value)
+    { items: { method: BIN_METHODS, background: same(['Default', 'Dark', 'Light']) }, smartFields: { method: (o) => o === 'Default', background: (o) => o === 'Default' } });
+  // ImageMath.getValue: digits = max(Analyzer precision (3), 1) for a fractional default, 0 for a whole one; Gamma's own dialog has 2
+  const MATH = (cap, title) => dlg(cap, title, { value: 'value', all: ALL }, { setup: true, decimals: { value: (o) => (Number.isInteger(Number(o)) ? 0 : 3) } });
   const RADIUS = (cap, title) => dlg(cap, title, { radius: 'radius', all: ALL }, { setup: true });
   const BITS = (cap, title) => dlg(cap, title, { bits: 'value', all: ALL }, { setup: true });
   const RGB_KEEP = (cap) => dlg(cap, 'Convert to RGB', { slices: 'slices', frames: 'frames', keep: 'keep' });
+  // BatchProcessor.formats and the items of its "Add macro code" choice (BatchProcessor.java:17-35)
+  const BATCH_FORMATS = ['TIFF', '8-bit TIFF', 'JPEG', 'GIF', 'PNG', 'PGM', 'BMP', 'FITS', 'Text Image', 'ZIP', 'Raw'];
+  const BATCH_SNIPPETS = ['[Select from list]', 'Add Border', 'Convert to RGB', 'Crop', 'Gaussian Blur', 'Invert', 'Label', 'Timestamp', 'Max Dimension', 'Measure',
+    'Print Index and Title', 'Resize', 'Scale', 'Show File Info', 'Unsharp Mask'];
 
   // ── File
   // Titles from the 1.54p sources (Opener.open, FileSaver.getPath "Save as "+type, MeasurementsWriter, TextReader, LutLoader,
@@ -373,7 +531,8 @@
   add('selInterpolate', 'Interpolate', 'A', [dlg(null, 'Interpolate', { interval: 'interval', smooth: 'smooth', adjust: 'adjust' })]);
   add('selProperties', 'Properties... ', 'A', [dlg('Properties... #0', 'Properties ', { name: 'name', width: 'width' }, { smart: true })]);
   add('selScale', 'Scale... ', 'A', [dlg('Scale... #0', 'Scale Selection', { xscale: 'x', yscale: 'y', centered: 'centered' })]);
-  add('selRotate', 'Rotate...', 'A', [dlg('Rotate...#0', 'Rotate Selection', { angle: 'angle', aroundCenter: 'rotate' })]);
+  // RoiRotator.showDialog reads the check before the angle (getNextBoolean, then getNextNumber)
+  add('selRotate', 'Rotate...', 'A', [dlg('Rotate...#0', 'Rotate Selection', { angle: 'angle', aroundCenter: 'rotate' }, { recordOrder: ['aroundCenter', 'angle'] })]);
   add('selTranslate', 'Translate... ', 'A', [dlg('Translate... #0', 'Translate', { dx: 'x', dy: 'y' })]);
   add('selMakeBand', 'Make Band...', 'A', [dlg('Make Band...#0', 'Make Band', { size: 'band' })]);
   add('selStraighten', 'Straighten...', 'A', [dlg('Straighten...#0', 'Straightener', { title: 'title', width: 'line' })]);
@@ -421,12 +580,14 @@
   add('imageProperties', 'Properties...', 'A', [dlg('Properties...#0', null,
     { channels: 'channels', slices: 'slices', frames: 'frames', pixelWidth: 'pixel_width', pixelHeight: 'pixel_height', unit: 'unit', pixelDepth: 'voxel_depth',
       frameInterval: 'frame' },
-    { rewrite: (o) => o.replace(/ depth=/g, ' slices=').replace(/ interval=/g, ' frame=') })],
+    // ImageProperties: pixel sizes with 4 digits (7 below 1); the frame interval read with smart recording when it is 0
+    { rewrite: (o) => o.replace(/ depth=/g, ' slices=').replace(/ interval=/g, ' frame='),
+      decimals: { pixelWidth: PROP_DIGITS, pixelHeight: PROP_DIGITS, pixelDepth: PROP_DIGITS }, smartFields: { frameInterval: (o) => parseFloat(o) === 0 } })],
   { notes: 'unit= is ImageProperties\' legacy macro key (options holding "unit=" switch the dialog to a "Unit of length:" field). The per-axis unit '
     + 'fields ("_"), origin, invert and global are not read.' });
   add('imageScale', 'Scale...', 'A', [dlg('Scale...#0', 'Scale',
     { xscale: 'x', yscale: 'y', zscale: 'z', width: 'width', height: 'height', depth: 'depth', interpolation: 'interpolation', average: 'average', process: 'process',
-      newWindow: 'create', title: 'title' }, { items: { interpolation: INTERP }, rewrite: scalerOptions })]);
+      newWindow: 'create', title: 'title' }, { items: { interpolation: INTERP }, rewrite: scalerOptions, smartFields: ['title'] })]);
   add('colorChannels', 'Channels Tool...', 'A');
   add('colorSplitChannels', 'Split Channels', 'A');
   add('colorMergeChannels', 'Merge Channels...', 'A', [dlg('Merge Channels...#0', 'Merge Channels',
@@ -481,7 +642,7 @@
     { items: { order: { 'czt (default)': 'czt', ctz: 'ctz', zct: 'zct', ztc: 'ztc', tcz: 'tcz', tzc: 'tzc' } } })]);
   add('stackLabel', 'Label...', 'A', [dlg('Label...#0', 'Label Stacks',
     { format: 'format', starting: 'starting', interval: 'interval', x: 'x', y: 'y', font: 'font', text: 'text', range: 'range' },
-    { items: { format: { 0: '0', '0000': '0000', '00:00': '00:00', '00:00:00': '00:00:00', Text: 'text', Label: 'label' } } })]);
+    { items: { format: { 0: '0', '0000': '0000', '00:00': '00:00', '00:00:00': '00:00:00', Text: 'text', Label: 'label' } }, decimals: { starting: 'text', interval: 'text' } })]);
   add('stackStatistics', 'Statistics', 'A');
   add('stackStartAnimation', 'Start Animation [\\]', 'A');
   add('stackStopAnimation', 'Stop Animation', 'A');
@@ -504,7 +665,9 @@
   add('stackReverse', 'Reverse', 'A');
   add('stackSetLabel', 'Set Label...', 'A', [dlg('Set Label...#0', null, { label: 'label' })]);
   add('stackMontage', 'Make Montage...', 'A', [dlg('Make Montage...#0', 'Make Montage',
-    { columns: 'columns', rows: 'rows', scale: 'scale', first: 'first', last: 'last', increment: 'increment', border: 'border', fontSize: 'font', label: 'label', useForeground: 'use' })]);
+    { columns: 'columns', rows: 'rows', scale: 'scale', first: 'first', last: 'last', increment: 'increment', border: 'border', fontSize: 'font', label: 'label', useForeground: 'use' },
+    // MontageMaker.makeMontage :115: setSmartRecording(true) after scale (first, last, increment, border, font recorded only when changed)
+    { smartFields: ['first', 'last', 'increment', 'border', 'fontSize'] })]);
   add('hyperNew', 'New Hyperstack...', 'A', [dlg('New Hyperstack...#0', 'New Hyperstack...',
     { name: 'name', type: 'type', display: 'display', width: 'width', height: 'height', channels: 'channels', slices: 'slices', frames: 'frames', label: 'label' },
     { items: { type: { '8-bit': '8', '16-bit': '16', '32-bit': '32', RGB: 'rgb' }, display: DISPLAY } })]);
@@ -558,7 +721,7 @@
   add('binMedian', 'Median', 'A', [dlg('Median#0', '', { radius: 'radius' })]);
   add('binOptions', 'Options...', 'A', [dlg('Options...#0', 'Binary Options',
     { iterations: 'iterations', count: 'count', blackBackground: 'black', padEdges: 'pad', edmOutput: 'edm', operation: 'do' },
-    { items: { edmOutput: { Overwrite: 'overwrite', '8-bit': 'byte', '16-bit': 'short', '32-bit': 'float' },
+    { smartFields: { edmOutput: (o) => o === 'overwrite' }, items: { edmOutput: { Overwrite: 'overwrite', '8-bit': 'byte', '16-bit': 'short', '32-bit': 'float' },
       operation: { Nothing: 'nothing', Erode: 'erode', Dilate: 'dilate', Open: 'open', Close: 'close', Outline: 'outline', 'Fill Holes': 'fillHoles', Skeletonize: 'skeletonize' } } })]);
   add('binOutline', 'Outline', 'A');
   add('binSkeletonize', 'Skeletonize', 'A');
@@ -575,7 +738,7 @@
   add('mathXor', 'XOR...', 'A', [BITS('XOR...#0', 'XOR')]);
   add('mathMin', 'Min...', 'A', [MATH('Min...#0', 'Min')]);
   add('mathMax', 'Max...', 'A', [MATH('Max...#0', 'Max')]);
-  add('mathGamma', 'Gamma...', 'A', [MATH('Gamma...#0', 'Gamma')]);
+  add('mathGamma', 'Gamma...', 'A', [dlg('Gamma...#0', 'Gamma', { value: 'value', all: ALL }, { setup: true, decimals: { value: 2 } })]);
   add('mathSet', 'Set...', 'A', [MATH('Set...#0', 'Set')]);
   add('mathLog', 'Log', 'A');
   add('mathExp', 'Exp', 'A');
@@ -584,6 +747,9 @@
   add('mathReciprocal', 'Reciprocal', 'A');
   add('mathNaNBackground', 'NaN Background', 'A', [dlg(null, 'NaN Background', {})]);
   add('mathAbs', 'Abs', 'A');
+  // ImageMath.getMacro (ImageMath.java:409-412): options written "v=…" without "code=" are taken as the code
+  add('mathMacro', 'Macro...', 'A', [dlg('Macro...#0', 'Expression Evaluator', { code: 'code', all: ALL },
+    { setup: true, rewrite: (o) => (o.startsWith('v=') ? 'code=' + o : o) })]);
   add('fftForward', 'FFT', 'A');
   add('fftInverse', 'Inverse FFT', 'A');
   add('fftOptions', 'FFT Options...', 'A', [dlg('FFT Options...#0', 'FFT Options', { fftWindow: 'fft', rawPs: 'raw' })]);
@@ -610,7 +776,9 @@
     { size: 'size', circularity: 'circularity', show: 'show', display: 'display', exclude: 'exclude', clear: 'clear', holes: 'include', summarize: 'summarize',
       overlay: 'overlay', manager: 'add', composite: 'composite', record: 'record' },
     { items: { show: { Nothing: 'nothing', Overlay: 'overlay', 'Overlay Masks': 'overlayMasks', Outlines: 'outlines', 'Bare Outlines': 'bareOutlines', Ellipses: 'ellipses',
-      Masks: 'masks', 'Count Masks': 'countMasks' } } })]);
+      Masks: 'masks', 'Count Masks': 'countMasks' } },
+    // ParticleAnalyzer.java:366-405: size, circularity and show are read with smart recording while they hold their defaults
+    smartFields: { size: (o) => o === '0-Infinity', circularity: (o) => o === '0.00-1.00', show: (o) => o === 'nothing' } })]);
   add('analyzeSummarize', 'Summarize', 'A');
   add('analyzeDistribution', 'Distribution...', 'A', [dlg('Distribution...#0', 'Distribution', { parameter: 'parameter', auto: 'automatic', bins: 'or', range: 'and' },
     { items: { parameter: same(['Area', 'Mean', 'Min', 'Max']) } })]);
@@ -622,10 +790,13 @@
       redirectOn: null, redirectDoc: 'redirect', redirectChannel: null, decimals: 'decimal' },
     { titles: ['redirectDoc'], items: { redirectDoc: { None: null } },
       // ImageJ's one "Redirect to:" choice is the Studio's switch + image: redirect=None turns redirection off, an image title turns it on
-      derive: { redirectOn: (options) => { const v = getValue(options, 'redirect', null); return v === null ? undefined : v !== 'None'; } } })]);
+      derive: { redirectOn: (options) => { const v = getValue(options, 'redirect', null); return v === null ? undefined : v !== 'None'; } },
+      recordText: { redirectDoc: (values, text) => (values.redirectOn ? text : 'None') } })]);
   add('analyzeHistogram', 'Histogram', 'A', [dlg(null, 'Histogram', { bins: 'bins', useRange: 'use', xMin: 'x_min', xMax: 'x_max', yMax: 'y_max' })]);
   add('analyzePlotProfile', 'Plot Profile', 'A');
-  add('analyzeSetScale', 'Set Scale...', 'A', [dlg('Set Scale...#0', 'Set Scale', { measured: 'distance', known: 'known', aspect: 'pixel', unit: 'unit', remove: null, scale: null })],
+  // ScaleDialog: the aspect ratio is read with smart recording when it is 1
+  add('analyzeSetScale', 'Set Scale...', 'A', [dlg('Set Scale...#0', 'Set Scale', { measured: 'distance', known: 'known', aspect: 'pixel', unit: 'unit', remove: null, scale: null },
+    { smartFields: { aspect: (o) => Number(o) === 1 } })],
     { notes: 'remove: ImageJ removes the scale with distance=0 or known=0 (its "Click to Remove Scale" button has no key).' });
   add('analyzeColocalization', 'Colocalization...', 'D', [dlg(null, null,
     { doc1: 'image', ch1: 'channel', doc2: 'image_0', ch2: 'channel_0', mode: 'thresholds', t1: 'threshold,', t2: 'threshold,_0', excludeZero: 'exclude', denominator: 'tm1' },
@@ -678,8 +849,22 @@
 
   // ── Plugins, Window, Help
   add('utilFindCommands', 'Find Commands...', 'A');
+  // MacroInstaller (Plugins › Macros › Install…): OpenDialog("Install Macros", path); from a macro the set's AutoRun never runs
+  file('macInstall', 'Install...', fspec('install', 'open', 'Install Macros'));
   file('macRun', 'Run...', fspec('runMacro', 'open', 'Run Macro or Script...'));
   add('macEdit', 'Edit...', 'D');
+  refused('macStartup', 'Startup Macros...', 'err.macReasonStartup');
+  refused('macRecord', 'Record...', 'err.macReasonRecorder');
+  refused('macRemoveInstalled', 'Remove Installed Macros', 'err.macReasonInstalled');
+  refused('optStartup', 'Startup...', 'err.macReasonStartup');
+  // BatchProcessor ("Macro... " with ImageJ's trailing space): the GenericDialog part is read from the options; the Input / Output folders
+  // are panels of the dialog, not fields, so a macro gets the stored ones (BatchProcessor.addPanels)
+  file('batchMacro', 'Macro... ', fspec('batchMacro', 'none', 'Batch Process', { gdTitle: 'Batch Process', extra: {
+    format: { key: 'output_format', type: 'choice', items: BATCH_FORMATS },
+    add: { key: 'add', type: 'choice', items: BATCH_SNIPPETS },
+    filter: { key: 'file', type: 'string', dflt: '' },
+    code: { key: 'text1', type: 'text' }
+  } }));
   add('windowLog', 'Log', 'D', [], { notes: 'Process > Math > Log owns the ImageJ name "Log": run("Log") is mathLog (A–C win over D).' });
   add('windowShowAll', 'Show All', 'A');
   add('windowPutBehind', 'Put Behind [tab]', 'A');
@@ -778,7 +963,12 @@
   for (const e of Object.values(T)) {
     if (e.file) freezeSpec(e.file);
     Object.freeze(e.dialogs);
-    for (const d of e.dialogs) { Object.freeze(d.keys); if (d.items) { for (const k of Object.keys(d.items)) Object.freeze(d.items[k]); Object.freeze(d.items); } Object.freeze(d); }
+    for (const d of e.dialogs) {
+      Object.freeze(d.keys);
+      if (d.items) { for (const k of Object.keys(d.items)) Object.freeze(d.items[k]); Object.freeze(d.items); }
+      for (const k of ['decimals', 'smartFields', 'recordOrder', 'recordText']) if (d[k]) Object.freeze(d[k]);
+      Object.freeze(d);
+    }
     Object.freeze(e);
   }
   Object.freeze(T);
@@ -897,7 +1087,7 @@
         let p = getValue(opts, title, null);
         if (p === null) p = getValue(opts, 'path', null);
         pathText = p;
-      } else pathText = getValue(opts, title, null);
+      } else if (d.kind === 'dir') pathText = getValue(opts, title, null);
     }
     const out = { op: spec.op, key, pathText, values: {} };
     const vars = ctx && ctx.vars && typeof ctx.vars === 'object' ? ctx.vars : {};
@@ -907,11 +1097,13 @@
       let v = null;
       if (opts !== null) {
         if (x.type === 'check') v = isMatch(opts, x.key);
+        // GenericDialog.getNextText in macro mode: Macro.getValue(options, "text1", the area's text)
+        else if (x.type === 'text') v = getValue(opts, x.key, x.dflt === undefined ? null : x.dflt);
         else if (x.type === 'number') {
           const r = readNumber(opts, x.key, x, vars, gdTitle);
           if (r && r.error) { if (out.error === undefined) out.error = r.error; } else if (r) v = r.value;
         } else {
-          let t = getValue(opts, x.key, null);
+          let t = getValue(opts, x.key, x.dflt === undefined ? null : x.dflt);
           if (t !== null && t.startsWith('&')) { const s = varAsString(vars, t.slice(1)); t = s !== null ? s : t.slice(1); }
           if (t !== null && x.type === 'choice' && Array.isArray(x.items) && x.items.indexOf(t) < 0) {
             if (out.error === undefined) out.error = choiceError(t, x.key);
@@ -1182,6 +1374,8 @@
   }
 
   root.IJMacroOptions = Object.freeze(IJMacroOptions);
-  root.IJMacroCmds = Object.freeze({ MACRO_COMMANDS: T, IJ_CONVERT, REFUSED_NAMES, FILE_NAMES, NO_IMAGE_TEXT, resolve, nameOf, headlessAnswer, pickDialog,
-    fileRequest, saveAsPlan, updateExtension, IJMacroOptions: root.IJMacroOptions });
+  /** The DialogEntry the Recorder folds a dialog's values with: headlessAnswer's rule (pickDialog) over the dialog's fields. */
+  const dialogEntryFor = (entry, index, spec) => pickDialog(entry, index, ((spec && spec.fields) || []).filter(Boolean));
+  root.IJMacroCmds = Object.freeze({ MACRO_COMMANDS: T, IJ_CONVERT, REFUSED_NAMES, FILE_NAMES, NO_IMAGE_TEXT, resolve, nameOf, headlessAnswer, pickDialog, dialogEntryFor,
+    fileRequest, saveAsPlan, updateExtension, BATCH_FORMATS, BATCH_SNIPPETS, IJMacroOptions: root.IJMacroOptions });
 })(typeof self !== 'undefined' ? self : globalThis);

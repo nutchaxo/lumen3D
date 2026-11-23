@@ -263,3 +263,81 @@ behaviour, not in the Studio's:
 Write `files/<group>/<case>/macro.ijm` (+ `in/`, or a `setup.ijm` and `--make-inputs`), add `case.json` `{ "gui": true }` if it fails with a
 `HeadlessException`, run it alone (`IJM_ONLY='group/case$'`), read the entry, keep it only when it is deterministic and opens no picker.
 A case that prints a machine path, a time, or a Java exception with a stack is rewritten. The final line `unexpected: 0` must stay 0.
+
+## Recorder, parameters, batch, math (`RecorderGolden.java`, `ParamGolden.java`, `MathGolden.java`, `BatchGolden.java`, `run_extras.sh`)
+
+The goldens of phase M7 + M8 (contract `DOCS/studio-advanced/macros/EXTRAS.md`, section 14), recorded from the real applications.
+Local only, never shipped, never in CI.
+
+```
+tools/ij_fixtures/macro/run_extras.sh all                          # the four goldens (about 12 min; recorder, math, batch need a desktop)
+tools/ij_fixtures/macro/run_extras.sh recorder|params|math|batch   # one of them
+IJM_ONLY=thr- tools/ij_fixtures/macro/run_extras.sh recorder       # only the cases whose id contains the text (rewrites the golden with them only)
+```
+
+The jar defaults to `$FIJI/jars/ij-1.54p.jar` (`FIJI` = `D:/APT/3A/BIOIMAGING/Fiji`); a second argument names another jar. Every run uses
+a clean `user.home`, an empty ImageJ folder (`-Dij.dir`, its `macros/` receives `BatchMacro.ijm`), `-Duser.language=en -Duser.country=US
+-Duser.timezone=UTC`, `Locale.ROOT`.
+
+| File | Role |
+|---|---|
+| `MathGolden.java` | Process > Math > Macro... (`ImageMath` "macro") through `IJ.run(imp, "Macro...", options)` on generated images: `math/<case>.in.bin` + `.out.bin` and `math-golden.json`. Also holds `Kit` (JSON writer, sha256, plane bytes, the dialog watcher) shared by the four drivers. |
+| `BatchGolden.java` | Process > Batch > Macro... (`BatchProcessor`, command `"Macro... "`): writes each input folder `batch/<id>/in/`, runs the batch, copies the saved files to `batch/<id>/out/`, writes `batch-golden.json`; extracts the jar's `macros/TimeStamp.ijm` into `batch/TimeStamp.ijm`. |
+| `RecorderGolden.java` | The Recorder (`ij.plugin.frame.Recorder`) of a shown ImageJ, driven as the operator: `recorder/<id>.ijm` (the text) and `recorder-golden.json`. |
+| `ParamGolden.java` | `#@` script parameters in headless Fiji (SciJava `ScriptInfo` / `ScriptService.run`, the IJ1 macro engine of imagej-legacy): `params/<id>.ijm` and `params-golden.json`. Runs on Fiji's own JDK and jars (`--add-opens=java.base/java.lang=ALL-UNNAMED`, `LegacyInjector.preinit()` first). |
+| `run_extras.sh` | Compiles into a temp folder outside the repository and runs. |
+
+### How each one is driven
+
+* **Math** — no ImageJ instance (IJ.log goes to stdout, captured), GUI-less but not headless: in macro mode `GenericDialog` is built
+  without being shown, which a headless JVM refuses. A macro error opens ImageJ's "Macro Error" dialog: `Kit.runWatched` reads its text
+  (message, line, excerpt) and presses OK. Inputs are the `ramp` fill of `fillFormula`; the input bytes are stored too, so a test never
+  regenerates them. `perf-512*` are timing only (`jarMs`, not compared).
+* **Batch** — an ImageJ instance that is never shown (`new ImageJ(NO_SHOW)`): `IJ.error` is ImageJ's message box (recorded in `dialogs`
+  with its title, `Batch Processor`), `IJ.log` writes to the Log window (read back with `IJ.getLog()`). Modes: `macro` =
+  `IJ.run("Macro... ", optionString)` with `Prefs` `batch.input` / `batch.output` set (what a macro or a recorded line does);
+  `runMacro` = a macro calling `run("Macro... ", …)` (nested interpreter); `operator` = Executer (`IJ.doCommand`, the menu path) with the
+  Recorder on, the real "Batch Process" dialog filled (format, file filter, code) and **Process** pressed — `recorded` is the Recorder's
+  text; `test` = the **Test** button (`testImage` = the image it showed). Machine paths are replaced by `<input>/`, `<output>/`,
+  `<scratch>/`, `<fixtures>/`. A `.zip` output holds entry dates (`reproducible: false`); compare its `pixels`.
+* **Recorder** — `new ImageJ()` shown (the toolbar records `//setTool` only when it can paint), `new Recorder(false)` (its text area read
+  back), real image windows at 100 %. Selections: `Toolbar.setTool` then synthetic `MouseEvent`s dispatched on the event thread to the
+  `ImageCanvas` (pressed / dragged / released; polygons by a mouse-up per vertex and a double click; Shift through `IJ.setKeyDown`).
+  Activation: `WindowManager.setCurrentWindow` (what `ImageWindow.windowActivated` calls); Window menu: `WindowManager.activateWindow`
+  (package-private, by reflection). Commands: Executer (`IJ.doCommand`); each dialog answered by setting its fields **by the label
+  shown** (`#text:<n>` = the n-th text field, for the empty-label unit fields of Properties) and pressing its own button; a dialog nobody
+  expected is pressed OK and listed in `unexpectedDialogs`. Tool windows (Threshold, B&C, ROI Manager, Channels): their buttons by
+  `ActionEvent`s to the listeners they installed, choices / check boxes by `ItemEvent`s, ROI Manager rows by `JList.setSelectedIndices`,
+  its More>> menu by `RoiManager.actionPerformed(label)`. Before each case: images closed, tool windows closed with their own `close()`,
+  ImageJ `Prefs` restored to the start snapshot, the ThresholdAdjuster statics reset, Recorder flags reset (`fgColorSet`, `bgColorSet`,
+  `bbSet`, as a freshly opened Recorder), then the case's preparation (described in `setup.prep`: ROIs added to the manager, a
+  selection, Wand options, a calibration, a tool window opened, earlier operator steps) and its lines cleared. Every case says how it was driven (`driven`). The `setTool` line
+  of a selection case's own tool change is erased (it is not what the case is about); `choose-tool-*` keep theirs.
+* **Params** — headless Fiji; inputs given programmatically through `ScriptService.run(file, true, inputs)` (runs with `{}` show the
+  headless defaults and the cancel reason, caught from SciJava's `ModuleCanceledEvent`); SciJava prefs cleared before each case.
+  `program` = what the IJ1 engine actually ran: a second run of the case with `call("ParamGolden.dump");` on an extra last line makes the
+  running `ij.macro.Interpreter` list its tokenized program (public ImageJ API + reflection on `Program`: tokens per line, numbers as the
+  exact double, strings decoded). `findings` in the golden says in words what the cases show. No Fiji / SciJava source is read: only their
+  public API is run.
+
+### What the goldens decide (EXTRAS.md section 20)
+
+* P1 `cmd-cancel`: a cancelled dialog leaves `run("Gaussian Blur...");` (also `test-button` of the batch: `run("Macro... ");`).
+* P2–P6: see `params-golden.json` `findings` (prefix with a trailing comma, HashMap order of the names, a blank line before the appended
+  function, built-in names skipped, values per type, `runMacro` does not process `#@`, outputs and implicit `result`).
+* P7 `thr-apply-16bit` / `thr-apply-32bit`: no `//setThreshold` comment line at all on 16 / 32-bit (only 8-bit writes it).
+* P9 `cmd-new-image`, `cmd-image-calculator`, `cmd-duplicate-*`, `close`: ImageJ may write `selectImage("<title>");` after the command's
+  line, when the OS activates the window the command showed (or the one left after a close) — some time later, or never when the JVM has
+  no focus. Timing-dependent, so the driver removes every `selectImage` line the operator's own activations did not cause and lists it
+  in `asyncActivationStripped` (informative only: it depends on the run). Same for the batch `recorded` text.
+* The Threshold window of a clean profile records ` no-reset` (its *Don't reset range* box starts checked): `setAutoThreshold("Default no-reset");`.
+* The operator's Process in Batch > Macro records `run("Macro... ", "output_format=TIFF file=[] text1=run(\"Invert\");");`: no `add=`
+  (the *Add macro code* choice is never read back), `text1` bracketed only when it holds a space (batch `recorded`, `recorded-filter`).
+* Channels tool, mode choice: `Property.set("CompositeProjection", "null");` then `Stack.setDisplayMode("color");` on an image without
+  that property (`channels-mode`).
+
+### Adding a case
+
+Add it to the case list at the top of the driver (an id, the images, the actions), run it alone with `IJM_ONLY`, read its entry (and
+`unexpectedDialogs` / `driverError` for the recorder), then run the whole driver again so the golden holds every case.
+`tests/js/test_ij_macro_extras_golden.mjs` checks the schema, the counts and every data file.

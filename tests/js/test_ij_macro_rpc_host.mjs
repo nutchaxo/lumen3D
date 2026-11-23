@@ -18,11 +18,15 @@ const CONTRACT_RPC = ['run', 'dialog.show', 'dialog.message', 'dialog.messageCan
   'error.show', 'image.select', 'image.close', 'image.show', 'image.adopt', 'window.select', 'window.close', 'clipboard.copy', 'flush', 'image.rename',
   'window.print', 'command.list',
   // FILES.md §5.4
-  'vfs.pick', 'vfs.confirm', 'vfs.regrant', 'text.open', 'window.text'];
+  'vfs.pick', 'vfs.confirm', 'vfs.regrant', 'text.open', 'window.text',
+  // EXTRAS.md §10.2
+  'batch.prefs', 'install.set'];
 const FILES_RPC = ['vfs.pick', 'vfs.confirm', 'vfs.regrant', 'text.open', 'window.text'];
 const CONTRACT_WRITES = ['roi.set', 'display.set', 'display.lut', 'display.mode', 'display.visible', 'thr.set', 'thr.reset', 'thr.mode', 'table.replace',
   'table.remove', 'table.rename', 'table.show', 'rm.set', 'rm.select', 'rm.show', 'setting.set', 'measurements.set', 'colors.set', 'tool.set', 'status.show',
-  'progress.show'];
+  'progress.show',
+  // EXTRAS.md §10.3
+  'batch.save'];
 
 // ── one handler per method / op, the closed lists of the contract ──
 {

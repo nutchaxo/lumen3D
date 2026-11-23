@@ -32,11 +32,11 @@ await test('WORKER_SCRIPTS ends with ij-proc-macro.js; PACKAGE_PRE puts the lang
   const A = t.IJApp;
   assert.equal(A.WORKER_SCRIPTS[A.WORKER_SCRIPTS.length - 1], 'ij-proc-macro.js', 'the last worker script');
   assert.ok(A.PACKAGE_NAMES.includes('macro'), 'macro is a package');
-  assert.deepEqual(Array.from(A.PACKAGE_PRE.macro), ['ij-macro-lang.js', 'ij-macro-vfs.js'], 'the language, then its virtual file system (FILES.md §10.1)');
+  assert.deepEqual(Array.from(A.PACKAGE_PRE.macro), ['ij-macro-lang.js', 'ij-macro-vfs.js', 'ij-macro-params.js', 'ij-macro-math.js'], 'the language, its virtual file system (FILES.md §10.1), the #@ parser and the Math macro op (EXTRAS.md §2)');
   assert.ok(Object.isFrozen(A.PACKAGE_PRE), 'PACKAGE_PRE is frozen');
   const init = A.workerInit({ fileUrl: (f) => 'u:' + f });
   const mac = init.packages.find((p) => p.pkg === 'macro');
-  assert.deepEqual(JSON.parse(JSON.stringify(mac)), { pkg: 'macro', url: 'u:ij-proc-macro.js', pre: ['u:ij-macro-lang.js', 'u:ij-macro-vfs.js'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(mac)), { pkg: 'macro', url: 'u:ij-proc-macro.js', pre: ['u:ij-macro-lang.js', 'u:ij-macro-vfs.js', 'u:ij-macro-params.js', 'u:ij-macro-math.js'] });
   assert.ok(init.packages.filter((p) => p.pkg !== 'macro').every((p) => p.pre === undefined), 'no other package has a pre');
   assert.ok(!init.scripts.includes('u:ij-macro-lang.js'), 'the language is not a mandatory script');
   // the macro group of the menus and the settings prefix
@@ -66,7 +66,7 @@ await test('the worker loads ij-macro-lang.js then ij-proc-macro.js: the languag
   w2.onmessage = () => {};
   w2.postMessage({ init: Object.assign(t2.IJApp.workerInit(t2.ctx.plugin), { budgetBytes: 1 << 30 }) });
   await until(() => t2.log.events.some((e) => e.event === 'ready'), 'engine ready');
-  assert.deepEqual(order[order.length - 1], ['blob:ij-macro-lang.js', 'blob:ij-macro-vfs.js', 'blob:ij-proc-macro.js'], 'one importScripts call: language, file system, then package');
+  assert.deepEqual(order[order.length - 1], ['blob:ij-macro-lang.js', 'blob:ij-macro-vfs.js', 'blob:ij-macro-params.js', 'blob:ij-macro-math.js', 'blob:ij-proc-macro.js'], 'one importScripts call: language, file system, #@ parser, Math op, then package');
   t2.close();
 });
 

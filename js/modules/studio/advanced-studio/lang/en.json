@@ -1,6 +1,7 @@
 {
   "mode": "Advanced",
   "menu": {
+    "Batch": "Batch",
     "File": "File",
     "SaveAs": "Save As",
     "Edit": "Edit",
@@ -38,6 +39,13 @@
     "Macros": "Macros"
   },
   "cmd": {
+    "macInstall": "Install...",
+    "macStartup": "Startup Macros...",
+    "macRecord": "Record...",
+    "macRemoveInstalled": "Remove Installed Macros",
+    "optStartup": "Startup...",
+    "batchMacro": "Macro...",
+    "mathMacro": "Macro...",
     "fileOpen": "Open…",
     "fileSaveTiff": "Tiff…",
     "fileSaveJpeg": "Jpeg…",
@@ -1224,6 +1232,96 @@
       "levelsStatus": "{list}"
     },
     "mac": {
+      "rec": {
+        "title": "Recorder",
+        "record": "Record:",
+        "modeMacro": "Macro",
+        "name": "Name:",
+        "create": "Create",
+        "run": "Run",
+        "help": "Help",
+        "helpText": "Click \"Create\" to open the recorded commands in the Macro Editor.\n\nClick \"Run\" (or press Ctrl+Enter) to run the selected text or the line containing the cursor.\n\nOnly what you do yourself is recorded: never what a running macro does.",
+        "createEmpty": "A macro cannot be created until at least one command has been recorded.",
+        "runHint": "Runs the selected text or the line containing the cursor (Ctrl+Enter).",
+        "replaceEditor": "The Macro Editor holds text that is not saved. Replace it with the recorded macro?",
+        "replace": "Replace"
+      },
+      "install": {
+        "title": "Install Macros",
+        "keyInUse": "This keyboard shortcut is already in use:",
+        "keysInUse": "These keyboard shortcuts are already in use:",
+        "keysReserved": "These keys are kept by the browser and were not assigned:",
+        "toolsSkipped": "{n} tool macro(s) were not installed: toolbar tools are not available in the Advanced Studio.",
+        "popupSkipped": "The \"Popup Menu\" macro was not installed: the image pop-up menu is not available in the Advanced Studio.",
+        "installed": "{n} macros installed",
+        "installedOne": "1 macro installed"
+      },
+      "editor": {
+        "install": "Install"
+      },
+      "startup": {
+        "title": "Startup Macros",
+        "note": "These macros are installed each time the Advanced Studio opens; an AutoRun macro runs then.",
+        "save": "Save",
+        "revert": "Revert"
+      },
+      "startupCode": {
+        "title": "Startup Macro",
+        "note": "Macro code contained in this text area runs each time the Advanced Studio opens.",
+        "add": "Add code:",
+        "itemSelect": "[Select from list]",
+        "itemBlack": "Black background",
+        "itemDir": "Set default directory",
+        "itemOverlay": "Add to overlay"
+      },
+      "batch": {
+        "title": "Batch Process",
+        "input": "Input...",
+        "output": "Output...",
+        "format": "Output format:",
+        "addCode": "Add macro code:",
+        "filter": "File name contains:",
+        "test": "Test",
+        "open": "Open...",
+        "save": "Save...",
+        "process": "Process",
+        "formatNo": "The Advanced Studio cannot write this format.",
+        "snippetSelect": "[Select from list]",
+        "snippetAddBorder": "Add Border",
+        "snippetToRgb": "Convert to RGB",
+        "snippetCrop": "Crop",
+        "snippetGaussian": "Gaussian Blur",
+        "snippetInvert": "Invert",
+        "snippetLabel": "Label",
+        "snippetTimestamp": "Timestamp",
+        "snippetMaxDim": "Max Dimension",
+        "snippetMeasure": "Measure",
+        "snippetPrintIndex": "Print Index and Title",
+        "snippetResize": "Resize",
+        "snippetScale": "Scale",
+        "snippetFileInfo": "Show File Info",
+        "snippetUnsharp": "Unsharp Mask",
+        "errTitle": "Batch Processor",
+        "noInput": "Please choose an input folder",
+        "badInput": "Input does not exist or is not a folder\n \n{path}",
+        "badOutput": "Output does not exist or is not a folder\n \n{path}",
+        "noCode": "There is no macro code in the text area",
+        "tooLarge": "File is too large",
+        "progress": "{n}/{total}: {name}"
+      },
+      "math": {
+        "title": "Expression Evaluator",
+        "code": "Code:",
+        "help": "v=pixel value, x,y&z=pixel coordinates, w=image width,\nh=image height, a=angle, d=distance from center"
+      },
+      "params": {
+        "title": "Script parameters"
+      },
+      "outputs": {
+        "title": "Outputs",
+        "name": "Name",
+        "value": "Value"
+      },
       "editorTitle": "Macro Editor",
       "logTitle": "Log",
       "errorTitle": "Macro Error",
@@ -1315,6 +1413,8 @@
     }
   },
   "op": {
+    "macBatch": "Batch processing",
+    "mathMacro": "Macro",
     "invert": "Inverting",
     "math": "Applying math",
     "fill": "Filling",
@@ -1583,6 +1683,18 @@
     "keepFailed": "The browser could not store all your work. Save as TIFF, or discard it."
   },
   "err": {
+    "macInstallExt": "File name must end with \".txt\" or \".ijm\" .",
+    "macMathHost": "{name}() cannot be used in Process › Math › Macro in the browser.",
+    "macMathFailed": "The Math macro failed.",
+    "macParamService": "#@ {type} {name}: services are not available in the browser.",
+    "macParamType": "#@ {type} {name}: this parameter type is not available in the browser.",
+    "macParamPassword": "#@ String {name}: password fields are not available in the Advanced Studio.",
+    "macParamNoImage": "#@ {type} {name}: an image must be open.",
+    "macParamSyntax": "Line {line}: this parameter line cannot be read: {text}",
+    "macReasonStartup": "it changes what runs each time the Studio opens.",
+    "macReasonRecorder": "a macro may not drive the Recorder.",
+    "macReasonInstalled": "it changes the installed macros.",
+    "macInstallFailed": "The macro file could not be read.",
     "title": "Advanced view",
     "unknown": "Something went wrong. Your work is kept; try again.",
     "overBudget": "This does not fit in the memory this device gives the page. Choose a coarser resolution or fewer channels.",
@@ -1770,6 +1882,7 @@
     "ioTableEmpty": "The table is empty or invalid."
   },
   "warn": {
+    "macNotStored": "This text is too long to be kept after a reload.",
     "unprotected": "Your work is not protected: the browser refused to store it.",
     "held": "Some images were only partly restored: your changes to them are not saved.",
     "lowStorage": "Little storage is left in this browser: save a TIFF.",

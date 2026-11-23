@@ -1,5 +1,6 @@
 // Macros never use the network and never reach the site's datasets (INTEGRATION.md §8, user decision U6):
-//   • the macro files (ij-proc-macro.js, ij-macro-vfs.js, ij-macro-cmds.js, ij-cmds-macro.js — absent ones are skipped) contain no
+//   • the macro files (ij-proc-macro.js, ij-macro-vfs.js, ij-macro-cmds.js, ij-cmds-macro.js, ij-macro-rec.js, ij-macro-params.js,
+//     ij-macro-math.js — absent ones are skipped) contain no
 //     fetch / XMLHttpRequest / sendBeacon / WebSocket / EventSource / importScripts / new Worker / window.open / location / E.fetch /
 //     eval / new Function / WebAssembly (comments stripped first);
 //   • a runtime spy: every built-in family of the runtime corpus (tests/fixtures/ij-macro/runtime), the call() whitelist, the refusals and
@@ -34,7 +35,8 @@ function stripComments(src) {
 const FORBIDDEN = [/\bfetch\s*\(/, /\bXMLHttpRequest\b/, /\bsendBeacon\b/, /\bWebSocket\b/, /\bEventSource\b/, /\bimportScripts\b/, /\bnew\s+Worker\b/,
   /\bwindow\.open\b/, /\blocation\b/, /\bE\.fetch\b/, /\beval\s*\(/, /\bnew\s+Function\b/, /\bWebAssembly\b/];
 let checked = 0;
-for (const f of ['ij-proc-macro.js', 'ij-macro-vfs.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js']) {
+// + the files of the extras phase (EXTRAS.md §16): the Recorder, the #@ parser, the Math macro op
+for (const f of ['ij-proc-macro.js', 'ij-macro-vfs.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js', 'ij-macro-rec.js', 'ij-macro-params.js', 'ij-macro-math.js']) {
   const p = path.join(DIR, f);
   if (!fs.existsSync(p)) { console.log('SKIP static check of ' + f + ': absent'); continue; }
   const code = stripComments(fs.readFileSync(p, 'utf8'));

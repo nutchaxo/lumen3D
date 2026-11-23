@@ -24,19 +24,20 @@ const P = W.IJMacroProto;
 // ---------------------------------------------------------------- IJMacroProto
 {
   const methods = Object.keys(P.RPC_METHODS).sort();
-  assert.deepEqual(methods, ['clipboard.copy', 'command.list', 'dialog.boolean', 'dialog.message', 'dialog.messageCancel', 'dialog.number', 'dialog.show',
-    'dialog.string', 'dialog.waitForUser', 'error.show', 'flush', 'image.adopt', 'image.close', 'image.rename', 'image.select', 'image.show', 'run',
-    'text.open', 'vfs.confirm', 'vfs.pick', 'vfs.regrant', 'window.close', 'window.print', 'window.select', 'window.text'], 'RPC_METHODS is the closed list of §4.1 + FILES.md §5.4');
+  assert.deepEqual(methods, ['batch.prefs', 'clipboard.copy', 'command.list', 'dialog.boolean', 'dialog.message', 'dialog.messageCancel', 'dialog.number', 'dialog.show',
+    'dialog.string', 'dialog.waitForUser', 'error.show', 'flush', 'image.adopt', 'image.close', 'image.rename', 'image.select', 'image.show', 'install.set', 'run',
+    'text.open', 'vfs.confirm', 'vfs.pick', 'vfs.regrant', 'window.close', 'window.print', 'window.select', 'window.text'], 'RPC_METHODS is the closed list of §4.1 + FILES.md §5.4 + EXTRAS.md §10.2');
+  for (const m of ['batch.prefs', 'install.set']) assert.equal(P.RPC_METHODS[m].interactive, false, m + ' has a timeout');
   for (const m of ['vfs.pick', 'vfs.confirm', 'vfs.regrant']) assert.equal(P.RPC_METHODS[m].interactive, true, m + ' waits for the operator');
   for (const m of ['text.open', 'window.text']) assert.equal(P.RPC_METHODS[m].interactive, false, m + ' has a timeout');
   for (const m of ['flush', 'image.rename', 'window.print', 'command.list']) assert.equal(P.RPC_METHODS[m].interactive, false, m + ' has a timeout');
   for (const m of ['run', 'dialog.show', 'image.adopt', 'clipboard.copy']) assert.equal(P.RPC_METHODS[m].interactive, true, m + ' waits for the operator');
-  assert.deepEqual(J(P.WRITE_OPS).sort(), ['colors.set', 'display.lut', 'display.mode', 'display.set', 'display.visible', 'measurements.set', 'progress.show',
+  assert.deepEqual(J(P.WRITE_OPS).sort(), ['batch.save', 'colors.set', 'display.lut', 'display.mode', 'display.set', 'display.visible', 'measurements.set', 'progress.show',
     'rm.select', 'rm.set', 'rm.show', 'roi.set', 'setting.set', 'status.show', 'table.remove', 'table.rename', 'table.replace', 'table.show', 'thr.mode',
-    'thr.reset', 'thr.set', 'tool.set'], 'WRITE_OPS is the closed list of §4.2');
+    'thr.reset', 'thr.set', 'tool.set'], 'WRITE_OPS is the closed list of §4.2 + EXTRAS.md §10.3');
   assert.ok(Object.isFrozen(P) && Object.isFrozen(P.RPC_METHODS) && Object.isFrozen(P.WRITE_OPS) && Object.isFrozen(P.TEXT_KEYS), 'frozen tables');
   // the err.mac* texts, and the README lines of a results archive (FILES.md §12.1)
-  for (const k of P.TEXT_KEYS) assert.match(k, /^(err\.mac[A-Z0-9]|dlg\.mac\.files\.readme)/, 'text key ' + k + ' is in the err.mac* namespace');
+  for (const k of P.TEXT_KEYS) assert.match(k, /^(err\.mac[A-Z0-9]|dlg\.mac\.files\.readme|dlg\.mac\.batch\.)/, 'text key ' + k + ' is in the err.mac* namespace (+ the batch texts of EXTRAS.md §10.7)');
   assert.ok(P.TEXT_KEYS.indexOf('err.macFileLater') < 0, 'err.macFileLater is retired (FILES.md §12.3)');
   // the en texts of every TEXT_KEYS key exist once PAGE has written them (a missing one would show the key to the operator)
   const en = JSON.parse(fs.readFileSync(path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio', 'lang', 'en.json'), 'utf8'));

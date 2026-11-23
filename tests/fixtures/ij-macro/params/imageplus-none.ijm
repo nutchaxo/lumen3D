@@ -1,0 +1,2 @@
+#@ ImagePlus imp
+print(imp);

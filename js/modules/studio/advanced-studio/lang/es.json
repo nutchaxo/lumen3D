@@ -1,6 +1,7 @@
 {
   "mode": "Avanzado",
   "menu": {
+    "Batch": "Lote",
     "File": "Archivo",
     "SaveAs": "Guardar como",
     "Edit": "Edición",
@@ -38,6 +39,13 @@
     "Macros": "Macros"
   },
   "cmd": {
+    "macInstall": "Instalar...",
+    "macStartup": "Macros de inicio...",
+    "macRecord": "Grabar...",
+    "macRemoveInstalled": "Quitar las macros instaladas",
+    "optStartup": "Inicio...",
+    "batchMacro": "Macro...",
+    "mathMacro": "Macro...",
     "fileOpen": "Abrir…",
     "fileSaveTiff": "TIFF…",
     "fileSaveJpeg": "Jpeg…",
@@ -1224,6 +1232,96 @@
       "levelsStatus": "{list}"
     },
     "mac": {
+      "rec": {
+        "title": "Grabadora",
+        "record": "Grabar:",
+        "modeMacro": "Macro",
+        "name": "Nombre:",
+        "create": "Crear",
+        "run": "Ejecutar",
+        "help": "Ayuda",
+        "helpText": "Haga clic en «Crear» para abrir los comandos grabados en el editor de macros.\n\nHaga clic en «Ejecutar» (o pulse Ctrl+Intro) para ejecutar el texto seleccionado o la línea que contiene el cursor.\n\nSolo se graba lo que usted hace: nunca lo que hace una macro en curso.",
+        "createEmpty": "No se puede crear una macro hasta que se haya grabado al menos un comando.",
+        "runHint": "Ejecuta el texto seleccionado o la línea que contiene el cursor (Ctrl+Intro).",
+        "replaceEditor": "El editor de macros contiene un texto sin guardar. ¿Reemplazarlo por la macro grabada?",
+        "replace": "Reemplazar"
+      },
+      "install": {
+        "title": "Instalar macros",
+        "keyInUse": "Este atajo de teclado ya está en uso:",
+        "keysInUse": "Estos atajos de teclado ya están en uso:",
+        "keysReserved": "Estas teclas las reserva el navegador y no se han asignado:",
+        "toolsSkipped": "No se instalaron {n} macro(s) de herramienta: las herramientas de la barra no están disponibles en el Estudio avanzado.",
+        "popupSkipped": "No se instaló la macro «Popup Menu»: el menú contextual de la imagen no está disponible en el Estudio avanzado.",
+        "installed": "{n} macros instaladas",
+        "installedOne": "1 macro instalada"
+      },
+      "editor": {
+        "install": "Instalar"
+      },
+      "startup": {
+        "title": "Macros de inicio",
+        "note": "Estas macros se instalan cada vez que se abre el Estudio avanzado; entonces se ejecuta una macro AutoRun.",
+        "save": "Guardar",
+        "revert": "Revertir"
+      },
+      "startupCode": {
+        "title": "Macro de inicio",
+        "note": "El código de macro de esta área de texto se ejecuta cada vez que se abre el Estudio avanzado.",
+        "add": "Añadir código:",
+        "itemSelect": "[Elegir de la lista]",
+        "itemBlack": "Fondo negro",
+        "itemDir": "Definir la carpeta predeterminada",
+        "itemOverlay": "Añadir a la superposición"
+      },
+      "batch": {
+        "title": "Procesamiento por lotes",
+        "input": "Entrada...",
+        "output": "Salida...",
+        "format": "Formato de salida:",
+        "addCode": "Añadir código de macro:",
+        "filter": "El nombre de archivo contiene:",
+        "test": "Probar",
+        "open": "Abrir...",
+        "save": "Guardar...",
+        "process": "Procesar",
+        "formatNo": "El Estudio avanzado no puede escribir este formato.",
+        "snippetSelect": "[Elegir de la lista]",
+        "snippetAddBorder": "Añadir borde",
+        "snippetToRgb": "Convertir a RGB",
+        "snippetCrop": "Recortar",
+        "snippetGaussian": "Desenfoque gaussiano",
+        "snippetInvert": "Invertir",
+        "snippetLabel": "Etiqueta",
+        "snippetTimestamp": "Marca de tiempo",
+        "snippetMaxDim": "Dimensión máxima",
+        "snippetMeasure": "Medir",
+        "snippetPrintIndex": "Imprimir índice y título",
+        "snippetResize": "Redimensionar",
+        "snippetScale": "Escalar",
+        "snippetFileInfo": "Mostrar información del archivo",
+        "snippetUnsharp": "Máscara de enfoque",
+        "errTitle": "Procesador por lotes",
+        "noInput": "Elija una carpeta de entrada",
+        "badInput": "La entrada no existe o no es una carpeta\n \n{path}",
+        "badOutput": "La salida no existe o no es una carpeta\n \n{path}",
+        "noCode": "No hay código de macro en el área de texto",
+        "tooLarge": "El archivo es demasiado grande",
+        "progress": "{n}/{total}: {name}"
+      },
+      "math": {
+        "title": "Evaluador de expresiones",
+        "code": "Código:",
+        "help": "v=valor del píxel, x,y y z=coordenadas del píxel, w=ancho de la imagen,\nh=alto de la imagen, a=ángulo, d=distancia al centro"
+      },
+      "params": {
+        "title": "Parámetros del script"
+      },
+      "outputs": {
+        "title": "Salidas",
+        "name": "Nombre",
+        "value": "Valor"
+      },
       "editorTitle": "Editor de macros",
       "logTitle": "Registro",
       "errorTitle": "Error de macro",
@@ -1315,6 +1413,8 @@
     }
   },
   "op": {
+    "macBatch": "Procesamiento por lotes",
+    "mathMacro": "Macro",
     "invert": "Invirtiendo",
     "math": "Calculando",
     "fill": "Rellenando",
@@ -1583,6 +1683,18 @@
     "keepFailed": "El navegador no pudo guardar todo su trabajo. Guárdelo como TIFF o descártelo."
   },
   "err": {
+    "macInstallExt": "El nombre del archivo debe terminar en «.txt» o «.ijm».",
+    "macMathHost": "{name}() no se puede usar en Process › Math › Macro en el navegador.",
+    "macMathFailed": "La macro matemática ha fallado.",
+    "macParamService": "#@ {type} {name}: los servicios no están disponibles en el navegador.",
+    "macParamType": "#@ {type} {name}: este tipo de parámetro no está disponible en el navegador.",
+    "macParamPassword": "#@ String {name}: los campos de contraseña no están disponibles en el Estudio avanzado.",
+    "macParamNoImage": "#@ {type} {name}: debe haber una imagen abierta.",
+    "macParamSyntax": "Línea {line}: no se puede leer esta línea de parámetro: {text}",
+    "macReasonStartup": "cambia lo que se ejecuta cada vez que se abre el Estudio.",
+    "macReasonRecorder": "una macro no puede controlar la grabadora.",
+    "macReasonInstalled": "cambia las macros instaladas.",
+    "macInstallFailed": "No se pudo leer el archivo de macro.",
     "title": "Vista avanzada",
     "unknown": "Algo salió mal. Su trabajo se conserva; inténtelo de nuevo.",
     "overBudget": "Esto no cabe en la memoria que este equipo da a la página. Elija una resolución más gruesa o menos canales.",
@@ -1770,6 +1882,7 @@
     "ioTableEmpty": "La tabla está vacía o no es válida."
   },
   "warn": {
+    "macNotStored": "Este texto es demasiado largo para conservarse tras recargar.",
     "unprotected": "Su trabajo no está protegido: el navegador se negó a guardarlo.",
     "held": "Algunas imágenes solo se restauraron en parte: sus cambios en ellas no se guardan.",
     "lowStorage": "Queda poco espacio en este navegador: guarde un TIFF.",

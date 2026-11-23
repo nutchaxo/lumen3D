@@ -1,0 +1,2 @@
+roiManager("Deselect");
+roiManager("Fill");

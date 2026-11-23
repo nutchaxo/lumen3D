@@ -34,6 +34,9 @@ const ROWS = [
   ['toolsSaveXY', 'Save XY Coordinates...', 'saveXYCoordinates', 'save', 'Save Coordinates as Text...'],
   ['fileImportResults', 'Results... ', 'importResults', 'open', 'Open Table'],
   ['macRun', 'Run...', 'runMacro', 'open', 'Run Macro or Script...'],
+  // the macro extras (EXTRAS.md §4.3): MacroInstaller's OpenDialog, and BatchProcessor whose folders are not GenericDialog fields (kind none)
+  ['macInstall', 'Install...', 'install', 'open', 'Install Macros'],
+  ['batchMacro', 'Macro... ', 'batchMacro', 'none', 'Batch Process'],
   [null, 'Save', 'save', 'save', 'Save as TIFF'],
   [null, 'Table... ', 'importTable', 'open', 'Open Table...'],
   [null, 'Text...', 'saveText', 'save', 'Save as Text'],
@@ -45,7 +48,7 @@ const ROWS = [
   [null, 'Raw...', 'importRaw', 'open', 'Open Raw...']
 ];
 // the option key ImageJ's dialog reads (Macro.trimKey of its title), from the jar probe
-const KEY = { Open: 'open', 'Open Text Image...': 'open', 'Open LUT...': 'open', 'Open Table': 'open', 'Open Table...': 'open', 'Run Macro or Script...': 'run', 'Open Text File...': 'open', 'Open Raw...': 'open' };
+const KEY = { Open: 'open', 'Open Text Image...': 'open', 'Open LUT...': 'open', 'Open Table': 'open', 'Open Table...': 'open', 'Run Macro or Script...': 'run', 'Open Text File...': 'open', 'Open Raw...': 'open', 'Install Macros': 'install', 'Batch Process': 'batch' };
 const ops = new Set();
 for (const [id, name, op, kind, title] of ROWS) {
   const r = J(C.resolve(name));
@@ -231,7 +234,7 @@ if (fs.existsSync(PROC)) {
 if (FILE_OPS) {
   for (const op of ops) assert.ok(FILE_OPS.includes(op), 'op ' + op + ' is in IJMacroProto.FILE_OPS');
   for (const op of FILE_OPS) assert.ok(ops.has(op), 'IJMacroProto.FILE_OPS ' + op + ' is reachable from a run() name');
-  assert.deepEqual([...FILE_OPS].sort(), ['importLut', 'importRaw', 'importResults', 'importTable', 'importTextFile', 'importTextImage', 'importXY', 'open', 'runMacro', 'save', 'saveJpeg', 'saveLut',
+  assert.deepEqual([...FILE_OPS].sort(), ['batchMacro', 'importLut', 'importRaw', 'importResults', 'importTable', 'importTextFile', 'importTextImage', 'importXY', 'install', 'open', 'runMacro', 'save', 'saveJpeg', 'saveLut',
     'savePng', 'saveRaw', 'saveResults', 'saveSelection', 'saveText', 'saveTextImage', 'saveTiff', 'saveXY', 'saveXYCoordinates', 'saveZip']);
 } else if (FILE_OPS === null && fs.existsSync(PROC)) console.log('SKIP IJMacroProto.FILE_OPS absent (RUNTIME): ops coverage not checked');
 else console.log('SKIP ij-proc-macro.js absent: ops coverage not checked');

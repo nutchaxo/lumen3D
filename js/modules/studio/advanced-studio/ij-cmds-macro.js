@@ -625,6 +625,7 @@
     if (typeof a.state === 'function' && a.state().busy) throw Object.assign(new Error('a step is running'), { code: 'IJ_MACRO_STEP_BUSY' });
     if (M.persistTimer) persistEditor(a);
     const runId = 'r' + (++M.seq);
+    if (X.batchRun && opt.batch) X.batchRun.runId = runId;
     const lineOffset = Number.isInteger(opt.lineOffset) ? opt.lineOffset : null;
     const host = makeHost(a, runId);
     M.run = { runId, lineOffset };
@@ -635,11 +636,16 @@
       await ensureLoaded();
       if (V.refreshing) await V.refreshing;
       touchRoots();
-      result = await a.macro.start({
+      const args = {
         runId, source: String(source), name: opt.name ? String(opt.name) : 'Macro', arg: strOf(opt.arg),
         texts: textsFor(a), prefs: readPrefs(), log: logLines(), options: { fastPath: true, syncLoops: false, syncRecursion: false },
         vfs: vfsRunArgs()
-      });
+      };
+      // EXTRAS.md §10.1: an entry of an installed set, a batch, the variables Fiji shows as outputs
+      if (opt.entry) args.entry = opt.entry;
+      if (opt.batch) args.batch = opt.batch;
+      if (Array.isArray(opt.readVars) && opt.readVars.length) args.readVars = opt.readVars.slice();
+      result = await a.macro.start(args);
     } catch (err) {
       setStatus('idle', '');
       throw err;
@@ -697,7 +703,7 @@
 
   const V = {
     mountId: hex16(),              // FILES.md F13 / F14: the worker's /tmp/ and dialog statics live as long as this id
-    dbP: null, mem: { roots: new Map(), aliases: new Map(), settings: new Map() },
+    dbP: null, mem: { roots: new Map(), aliases: new Map(), settings: new Map(), macros: new Map(), params: new Map() },
     loaded: false, loading: null,
     roots: [],                     // granted roots: the stored record + `snapshot` (this page session only)
     aliases: [],                   // AliasRecord
@@ -1742,6 +1748,12 @@
     const abortBtn = button(papi.tr('dlg.mac.abort'), () => abortRun(), 'ij-btn--danger', { title: papi.tr('dlg.mac.abort') + ' (Esc)', 'aria-keyshortcuts': 'Escape' });
     const openBtn = button(papi.tr('dlg.mac.open'), () => openMacroFile());
     const saveBtn = button(papi.tr('dlg.mac.save'), () => saveMacroFile());
+    // Editor › Macros › Install Macros: the text becomes the installed set, named after the editor's file (an operator install: AutoRun runs)
+    const installBtn = button(papi.tr('dlg.mac.editor.install'), () => {
+      if (running()) { papi.toast('err.macBusy'); return; }
+      installSet(papi, ta.value, { fileName: M.editorFile || 'Macro.ijm', set: 'installed', origin: 'editor', autoRun: true, persist: true, boxes: true })
+        .catch((err) => papi.error(err));
+    });
     const pause = buildPause(papi);
     const files = buildFiles(papi);
     let gutterKey = '';
@@ -1758,7 +1770,7 @@
     }
     function render() {
       const busy = running();
-      runBtn.disabled = busy; selBtn.disabled = busy; abortBtn.disabled = !busy;
+      runBtn.disabled = busy; selBtn.disabled = busy; abortBtn.disabled = !busy; installBtn.disabled = busy || !PAR();
       status.textContent = V.pause ? papi.tr('dlg.mac.paused') : M.status.text;
       status.className = 'ij-mac-status' + (M.status.kind === 'error' && !V.pause ? ' ij-mac-status-err' : '');
       note.hidden = !M.notPersisted;
@@ -1806,7 +1818,7 @@
         source = s.source; lineOffset = s.lineOffset;
       }
       if (!source.trim()) { papi.toast('dlg.mac.empty'); return; }
-      startRun(source, { name: 'Macro', lineOffset }).catch((err) => papi.error(err));
+      runMacroText(papi, source, { name: 'Macro', lineOffset, identity: M.editorFile || 'Macro.ijm' }).catch((err) => papi.error(err));
       render();
     }
     ta.addEventListener('keydown', (e) => {
@@ -1817,12 +1829,14 @@
     ta.addEventListener('input', () => { M.editorText = ta.value; schedulePersist(papi); paintGutter(); scheduleScan(); });
     ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
     rootEl.appendChild(el('div', { class: 'ij-mac-editor' },
-      el('div', { class: 'ij-mac-toolbar' }, runBtn, selBtn, abortBtn, openBtn, saveBtn, status),
+      el('div', { class: 'ij-mac-toolbar' }, runBtn, selBtn, abortBtn, openBtn, saveBtn, installBtn, status),
       pause.el,
       el('div', { class: 'ij-mac-body' }, gutter, ta),
       note,
       files.el));
-    const inst = { render, showLine, _state: () => ({ ta, gutter, status, note, runBtn, selBtn, abortBtn, openBtn, saveBtn, pause: pause.el, files: files.el }) };
+    // the Recorder's Create hands its text over while the editor is open
+    function setText(t) { ta.value = strOf(t); paintGutter(); scheduleScan(); }
+    const inst = { render, showLine, setText, _state: () => ({ ta, gutter, status, note, runBtn, selBtn, abortBtn, openBtn, saveBtn, installBtn, pause: pause.el, files: files.el }) };
     M.panels.editor.add(inst);
     render();
     // a question of the worker keeps the focus on its strip
@@ -1934,6 +1948,646 @@
     return { refresh() {}, dispose() { M.panels.text.delete(inst); M.texts.clear(); M.activeText = null; }, _state: inst._state };
   }
 
+  // ───────────────────────────── extras: Recorder, #@ parameters, Install / Startup, Batch, Math (EXTRAS.md) ─────────────────────────────
+
+  const REC = () => (typeof IJMacroRec !== 'undefined' && IJMacroRec ? IJMacroRec : null);
+  const PAR = () => (typeof IJMacroParams !== 'undefined' && IJMacroParams ? IJMacroParams : null);
+  const MCMDS = () => (typeof IJMacroCmds !== 'undefined' && IJMacroCmds ? IJMacroCmds : null);
+  const STORE_MAX = 1048576;            // EXTRAS.md §12: a text longer than this is not kept across a reload
+  const BATCH_OPEN_MAX = 30000;         // BatchProcessor.openMacro: "File is too large"
+  const MATH_DEFAULT = 'v=v+50*sin(d/10)';
+  // the formats the Studio has no writer for (FILES.md F18): shown, never chosen
+  const BATCH_NO_WRITER = new Set(['GIF', 'PGM', 'BMP', 'FITS']);
+  // BatchProcessor.itemStateChanged (BatchProcessor.java:313-340), verbatim. "Label" and "Timestamp" (the jar's macros/TimeStamp.ijm) are left
+  // out: both draw text with drawString, which the Studio's macros do not have ("drawString is not available in the browser").
+  const BATCH_SNIPPET_CODE = {
+    'Add Border': 'border=25;\nw=getWidth+border*2; h=getHeight+border*2;\nrun("Canvas Size...", "width=w height=h position=Center zero");\n',
+    'Convert to RGB': 'run("RGB Color");\n',
+    Crop: 'makeRectangle(getWidth/4, getHeight/4, getWidth/2, getHeight/2);\nrun("Crop");\n',
+    'Gaussian Blur': 'run("Gaussian Blur...", "sigma=2");\n',
+    Invert: 'run("Invert");\n',
+    'Max Dimension': 'max=2048;\nw=getWidth; h=getHeight;\nsize=maxOf(w,h);\nif (size>max) {\n  scale = max/size;\n  w*=scale; h*=scale;\n  run("Size...", "width=w height=h interpolation=Bicubic average");\n}',
+    Measure: 'run("Measure");\n',
+    'Print Index and Title': 'if (i==0) print("\\\\Clear"); print(IJ.pad(i,4)+": "+getTitle());\n',
+    Resize: 'run("Size...", "width=512 height=512 interpolation=Bicubic");\n',
+    Scale: 'scale=1.5;\nw=getWidth*scale; h=getHeight*scale;\nrun("Size...", "width=w height=h interpolation=Bilinear");\n',
+    'Show File Info': 'path=File.directory+File.name;\ndate=File.dateLastModified(path);\nsize=File.length(path);\nprint(i+", "+getTitle+", "+date+", "+size);\n',
+    'Unsharp Mask': 'run("Unsharp Mask...", "radius=1 mask=0.60");\n'
+  };
+  const SNIPPET_KEYS = { '[Select from list]': 'dlg.mac.batch.snippetSelect', 'Add Border': 'dlg.mac.batch.snippetAddBorder', 'Convert to RGB': 'dlg.mac.batch.snippetToRgb', Crop: 'dlg.mac.batch.snippetCrop', 'Gaussian Blur': 'dlg.mac.batch.snippetGaussian', Invert: 'dlg.mac.batch.snippetInvert',
+    Label: 'dlg.mac.batch.snippetLabel', Timestamp: 'dlg.mac.batch.snippetTimestamp', 'Max Dimension': 'dlg.mac.batch.snippetMaxDim', Measure: 'dlg.mac.batch.snippetMeasure', 'Print Index and Title': 'dlg.mac.batch.snippetPrintIndex', Resize: 'dlg.mac.batch.snippetResize', Scale: 'dlg.mac.batch.snippetScale',
+    'Show File Info': 'dlg.mac.batch.snippetFileInfo', 'Unsharp Mask': 'dlg.mac.batch.snippetUnsharp' };
+  const BATCH_FORMATS = () => { const C = MCMDS(); return C && Array.isArray(C.BATCH_FORMATS) ? C.BATCH_FORMATS : ['TIFF', '8-bit TIFF', 'JPEG', 'GIF', 'PNG', 'PGM', 'BMP', 'FITS', 'Text Image', 'ZIP', 'Raw']; };
+  const BATCH_SNIPPETS = () => ['[Select from list]'].concat(Object.keys(BATCH_SNIPPET_CODE));
+  // Edit › Options › Startup… "Add code" items that mean something in the Studio (ij.plugin.Startup 1.54p)
+  const STARTUP_ITEMS = [
+    { value: 'select', labelKey: 'dlg.mac.startupCode.itemSelect', code: null },
+    { value: 'black', labelKey: 'dlg.mac.startupCode.itemBlack', code: 'setOption("BlackBackground", true);\n' },
+    { value: 'dir', labelKey: 'dlg.mac.startupCode.itemDir', code: 'File.setDefaultDir(getDir("downloads"));\n' },
+    { value: 'overlay', labelKey: 'dlg.mac.startupCode.itemOverlay', code: 'setOption("Add to overlay", true);\n' }
+  ];
+
+  const X = {
+    rec: null, recOffs: [],               // the Recorder model and its event subscriptions while its window is open
+    installed: null,                      // { set: 'installed' | 'startup', name, source, hash, plan, rows }
+    batch: null,                          // the Batch Process window's values { input, output, format, filter, code } (read from the store once)
+    batchRun: null,                       // { runId } while a batch started here runs
+    batchTestDoc: null,                   // the image the last Test showed
+    batchStatus: '',
+    outputs: [],                          // the rows of the Outputs window
+    panels: { startup: new Set(), batch: new Set(), outputs: new Set() }
+  };
+  function notifyX(kind) { for (const inst of X.panels[kind]) { try { inst.render(); } catch (err) { console.error('[advanced-studio] macro panel', err); } } }
+
+  async function settingRead(key) {
+    const all = await dbAll('settings');
+    const r = all.find((x) => x && x.key === key);
+    return r && typeof r.value === 'string' ? r.value : null;
+  }
+  async function settingWrite(a, key, value) {
+    const v = strOf(value);
+    if (v.length > STORE_MAX) { if (a) a.toast('warn.macNotStored'); return false; }
+    await dbPut('settings', { key, value: v });
+    return true;
+  }
+  async function macroRecord(id) {
+    const all = await dbAll('macros');
+    return all.find((x) => x && x.id === id) || null;
+  }
+  async function infoBox(a, title, text) {
+    return a.dialog({ title: strOf(title), fields: messageFields(text, 'm'), okLabel: a.tr('dlg.ok'), noCancel: true });
+  }
+  /** MacroInstaller.open: BufferedReader lines, each followed by "\n" (a non-UTF-8 file is refused rather than guessed). */
+  function decodeMacroBytes(buf) {
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (_) { throw Object.assign(new Error('not utf-8'), { code: 'IJ_MACRO_INSTALL' }); }
+    const parts = text.split(/\r\n|\r|\n/);
+    if (parts.length && parts[parts.length - 1] === '') parts.pop();
+    return parts.map((l) => l + '\n').join('');
+  }
+  const hashOf = (text) => fnvHex(new TextEncoder().encode(strOf(text)));
+
+  // ── #@ script parameters (Fiji): one dialog before the run, values injected as the IJ1 macro engine does (EXTRAS.md §6) ──
+  const paramItems = (parsed) => {
+    for (const k of ['inputs', 'items', 'params']) if (parsed && Array.isArray(parsed[k])) return parsed[k];
+    return [];
+  };
+  /** The stored values by input name: Fiji shares one value between every script with an input of that name (the latest write wins). */
+  async function persistedParams() {
+    const out = {}, at = {};
+    for (const r of await dbAll('params')) {
+      if (!r || typeof r.name !== 'string' || r.id !== PAR().persistId(r.name)) continue;
+      const t = typeof r.at === 'number' ? r.at : 0;
+      if (at[r.name] === undefined || t >= at[r.name]) { out[r.name] = r.value; at[r.name] = t; }
+    }
+    return out;
+  }
+  async function persistParams(parsed, identity, values) {
+    const P = PAR();
+    const items = paramItems(parsed);
+    const keep = typeof P.persistable === 'function' ? new Set(P.persistable(parsed)) : null;
+    for (const name of Object.keys(values || {})) {
+      const it = items.find((x) => x && x.name === name);
+      if (keep ? !keep.has(name) : !(it && it.persist !== false && it.visibility === 'NORMAL' && it.kind !== 'image')) continue;
+      const v = values[name];
+      if (!(typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean')) continue;
+      try { await dbPut('params', { id: P.persistId(name), identity, name, type: it ? it.kind : typeof v, value: v, at: Date.now() }); } catch (err) { console.error('[advanced-studio] macro parameters store', err); }
+    }
+  }
+  /** One output value as the Outputs window shows it (IJMacroParams.formatOutput: Java's toString of the declared type). */
+  function formatOutput(parsed, name, v) {
+    const P = PAR();
+    if (P && typeof P.formatOutput === 'function' && parsed) { try { return strOf(P.formatOutput(parsed, name, v)); } catch (err) { console.error('[advanced-studio] macro output', err); } }
+    if (!v || typeof v !== 'object') return '';
+    if (typeof v.n === 'number') return String(v.n);
+    if (typeof v.s === 'string') return v.s;
+    if (Array.isArray(v.a)) return '[' + v.a.map(strOf).join(', ') + ']';
+    return '';
+  }
+  function showOutputs(a, parsed, outs, result) {
+    const vars = (result && result.vars) || {};
+    const rows = outs.map((name) => ({ name, value: formatOutput(parsed, name, vars[name]) }));
+    // the script's own return value as the implicit "result" output when none is declared
+    if (parsed && parsed.implicitResult !== false && outs.indexOf('result') < 0 && result && typeof result.returnValue === 'string' && result.returnValue !== '') {
+      rows.push({ name: 'result', value: result.returnValue });
+    }
+    if (!rows.length) return;
+    X.outputs = rows;
+    notifyX('outputs');
+    openQuiet(a, 'macroOutputs', true);
+  }
+  /**
+   * Runs a macro text as Fiji runs a script with #@ inputs: the parameters are asked in one dialog first (Cancel = no run), persisted, then
+   * injected (EXTRAS.md §6.4–6.7). Without #@ lines (or without ij-macro-params.js) the text runs as it is. o = startRun's options + identity.
+   */
+  async function runMacroText(a, source, o) {
+    const opt = o || {};
+    const P = PAR();
+    let parsed = null;
+    if (P && typeof P.parse === 'function') {
+      try { parsed = P.parse(String(source)); } catch (err) { console.error('[advanced-studio] macro parameters', err); parsed = null; }
+    }
+    if (!parsed || !parsed.hasParams || typeof parsed.stripped !== 'string') return startRun(source, opt);
+    const st = typeof a.state === 'function' ? a.state() : {};
+    const docs = (st && st.docs) || [];
+    const images = docs.map((d) => ({ docId: d.docId, title: strOf(d.name) }));
+    const refusals = P.check(parsed, { images }) || [];
+    if (refusals.length) {
+      await infoBox(a, a.tr('dlg.mac.params.title'), refusals.map((r) => a.tr(r.key, r.params)).join('\n'));
+      return null;
+    }
+    const identity = strOf(opt.identity) || 'Macro';
+    const grants = [];
+    const spec = P.dialogSpec(parsed, {
+      title: strOf(opt.name) || 'Macro', persisted: await persistedParams(identity),
+      images, current: st && st.doc ? st.doc.docId : null,
+      grants: grantsList().map((g) => '/' + g.name + '/').concat(['/tmp/']),
+      pathField: (f, label) => pathField(f, label, grants)
+    });
+    let answers = {};
+    if (spec && Array.isArray(spec.fields) && spec.fields.some((f) => f && f.type !== 'message')) {
+      answers = await a.dialog(Object.assign({ okLabel: a.tr('dlg.ok') }, spec));
+      if (!answers) return null;
+    }
+    const got = P.valuesOf(parsed, answers || {});
+    if (got.problems && got.problems.length) {
+      await infoBox(a, a.tr('dlg.mac.params.title'), got.problems.map((p) => a.tr(p.key, { name: p.name })).join('\n'));
+      return null;
+    }
+    await persistParams(parsed, identity, got.values);
+    const imageIds = {};
+    for (const it of paramItems(parsed)) {
+      if (!it || it.kind !== 'image' || got.values[it.name] === undefined || got.values[it.name] === null) continue;
+      try {
+        imageIds[it.name] = a.macro.ijId(got.values[it.name]);
+        // the image a parameter names is the current image of the run (the IJ1 engine hands the script its ImagePlus)
+        await a.macro.selectImage(got.values[it.name]);
+      } catch (err) { console.error('[advanced-studio] macro image parameter', err); }
+    }
+    const text = P.inject(parsed, got.values, { imageIds });
+    const outs = (P.outputs(parsed) || []).filter((n) => typeof n === 'string');
+    const result = await startRun(text, Object.assign({}, opt, { readVars: outs.length ? outs : null }));
+    showOutputs(a, parsed, outs, result);
+    return result;
+  }
+
+  function buildOutputs(rootEl, papi) {
+    const body = el('div', { class: 'ij-mac-outputs', attrs: { role: 'table', 'aria-label': papi.tr('dlg.mac.outputs.title') } });
+    rootEl.appendChild(body);
+    const inst = {
+      render() {
+        const head = el('div', { class: 'ij-mac-out-row ij-mac-out-head', attrs: { role: 'row' } },
+          el('span', { text: papi.tr('dlg.mac.outputs.name'), attrs: { role: 'columnheader' } }), el('span', { text: papi.tr('dlg.mac.outputs.value'), attrs: { role: 'columnheader' } }));
+        body.replaceChildren(head, ...X.outputs.map((r) => el('div', { class: 'ij-mac-out-row', attrs: { role: 'row' } },
+          el('span', { text: r.name, attrs: { role: 'cell' } }), el('span', { class: 'ij-mac-out-value', text: r.value, attrs: { role: 'cell' } }))));
+      },
+      _state: () => ({ body, rows: X.outputs.slice() })
+    };
+    X.panels.outputs.add(inst);
+    inst.render();
+    return { refresh() {}, dispose() { X.panels.outputs.delete(inst); }, _state: inst._state };
+  }
+
+  // ── Install (MacroInstaller): one set at a time, its rows under Plugins › Macros (EXTRAS.md §7) ──
+  function macrosOf(source) {
+    const P = PAR();
+    try { return P && typeof P.scanMacros === 'function' ? P.scanMacros(source) || [] : []; } catch (err) { console.error('[advanced-studio] macro scan', err); return []; }
+  }
+  /** The entry of the installed set that run("<name>") names (MacroInstaller.runMacroCommand: the full name, brackets included). */
+  function installedEntry(name) {
+    const set = X.installed;
+    if (!set || typeof name !== 'string') return null;
+    const row = set.plan.rows.find((r) => r && r.kind === 'menu' && r.name === name);
+    if (row) return { set: set.set, hash: set.hash, source: set.source, name: row.name, index: row.index };
+    if (set.plan.anonymous && set.plan.anonymous.name === name) return { set: set.set, hash: set.hash, source: set.source, name, index: 0 };
+    return null;
+  }
+  /** Runs one entry of a set in its own lane (start -1 = only its globals, null = the entry `index`, 0 = the whole anonymous set). */
+  async function runEntry(a, set, index, name, start) {
+    if (running()) {
+      // MacroInstaller.runMacro: a run that waits for the operator is aborted first; a run that is working keeps the menus off anyway
+      const r = a.macro && a.macro.running();
+      if (!(r && r.paused)) { a.toast('err.macBusy'); return null; }
+      abortRun();
+      const t0 = Date.now();
+      while (running() && Date.now() - t0 < 2000) await new Promise((res) => setTimeout(res, 20));
+      if (running()) { a.toast('err.macBusy'); return null; }
+    }
+    return startRun(set.source, { name: name || set.name || 'Macro', lineOffset: null,
+      entry: { kind: 'installed', set: set.set, hash: set.hash, source: set.source, name: strOf(name), index: index === null || index === undefined ? null : index, start } });
+  }
+  /**
+   * Installs `source` as THE installed set: rows replace the previous ones, the boxes ImageJ shows, the globals prepared, then the AutoRun
+   * entry for an operator install. o = { fileName, set, origin, autoRun, persist, boxes, prepare, isMacro }. → the set (with its plan).
+   */
+  async function installSet(a, source, o) {
+    const P = PAR();
+    if (!P || !a.macro || typeof a.macro.setInstalled !== 'function') throw Object.assign(new Error('package macro is not available'), { code: 'IJ_MODULE_MISSING' });
+    const text = strOf(source);
+    const plan = P.installPlan(text, { fileName: o.fileName === undefined ? null : o.fileName, origin: o.origin || null, path: typeof o.path === 'string' ? o.path : null,
+      isMacro: !!o.isMacro, shortcutUse: (spec) => a.macro.shortcutUse(spec) });
+    const set = { set: o.set || 'installed', name: strOf(o.fileName) || (o.set === 'startup' ? 'StartupMacros' : 'Macro.ijm'), source: text, hash: hashOf(text), plan, rows: [] };
+    const rows = [];
+    let k = 0, sepNext = true;
+    for (const r of plan.rows || []) {
+      if (!r) continue;
+      if (r.kind === 'separator') { sepNext = true; continue; }
+      const rowEntry = r;
+      rows.push({ id: 'macInst' + k, label: r.parent ? strOf(r.child || r.label) : strOf(r.label), menu: r.parent ? ['Plugins', 'Macros', strOf(r.parent)] : ['Plugins', 'Macros'],
+        order: 1000 + k, separatorBefore: sepNext, shortcut: r.shortcut || null,
+        run: () => { runEntry(a, set, rowEntry.index, rowEntry.name, null).catch((err) => a.error(err)); } });
+      k++; sepNext = false;
+    }
+    if (plan.anonymous) {
+      rows.push({ id: 'macInst' + k, label: strOf(plan.anonymous.name), menu: ['Plugins', 'Macros'], order: 1000 + k, separatorBefore: sepNext, shortcut: null,
+        run: () => { runEntry(a, set, 0, plan.anonymous.name, 0).catch((err) => a.error(err)); } });
+    }
+    a.macro.setInstalled(rows);
+    set.rows = rows.map((r) => ({ id: r.id, label: r.label, menu: r.menu.slice(), shortcut: r.shortcut }));
+    X.installed = set;
+    if (o.boxes) {
+      const inUse = plan.keysInUse || [];
+      if (inUse.length) {
+        await infoBox(a, a.tr('dlg.mac.install.title'), a.tr(inUse.length === 1 ? 'dlg.mac.install.keyInUse' : 'dlg.mac.install.keysInUse') + '\n \n'
+          + inUse.map((n) => '\t  ' + n).join('\n'));
+      }
+      const reserved = plan.keysReserved || [];
+      if (reserved.length) await infoBox(a, a.tr('dlg.mac.install.title'), a.tr('dlg.mac.install.keysReserved') + '\n' + reserved.map((x) => x.name + ' (' + x.key + ')').join('\n'));
+      for (const n of plan.notices || []) a.toast(n.key, n.params);
+      if (plan.count > 0) a.toast(plan.count === 1 ? 'dlg.mac.install.installedOne' : 'dlg.mac.install.installed', { n: plan.count });
+    }
+    if (o.persist) {
+      if (text.length > STORE_MAX) a.toast('warn.macNotStored');
+      else await dbPut('macros', { id: 'installed', name: set.name, source: text, at: Date.now(), origin: o.origin || 'file' });
+    }
+    if (o.prepare !== false && !running()) {
+      try { await runEntry(a, set, null, '', -1); } catch (err) { console.error('[advanced-studio] installed macros', err); }
+    }
+    if (o.autoRun && !o.isMacro && plan.autoRun !== null && plan.autoRun !== undefined) await runAutoRun(a, set);
+    return set;
+  }
+  async function runAutoRun(a, set) {
+    const idx = set.plan.autoRun;
+    const m = macrosOf(set.source).find((x) => x.index === idx);
+    try { await runEntry(a, set, idx, m ? m.name : 'AutoRun', null); } catch (err) { console.error('[advanced-studio] AutoRun', err); }
+  }
+  async function installFromFile(a, f) {
+    const name = strOf(f && f.name);
+    // MacroInstaller.showDialog: only .txt and .ijm files
+    if (!(name.endsWith('.txt') || name.endsWith('.ijm'))) { await infoBox(a, a.tr('dlg.mac.install.title'), a.tr('err.macInstallExt')); return null; }
+    const text = decodeMacroBytes(new Uint8Array(await f.arrayBuffer()));
+    return installSet(a, text, { fileName: name, set: 'installed', origin: 'file', autoRun: true, persist: true, boxes: true });
+  }
+  async function removeInstalled(a) {
+    await dbDelete('macros', 'installed');
+    const st = await macroRecord('startup');
+    if (st && st.source) await installSet(a, st.source, { fileName: null, set: 'startup', autoRun: false, persist: false, boxes: false });
+    else { const mac = apiOf().macro; if (mac && typeof mac.setInstalled === 'function') mac.setInstalled([]); X.installed = null; }
+  }
+
+  // ── startup (StartupRunner + Startup.run): at each fresh Studio open (EXTRAS.md §7.6) ──
+  async function runStartup(a) {
+    if (!a.macro || !PAR()) return;
+    let st = null, inst = null, code = null;
+    try { [st, inst, code] = await Promise.all([macroRecord('startup'), macroRecord('installed'), settingRead('startup.code')]); } catch (err) { console.error('[advanced-studio] startup macros', err); return; }
+    let deferred = null;
+    if (st && typeof st.source === 'string' && st.source) {
+      try {
+        const set = await installSet(a, st.source, { fileName: null, set: 'startup', autoRun: false, persist: false, boxes: false });
+        if (set.plan.autoRun !== null && set.plan.autoRun !== undefined) deferred = set;
+      } catch (err) { console.error('[advanced-studio] startup macros', err); }
+    }
+    // StartupRunner.run: "if (macro.length()>4)"
+    if (code && code.length > 4) {
+      try { await startRun(code, { name: 'RunAtStartup.ijm', lineOffset: null }); } catch (err) { console.error('[advanced-studio] RunAtStartup', err); }
+    }
+    // the restored set runs no code until the operator picks a row (its globals are prepared by that first entry run); a set a macro
+    // stored before macro installs stopped being kept is not restored
+    if (inst && typeof inst.source === 'string' && inst.source && inst.origin !== 'macro') {
+      try { await installSet(a, inst.source, { fileName: inst.name || null, set: 'installed', autoRun: false, persist: false, boxes: false, prepare: false }); } catch (err) { console.error('[advanced-studio] installed macros', err); }
+    }
+    if (deferred) await runAutoRun(a, deferred);
+  }
+
+  function buildStartup(rootEl, papi) {
+    const ta = el('textarea', { class: 'ij-mac-text ij-mac-startup-text', wrap: 'off', value: '',
+      attrs: { spellcheck: 'false', 'aria-label': papi.tr('dlg.mac.startup.title'), autocomplete: 'off', autocapitalize: 'off' } });
+    const note = el('p', { class: 'ij-note', text: papi.tr('dlg.mac.startup.note') });
+    let stored = '';
+    const load = () => macroRecord('startup').then((r) => { stored = r && typeof r.source === 'string' ? r.source : ''; ta.value = stored; }).catch((err) => console.error('[advanced-studio] startup macros', err));
+    async function save() {
+      const text = ta.value;
+      if (text.length > STORE_MAX) { papi.toast('warn.macNotStored'); return; }
+      await dbPut('macros', { id: 'startup', source: text, at: Date.now() });
+      stored = text;
+      if (text.trim()) await installSet(papi, text, { fileName: null, set: 'startup', autoRun: false, persist: false, boxes: true });
+      else if (!(await macroRecord('installed'))) { papi.macro.setInstalled([]); X.installed = null; }
+    }
+    const saveBtn = button(papi.tr('dlg.mac.startup.save'), () => { save().catch((err) => papi.error(err)); }, 'ij-btn--primary');
+    const revertBtn = button(papi.tr('dlg.mac.startup.revert'), () => { load(); });
+    rootEl.appendChild(el('div', { class: 'ij-mac-startup' }, note, ta, el('div', { class: 'ij-mac-toolbar' }, saveBtn, revertBtn)));
+    const inst = { render() {}, _state: () => ({ ta, note, saveBtn, revertBtn }), ready: load() };
+    X.panels.startup.add(inst);
+    return { refresh() {}, dispose() { X.panels.startup.delete(inst); }, _state: inst._state, ready: inst.ready };
+  }
+
+  /** Edit › Options › Startup… (ij.plugin.Startup): the RunAtStartup code, run now and kept only when it runs without an error. */
+  async function startupCodeDialog(api) {
+    const stored = (await settingRead('startup.code')) || '';
+    const v = await api.dialog({
+      title: api.tr('dlg.mac.startupCode.title'), okLabel: api.tr('dlg.ok'),
+      fields: [
+        { type: 'message', id: 'note', labelKey: 'dlg.mac.startupCode.note' },
+        { type: 'textarea', id: 'text1', label: NBSP, value: stored, rows: 15, monospace: true, remember: false },
+        { type: 'choice', id: 'add', labelKey: 'dlg.mac.startupCode.add', value: 'select', options: STARTUP_ITEMS.map((x) => ({ value: x.value, labelKey: x.labelKey })), remember: false }
+      ],
+      // the dialog has no caret to insert at: the item's code goes at the end, and the choice goes back to its first item
+      onChange(values, set, changed) {
+        if (changed !== 'add') return;
+        const item = STARTUP_ITEMS.find((x) => x.value === values.add);
+        if (!item || !item.code) return;
+        const cur = strOf(values.text1);
+        set({ text1: cur + (cur && !cur.endsWith('\n') ? '\n' : '') + item.code, add: 'select' });
+      }
+    });
+    if (!v) return;
+    const code = strOf(v.text1);
+    if (code === stored) return;
+    // Startup.run: the new code runs first; an error keeps the old one
+    if (code.trim()) {
+      const r = await startRun(code, { name: 'RunAtStartup.ijm', lineOffset: null });
+      if (!r || r.error) return;
+    }
+    await settingWrite(api, 'startup.code', code);
+  }
+
+  // ── Process › Batch › Macro… (BatchProcessor): a tool window, the loop in the worker (EXTRAS.md §8) ──
+  async function batchValues() {
+    if (X.batch) return X.batch;
+    const [input, output, format, code] = await Promise.all(['batch.input', 'batch.output', 'batch.format', 'batch.macro'].map((k) => settingRead(k).catch(() => null)));
+    // BatchProcessor.validateFormat: an unknown stored format is TIFF
+    const fmt = BATCH_FORMATS().indexOf(format) >= 0 && !BATCH_NO_WRITER.has(format) ? format : 'TIFF';
+    X.batch = { input: input || '', output: output || '', format: fmt, filter: '', code: code || '' };
+    return X.batch;
+  }
+  async function storeBatch(a, v, withInput) {
+    if (withInput !== false) await settingWrite(a, 'batch.input', v.input);
+    await settingWrite(a, 'batch.output', v.output);
+    await settingWrite(a, 'batch.format', v.format);
+    if (strOf(v.code) !== '') await settingWrite(a, 'batch.macro', v.code);
+  }
+  const vpathOf = (s) => strOf(s).trim();
+  const ensureSlash = (p) => (p === '' || p.endsWith('/') ? p : p + '/');
+  /** The granted root a vpath lies in (or /tmp/), else null: the Batch window refuses a folder no macro may reach. */
+  function rootOfVpath(p) {
+    if (p === '/tmp' || p.startsWith('/tmp/')) return { name: 'tmp', mode: 'allow' };
+    const m = /^\/([^/]+)(\/|$)/.exec(p);
+    if (!m) return null;
+    return grantsList().find((g) => g && g.name === m[1]) || null;
+  }
+  /** BatchProcessor.run's checks (BatchProcessor.java:80-104), the texts in its message box. → error text or null. */
+  function batchProblem(a, v, test) {
+    const input = vpathOf(v.input);
+    if (input === '') return a.tr('dlg.mac.batch.noInput');
+    if (!rootOfVpath(input)) return a.tr('dlg.mac.batch.badInput', { path: ensureSlash(input) });
+    const output = vpathOf(v.output);
+    if (!test && output !== '') {
+      const g = rootOfVpath(output);
+      if (!g || g.mode === 'readonly') return a.tr('dlg.mac.batch.badOutput', { path: ensureSlash(output) });
+    }
+    if (strOf(v.code) === '') return a.tr('dlg.mac.batch.noCode');
+    return null;
+  }
+  async function runBatch(a, v, test) {
+    const problem = batchProblem(a, v, test);
+    if (problem) { await infoBox(a, a.tr('dlg.mac.batch.errTitle'), problem); return null; }
+    if (running()) { a.toast('err.macBusy'); return null; }
+    const vals = { input: ensureSlash(vpathOf(v.input)), output: vpathOf(v.output) === '' ? '' : ensureSlash(vpathOf(v.output)), format: v.format, filter: strOf(v.filter), test: !!test };
+    if (!test && a.macro && typeof a.macro.recordCommand === 'function') {
+      // ImageJ records the GenericDialog part of the Batch Process dialog that showDialog reads: output_format, file, text1 (the Add macro code
+      // choice is never read with getNextChoice, so it leaves no option: golden batch/recorded)
+      const fields = [
+        { type: 'choice', id: 'output_format', label: 'Output format:', value: 'TIFF', options: BATCH_FORMATS().map((x) => ({ value: x, label: x })) },
+        { type: 'choice', id: 'add', label: 'Add macro code:', value: '[Select from list]', options: BATCH_SNIPPETS().map((x) => ({ value: x, label: x })) },
+        { type: 'string', id: 'file', label: 'File name contains:', value: '' },
+        { type: 'textarea', id: 'text1', label: NBSP, value: '' }];
+      const entry = { ij: null, title: 'Batch Process', keys: { output_format: 'output_format', add: 'add', file: 'file', text1: 'text1' } };
+      try {
+        a.macro.recordCommand({ id: 'batchMacro', steps: [{ kind: 'dialog', index: 0, spec: { title: 'Batch Process', fields }, entry,
+          offered: { output_format: 'TIFF', add: '[Select from list]', file: '', text1: '' }, values: { output_format: v.format, file: strOf(v.filter), text1: strOf(v.code) } }] });
+      } catch (err) { console.error('[advanced-studio] batch record', err); }
+    }
+    let result = null;
+    const off = a.on('ext:macro.batch', (ev) => {
+      if (!ev || typeof ev.total !== 'number' || !X.batchRun || (ev.runId !== undefined && ev.runId !== X.batchRun.runId)) return;
+      X.batchStatus = a.tr('dlg.mac.batch.progress', { n: (ev.index | 0) + 1, total: ev.total, name: strOf(ev.name) });
+      if (ev.total > 0 && a.macro && typeof a.macro.progress === 'function') a.macro.progress(((ev.index | 0) + 1) / ev.total);
+      notifyX('batch');
+    });
+    X.batchRun = { runId: 'r' + (M.seq + 1) };
+    X.batchStatus = '';
+    notifyX('batch');
+    try {
+      result = await startRun(v.code, { name: 'BatchMacro.ijm', lineOffset: null, batch: vals });
+    } finally {
+      off();
+      X.batchRun = null;
+      if (!test) await storeBatch(a, v).catch((err) => console.error('[advanced-studio] batch settings', err));
+      notifyX('batch');
+    }
+    const b = result && result.batch;
+    if (test && b && b.testDocId !== null && b.testDocId !== undefined) {
+      // BatchProcessor.run(): the previous test image is closed without asking
+      const prev = X.batchTestDoc;
+      X.batchTestDoc = b.testDocId;
+      if (prev !== null && prev !== undefined && prev !== b.testDocId) { try { await a.macro.closeImages([prev]); } catch (err) { console.error('[advanced-studio] batch test', err); } }
+    }
+    return result;
+  }
+
+  function buildBatch(rootEl, papi) {
+    const inputEl = el('input', { type: 'text', class: 'ij-mac-batch-path', attrs: { 'aria-label': papi.tr('dlg.mac.batch.input'), spellcheck: 'false' } });
+    const outputEl = el('input', { type: 'text', class: 'ij-mac-batch-path', attrs: { 'aria-label': papi.tr('dlg.mac.batch.output'), spellcheck: 'false' } });
+    const formatEl = el('select', { attrs: { 'aria-label': papi.tr('dlg.mac.batch.format') } },
+      BATCH_FORMATS().map((f) => el('option', { value: f, text: f, disabled: BATCH_NO_WRITER.has(f), attrs: BATCH_NO_WRITER.has(f) ? { title: papi.tr('dlg.mac.batch.formatNo') } : null })));
+    const addEl = el('select', { attrs: { 'aria-label': papi.tr('dlg.mac.batch.addCode') } },
+      BATCH_SNIPPETS().map((s) => el('option', { value: s, text: papi.tr(SNIPPET_KEYS[s]) })));
+    const filterEl = el('input', { type: 'text', class: 'ij-mac-batch-filter', attrs: { 'aria-label': papi.tr('dlg.mac.batch.filter'), spellcheck: 'false' } });
+    const codeEl = el('textarea', { class: 'ij-mac-text ij-mac-batch-code', wrap: 'off', attrs: { spellcheck: 'false', 'aria-label': papi.tr('dlg.mac.batch.title'), autocomplete: 'off', autocapitalize: 'off' } });
+    const status = el('span', { class: 'ij-mac-status', attrs: { role: 'status', 'aria-live': 'polite' } });
+    const values = () => ({ input: inputEl.value, output: outputEl.value, format: formatEl.value, filter: filterEl.value, code: codeEl.value });
+    const keep = () => { if (X.batch) Object.assign(X.batch, values()); };
+    // Input… / Output…: the folder picker opens in the click (FILES.md §6.5); the folder becomes a granted root and its path is written
+    function chooseFolder(target, writable) {
+      choose('directory', writable ? {} : { readOnly: true }).then((r) => {
+        if (!r || r.cancelled || r.writeRefused || typeof r.vpath !== 'string') return;
+        target.value = ensureSlash(r.vpath); keep();
+      }).catch((err) => papi.error(err));
+    }
+    const inBtn = button(papi.tr('dlg.mac.batch.input'), () => chooseFolder(inputEl, false));
+    const outBtn = button(papi.tr('dlg.mac.batch.output'), () => chooseFolder(outputEl, true));
+    const testBtn = button(papi.tr('dlg.mac.batch.test'), () => { keep(); runBatch(papi, values(), true).catch((err) => papi.error(err)); });
+    const openBtn = button(papi.tr('dlg.mac.batch.open'), () => {
+      const pr = papi.pickFile({ accept: '.ijm,.txt' });
+      Promise.resolve(pr).then(async (list) => {
+        const f = list && list[0];
+        if (!f) return;
+        const t = await f.text();
+        if (t.length > BATCH_OPEN_MAX) { await infoBox(papi, papi.tr('dlg.mac.batch.errTitle'), papi.tr('dlg.mac.batch.tooLarge')); return; }
+        codeEl.value = t; keep();
+      }).catch((err) => papi.error(err));
+    });
+    const saveBtn = button(papi.tr('dlg.mac.batch.save'), () => {
+      const t = codeEl.value;
+      Promise.resolve(papi.saveFile('BatchMacro.ijm', 'text/plain', '.ijm', 'dlg.mac.ijmFiles', async () => new Blob([t], { type: 'text/plain' }))).catch((err) => papi.error(err));
+    });
+    const processBtn = button(papi.tr('dlg.mac.batch.process'), () => { keep(); runBatch(papi, values(), false).catch((err) => papi.error(err)); }, 'ij-btn--primary');
+    const cancelBtn = button(papi.tr('dlg.cancel'), () => { if (X.batchRun) abortRun(); papi.closePanel('batchProcess'); });
+    addEl.addEventListener('change', () => {
+      const code = BATCH_SNIPPET_CODE[addEl.value];
+      if (!code) return;
+      // TextArea.insert(code, caret): at the caret; the chosen item stays chosen, as ImageJ's Choice
+      const at = typeof codeEl.selectionStart === 'number' ? codeEl.selectionStart : codeEl.value.length;
+      if (typeof codeEl.setRangeText === 'function') codeEl.setRangeText(code, at, at, 'end');
+      else codeEl.value = codeEl.value.slice(0, at) + code + codeEl.value.slice(at);
+      keep();
+    });
+    for (const e of [inputEl, outputEl, filterEl, codeEl]) e.addEventListener('input', keep);
+    formatEl.addEventListener('change', keep);
+    codeEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && X.batchRun) { stop(e); abortRun(); } });
+    const row = (...kids) => el('div', { class: 'ij-mac-batch-row' }, ...kids);
+    const lab = (key, ctl) => el('label', { class: 'ij-mac-batch-field' }, el('span', { text: papi.tr(key) }), ctl);
+    rootEl.appendChild(el('div', { class: 'ij-mac-batch' },
+      row(inBtn, inputEl), row(outBtn, outputEl),
+      row(lab('dlg.mac.batch.format', formatEl), lab('dlg.mac.batch.addCode', addEl)),
+      row(lab('dlg.mac.batch.filter', filterEl)),
+      codeEl,
+      el('div', { class: 'ij-mac-toolbar' }, testBtn, openBtn, saveBtn, status),
+      el('div', { class: 'ij-mac-toolbar ij-mac-batch-end' }, processBtn, cancelBtn)));
+    const inst = {
+      render() {
+        const busy = running();
+        testBtn.disabled = busy; processBtn.disabled = busy;
+        status.textContent = X.batchStatus;
+      },
+      _state: () => ({ inputEl, outputEl, formatEl, addEl, filterEl, codeEl, status, inBtn, outBtn, testBtn, openBtn, saveBtn, processBtn, cancelBtn })
+    };
+    X.panels.batch.add(inst);
+    const ready = batchValues().then((v) => {
+      inputEl.value = v.input; outputEl.value = v.output; formatEl.value = v.format; filterEl.value = v.filter; codeEl.value = v.code; inst.render();
+    }).catch((err) => console.error('[advanced-studio] batch settings', err));
+    inst.render();
+    return { refresh() { inst.render(); }, dispose() { X.panels.batch.delete(inst); }, _state: inst._state, ready };
+  }
+
+  // ── Process › Math › Macro… (ImageMath "macro"): the registry op macroMath, its code a journaled parameter (EXTRAS.md §9) ──
+  /** ImageMath.applyMacro: a code without '=' is the right-hand side of "v=". */
+  const finalMathCode = (code) => { const c = strOf(code); return c.indexOf('=') === -1 ? 'v=' + c : c; };
+  /** An error of the per-pixel program (op macroMath, IJ_MACRO_MATH): the Macro Error window, as ImageJ's nested interpreter shows it. */
+  function showMacroError(error) {
+    const a = apiOf();
+    const d = errorDisplay(error && typeof error === 'object' ? error : { message: strOf(error), line: 0 }, trOf(a));
+    if (!d) return false;
+    M.lastError = { text: d.text, line: d.line, editorLine: null };
+    notify('error');
+    openQuiet(a, 'macroError', true);
+    return true;
+  }
+  async function mathMacroCommand(api) {
+    const st = api.state();
+    const info = st && st.doc;
+    if (!info) return;
+    const stored = await settingRead('math.macro').catch(() => null);
+    const multi = (info.channels || []).length > 1 && !info.rgb;
+    const fields = [
+      { type: 'string', id: 'code', labelKey: 'dlg.mac.math.code', value: stored || MATH_DEFAULT, remember: true, columns: 42 },
+      ...messageFields(api.tr('dlg.mac.math.help'), 'help')
+    ];
+    if (multi) fields.push({ type: 'check', id: 'all', labelKey: 'dlg.allChannels', value: false });
+    const v = await api.dialog({ title: api.tr('dlg.mac.math.title'), okLabel: api.tr('dlg.ok'), fields,
+      preview: { op: 'macroMath', params: (vals) => ({ code: finalMathCode(vals.code) }) } });
+    if (!v) return;
+    const code = finalMathCode(v.code);
+    const res = await api.run('macroMath', { code }, { channel: v.all && multi ? 'all' : undefined, labelKey: 'op.mathMacro' });
+    // ImageMath: Prefs.set(MACRO_KEY, macro) once the step ran
+    if (res) await settingWrite(api, 'math.macro', code);
+  }
+
+  // ── Recorder (ij-macro-rec.js): the window, fed by the page's command / action events while it is open (EXTRAS.md §5.9) ──
+  function recorderModel() {
+    const R = REC();
+    if (!R) return null;
+    if (!X.rec) X.rec = R.create();
+    return X.rec;
+  }
+  function recorderPapi(a) {
+    return {
+      tr: (k, p) => a.tr(k, p),
+      model: X.rec,
+      create: (name, text) => createFromRecorder(a, name, text),
+      run: (text) => startRun(strOf(text), { name: X.rec ? X.rec.name() : 'Macro.ijm', lineOffset: null }).catch((err) => a.error(err)),
+      message: (titleKey, textKey) => infoBox(a, a.tr(titleKey), a.tr(textKey)),
+      isRunning: () => running()
+    };
+  }
+  /** Create: the recorded text becomes the Macro Editor's (asking first when the editor holds other text). */
+  async function createFromRecorder(a, name, text) {
+    const cur = editorText(a);
+    if (cur.trim() && cur !== text) {
+      const v = await a.dialog({ title: a.tr('dlg.mac.rec.title'), okLabel: a.tr('dlg.mac.rec.replace'), fields: messageFields(a.tr('dlg.mac.rec.replaceEditor'), 'm') });
+      if (!v) return false;
+    }
+    M.editorText = strOf(text);
+    M.editorFile = strOf(name) || 'Macro.ijm';
+    if (M.errorLine) M.errorLine = 0;
+    schedulePersist(a);
+    for (const inst of M.panels.editor) if (typeof inst.setText === 'function') inst.setText(M.editorText);
+    await a.openPanel('macroEditor', { focus: true });
+    return true;
+  }
+  function buildRecorder(rootEl, papi) {
+    const R = REC();
+    const model = recorderModel();
+    if (!R || !model) return { refresh() {}, dispose() {} };
+    for (const off of X.recOffs.splice(0)) { try { off(); } catch (_) { /* gone */ } }
+    model.open();
+    X.recOffs.push(papi.on('command', (ev) => model.onCommand(ev)), papi.on('action', (ev) => model.onAction(ev)));
+    const box = el('div', { class: 'ij-mac-rec' });
+    rootEl.appendChild(box);
+    const inst = R.buildPanel(box, recorderPapi(papi)) || {};
+    return {
+      refresh(kind) { if (typeof inst.refresh === 'function') inst.refresh(kind); },
+      controls: inst.controls,
+      dispose() {
+        for (const off of X.recOffs.splice(0)) { try { off(); } catch (_) { /* the view is gone */ } }
+        try { if (typeof inst.dispose === 'function') inst.dispose(); } finally { model.close(); }
+      }
+    };
+  }
+
+  // ── the worker's extras requests (EXTRAS.md §10.2, §10.3) ──
+  RPC['batch.prefs'] = async () => {
+    const v = await batchValues();
+    return { input: v.input, output: v.output, format: v.format, macro: v.code };
+  };
+  // install.set is a non-interactive request (the worker's page timeout runs): no modal box inside it, the keys in use go back to the macro;
+  // the globals are prepared by the first run of an entry (the lane is the calling macro's). A macro's install lasts for this Studio open
+  // only (never stored): what runs at a later open is only what the operator installed.
+  RPC['install.set'] = async (a, x) => {
+    const set = await installSet(a, strOf(x.source), { fileName: strOf(x.name) || null, path: typeof x.path === 'string' ? x.path : null, set: 'installed',
+      origin: 'macro', autoRun: false, isMacro: true, persist: false, boxes: false, prepare: false });
+    return { count: set.plan.count | 0, keysInUse: (set.plan.keysInUse || []).slice() };
+  };
+  WRITES['batch.save'] = async (a, x) => {
+    const v = await batchValues();
+    if (typeof x.input === 'string') v.input = x.input;
+    if (typeof x.output === 'string') v.output = x.output;
+    if (typeof x.format === 'string') v.format = x.format;
+    if (typeof x.macro === 'string' && x.macro !== '') v.code = x.macro;
+    await storeBatch(a, v, typeof x.input === 'string');
+    notifyX('batch');
+  };
+
   // ───────────────────────────── commands ─────────────────────────────
 
   const commands = [
@@ -1949,8 +2603,57 @@
         if (!v) return;
         const code = strOf(v.code);
         if (!code.trim()) { api.toast('dlg.mac.empty'); return; }
-        await startRun(code, { name: 'Macro', lineOffset: code === M.editorText ? 0 : null });
+        const fromEditor = code === M.editorText;
+        await runMacroText(api, code, { name: 'Macro', lineOffset: fromEditor ? 0 : null, identity: fromEditor ? (M.editorFile || 'Macro.ijm') : 'Macro' });
       }
+    },
+    {
+      // Plugins › Macros › Install… (MacroInstaller): the browser's file picker opens in the click itself
+      id: 'macInstall', menu: ['Plugins', 'Macros'], order: 10, gesture: true,
+      enabled: (st) => !(st && st.busy) && !!PAR(),
+      run(api) {
+        const pr = api.pickFile({ accept: '.ijm,.txt' });
+        return Promise.resolve(pr).then(async (list) => {
+          const f = list && list[0];
+          if (!f) return;
+          await installFromFile(api, f);
+        });
+      }
+    },
+    {
+      id: 'macStartup', menu: ['Plugins', 'Macros'], order: 40,
+      enabled: () => !!PAR(),
+      async run(api) { await api.openPanel('macroStartup', { focus: true }); }
+    },
+    {
+      // IJ_Props: Record...[u] (the Studio's table leaves u free)
+      id: 'macRecord', menu: ['Plugins', 'Macros'], order: 60, shortcut: 'u',
+      enabled: () => !!REC(),
+      async run(api) { await api.openPanel('macroRecorder', { focus: true }); }
+    },
+    {
+      id: 'macRemoveInstalled', menu: ['Plugins', 'Macros'], order: 70,
+      enabled: () => !!X.installed && X.installed.set === 'installed',
+      async run(api) {
+        const st = api.state();
+        if ((st && st.busy) || running()) { api.toast('err.macBusy'); return; }
+        await removeInstalled(api);
+      }
+    },
+    {
+      id: 'optStartup', menu: ['Edit', 'Options'], order: 170,
+      enabled: (st) => !(st && st.busy),
+      async run(api) { await startupCodeDialog(api); }
+    },
+    {
+      id: 'batchMacro', menu: ['Process', 'Batch'], order: 30,
+      enabled: () => true,
+      async run(api) { await api.openPanel('batchProcess', { focus: true }); }
+    },
+    {
+      id: 'mathMacro', menu: ['Process', 'Math'], order: 190, long: true,
+      enabled: (st) => !!(st && st.doc) && !st.busy,
+      async run(api) { await mathMacroCommand(api); }
     },
     {
       id: 'macEdit', menu: ['Plugins', 'Macros'], order: 30,
@@ -1972,12 +2675,21 @@
       macroEditor: { titleKey: 'dlg.mac.editorTitle', build: buildEditor, persist: true, defaultSize: { w: 640, h: 560 } },
       macroLog: { titleKey: 'dlg.mac.logTitle', build: buildLog, persist: true, defaultSize: { w: 480, h: 320 } },
       macroError: { titleKey: 'dlg.mac.errorTitle', build: buildError, persist: true, defaultSize: { w: 520, h: 240 } },
-      macroText: { titleKey: 'dlg.mac.textTitle', build: buildText, persist: true, defaultSize: { w: 480, h: 320 } }
+      macroText: { titleKey: 'dlg.mac.textTitle', build: buildText, persist: true, defaultSize: { w: 480, h: 320 } },
+      // EXTRAS.md §4.4
+      macroRecorder: { titleKey: 'dlg.mac.rec.title', build: buildRecorder, persist: false, defaultSize: { w: 640, h: 300 } },
+      macroStartup: { titleKey: 'dlg.mac.startup.title', build: buildStartup, persist: false, defaultSize: { w: 560, h: 420 } },
+      batchProcess: { titleKey: 'dlg.mac.batch.title', build: buildBatch, persist: false, defaultSize: { w: 620, h: 520 } },
+      macroOutputs: { titleKey: 'dlg.mac.outputs.title', build: buildOutputs, persist: false, defaultSize: { w: 360, h: 220 } }
     },
+    // the startup macros of a fresh Studio open (EXTRAS.md §7.6): never in the way of the mount, every failure in the Macro Error window
+    onOpen(api, o) { if (o && o.fresh) runStartup(api).catch((err) => console.error('[advanced-studio] startup macros', err)); },
     errors: {
       IJ_MACRO_BUSY: 'err.macBusy', IJ_MACRO_STEP_BUSY: 'err.macStepBusy', IJ_MACRO_GROUP: 'err.macUndoDuringRun',
       // FILES.md §5.2
-      IJ_MACRO_VFS_QUOTA: 'err.macZipQuota', IJ_MACRO_VFS_BUSY: 'err.macWorkspaceBusy', IJ_MACRO_VFS_NO_STORAGE: 'err.macNoStorageUi', IJ_MACRO_FILE_DIRECT: 'err.macFileDirect'
+      IJ_MACRO_VFS_QUOTA: 'err.macZipQuota', IJ_MACRO_VFS_BUSY: 'err.macWorkspaceBusy', IJ_MACRO_VFS_NO_STORAGE: 'err.macNoStorageUi', IJ_MACRO_FILE_DIRECT: 'err.macFileDirect',
+      // EXTRAS.md §11
+      IJ_MACRO_MATH: 'err.macMathFailed', IJ_MACRO_INSTALL: 'err.macInstallFailed'
     }
   });
 
@@ -1985,6 +2697,9 @@
     run: (source, o) => startRun(source, { name: o && o.name, arg: o && o.arg, lineOffset: null }),
     abort: abortRun,
     logLines,
+    // EXTRAS.md §7.5 (Executer → MacroInstaller.runMacroCommand) and §9.4 (an error of the per-pixel program)
+    installedEntry,
+    showError: showMacroError,
     // for the tests
     _internals: Object.freeze({
       RPC, WRITES, lineStarts, lineRange, lineOfOffset, runSlice, editorAction, persistable, errorDisplay,
@@ -1996,6 +2711,29 @@
           run: null, status: { kind: 'idle', text: '' }, memPrefs: null, renderTimer: 0 });
       },
       startRun,
+      // EXTRAS.md §4.9: what tests/js/ij_harness.mjs drives
+      extras: Object.freeze({
+        state: () => X,
+        recorder: () => X.rec,
+        runMacroText: (source, o) => runMacroText(apiOf(), source, o || {}),
+        install: (source, o) => installSet(apiOf(), source, Object.assign({ fileName: 'Macro.ijm', set: 'installed', origin: 'editor', autoRun: true, persist: true, boxes: true }, o || {})),
+        installFromFile: (f) => installFromFile(apiOf(), f),
+        installed: () => (X.installed ? X.installed.rows.slice() : []),
+        removeInstalled: () => removeInstalled(apiOf()),
+        startup: () => runStartup(apiOf()),
+        startupCode: () => startupCodeDialog(apiOf()),
+        batch: (v, test) => runBatch(apiOf(), v, !!test),
+        batchValues, settingRead, settingWrite: (k, v) => settingWrite(apiOf(), k, v), macroRecord, decodeMacroBytes, finalMathCode,
+        put: (store, rec) => dbPut(store, rec),
+        rpc: (name, x) => RPC[name](apiOf(), x || {}),
+        all: (store) => dbAll(store),
+        recorderCreate: () => { const R = REC(); const m = X.rec; return R && m ? createFromRecorder(apiOf(), R.macroName(m.name()), m.text()) : Promise.resolve(false); },
+        BATCH_SNIPPET_CODE, STARTUP_ITEMS, reset() {
+          X.installed = null; X.batch = null; X.batchRun = null; X.batchTestDoc = null; X.batchStatus = ''; X.outputs = [];
+          for (const off of X.recOffs.splice(0)) { try { off(); } catch (_) { /* gone */ } }
+          X.rec = null;
+        }
+      }),
       // files (FILES.md)
       files: Object.freeze({
         state: () => V, DB_NAME, DB_VERSION, DB_STORES, ensureLoaded, grantsList, grantOf, recordOf, rootFromRecord, snapshotOfFiles, snapshotOfEntry,

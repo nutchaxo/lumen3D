@@ -62,7 +62,7 @@
  *   host.call(name, args, ctx)        non-pure built-ins, may return a Promise
  *   host.showMessage(title, text)     IJ.showMessage / IJ.error (exit("msg"), requires); modal: a returned
  *                                     Promise pauses the macro
- *   host.showError(text)              the error window of a failed eval() / runMacro() (falls back to
+ *   host.showError(text)              the error window of a failed macro eval / runMacro() (falls back to
  *                                     host.showMessage('Macro Error', text))
  *   host.printToWindow(title, text)   print("[Window]", ...)
  *   host.runMacroFile(path, arg)      runMacro("file")
@@ -4098,7 +4098,7 @@ define('arr', K_NEW_ARRAY, function* (f) {
   return vector;
 });
 
-/* ---- eval() / runMacro(): a nested interpreter, as IJ.runMacro does ---- */
+/* ---- macro eval / runMacro(): a nested interpreter, as IJ.runMacro does ---- */
 function* runNestedMacro(f, code, arg) {
   const outer = f.interp;
   const nested = new Interpreter(outer.ctx);
@@ -5344,7 +5344,7 @@ define('do', K_SHOW_MESSAGE, function* (f) {
  *     a built-in defined later through IJMacro.define() without an option defaults to 'host';
  *   - a user function may suspend when its body does, transitively (fixed point over the call graph), or calls a name
  *     that is not a known function;
- *   - eval() / runMacro() / wait() / showMessage() / requires() / exit("msg") / print("[Window]", ..) are registered so.
+ *   - macro eval / runMacro() / wait() / showMessage() / requires() / exit("msg") / print("[Window]", ..) are registered so.
  * A statement with a loop in it (or a call to a function that has one) that cannot suspend is class SYNC_LOOP: the
  * generator keeps the loop CONTROL (so the event loop is released and an abort is honoured every TICK_MASK+1
  * iterations, exactly as before) while the loop header and every body statement run in the twin, with no generator
@@ -7868,7 +7868,7 @@ defineS('do', K_SHOW_MESSAGE, function (f) {
  *     a built-in defined later through IJMacro.defineS() without an option defaults to 'host';
  *   - a user function may suspend when its body does, transitively (fixed point over the call graph), or calls a name
  *     that is not a known function;
- *   - eval() / runMacro() / wait() / showMessage() / requires() / exit("msg") / print("[Window]", ..) are registered so.
+ *   - macro eval / runMacro() / wait() / showMessage() / requires() / exit("msg") / print("[Window]", ..) are registered so.
  * A statement with a loop in it (or a call to a function that has one) that cannot suspend is class SYNC_LOOP: the
  * generator keeps the loop CONTROL (so the event loop is released and an abort is honoured every TICK_MASK+1
  * iterations, exactly as before) while the loop header and every body statement run in the twin, with no generator

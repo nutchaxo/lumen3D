@@ -146,9 +146,11 @@ export const PAGE_MACRO_CMDS = `
 `;
 
 /** boot() options that put every stand-in in place (worker + page). */
+// the virtual file system of the macro package (FILES.md §4, VFS builder): the plumbing tests only need it to load
+export const VFS_STANDIN = `(function (root) { 'use strict'; root.__vfsLoaded = true; root.IJMacroVFS = Object.freeze({ VERSION: 1, standIn: true }); })(typeof self !== 'undefined' ? self : globalThis);`;
 export const FAKE_SOURCES = {
-  workerSources: { 'ij-proc-macro.js': WORKER_MACRO },
-  pageSources: { 'ij-proc-macro.js': WORKER_MACRO, 'ij-macro-cmds.js': PAGE_CMDTAB, 'ij-cmds-macro.js': PAGE_MACRO_CMDS }
+  workerSources: { 'ij-proc-macro.js': WORKER_MACRO, 'ij-macro-vfs.js': VFS_STANDIN },
+  pageSources: { 'ij-proc-macro.js': WORKER_MACRO, 'ij-macro-vfs.js': VFS_STANDIN, 'ij-macro-cmds.js': PAGE_CMDTAB, 'ij-cmds-macro.js': PAGE_MACRO_CMDS }
 };
 
 /**

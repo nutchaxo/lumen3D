@@ -531,9 +531,11 @@ const IJViewPure = (() => {
   //   doc       { options:[{ value: docId, label }] }  an open document      value: the docId
   //   channel   { options | (docField: id of a sibling `doc` field + optionsByDoc: { [docId]: options }) }  value: the option's value
   //   message   { label | labelKey }  (text only, no value)
+  //   path      { pathKind: 'directory' | 'file', browse?() → Promise<string | null> }  a text field + Browse… button   value: string
+  //             (GenericDialog.addDirectoryField / addFileField; the click calls browse() first thing, a null answer leaves the text)
   // Every field: id, label | labelKey (a message too), optional value, enabledIf(values), visibleIf(values).
   // Dialog-level: validate(values) → { fieldId: errKey } | null; onChange(values, set); preview.
-  const FIELD_TYPES = ['number', 'slider', 'check', 'choice', 'radio', 'string', 'textarea', 'doc', 'channel', 'message'];
+  const FIELD_TYPES = ['number', 'slider', 'check', 'choice', 'radio', 'string', 'textarea', 'doc', 'channel', 'message', 'path'];
   const CHOICE_LIKE = new Set(['choice', 'radio', 'doc', 'channel']);
 
   /** The problems of a dialog spec's field list ([] when sound): the stand-ins of the tests fail on any. */
@@ -550,6 +552,10 @@ const IJViewPure = (() => {
       if (FIELD_TYPES.indexOf(f.type) < 0) { out.push('unknown field type ' + f.type + ' (' + id + ')'); continue; }
       if (!f.label && !f.labelKey && !(f.type === 'message' && f.value)) out.push('field ' + id + ' has no label / labelKey');
       if ((f.type === 'number' || f.type === 'slider') && f.min !== undefined && f.max !== undefined && !(f.min <= f.max)) out.push('field ' + id + ' min > max');
+      if (f.type === 'path') {
+        if (f.pathKind !== 'directory' && f.pathKind !== 'file') out.push('path field ' + id + ' needs pathKind directory | file');
+        if (f.browse !== undefined && typeof f.browse !== 'function') out.push(id + '.browse is not a function');
+      }
       if (CHOICE_LIKE.has(f.type)) {
         const hasOpts = Array.isArray(f.options) && f.options.length > 0;
         const hasByDoc = f.type === 'channel' && f.optionsByDoc && typeof f.optionsByDoc === 'object' && typeof f.docField === 'string';
@@ -1450,7 +1456,7 @@ const IJWindows = (() => {
         const wrap = d.createElement('span');
         wrap.className = 'ij-field-control';
         let ctrl;
-        if (f.type === 'number' || f.type === 'string') {
+        if (f.type === 'number' || f.type === 'string' || f.type === 'path') {
           ctrl = d.createElement('input');
           ctrl.type = 'text';
           if (f.type === 'number') ctrl.inputMode = 'decimal';
@@ -1520,6 +1526,25 @@ const IJWindows = (() => {
           ctrl.addEventListener('input', () => { out.textContent = ctrl.value; });
           outputs[f.id] = out;
           wrap.appendChild(out);
+        }
+        if (f.type === 'path' && typeof f.browse === 'function') {
+          const b = d.createElement('button');
+          b.type = 'button';
+          b.className = 'ij-btn ij-field-browse';
+          b.textContent = t('view.browse', 'Browse...');
+          const input = ctrl;
+          b.addEventListener('click', () => {
+            // the picker needs the click's transient activation: browse() is the first call of the handler
+            let p;
+            try { p = f.browse(); } catch (err) { console.error('IJWindows.dialog: browse', err); return; }
+            Promise.resolve(p).then((v) => {
+              if (typeof v !== 'string') return;
+              input.value = v;
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+            }, (err) => console.error('IJWindows.dialog: browse', err));
+          });
+          wrap.appendChild(b);
         }
         if (f.units || f.unitsKey) {
           const u = d.createElement('span');

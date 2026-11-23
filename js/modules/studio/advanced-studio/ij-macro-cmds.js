@@ -16,11 +16,18 @@
  *     javaToString(n) → string                Double.toString
  *
  *   IJMacroCmds — the Studio command behind each ImageJ command name, and the headless answer of its dialogs:
- *     MACRO_COMMANDS { [commandId]: Entry }, IJ_CONVERT, REFUSED_NAMES, NO_IMAGE_TEXT,
- *     resolve(name), nameOf(commandId), headlessAnswer(spec, options, ctx)
+ *     MACRO_COMMANDS { [commandId]: Entry }, IJ_CONVERT, REFUSED_NAMES, FILE_NAMES, NO_IMAGE_TEXT,
+ *     resolve(name), nameOf(commandId), headlessAnswer(spec, options, ctx), fileRequest(fileSpec, options, ctx),
+ *     saveAsPlan(format, path) (IJ.saveAs's format table), updateExtension(path, ext) (IJ.updateExtension, '/' separator)
  *
- * Entry = { name, cls: 'A'|'B'|'C'|'D'|'E', refuse?, later?, alias?, dialogs: [DialogEntry], disabledText?, noopWhenDisabled?, notes? }
+ * Entry = { name, cls: 'A'|'B'|'C'|'D'|'E'|'F', refuse?, file?, alias?, dialogs: [DialogEntry], disabledText?, noopWhenDisabled?, notes? }
+ * Class F (DOCS/studio-advanced/macros/FILES.md §9): a command that reads or writes a user file. The page never runs its Studio command
+ * from a macro: resolve() hands back `entry.file` (FileSpec) and the engine worker runs the op on the macro's virtual file system.
+ * FileSpec = { op, dialog: { kind: 'open'|'save'|'dir', title }, gdTitle?, extra?: { [name]: { key, type: 'number'|'check'|'string'|'choice',
+ *   items?, dflt? } } } — `title` is the OpenDialog / SaveDialog / DirectoryChooser title the ImageJ command shows (its trimKey is the
+ *   path option key), `gdTitle` the title of the GenericDialog that holds the extras (numeric error texts).
  * noopWhenDisabled: on an image the Studio command is disabled for, ImageJ runs the command as a no-op (run() succeeds, nothing changes).
+ *   'always': the same with no image open as well (the command needs none in ImageJ).
  * DialogEntry.rewrite(options) → options: the plugin's own Macro.setOptions before its dialog (Scaler, ImageProperties, ContrastEnhancer).
  * DialogEntry = { ij: '<capture key>' | null, title: string | null (null = the title the dialog shows), keys: { fieldId: imagejKey | null },
  *   items: { fieldId: { imagejItemText: studioValue (null = keep the default) } }, smart?, titles?: [fieldId], derive?: { fieldId(options) },
@@ -270,7 +277,9 @@
   const same = (list) => { const o = {}; for (const x of list) o[x] = x; return o; };
   const lowerOf = (list) => { const o = {}; for (const x of list) o[x] = x.toLowerCase(); return o; };
   const refused = (id, name, reason) => add(id, name, 'E', [], { refuse: reason });
-  const later = (id, name) => add(id, name, 'E', [], { refuse: 'err.macFileLater', later: true });
+  /** FileSpec of a class F command: the op the worker runs, the kind and title of the file dialog ImageJ shows. */
+  const fspec = (op, kind, title, more) => Object.assign({ op, dialog: { kind, title } }, more || {});
+  const file = (id, name, spec, extra) => add(id, name, 'F', [], Object.assign({ file: spec }, extra || {}));
 
   const INTERP = { None: 'none', Bilinear: 'bilinear', Bicubic: 'bicubic' };
   /** Scaler.showDialog in macro mode: " interpolate" → Bilinear, no interpolation= → None; width= and height= → the scales default to "-". */
@@ -302,11 +311,15 @@
   const RGB_KEEP = (cap) => dlg(cap, 'Convert to RGB', { slices: 'slices', frames: 'frames', keep: 'keep' });
 
   // ── File
-  later('fileOpen', 'Open...');
-  later('fileSaveTiff', 'Tiff...');
-  later('fileSaveJpeg', 'Jpeg...');
-  later('fileSavePng', 'PNG...');
-  later('fileSaveResults', 'Results...');
+  // Titles from the 1.54p sources (Opener.open, FileSaver.getPath "Save as "+type, MeasurementsWriter, TextReader, LutLoader,
+  // RoiWriter, XYWriter, XYCoordinates, Opener.openResultsTable → ResultsTable.open, Macro_Runner); keys checked on the jar by
+  // tools/ij_fixtures/macro/FileCmdProbe.java.
+  file('fileOpen', 'Open...', fspec('open', 'open', 'Open'), { notes: 'Commands("open") → Opener.open → OpenDialog("Open", "").' });
+  file('fileSaveTiff', 'Tiff...', fspec('saveTiff', 'save', 'Save as TIFF'));
+  file('fileSaveJpeg', 'Jpeg...', fspec('saveJpeg', 'save', 'Save as JPEG'),
+    { notes: 'FileSaver.saveAsJpeg titles its dialog "Save as JPEG (<quality>)"; the option key is save either way.' });
+  file('fileSavePng', 'PNG...', fspec('savePng', 'save', 'Save as PNG'), { notes: 'Writer("png") → FileSaver.saveAsPng → getPath("PNG").' });
+  file('fileSaveResults', 'Results...', fspec('saveResults', 'save', 'Save as Text'));
   add('fileRevert', 'Revert', 'A');
   refused('fileRecover', 'Recover...', 'err.macReasonRecover');
   add('fileClose', 'Close', 'A');
@@ -319,12 +332,14 @@
   add('fileNewInternalClipboard', 'Internal Clipboard', 'A');
   add('fileNewSystemClipboard', 'System Clipboard', 'A');
   add('fileCloseAll', 'Close All', 'A');
-  later('fileImportTextImage', 'Text Image... ');
-  later('fileSaveTextImage', 'Text Image...');
-  later('fileSaveSelection', 'Selection...');
-  later('fileSaveXY', 'XY Coordinates...');
-  later('fileImportLut', 'LUT... ');
-  later('fileSaveLut', 'LUT...');
+  file('fileImportTextImage', 'Text Image... ', fspec('importTextImage', 'open', 'Open Text Image...'));
+  file('fileSaveTextImage', 'Text Image...', fspec('saveTextImage', 'save', 'Save as Text'));
+  file('fileSaveSelection', 'Selection...', fspec('saveSelection', 'save', 'Save Selection...'));
+  file('fileSaveXY', 'XY Coordinates...', fspec('saveXY', 'save', 'Save Coordinates as Text...'));
+  file('fileImportLut', 'LUT... ', fspec('importLut', 'open', 'Open LUT...'));
+  file('fileSaveLut', 'LUT...', fspec('saveLut', 'save', 'Save as LUT'));
+  file('fileImportResults', 'Results... ', fspec('importResults', 'open', 'Open Table'),
+    { notes: 'SimpleCommands("import") → Opener.openResultsTable("") → ResultsTable.open → OpenDialog("Open Table", "").' });
 
   // ── Edit
   refused('editUndo', 'Undo', 'err.macReasonUndo');
@@ -599,7 +614,7 @@
   add('analyzeSummarize', 'Summarize', 'A');
   add('analyzeDistribution', 'Distribution...', 'A', [dlg('Distribution...#0', 'Distribution', { parameter: 'parameter', auto: 'automatic', bins: 'or', range: 'and' },
     { items: { parameter: same(['Area', 'Mean', 'Min', 'Max']) } })]);
-  add('analyzeClearResults', 'Clear Results', 'A');
+  add('analyzeClearResults', 'Clear Results', 'A', [], { noopWhenDisabled: 'always', notes: 'ResultsTable.reset on an empty table: nothing to clear, no image needed.' });
   add('analyzeSetMeasurements', 'Set Measurements...', 'A', [dlg('Set Measurements...#0', 'Set Measurements',
     { area: 'area', mean: 'mean', stdDev: 'standard', mode: 'modal', minMax: 'min', centroid: 'centroid', center: 'center', perimeter: 'perimeter', rect: 'bounding',
       ellipse: 'fit', shape: 'shape', feret: "feret's", intDen: 'integrated', median: 'median', skewness: 'skewness', kurtosis: 'kurtosis', areaFraction: 'area_fraction',
@@ -622,7 +637,12 @@
     { items: { method: { 'Fourier components': 'fourier', 'Local gradient orientation': 'gradient' } } })]);
   add('toolsRoiManager', 'ROI Manager...', 'A');
   add('toolsSyncWindows', 'Synchronize Windows', 'A');
-  later('toolsSaveXY', 'Save XY Coordinates...');
+  file('toolsSaveXY', 'Save XY Coordinates...', fspec('saveXYCoordinates', 'save', 'Save Coordinates as Text...', {
+    gdTitle: 'Save XY Coordinates',
+    extra: { background: { key: 'background', type: 'number' }, invert: { key: 'invert', type: 'check' }, suppress: { key: 'suppress', type: 'check' },
+      process: { key: 'process', type: 'check' } }
+  }), { notes: 'An area selection skips the dialog and saves .csv coordinates unless the options carry "background=" (legacy macro rule of '
+    + 'XYCoordinates.run); background is absent on an RGB image and process on a single image.' });
   add('toolsScaleBar', 'Scale Bar...', 'A', [dlg('Scale Bar...#0', 'Scale Bar',
     { width: 'width', height: 'height', thickness: 'thickness', fontSize: 'font', color: 'color', background: 'background', location: 'location', horizontal: 'horizontal',
       vertical: 'vertical', bold: 'bold', hideText: 'hide', serif: 'serif', overlay: 'overlay' },
@@ -658,7 +678,7 @@
 
   // ── Plugins, Window, Help
   add('utilFindCommands', 'Find Commands...', 'A');
-  later('macRun', 'Run...');
+  file('macRun', 'Run...', fspec('runMacro', 'open', 'Run Macro or Script...'));
   add('macEdit', 'Edit...', 'D');
   add('windowLog', 'Log', 'D', [], { notes: 'Process > Math > Log owns the ImageJ name "Log": run("Log") is mathLog (A–C win over D).' });
   add('windowShowAll', 'Show All', 'A');
@@ -690,12 +710,45 @@
     'T1 Head Renderings (736K)': 'T1 Head Renderings', 'TEM Filter (112K)': 'TEM Filter', 'Tree Rings (48K)': 'Tree Rings'
   };
 
+  // ImageJ file commands with no Studio command (IJ_Props.txt 1.54p: Commands("save"), SimpleCommands("table"), TextWriter,
+  // Writer("zip"), Writer("raw")); resolved after the entries, before IJ.convert's second lookup
+  const FILE_NAMES = [
+    { name: 'Save', file: fspec('save', 'save', 'Save as TIFF') },
+    { name: 'Table... ', file: fspec('importTable', 'open', 'Open Table...') },
+    { name: 'Text...', file: fspec('saveText', 'save', 'Save as Text') },
+    { name: 'ZIP...', file: fspec('saveZip', 'save', 'Save as TIFF/ZIP') },
+    { name: 'Raw Data...', file: fspec('saveRaw', 'save', 'Save as Raw') },
+    // File › Import: TextFileReader (TextWindow's OpenDialog), XY_Reader (TextReader.open), Raw (OpenDialog + ImportDialog 1.54p)
+    { name: 'Text File... ', file: fspec('importTextFile', 'open', 'Open Text File...') },
+    { name: 'XY Coordinates... ', file: fspec('importXY', 'open', 'Open Text Image...') },
+    { name: 'Raw...', file: fspec('importRaw', 'open', 'Open Raw...', {
+      gdTitle: 'Import>Raw...',
+      extra: {
+        image: { key: 'image', type: 'choice', items: ['8-bit', '16-bit Signed', '16-bit Unsigned', '32-bit Signed', '32-bit Unsigned', '32-bit Real', '64-bit Real',
+          '24-bit RGB', '24-bit RGB Planar', '24-bit BGR', '24-bit Integer', '32-bit ARGB', '32-bit ABGR', '1-bit Bitmap'] },
+        width: { key: 'width', type: 'number' }, height: { key: 'height', type: 'number' }, offset: { key: 'offset', type: 'number' },
+        number: { key: 'number', type: 'number' }, gap: { key: 'gap', type: 'number' }, white: { key: 'white', type: 'check' },
+        littleEndian: { key: 'little-endian', type: 'check' }, openAll: { key: 'open', type: 'check' }, virtual: { key: 'use', type: 'check' }
+      }
+    }) }
+  ];
+
+  // params: '$name' stands for the command name the macro wrote; without params the refusal carries { name }
   const REFUSED_NAMES = [
     { exact: 'Bio-Formats Importer', key: 'err.macBioFormats' },
     { exact: 'Bio-Formats Windowless Importer', key: 'err.macBioFormats' },
     { prefix: 'Bio-Formats', key: 'err.macBioFormats' },
     { exact: 'URL...', key: 'err.macNetwork' },
-    { suffix: ' Macro Extensions', key: 'err.macExtensions' }
+    { suffix: ' Macro Extensions', key: 'err.macExtensions' },
+    // FolderOpener / StackWriter map onto no Studio command (FILES.md F17)
+    { exact: 'Image Sequence...', key: 'err.macRefused', params: { command: '$name', reasonKey: 'err.macReasonSequence' } },
+    { exact: 'Image Sequence... ', key: 'err.macRefused', params: { command: '$name', reasonKey: 'err.macReasonSequence' } },
+    // formats the Studio has no exact writer for (FILES.md F18)
+    { exact: 'Gif...', key: 'err.macSaveFormat', params: { format: 'gif' } },
+    { exact: 'AVI... ', key: 'err.macSaveFormat', params: { format: 'avi' } },
+    { exact: 'BMP...', key: 'err.macSaveFormat', params: { format: 'bmp' } },
+    { exact: 'PGM...', key: 'err.macSaveFormat', params: { format: 'pgm' } },
+    { exact: 'FITS...', key: 'err.macSaveFormat', params: { format: 'fits' } }
   ];
 
   // IJ.noImage() in a macro: Interpreter.abort("There are no images open")
@@ -703,7 +756,7 @@
 
   // Name → id. A–C win over D on a shared name (Window › Log is Studio only; Process › Math › Log is ImageJ's "Log").
   const ACTIVE = new Map(), REFUSED = new Map();
-  for (const pass of [['A', 'B', 'C'], ['D'], ['E']]) {
+  for (const pass of [['A', 'B', 'C', 'F'], ['D'], ['E']]) {
     for (const id of Object.keys(T)) {
       const e = T[id];
       if (pass.indexOf(e.cls) < 0 || e.alias) continue;
@@ -711,26 +764,37 @@
       if (!m.has(e.name)) m.set(e.name, id);
     }
   }
+  const freezeSpec = (f) => {
+    Object.freeze(f.dialog);
+    if (f.extra) {
+      for (const k of Object.keys(f.extra)) { if (f.extra[k].items) Object.freeze(f.extra[k].items); Object.freeze(f.extra[k]); }
+      Object.freeze(f.extra);
+    }
+    return Object.freeze(f);
+  };
+  const FILE_BY_NAME = new Map();
+  for (const f of FILE_NAMES) { freezeSpec(f.file); Object.freeze(f); FILE_BY_NAME.set(f.name, f.file); }
+  Object.freeze(FILE_NAMES);
   for (const e of Object.values(T)) {
+    if (e.file) freezeSpec(e.file);
     Object.freeze(e.dialogs);
     for (const d of e.dialogs) { Object.freeze(d.keys); if (d.items) { for (const k of Object.keys(d.items)) Object.freeze(d.items[k]); Object.freeze(d.items); } Object.freeze(d); }
     Object.freeze(e);
   }
   Object.freeze(T);
   Object.freeze(IJ_CONVERT);
-  REFUSED_NAMES.forEach(Object.freeze);
+  for (const r of REFUSED_NAMES) { if (r.params) Object.freeze(r.params); Object.freeze(r); }
   Object.freeze(REFUSED_NAMES);
 
   function lookup(name) {
     if (ACTIVE.has(name)) { const id = ACTIVE.get(name); return { id, entry: T[id] }; }
-    if (REFUSED.has(name)) {
-      const e = T[REFUSED.get(name)];
-      return { refuse: e.later ? { key: 'err.macFileLater', params: { name } } : { key: 'err.macRefused', params: { command: name, reasonKey: e.refuse } } };
-    }
+    if (FILE_BY_NAME.has(name)) return { file: FILE_BY_NAME.get(name), name };
+    if (REFUSED.has(name)) return { refuse: { key: 'err.macRefused', params: { command: name, reasonKey: T[REFUSED.get(name)].refuse } } };
     return null;
   }
 
-  /** run("name") → the Studio command, a refusal, or null (ImageJ's "Unrecognized command"). No case folding, no trimming. */
+  /** run("name") → { id, entry } (a class F entry carries entry.file) | { file, name } (FILE_NAMES) | { refuse } | null (ImageJ's
+   *  "Unrecognized command"). No case folding, no trimming. */
   function resolve(name) {
     if (typeof name !== 'string') return null;
     const direct = lookup(name);
@@ -741,10 +805,122 @@
     }
     for (const r of REFUSED_NAMES) {
       if ((r.exact !== undefined && name === r.exact) || (r.prefix !== undefined && name.startsWith(r.prefix)) || (r.suffix !== undefined && name.endsWith(r.suffix))) {
-        return { refuse: { key: r.key, params: Object.assign({ name }, r.params || {}) } };
+        const params = {};
+        if (r.params) for (const k of Object.keys(r.params)) params[k] = r.params[k] === '$name' ? name : r.params[k];
+        else params.name = name;
+        return { refuse: { key: r.key, params } };
       }
     }
     return null;
+  }
+
+  /** IJ.updateExtension 1.54p with File.separator '/' (the macro sees virtual paths, FILES.md F5). */
+  function updateExtension(path, extension) {
+    if (path === null || path === undefined) return null;
+    let p = String(path);
+    const dot = p.lastIndexOf('.');
+    if (dot >= 0 && dot > p.lastIndexOf('/') && p.length - dot <= 5) {
+      if (dot + 1 < p.length && /\p{Nd}/u.test(p.charAt(dot + 1))) p += extension;
+      else p = p.slice(0, dot) + extension;
+    } else p += extension;
+    return p;
+  }
+
+  /**
+   * IJ.saveAs(imp, format, path) 1.54p as a plan (FILES.md §8.6): the format test order, the extension rules and the command it runs.
+   *   { op: 'saveTiff', path }      IJ.saveAsTiff: path null ⇒ the "Save as TIFF" dialog; else '.tiff' kept, other extensions → '.tif'
+   *   { op: 'saveJpeg', path }      JpegWriter.save at FileSaver.getJpegQuality() (path through updateExtension '.jpg'; null ⇒ JpegWriter's dialog)
+   *   { refuse }                    gif (GifWriter: no exact writer in the Studio, FILES.md F18)
+   *   { command, path, options }    run(command, options): options = "save=<path>" ("save=[<path>]" with a space), null when path is null;
+   *                                 resolve(command) gives the class F entry, the FILE_NAMES spec or the format refusal (avi, bmp, fits, pgm)
+   *   { unsupported: { message }, command, path, options }   IJ.error(message) (no title: the message box, the macro goes on), then
+   *                                 run(<lowercased format>, options), which ImageJ answers with "Unrecognized command"
+   * '' as path is null (IJ.saveAs); a null format → null (IJ.saveAs returns).
+   */
+  function saveAsPlan(format, path) {
+    if (format === null || format === undefined) return null;
+    let p = path === null || path === undefined || String(path).length === 0 ? null : String(path);
+    const f = String(format).toLowerCase();
+    const has = (w) => f.indexOf(w) !== -1;
+    if (has('tif')) return { op: 'saveTiff', path: p === null ? null : (p.endsWith('.tiff') ? p : updateExtension(p, '.tif')) };
+    if (has('jpeg') || has('jpg')) return { op: 'saveJpeg', path: updateExtension(p, '.jpg') };
+    if (has('gif')) return { refuse: { key: 'err.macSaveFormat', params: { format: 'gif' } }, path: updateExtension(p, '.gif') };
+    let command = null;
+    if (has('text image')) { p = updateExtension(p, p !== null && (p.endsWith('.csv') || p.endsWith('.CSV')) ? '.csv' : '.txt'); command = 'Text Image...'; }
+    else if (has('text') || has('txt')) {
+      if (p !== null && !p.endsWith('.xls') && !p.endsWith('.csv') && !p.endsWith('.tsv')) p = updateExtension(p, '.txt');
+      command = 'Text...';
+    } else if (has('zip')) { p = updateExtension(p, '.zip'); command = 'ZIP...'; }
+    else if (has('raw')) command = 'Raw Data...';
+    else if (has('avi')) { p = updateExtension(p, '.avi'); command = 'AVI... '; }
+    else if (has('bmp')) { p = updateExtension(p, '.bmp'); command = 'BMP...'; }
+    else if (has('fits')) { p = updateExtension(p, '.fits'); command = 'FITS...'; }
+    else if (has('png')) { p = updateExtension(p, '.png'); command = 'PNG...'; }
+    else if (has('pgm')) { p = updateExtension(p, '.pgm'); command = 'PGM...'; }
+    else if (has('lut')) { p = updateExtension(p, '.lut'); command = 'LUT...'; }
+    else if (has('results') || has('measurements') || has('table')) command = 'Results...';
+    else if (has('selection') || has('roi')) { p = updateExtension(p, '.roi'); command = 'Selection...'; }
+    else if (has('xy') || has('coordinates')) { p = updateExtension(p, '.txt'); command = 'XY Coordinates...'; }
+    const options = p === null ? null : (p.indexOf(' ') >= 0 ? 'save=[' + p + ']' : 'save=' + p);
+    if (command === null) {
+      return { unsupported: { message: 'Unsupported save() or saveAs() file format: "' + f + '"\n \n"' + (p === null ? 'null' : p) + '"' }, command: f, path: p, options };
+    }
+    return { command, path: p, options };
+  }
+
+  /**
+   * The path a class F command reads from its options (FILES.md §9.1), as ImageJ's file dialogs do in macro mode:
+   *   open (OpenDialog(title, path) 1.54p): getValue(options, title), then getValue(options, 'path') when null or '', then
+   *     'OpenAsString' for the title "Open As String"; still null or '' ⇒ the dialog shows (pathText null);
+   *   save (SaveDialog.isMacro): getValue(options, title), then 'path' when absent; '' is kept (ImageJ goes on with an empty path);
+   *   dir (DirectoryChooser): getValue(options, title).
+   * The `&var` and "no '.' and no such file ⇒ a string variable" steps (OpenDialog.lookupPathVariable, SaveDialog.isMacro) need the
+   * variables and the file system: they are the runtime's. options = IJMacroOptions.normalize(...), or null (no options: the dialog shows).
+   * Extras follow GenericDialog's macro mode: an absent number is null (the command's own default applies), a check is isMatch, every
+   * extra is null when options is null; ctx = { vars } (the interpreter variables, headlessAnswer's shape) lets a number name a variable.
+   * → { op, key, pathText: string | null, values: { [name]: value | null }, error?: string } (error = GenericDialog's text for a bad value).
+   */
+  function fileRequest(fileSpec, options, ctx) {
+    const spec = fileSpec || {};
+    const d = spec.dialog || {};
+    const title = String(d.title || '');
+    const key = trimKey(title);
+    const opts = options === undefined ? null : options;
+    let pathText = null;
+    if (opts !== null) {
+      if (d.kind === 'open') {
+        let p = getValue(opts, title, null);
+        if (p === null || p === '') p = getValue(opts, 'path', p);
+        if ((p === null || p === '') && title === 'Open As String') p = getValue(opts, 'OpenAsString', p);
+        pathText = p === null || p === '' ? null : p;
+      } else if (d.kind === 'save') {
+        let p = getValue(opts, title, null);
+        if (p === null) p = getValue(opts, 'path', null);
+        pathText = p;
+      } else pathText = getValue(opts, title, null);
+    }
+    const out = { op: spec.op, key, pathText, values: {} };
+    const vars = ctx && ctx.vars && typeof ctx.vars === 'object' ? ctx.vars : {};
+    const gdTitle = spec.gdTitle || title;
+    for (const name of Object.keys(spec.extra || {})) {
+      const x = spec.extra[name];
+      let v = null;
+      if (opts !== null) {
+        if (x.type === 'check') v = isMatch(opts, x.key);
+        else if (x.type === 'number') {
+          const r = readNumber(opts, x.key, x, vars, gdTitle);
+          if (r && r.error) { if (out.error === undefined) out.error = r.error; } else if (r) v = r.value;
+        } else {
+          let t = getValue(opts, x.key, null);
+          if (t !== null && t.startsWith('&')) { const s = varAsString(vars, t.slice(1)); t = s !== null ? s : t.slice(1); }
+          if (t !== null && x.type === 'choice' && Array.isArray(x.items) && x.items.indexOf(t) < 0) {
+            if (out.error === undefined) out.error = choiceError(t, x.key);
+          } else v = t;
+        }
+      }
+      out.values[name] = v;
+    }
+    return out;
   }
   const nameOf = (id) => (Object.prototype.hasOwnProperty.call(T, id) ? T[id].name : null);
 
@@ -1006,5 +1182,6 @@
   }
 
   root.IJMacroOptions = Object.freeze(IJMacroOptions);
-  root.IJMacroCmds = Object.freeze({ MACRO_COMMANDS: T, IJ_CONVERT, REFUSED_NAMES, NO_IMAGE_TEXT, resolve, nameOf, headlessAnswer, pickDialog, IJMacroOptions: root.IJMacroOptions });
+  root.IJMacroCmds = Object.freeze({ MACRO_COMMANDS: T, IJ_CONVERT, REFUSED_NAMES, FILE_NAMES, NO_IMAGE_TEXT, resolve, nameOf, headlessAnswer, pickDialog,
+    fileRequest, saveAsPlan, updateExtension, IJMacroOptions: root.IJMacroOptions });
 })(typeof self !== 'undefined' ? self : globalThis);

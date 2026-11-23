@@ -1683,6 +1683,8 @@ const IJEngine = (() => {
         hyperstack: !!doc.hyperstack, rgb: !!doc.rgb, label: labelOf(doc, doc.active, curPi(doc)), bitDepthIJ: doc.rgb ? 24 : doc.bitDepth,
         channels: doc.channels.map((c) => ({ name: c.name, color: c.color, display: Object.assign({}, c.display) })),
         calibration: doc.calibration, provenance: doc.provenance,
+        // the file an image was opened from / saved to by a macro (FILES.md §10.2: virtual strings only)
+        file: fileOf(doc),
         mode: doc.mode, active: doc.active, visible: doc.visible.slice(),
         undoDepth: doc.undo.length, redoDepth: doc.redo.length, layoutRev: doc.layoutRev, hidden: !!doc.hidden, ephemeral: !!doc.ephemeral,
         bytes, levels: levelCount(doc.width, doc.height), tileSize: TILE,
@@ -1695,6 +1697,243 @@ const IJEngine = (() => {
       const d = docs.get(id);
       if (!d) throw ijError('IJ_NO_DOC', 'no such document');
       return d;
+    }
+
+    function fileOf(doc) {
+      const f = doc.provenance && doc.provenance.file;
+      return f && typeof f === 'object' && typeof f.dir === 'string' && typeof f.name === 'string'
+        ? { dir: f.dir, name: f.name, format: typeof f.format === 'string' ? f.format : null } : null;
+    }
+
+    // ── file codecs of the macro file commands (FILES.md §10.2): decode a file's bytes into a stack image, encode a document ──
+    const PICTURE_MAX_PIXELS = 268435456;
+    const FILE_FORMATS = ['tiff', 'png', 'jpeg', 'gif', 'bmp', 'text', 'zip', 'raw'];
+    const asBytes = (b) => (ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : (b && typeof b.byteLength === 'number' ? new Uint8Array(b) : null));
+    /** Opener.openTiff(path, n): the n-th image of the file (1-based, ImageJ's stack order: channels fastest, then slices, then frames) alone. */
+    function tiffPlane(img, n) {
+      const rgb = img.rgb === true;
+      const nC = rgb ? 1 : img.channels.length;
+      const lists = img.channels.map((c) => (Array.isArray(c.planes) ? c.planes : [c.data]));
+      const nP = lists[0].length;
+      const count = nC * nP;
+      if (!isInt(n) || n < 1 || n > count) throw ijError('IJ_IO_PLANE', 'N out of 1-' + count + ' range', { count, ijText: 'N out of 1-' + count + ' range' });
+      const k = n - 1;
+      const c = rgb ? 0 : k % nC, pi = rgb ? k : Math.floor(k / nC);
+      const pick = (j) => { const ch = img.channels[j]; const o = { data: lists[j][pi], name: ch.name, color: ch.color }; if (ch.display) o.display = Object.assign({}, ch.display); return o; };
+      const channels = rgb ? img.channels.map((ch, j) => pick(j)) : [pick(c)];
+      const out = { name: img.name, width: img.width, height: img.height, bitDepth: img.bitDepth, calibration: img.calibration, channels };
+      if (rgb) out.rgb = true;
+      return out;
+    }
+    /** A picture the browser decodes (PNG / JPEG / GIF / BMP) read in bands of about 1 Mpx through an OffscreenCanvas: grey (every pixel
+     *  R = G = B) → one 8-bit channel, colour → a 24-bit RGB image (Opener: convertGrayJpegTo8Bits; IJFileKinds.imageFromRgba's layout). */
+    async function decodePicture(bytes, name, check) {
+      const cib = ROOT.createImageBitmap, OC = ROOT.OffscreenCanvas;
+      if (typeof cib !== 'function' || typeof OC !== 'function') throw ijError('IJ_IO_DECODE', 'no picture decoder');
+      let bmp;
+      try { bmp = await cib(new Blob([bytes])); } catch (_) { throw ijError('IJ_IO_DECODE', 'picture'); }
+      try {
+        const w = bmp.width, h = bmp.height;
+        if (!(w > 0 && h > 0) || w * h > PICTURE_MAX_PIXELS) throw ijError('IJ_PICTURE_TOO_LARGE', 'picture');
+        ensureRoom(w * h * 3);
+        const n = w * h, bandH = Math.max(1, Math.min(h, Math.floor(1048576 / w)));
+        let g;
+        try { g = new OC(w, bandH).getContext('2d', { willReadFrequently: true }); } catch (_) { throw ijError('IJ_PICTURE_TOO_LARGE', 'picture'); }
+        if (!g) throw ijError('IJ_IO_DECODE', 'picture');
+        const R = new Uint8Array(n), G = new Uint8Array(n), B = new Uint8Array(n);
+        let gray = true;
+        for (let y0 = 0; y0 < h; y0 += bandH) {
+          if (check) check();
+          const bh = Math.min(bandH, h - y0);
+          g.clearRect(0, 0, w, bandH);
+          g.drawImage(bmp, 0, y0, w, bh, 0, 0, w, bh);
+          const px = g.getImageData(0, 0, w, bh).data;
+          const o = y0 * w;
+          for (let i = 0, m = w * bh; i < m; i++) {
+            const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+            R[o + i] = r; G[o + i] = gg; B[o + i] = b;
+            if (r !== gg || gg !== b) gray = false;
+          }
+        }
+        const calibration = { pixelWidth: 1, pixelHeight: 1, unit: 'px' };
+        if (gray) return { name, width: w, height: h, bitDepth: 8, calibration, channels: [{ data: R, name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false } }] };
+        return { name, width: w, height: h, bitDepth: 8, calibration, rgb: true,
+          channels: [[R, 'Red', '#ff0000'], [G, 'Green', '#00ff00'], [B, 'Blue', '#0000ff']].map(([data, lut, color]) => ({ data, name: lut, color, display: { min: 0, max: 255, lut, invert: false } })) };
+      } finally { if (bmp && bmp.close) bmp.close(); }
+    }
+    /** decodeImage(bytes, { name, kind: 'tiff' | 'picture' | 'text', plane }) → stack image (not yet a document). */
+    async function decodeImage(input, o, check) {
+      const opt = o || {};
+      const bytes = asBytes(input);
+      if (!bytes || !bytes.byteLength) throw ijError('IJ_BAD_ARGS', 'bytes');
+      const name = typeof opt.name === 'string' && opt.name ? opt.name : undefined;
+      let img;
+      if (opt.kind === 'tiff') {
+        ensureRoom(bytes.byteLength * 2);
+        const Local = ROOT.IJLocalTiff;
+        let compressed = false;
+        try { compressed = !!(Local && Local.needsDecoder(bytes)); } catch (_) { compressed = false; }
+        img = compressed ? await Local.read(bytes, name, { check: check || (() => {}) }) : dep('IJTiff').read(bytes, name);
+        if (opt.plane !== undefined && opt.plane !== null) img = tiffPlane(img, opt.plane);
+      } else if (opt.kind === 'picture') {
+        const P = ROOT.IJPng;
+        // a 16-bit PNG is inflated here: the room for its pixels and its inflated rows is taken before the inflation starts
+        const im16 = P && typeof P.decode16 === 'function' ? await P.decode16(bytes, { room: ensureRoom }) : null;
+        img = im16 ? Object.assign(im16, { name }) : await decodePicture(bytes, name, check);
+      } else if (opt.kind === 'text') {
+        const T = dep('IJTextIo');
+        const t = T.parseTextImage(bytes);
+        const r = T.floatRange(t.data);
+        img = { name: name || 'Untitled', width: t.width, height: t.height, bitDepth: 32, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
+          channels: [{ data: t.data, name: 'C1', color: '#ffffff', display: { min: r.min, max: r.max, lut: 'Grays', invert: false } }] };
+      } else throw ijError('IJ_BAD_ARGS', 'kind');
+      ensureRoom(imageBytes(img));
+      return img;
+    }
+
+    /** The picture of one plane as ImageJ's getBufferedImage hands it to a writer (PNG_Writer, JpegWriter): a composite = the RGB of its
+     *  display (CompositeImage), an RGB image its three planes, a single channel its 8-bit levels through the colour model — an 8-bit image's
+     *  display range is baked into the table (ByteProcessor.setMinAndMax), a 16 / 32-bit one is scaled by create8BitImage first. `png16`: a
+     *  16-bit image of the default grey LUT stays 16-bit (PNG_Writer.write16gs). → { kind: 'gray8' | 'gray16' | 'palette' | 'rgb', … }. */
+    function displayedPicture(doc, pi, png16) {
+      const W = doc.width, H = doc.height;
+      const R = dep('IJStkRender');
+      if (doc.rgb) return { kind: 'rgb', width: W, height: H, planes: doc.channels.map((ch) => ch.planes[pi]) };
+      if (doc.channels.length > 1) {
+        const list = [];
+        const mode = doc.mode;
+        if (mode === 'composite') {
+          doc.channels.forEach((ch, c) => { if (doc.visible[c] !== false) list.push(R.renderChannel(ch.planes[pi], doc.bitDepth, ch.display, W, H)); });
+        } else {
+          const ch = doc.channels[Math.min(doc.active, doc.channels.length - 1)];
+          const d = mode === 'gray' ? Object.assign({}, ch.display, { lut: 'Grays', invert: false }) : ch.display;
+          list.push(R.renderChannel(ch.planes[pi], doc.bitDepth, d, W, H));
+        }
+        return { kind: 'rgb', width: W, height: H, planes: R.renderComposite(list, W, H) };
+      }
+      const ch = doc.channels[0];
+      const d = ch.display || {};
+      const plane = ch.planes[pi];
+      const greyLut = (d.lut === undefined || d.lut === null || d.lut === 'Grays') && !d.invert;
+      if (png16 && doc.bitDepth === 16 && greyLut) return { kind: 'gray16', width: W, height: H, data: plane };
+      let table = R.baseTable(d), data;
+      if (doc.bitDepth === 8) { table = R.bakeRange(table, d.min, d.max); data = plane; } else data = R.toByte(plane, doc.bitDepth, d);
+      let identity = true;
+      for (let i = 0; i < 256 && identity; i++) if (table[i * 3] !== i || table[i * 3 + 1] !== i || table[i * 3 + 2] !== i) identity = false;
+      return identity ? { kind: 'gray8', width: W, height: H, data } : { kind: 'palette', width: W, height: H, data, palette: table };
+    }
+    function pictureRgb(pic) {
+      if (pic.kind === 'rgb') return pic.planes;
+      const n = pic.width * pic.height, r = new Uint8Array(n), g = new Uint8Array(n), b = new Uint8Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = pic.data[i];
+        if (pic.kind === 'palette') { const k = v * 3; r[i] = pic.palette[k]; g[i] = pic.palette[k + 1]; b[i] = pic.palette[k + 2]; } else { r[i] = v; g[i] = v; b[i] = v; }
+      }
+      return [r, g, b];
+    }
+    /** JpegWriter on the browser's encoder: the displayed picture as RGBA through an OffscreenCanvas, quality 0..100. */
+    async function encodeJpeg(pic, quality) {
+      const OC = ROOT.OffscreenCanvas;
+      if (typeof OC !== 'function' || typeof OC.prototype.convertToBlob !== 'function') throw ijError('IJ_IO_ENCODE', 'no JPEG encoder');
+      const W = pic.width, H = pic.height;
+      const cv = new OC(W, H);
+      const g = cv.getContext('2d');
+      if (!g) throw ijError('IJ_IO_ENCODE', 'no JPEG encoder');
+      const [r, gg, b] = pictureRgb(pic);
+      const im = g.createImageData(W, H);
+      const px = im.data;
+      for (let i = 0, n = W * H; i < n; i++) { px[i * 4] = r[i]; px[i * 4 + 1] = gg[i]; px[i * 4 + 2] = b[i]; px[i * 4 + 3] = 255; }
+      g.putImageData(im, 0, 0);
+      const q = Number.isFinite(quality) ? Math.max(0, Math.min(100, Math.round(quality))) : 85;
+      let blob;
+      try { blob = await cv.convertToBlob({ type: 'image/jpeg', quality: q / 100 }); } catch (_) { throw ijError('IJ_IO_ENCODE', 'jpeg'); }
+      if (!blob || blob.type !== 'image/jpeg') throw ijError('IJ_IO_ENCODE', 'jpeg');
+      return new Uint8Array(await blob.arrayBuffer());
+    }
+    /** FileSaver.saveAsRaw / ImageWriter: every plane in ImageJ's stack order (channels fastest, then slices, then frames), big-endian
+     *  16-bit, big-endian IEEE 32-bit float, an RGB pixel as its three bytes R, G, B. */
+    function encodeRaw(doc) {
+      const W = doc.width, H = doc.height, n = W * H, NP = doc.nZ * doc.nT;
+      const bpp = doc.rgb ? 3 : doc.bitDepth / 8;
+      const lists = doc.rgb ? [null] : doc.channels;
+      const out = new Uint8Array(n * bpp * lists.length * NP);
+      const dv = new DataView(out.buffer);
+      let at = 0;
+      for (let pi = 0; pi < NP; pi++) {
+        if (doc.rgb) {
+          const [r, g, b] = doc.channels.map((ch) => ch.planes[pi]);
+          for (let i = 0; i < n; i++) { out[at++] = r[i]; out[at++] = g[i]; out[at++] = b[i]; }
+          continue;
+        }
+        for (const ch of doc.channels) {
+          const a = ch.planes[pi];
+          if (doc.bitDepth === 8) { out.set(a, at); at += n; } else if (doc.bitDepth === 16) { for (let i = 0; i < n; i++) { dv.setUint16(at, a[i], false); at += 2; } } else { for (let i = 0; i < n; i++) { dv.setFloat32(at, a[i], false); at += 4; } }
+        }
+      }
+      return out;
+    }
+    /** encodeImage(doc, { format, quality, entryName, pos }) → { bytes, rev } (FILES.md §10.2). */
+    function encodeImage(doc, o, ctx) {
+      const opt = o || {};
+      const format = opt.format;
+      if (['tiff', 'png', 'jpeg', 'zip', 'raw'].indexOf(format) < 0) throw ijError('IJ_BAD_ARGS', 'format');
+      return lockDoc(doc, async () => {
+        const n = planeBytes(doc);
+        const extra = n * (format === 'zip' ? 2 : 1) + 65536;
+        ensureRoomNoEvict(extra);
+        transientBytes += extra;
+        try {
+          const rev = doc.rev;
+          let bytes;
+          if (format === 'tiff' || format === 'zip') {
+            bytes = dep('IJTiff').write(doc);
+            if (format === 'zip') {
+              // FileSaver.saveAsZip: one entry named after the title, ".zip" cut, ".tif" added
+              let entry = typeof opt.entryName === 'string' && opt.entryName ? opt.entryName : doc.name;
+              if (!(typeof opt.entryName === 'string' && opt.entryName)) {
+                if (/\.zip$/.test(entry)) entry = entry.substring(0, entry.length - 4);
+                if (!/\.tif$/.test(entry)) entry += '.tif';
+              }
+              bytes = dep('IJRoiCodec').zipStore([{ name: entry, bytes }]);
+            }
+          } else if (format === 'raw') bytes = encodeRaw(doc);
+          else {
+            const pi = posToPi(doc, opt.pos);
+            const pic = displayedPicture(doc, pi, format === 'png');
+            if (format === 'png') bytes = await dep('IJPng').encode(pic);
+            else bytes = await encodeJpeg(pic, opt.quality);
+          }
+          if (ctx) ctx.task.check();
+          if (bytes.byteOffset !== 0 || bytes.buffer.byteLength !== bytes.byteLength) bytes = bytes.slice();
+          return { bytes, rev };
+        } finally { transientBytes -= extra; }
+      });
+    }
+    /** markSaved(doc, { rev, file }): the revision a file holds is what is saved; `file` = FileOrigin (virtual) becomes provenance.file. */
+    function markSavedFile(doc, o) {
+      const opt = o || {};
+      return lockDoc(doc, async () => {
+        const rev = isInt(opt.rev) && opt.rev >= 0 ? Math.min(opt.rev, doc.rev) : doc.rev;
+        doc.savedRev = rev;
+        if (opt.file !== undefined) {
+          const f = checkFileOrigin(opt.file);
+          const pv = Object.assign({}, doc.provenance || {});
+          if (f) pv.file = f; else delete pv.file;
+          doc.provenance = pv;
+        }
+        markMeta(doc);
+        return infoOf(doc);
+      });
+    }
+    /** A FileOrigin as the engine keeps it: virtual strings only, never a handle or a machine path. null clears. */
+    function checkFileOrigin(f) {
+      if (f === null) return null;
+      if (!f || typeof f !== 'object' || typeof f.dir !== 'string' || typeof f.name !== 'string' || !f.name || f.dir.charAt(0) !== '/' || f.dir.slice(-1) !== '/') throw ijError('IJ_BAD_ARGS', 'file');
+      if (f.format !== undefined && f.format !== null && FILE_FORMATS.indexOf(f.format) < 0) throw ijError('IJ_BAD_ARGS', 'file format');
+      const out = { dir: f.dir, name: f.name };
+      for (const k of ['rootId', 'root', 'rel']) if (typeof f[k] === 'string') out[k] = f[k];
+      if (typeof f.format === 'string') out.format = f.format;
+      return out;
     }
 
     function getChannel(doc, c) {
@@ -4240,6 +4479,8 @@ const IJEngine = (() => {
       let openGroup = null;   // the macro run this request opened and has not ended (ended for it when the request ends)
       const E = {
         budgetBytes,
+        // what would fit once the tile cache and every undo step were given up (no side effect): a macro's file read checks it first
+        freeBytes: () => Math.max(0, budgetBytes - (usedBytes() - reclaimableBytes())),
         ijError,
         check: () => ctx.task.check(),
         tick: (f, stepKey, detail) => ctx.task.tick(f, stepKey, detail),
@@ -4252,14 +4493,16 @@ const IJEngine = (() => {
           transientBytes -= k; reserved -= k;
         },
         // A document the handler built: arrays it reserved become the document's own (the reservation shrinks by their size).
+        // o.clean: an image read from a file is what is on disk (nothing unsaved until it is edited); o.provenance.file = its FileOrigin.
         createDoc(image, o) {
           const opt = o || {};
           const bytes = checkImageArgs(image);
           const covered = Math.min(bytes, reserved);
           if (bytes > covered) ensureRoom(bytes - covered);
           const provenance = Object.assign({}, opt.provenance && typeof opt.provenance === 'object' ? opt.provenance : {});
+          if (provenance.file !== undefined) { const f = checkFileOrigin(provenance.file); if (f) provenance.file = f; else delete provenance.file; }
           const doc = addDocFromImage(image, provenance, typeof opt.sessionKey === 'string' && opt.sessionKey ? opt.sessionKey : undefined, !!opt.hidden);
-          doc.savedRev = -1;
+          doc.savedRev = opt.clean === true ? doc.rev : -1;
           markMeta(doc);
           E.release(bytes);
           finishMutation();
@@ -4267,6 +4510,10 @@ const IJEngine = (() => {
         },
         // the frozen view of a document at `pos` ({ z, t }, default the current plane; API.md §6)
         readDoc: (docId, pos) => { const d = getDoc(docId); return makeView(d, posToPi(d, pos)); },
+        // ---- files of a macro (FILES.md §10.2): a file's bytes → a stack image for createDoc, a document → a file's bytes
+        decodeImage: (bytes, o) => decodeImage(bytes, o, () => ctx.task.check()),
+        encodeImage: (docId, o) => encodeImage(getDoc(docId), o, ctx),
+        markSaved: (docId, o) => markSavedFile(getDoc(docId), o),
         // ---- stacks: the dimensions, the position (a move posts the `position` event so the page's view follows), the live planes
         dims(docId) {
           const d = getDoc(docId);

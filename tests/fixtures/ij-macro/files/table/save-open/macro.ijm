@@ -1,0 +1,14 @@
+Table.create("T");
+Table.set("a", 0, 1.5);
+Table.set("b", 0, "x");
+Table.set("a", 1, 2.5);
+Table.set("b", 1, "y");
+Table.update;
+Table.save("{ROOT}t.csv");
+Table.save("{ROOT}t.tsv");
+print("saved " + File.length("{ROOT}t.csv"));
+Table.create("U");
+Table.open("{ROOT}t.csv");
+print("size " + Table.size + " headings " + Table.headings);
+print("a1 " + Table.get("a", 1) + " b1 " + Table.getString("b", 1));
+print("title " + Table.title);

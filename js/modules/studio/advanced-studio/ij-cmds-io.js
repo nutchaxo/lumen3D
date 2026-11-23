@@ -3,6 +3,7 @@
  * ij-proc-io.js (xyCoordinates, textImage); the codecs (IJRoiCodec, IJTextIo) are page-pure.
  *
  *   File › Import › Text Image…           ij.plugin.TextReader          a tab / comma / space separated text becomes a 32-bit image
+ *   File › Import › Results…              Opener.openResultsTable       a tab / comma delimited table becomes the Results table
  *   File › Save As › Text Image…          ij.io.TextEncoder             the active channel as tab-separated text, 3 decimals for a 32-bit image
  *   File › Save As › Selection…           ij.plugin.filter.RoiWriter    the selection as an ImageJ .roi file
  *   File › Save As › XY Coordinates…      ij.plugin.filter.XYWriter     the vertices of the selection, no dialog
@@ -45,6 +46,25 @@
           name: baseName(f.name), width: t.width, height: t.height, bitDepth: 32, calibration: { pixelWidth: 1, pixelHeight: 1, unit: 'px' },
           channels: [{ data: t.data, name: 'C1', color: '#ffffff', display: { min: r.min, max: r.max, lut: 'Grays', invert: false } }]
         }, { placement: 'tab' });
+      }
+    },
+    {
+      // Opener.openResultsTable: "ResultsTable rt = ResultsTable.open(path); rt.show("Results");" — the file replaces the Results table
+      id: 'fileImportResults', menu: ['File', 'Import'], order: 40,
+      enabled: (st) => !!st && !st.busy,
+      async run(api) {
+        const files = await api.pickFile({ accept: '.csv,.tsv,.txt,.xls', multiple: false });
+        if (!files || !files.length) return;
+        const f = files[0];
+        const t = IJTextIo.readTable(new Uint8Array(await f.arrayBuffer()), { name: String(f.name || '') });
+        const rows = [];
+        for (let i = 0; i < t.size; i++) {
+          const r = {};
+          if (t.labels && t.labels[i] !== null && t.labels[i] !== undefined) r.Label = t.labels[i];
+          for (const head of t.headings) { const v = t.columns[head][i]; if (v !== null && v !== undefined) r[head] = v; }
+          rows.push(r);
+        }
+        api.addResults(rows, { replace: true });
       }
     },
     {
@@ -161,7 +181,11 @@
       IJ_IO_TOO_LARGE: 'err.ioTooLarge',
       IJ_IO_NEEDS_IMAGE: 'err.ioNeedsImage',
       IJ_IO_NEEDS_COMPOSITE: 'err.ioNeedsComposite',
-      IJ_IO_DECODE: 'err.ioDecode'
+      IJ_IO_DECODE: 'err.ioDecode',
+      IJ_IO_TABLE_INVALID: 'err.ioTableInvalid',
+      IJ_IO_TABLE_EMPTY: 'err.ioTableEmpty',
+      // ResultsTable.open's "Error opening <path>" (a file whose text starts with "Error:"): not a table either
+      IJ_IO_TABLE_ERROR: 'err.ioTableInvalid'
     }
   });
 })();

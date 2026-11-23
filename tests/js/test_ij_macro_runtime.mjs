@@ -26,14 +26,18 @@ const P = W.IJMacroProto;
   const methods = Object.keys(P.RPC_METHODS).sort();
   assert.deepEqual(methods, ['clipboard.copy', 'command.list', 'dialog.boolean', 'dialog.message', 'dialog.messageCancel', 'dialog.number', 'dialog.show',
     'dialog.string', 'dialog.waitForUser', 'error.show', 'flush', 'image.adopt', 'image.close', 'image.rename', 'image.select', 'image.show', 'run',
-    'window.close', 'window.print', 'window.select'], 'RPC_METHODS is the closed list of §4.1');
+    'text.open', 'vfs.confirm', 'vfs.pick', 'vfs.regrant', 'window.close', 'window.print', 'window.select', 'window.text'], 'RPC_METHODS is the closed list of §4.1 + FILES.md §5.4');
+  for (const m of ['vfs.pick', 'vfs.confirm', 'vfs.regrant']) assert.equal(P.RPC_METHODS[m].interactive, true, m + ' waits for the operator');
+  for (const m of ['text.open', 'window.text']) assert.equal(P.RPC_METHODS[m].interactive, false, m + ' has a timeout');
   for (const m of ['flush', 'image.rename', 'window.print', 'command.list']) assert.equal(P.RPC_METHODS[m].interactive, false, m + ' has a timeout');
   for (const m of ['run', 'dialog.show', 'image.adopt', 'clipboard.copy']) assert.equal(P.RPC_METHODS[m].interactive, true, m + ' waits for the operator');
   assert.deepEqual(J(P.WRITE_OPS).sort(), ['colors.set', 'display.lut', 'display.mode', 'display.set', 'display.visible', 'measurements.set', 'progress.show',
     'rm.select', 'rm.set', 'rm.show', 'roi.set', 'setting.set', 'status.show', 'table.remove', 'table.rename', 'table.replace', 'table.show', 'thr.mode',
     'thr.reset', 'thr.set', 'tool.set'], 'WRITE_OPS is the closed list of §4.2');
   assert.ok(Object.isFrozen(P) && Object.isFrozen(P.RPC_METHODS) && Object.isFrozen(P.WRITE_OPS) && Object.isFrozen(P.TEXT_KEYS), 'frozen tables');
-  for (const k of P.TEXT_KEYS) assert.match(k, /^err\.mac[A-Z0-9]/, 'text key ' + k + ' is in the err.mac* namespace');
+  // the err.mac* texts, and the README lines of a results archive (FILES.md §12.1)
+  for (const k of P.TEXT_KEYS) assert.match(k, /^(err\.mac[A-Z0-9]|dlg\.mac\.files\.readme)/, 'text key ' + k + ' is in the err.mac* namespace');
+  assert.ok(P.TEXT_KEYS.indexOf('err.macFileLater') < 0, 'err.macFileLater is retired (FILES.md §12.3)');
   // the en texts of every TEXT_KEYS key exist once PAGE has written them (a missing one would show the key to the operator)
   const en = JSON.parse(fs.readFileSync(path.join(ROOT, 'js', 'modules', 'studio', 'advanced-studio', 'lang', 'en.json'), 'utf8'));
   const missing = P.TEXT_KEYS.filter((k) => k.split('.').reduce((o, s) => (o && typeof o === 'object' ? o[s] : undefined), en) === undefined);
@@ -145,7 +149,7 @@ async function cancelWithin(src, setup) {
   delete t.page.answers['image.rename'];
   okRun(r, 'writes');
   assert.deepEqual(r.writes.map((w) => w[0]), ['roi.set', 'thr.set', 'tool.set', 'roi.set'], 'in order');
-  assert.deepEqual(seen.roi, { type: 'oval', x: 0, y: 0, w: 5, h: 5 }, 'applied before the method: the page saw the last selection');
+  assert.deepEqual(seen.roi, { type: 'oval', x: 0, y: 0, w: 5, h: 5, subPixel: true }, 'applied before the method: the page saw the last selection');
   assert.deepEqual(seen.thr, { 0: { lower: 10, upper: 20, dark: false } });
   assert.equal(seen.tool, 'oval');
   assert.deepEqual(r.rpc, ['image.rename']);
@@ -251,8 +255,11 @@ async function cancelWithin(src, setup) {
   assert.deepEqual(J(r.result.prefsWrites), { 'macro.k': 'v1' }, 'only the keys this run changed');
   r = await t.run('print(getInfo("user.home")); print(getInfo("os.name")); print(getInfo("no.such.key")); print(getInfo("file.separator"));');
   assert.deepEqual(okRun(r, 'getInfo'), ['/home', 'Browser', 'Invalid key', '/']);
+  // a path outside every granted folder stops the run (FILES.md §8.1): the folder is offered in the Files section
+  const notGranted = (msg, literal) => msg === 'Folder not granted: ' + literal + ' — choose it in the Files section of the Macro Editor.' ||
+    /^This browser gives the page no storage/.test(msg);
   r = await t.run('open("/data/x.tif");');
-  assert.equal(r.result.error.message, '"open("/data/x.tif")" is not available yet in this version of the Advanced Studio: macros cannot read or write files on your computer yet.'.replace(/^"|"(?= is)/g, ''));
+  assert.ok(notGranted(r.result.error.message, '/data/'), r.result.error.message);
   r = await t.run('open("C:/data/embryo.ims");');
   assert.match(r.result.error.message, /^Bio-Formats is not available in the browser/);
   r = await t.run('open("https://example.org/a.tif");');
@@ -263,14 +270,14 @@ async function cancelWithin(src, setup) {
   assert.equal(r.result.error.message, 'Only macro code can be evaluated in the browser.');
   r = await t.run('x = eval("print(6*7);");');
   assert.deepEqual(okRun(r, 'eval'), ['42'], 'eval of macro code runs in the same run');
-  r = await t.run('x = File.exists("/a");');
-  assert.match(r.result.error.message, /^File\.exists is not available yet/);
-  r = await t.run('x = getDirectory("home");');
-  assert.match(r.result.error.message, /^getDirectory is not available yet/);
+  r = await t.run('x = File.exists("/a/b.txt");');
+  assert.ok(notGranted(r.result.error.message, '/a/'), r.result.error.message);
+  r = await t.run('print(getDirectory("home")); print(getDir("temp")); print(File.separator);');
+  assert.deepEqual(okRun(r, 'keyword directories'), ['/home/', '/tmp/', '/']);
   r = await t.run('Ext.install("x");');
   assert.equal(r.result.error.message, 'Macro extensions are not available.');
-  r = await t.run('x = runMacro("/a.ijm");');
-  assert.match(r.result.error.message, /^runMacro\("\/a\.ijm"\) is not available yet/);
+  r = await t.run('x = runMacro("/q/a.ijm");');
+  assert.ok(notGranted(r.result.error.message, '/q/'), r.result.error.message);
 }
 
 // ---------------------------------------------------------------- run(): statuses

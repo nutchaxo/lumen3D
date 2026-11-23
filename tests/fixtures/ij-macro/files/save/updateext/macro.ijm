@@ -1,0 +1,11 @@
+newImage("img", "8-bit ramp", 16, 16, 1);
+saveAs("tiff", "{ROOT}a.1");
+print("title " + getTitle());
+saveAs("png", "{ROOT}b.jpeg");
+print("title " + getTitle());
+saveAs("jpeg", "{ROOT}c.png");
+print("title " + getTitle());
+saveAs("tiff", "{ROOT}d.tiff");
+print("title " + getTitle());
+saveAs("tiff", "{ROOT}e.TIF");
+print("title " + getTitle());

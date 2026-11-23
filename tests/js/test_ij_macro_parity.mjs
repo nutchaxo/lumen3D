@@ -128,7 +128,8 @@ for (const c of t.IJApp.COMMANDS) {
   if (c.dynamic) continue;
   const entry = T[c.id];
   if (!entry) { failures.push(c.id + ': no MACRO_COMMANDS entry'); continue; }
-  if (entry.cls === 'E' || NOT_RUN.has(c.id)) continue;
+  // class E is refused; class F runs in the worker on the macro's file system (FILES.md §9), never through the Studio command
+  if (entry.cls === 'E' || entry.cls === 'F' || NOT_RUN.has(c.id)) continue;
   const expectDialogs = entry.dialogs.length > 0;
   seenFields[c.id] = new Set();
   let ok = 0, ranAny = false;

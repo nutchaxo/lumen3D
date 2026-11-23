@@ -1,0 +1,14 @@
+a = "{ROOT}sub/a.b.tif";
+print("name " + File.getName(a));
+print("nameWithoutExtension " + File.getNameWithoutExtension(a));
+print("directory " + File.getDirectory(a));
+print("parent " + File.getParent(a));
+print("absolute " + File.getAbsolutePath(a));
+b = "{ROOT}noext";
+print("noext name [" + File.getName(b) + "] without [" + File.getNameWithoutExtension(b) + "]");
+c = "{ROOT}";
+print("root name [" + File.getName(c) + "] directory [" + File.getDirectory(c) + "] parent [" + File.getParent(c) + "]");
+d = "{ROOT}sub/";
+print("folder name [" + File.getName(d) + "] directory [" + File.getDirectory(d) + "] parent [" + File.getParent(d) + "]");
+e = "{ROOT}.hidden";
+print("dotfile name [" + File.getName(e) + "] without [" + File.getNameWithoutExtension(e) + "]");

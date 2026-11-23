@@ -230,9 +230,11 @@ await test('errors: ImageJ\'s texts and lines, the translated refusals, the Macr
   assert.equal(r3.error.line, 2);
   assert.ok(typeof r3.error.dialogText === 'string' && r3.error.dialogText.indexOf(r3.error.message) >= 0, 'ImageJ\'s dialog text');
   assert.ok(t.panel('macroError'), 'the Macro Error window is open');
-  const r4 = await run(t, lines('print("before");', 'open("/x.tif");'));
+  // a machine path with no alias stops the run with the translated text (FILES.md F3) and names the folder to choose
+  const r4 = await run(t, lines('print("before");', 'open("C:' + BS + 'data' + BS + 'x.tif");'));
   assert.equal(r4.ok, false);
-  assert.equal(r4.error.message, tr(t, 'err.macFileLater', { name: 'open("/x.tif")' }), 'the translated "not available yet" text');
+  assert.equal(r4.error.message, tr(t, 'err.macFolderNotGranted', { path: 'C:/data/' }), 'the translated "folder not granted" text');
+  assert.ok(r4.vfs && r4.vfs.needs.some((n) => n.kind === 'alias' && n.literal === 'C:/data/'), 'the run lists the alias it needs');
   assert.equal(r4.error.line, 2);
   const r5 = await run(t, 'exec("ls");');
   assert.equal(r5.error.message, tr(t, 'err.macExec'));

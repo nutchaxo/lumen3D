@@ -140,7 +140,8 @@ await test('run("Repeat Command") never reaches a command refused to macros (a f
     await until(() => t.saved.length === 1, 'the operator\'s save');
     const r = await t.runMacro('run("Repeat Command"); print("done");');
     assert.equal(r.ok, false);
-    assert.match(String(r.error && r.error.message), /not available yet/);
+    // a file command runs only in the worker on the macro's virtual file system (FILES.md §9): through the page it is refused
+    assert.match(String(r.error && r.error.message), /needs a file chosen by hand/);
     assert.equal(t.saved.length, 1, 'no second file saved by the macro');
     assert.deepEqual(Array.from(t.macroLog()), []);
   } finally { t.close(); }

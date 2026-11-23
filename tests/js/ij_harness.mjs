@@ -33,6 +33,12 @@
 // receives), t.openPanel(id) / t.panel(id) (an extension panel and its element), t.settings (the preferences the app keeps in
 // localStorage 'lumen3d.ij.prefs', in memory and kept across reload()), t.pickFile(files | null) (the answer of the next file
 // picker: an array of File-like objects, null = cancelled), t.saved ([{ name, blob }] given to saveFile / a download).
+//
+// Macro files (DOCS/studio-advanced/macros/FILES.md §10.5): boot({ fs }) with fs = { opfs?, pickers?, idb?, activation?, FileReaderSync? } (the
+// fakes of tests/js/ij_macro_fs_fakes.mjs) installs on the page showDirectoryPicker / showOpenFilePicker / showSaveFilePicker (pickers.install),
+// indexedDB (idb), navigator.storage.{ estimate, persist } and the deflate streams, and in the worker navigator.storage.{ getDirectory, estimate }
+// (opfs.storage) and FileReaderSync (fs.FileReaderSync, else the fakes' FakeFileReaderSync when that file exists); t.gesture(fn) runs fn with
+// transient activation (page.__activation, what the fake pickers test). Without `fs` nothing changes.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,7 +73,7 @@ export function langPart(pkg) {
 export const PACKAGES = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
 // The files of the macro phase, written by several builders at once (DOCS/studio-advanced/macros/INTEGRATION.md §1.3): the page skips one that
 // is not on disk yet (the worker does not: a missing package file fails the package there, which is what production does).
-export const MACRO_FILES = ['ij-macro-lang.js', 'ij-proc-macro.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js'];
+export const MACRO_FILES = ['ij-macro-lang.js', 'ij-macro-vfs.js', 'ij-proc-macro.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js'];
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function until(fn, what, ms = 8000) {
   const t0 = Date.now();
@@ -296,6 +302,12 @@ export async function boot(opts = {}) {
   const vol = makeVolume(o.volume || { channels: o.channels || 2 });
   const log = { msgs: [], events: [], dialogSpecs: [], status: [], notes: [], previews: [], overlays: [], workerErrors: [], failures: [], errors: [] };
   const store = o.storage || null;
+  // the macro file system fakes (FILES.md §10.5), opt-in
+  const fsx = o.fs && typeof o.fs === 'object' ? o.fs : null;
+  let FileReaderSyncImpl = fsx && typeof fsx.FileReaderSync === 'function' ? fsx.FileReaderSync : null;
+  if (fsx && !FileReaderSyncImpl) {
+    try { FileReaderSyncImpl = (await import('./ij_macro_fs_fakes.mjs')).FakeFileReaderSync || null; } catch (_) { FileReaderSyncImpl = null; }
+  }
 
   // ---------------- the page
   // A preview / compute-preview failure is only logged by the app: the harness turns it into a failure.
@@ -308,6 +320,15 @@ export async function boot(opts = {}) {
   const page = { console: pageConsole, setTimeout, clearTimeout, MessageChannel, performance, TextEncoder, TextDecoder, AbortController, Blob, queueMicrotask };
   page.self = page;
   page.navigator = { storage: { persist: async () => true, estimate: async () => ({ quota: 1e12, usage: 0 }) } };
+  if (fsx) {
+    const st = fsx.opfs && fsx.opfs.storage;
+    if (st) page.navigator.storage = { persist: (...a) => st.persist(...a), estimate: (...a) => st.estimate(...a) };
+    if (fsx.idb) page.indexedDB = fsx.idb;
+    if (fsx.pickers && typeof fsx.pickers.install === 'function') fsx.pickers.install(page);
+    page.__activation = !!fsx.activation;
+    page.CompressionStream = globalThis.CompressionStream;
+    page.DecompressionStream = globalThis.DecompressionStream;
+  }
   page.localStorage = { getItem: (k) => (o.localStore.has(k) ? o.localStore.get(k) : null), setItem(k, v) { o.localStore.set(k, String(v)); }, removeItem(k) { o.localStore.delete(k); } };
   let lastBlob = null;
   page.URL = { createObjectURL(b) { log.download = b; lastBlob = b; return 'blob:fake'; }, revokeObjectURL() {} };
@@ -328,7 +349,7 @@ export async function boot(opts = {}) {
   const runPage = (f) => vm.runInContext(readSrc(f, o.pageSources), page, { filename: f });
   // plugin.json's order: the ij-proc files (the page copy of ij-proc-macro.js registers the specs of its worker commands), then the pure
   // run() bridge tables (ij-macro-cmds.js), all before ij-app.js
-  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PACKAGES.map((p) => `ij-proc-${p}.js`), 'ij-macro-cmds.js']) if (pageHas(f, o.pageSources)) runPage(f);
+  for (const f of ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PACKAGES.map((p) => (p === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${p}.js`])).flat(), 'ij-macro-cmds.js']) if (pageHas(f, o.pageSources)) runPage(f);
 
   // The view's pure helpers and the plot module, from the real file (its own context: no DOM is touched at load).
   const viewCtx = vm.createContext({ console, setTimeout, clearTimeout });
@@ -350,7 +371,12 @@ export async function boot(opts = {}) {
   const deliver = o.immediateMessages && typeof setImmediate === 'function' ? setImmediate : (f) => setTimeout(f, 0);
   function makeWorkerContext(fw) {
     const w = { console, setTimeout, clearTimeout, setInterval, clearInterval, MessageChannel, performance, TextEncoder, TextDecoder, Blob, queueMicrotask, AbortController, navigator: {},
-      DecompressionStream: globalThis.DecompressionStream };
+      DecompressionStream: globalThis.DecompressionStream, CompressionStream: globalThis.CompressionStream };
+    if (fsx) {
+      const st = fsx.opfs && fsx.opfs.storage;
+      if (st) w.navigator.storage = { getDirectory: (...a) => st.getDirectory(...a), estimate: (...a) => st.estimate(...a) };
+      if (FileReaderSyncImpl) w.FileReaderSync = FileReaderSyncImpl;
+    }
     w.self = w;
     w.onmessage = null;
     w.postMessage = (m) => { if (!fw.dead) deliver(() => { if (!fw.dead && fw.onmessage) fw.onmessage({ data: m }); }); };
@@ -389,8 +415,11 @@ export async function boot(opts = {}) {
       if (m && m.cmd && log.intercept) {
         const r = log.intercept(m);
         if (r !== undefined) {
-          const data = r && r.__error ? { id: m.id, ok: false, error: { code: r.__error, message: r.__error } } : { id: m.id, ok: true, result: r };
-          setTimeout(() => this.onmessage && this.onmessage({ data }), 0);
+          // a Promise holds the request until it settles (a test that keeps a macro.run pending while it drives the lane)
+          Promise.resolve(r).then((v) => {
+            const data = v && v.__error ? { id: m.id, ok: false, error: { code: v.__error, message: v.__error } } : { id: m.id, ok: true, result: v };
+            setTimeout(() => this.onmessage && this.onmessage({ data }), 0);
+          });
           return;
         }
       }
@@ -552,6 +581,12 @@ export async function boot(opts = {}) {
     panel: (id) => { const w = t.shell.windows.floats.get(id); return w ? w.spec.content : null; },
     saved,
     pickFile: (files) => { picks.next = files; },
+    /** fn() with transient user activation (a click): the fake pickers refuse to open without it. Like a browser, only the synchronous part
+     *  of fn holds the activation (a picker must be the first thing a click handler does). */
+    gesture(fn) {
+      page.__activation = true;
+      try { return fn(); } finally { page.__activation = false; }
+    },
     settings: {
       all: () => { const raw = o.localStore.get('lumen3d.ij.prefs'); return raw ? JSON.parse(raw) : {}; },
       get(k) { return this.all()[k]; },

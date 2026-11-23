@@ -26,13 +26,15 @@ export function loadWorker(opts = {}) {
   vm.createContext(sandbox);
   const files = ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js'];
   for (const p of opts.packages || ['multi', 'geom', 'roi', 'ana']) files.push('ij-proc-' + p + '.js');
-  files.push('ij-macro-lang.js', 'ij-proc-macro.js');
+  files.push('ij-macro-lang.js');
+  // the virtual file system loads with the language (FILES.md F2) once it exists; opts.vfs === false keeps it out (stand-in tests)
+  if (opts.vfs !== false && fs.existsSync(path.join(DIR, 'ij-macro-vfs.js'))) files.push('ij-macro-vfs.js');
+  files.push('ij-proc-macro.js');
   for (const f of files) vm.runInContext((opts.sources && opts.sources[f]) || fs.readFileSync(path.join(DIR, f), 'utf8'), sandbox, { filename: f });
   return sandbox;
 }
 
 export const TEXTS = {
-  'err.macFileLater': '{name} is not available yet in this version of the Advanced Studio: macros cannot read or write files on your computer yet.',
   'err.macNetwork': 'Macros cannot use the network.',
   'err.macBioFormats': 'Bio-Formats is not available in the browser: save the image as TIFF in Fiji (File › Save As › Tiff…) and open the TIFF.',
   'err.macExec': 'exec() is not available in the browser.',
@@ -46,7 +48,21 @@ export const TEXTS = {
   'err.macPageTimeout': 'The page did not answer ({method}).',
   'err.macNotInBrowser': '{name} is not available in the browser.',
   'err.macArrow': 'Arrow selections are not available.',
-  'err.macClipboard': 'The clipboard can only be used from a click.'
+  'err.macClipboard': 'The clipboard can only be used from a click.',
+  'err.macRefused': '{command} is not available to macros: {reason}',
+  'err.macFolderNotGranted': 'Folder not granted: {path} — choose it in the Files section of the Macro Editor.',
+  'err.macFolderStale': 'The folder {name} must be chosen again in the Files section: this browser forgets folders between visits.',
+  'err.macReadOnly': '{path}: this folder is read-only for macros (change its mode in the Files section).',
+  'err.macWriteRefused': 'Writing refused: {path}',
+  'err.macRootDelete': '{path} is a folder you granted: a macro cannot delete it.',
+  'err.macPermission': 'No permission to use {name}: allow it again in the Files section.',
+  'err.macQuota': 'Not enough browser storage: {written} written, {free} free',
+  'err.macNoStorage': 'This browser gives the page no storage (a private window?): the macro cannot write {path}.',
+  'err.macFileGone': '{path} can no longer be read: it changed after the folder was chosen. Choose the folder again.',
+  'err.macFileBusy': '{path} is in use by another tab of the Studio.',
+  'err.macFileTooLarge': '{path} is too large to be read in the browser.',
+  'err.macSaveFormat': '{format} files cannot be written in the browser.',
+  'err.macReasonSequence': 'image sequences are not available yet: open the files with open() in a loop, then use Image › Stacks › Images to Stack.'
 };
 
 /** The scripted page + the real worker engine. */
@@ -225,8 +241,9 @@ export async function rt(opts = {}) {
   async function run(source, o = {}) {
     const rpc0 = page.rpc.length, w0 = page.writes.length, l0 = page.log.length;
     const runId = 'r' + (++runSeq);
-    const args = { runId, source, name: o.name || 'Macro', arg: o.arg || '', mirror: await mirror(), log: page.log.slice(), texts: TEXTS, prefs: o.prefs || {},
+    const args = { runId, source, name: o.name || 'Macro', arg: o.arg || '', mirror: await mirror(), log: page.log.slice(), texts: Object.assign({}, TEXTS, o.texts || {}), prefs: o.prefs || {},
       options: Object.assign({ fastPath: true, syncLoops: false, syncRecursion: false }, o.options || {}) };
+    if (o.vfs !== undefined) args.vfs = o.vfs;
     // a complete first mirror: forget what earlier runs were sent
     page.sentTables = new Map();
     args.mirror = await mirror();

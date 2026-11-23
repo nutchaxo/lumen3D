@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { boot, until, DIR } from './ij_harness.mjs';
-import { FAKE_SOURCES, WORKER_MACRO } from './ij_macro_plumbing_fakes.mjs';
+import { FAKE_SOURCES, WORKER_MACRO, VFS_STANDIN } from './ij_macro_plumbing_fakes.mjs';
 
 let passed = 0;
 async function test(name, fn) {
@@ -32,11 +32,11 @@ await test('WORKER_SCRIPTS ends with ij-proc-macro.js; PACKAGE_PRE puts the lang
   const A = t.IJApp;
   assert.equal(A.WORKER_SCRIPTS[A.WORKER_SCRIPTS.length - 1], 'ij-proc-macro.js', 'the last worker script');
   assert.ok(A.PACKAGE_NAMES.includes('macro'), 'macro is a package');
-  assert.deepEqual(Array.from(A.PACKAGE_PRE.macro), ['ij-macro-lang.js']);
+  assert.deepEqual(Array.from(A.PACKAGE_PRE.macro), ['ij-macro-lang.js', 'ij-macro-vfs.js'], 'the language, then its virtual file system (FILES.md §10.1)');
   assert.ok(Object.isFrozen(A.PACKAGE_PRE), 'PACKAGE_PRE is frozen');
   const init = A.workerInit({ fileUrl: (f) => 'u:' + f });
   const mac = init.packages.find((p) => p.pkg === 'macro');
-  assert.deepEqual(JSON.parse(JSON.stringify(mac)), { pkg: 'macro', url: 'u:ij-proc-macro.js', pre: ['u:ij-macro-lang.js'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(mac)), { pkg: 'macro', url: 'u:ij-proc-macro.js', pre: ['u:ij-macro-lang.js', 'u:ij-macro-vfs.js'] });
   assert.ok(init.packages.filter((p) => p.pkg !== 'macro').every((p) => p.pre === undefined), 'no other package has a pre');
   assert.ok(!init.scripts.includes('u:ij-macro-lang.js'), 'the language is not a mandatory script');
   // the macro group of the menus and the settings prefix
@@ -52,7 +52,7 @@ await test('WORKER_SCRIPTS ends with ij-proc-macro.js; PACKAGE_PRE puts the lang
 
 await test('the worker loads ij-macro-lang.js then ij-proc-macro.js: the language is there when the package runs', async () => {
   const probe = WORKER_MACRO + `\n;self.__sawLanguage = typeof IJMacro !== 'undefined' && typeof IJMacro.run === 'function';`;
-  const t = await boot({ workerSources: { 'ij-proc-macro.js': probe }, pageSources: FAKE_SOURCES.pageSources });
+  const t = await boot({ workerSources: { 'ij-proc-macro.js': probe, 'ij-macro-vfs.js': VFS_STANDIN }, pageSources: FAKE_SOURCES.pageSources });
   const w = await t.spawn();
   assert.equal(t.failedPackages().size, 0, 'no package failed');
   assert.equal(w.far.__sawLanguage, true, 'IJMacro was loaded before the package file');
@@ -66,13 +66,13 @@ await test('the worker loads ij-macro-lang.js then ij-proc-macro.js: the languag
   w2.onmessage = () => {};
   w2.postMessage({ init: Object.assign(t2.IJApp.workerInit(t2.ctx.plugin), { budgetBytes: 1 << 30 }) });
   await until(() => t2.log.events.some((e) => e.event === 'ready'), 'engine ready');
-  assert.deepEqual(order[order.length - 1], ['blob:ij-macro-lang.js', 'blob:ij-proc-macro.js'], 'one importScripts call: language, then package');
+  assert.deepEqual(order[order.length - 1], ['blob:ij-macro-lang.js', 'blob:ij-macro-vfs.js', 'blob:ij-proc-macro.js'], 'one importScripts call: language, file system, then package');
   t2.close();
 });
 
 await test('a broken ij-macro-lang.js withdraws package macro alone: ij-proc-macro.js never runs, the engine and the other packages work, the page disables the macro commands', async () => {
-  for (const broken of [{ workerSources: { 'ij-macro-lang.js': 'throw new Error("the language does not load");', 'ij-proc-macro.js': WORKER_MACRO } },
-    { workerSources: { 'ij-proc-macro.js': WORKER_MACRO }, brokenPackages: ['ij-macro-lang.js'] }]) {
+  for (const broken of [{ workerSources: { 'ij-macro-lang.js': 'throw new Error("the language does not load");', 'ij-proc-macro.js': WORKER_MACRO, 'ij-macro-vfs.js': VFS_STANDIN } },
+    { workerSources: { 'ij-proc-macro.js': WORKER_MACRO, 'ij-macro-vfs.js': VFS_STANDIN }, brokenPackages: ['ij-macro-lang.js'] }]) {
     const t = await boot(Object.assign({}, broken, { pageSources: FAKE_SOURCES.pageSources }));
     const sh = await t.open();
     await until(() => t.failedPackages().has('macro'), 'packageFailed macro');
@@ -109,7 +109,7 @@ await test('defineCommand: `passive` must be a boolean', async () => {
 
 await test('api.call of a passive command: package macro only, no busy state, no progress, nothing re-read; a non-passive call keeps its busy state', async () => {
   const t = await boot(Object.assign({}, FAKE_SOURCES, {
-    workerSources: { 'ij-proc-macro.js': WORKER_MACRO, 'ij-proc-fiji.js': `IJOpRegistry.defineCommand('doc.fiji.quiet', { pkg: 'fiji', passive: true, handler: () => ({ q: 1 }) });` },
+    workerSources: { 'ij-proc-macro.js': WORKER_MACRO, 'ij-macro-vfs.js': VFS_STANDIN, 'ij-proc-fiji.js': `IJOpRegistry.defineCommand('doc.fiji.quiet', { pkg: 'fiji', passive: true, handler: () => ({ q: 1 }) });` },
     pageSources: Object.assign({}, FAKE_SOURCES.pageSources, { 'ij-proc-fiji.js': `IJOpRegistry.defineCommand('doc.fiji.quiet', { pkg: 'fiji', passive: true, handler: () => ({ q: 1 }) });` })
   }));
   const sh = await t.open();

@@ -30,7 +30,8 @@ const done = (o) => Object.assign({ ok: true, aborted: false, exited: false, err
   deq(Object.keys(s.panels).sort(), ['macroEditor', 'macroError', 'macroLog', 'macroText']);
   const titles = { macroEditor: 'dlg.mac.editorTitle', macroLog: 'dlg.mac.logTitle', macroError: 'dlg.mac.errorTitle', macroText: 'dlg.mac.textTitle' };
   for (const id of Object.keys(titles)) { assert.equal(s.panels[id].titleKey, titles[id]); assert.equal(s.panels[id].persist, true, id + ' persists'); }
-  deq(s.errors, { IJ_MACRO_BUSY: 'err.macBusy', IJ_MACRO_STEP_BUSY: 'err.macStepBusy', IJ_MACRO_GROUP: 'err.macUndoDuringRun' });
+  deq(s.errors, { IJ_MACRO_BUSY: 'err.macBusy', IJ_MACRO_STEP_BUSY: 'err.macStepBusy', IJ_MACRO_GROUP: 'err.macUndoDuringRun',
+    IJ_MACRO_VFS_QUOTA: 'err.macZipQuota', IJ_MACRO_VFS_BUSY: 'err.macWorkspaceBusy', IJ_MACRO_VFS_NO_STORAGE: 'err.macNoStorageUi', IJ_MACRO_FILE_DIRECT: 'err.macFileDirect' });
   assert.equal(typeof t.page.run, 'function'); assert.equal(typeof t.page.abort, 'function'); assert.equal(typeof t.page.logLines, 'function');
 }
 
@@ -46,7 +47,7 @@ const done = (o) => Object.assign({ ok: true, aborted: false, exited: false, err
   const KEYS = ['menu.Macros', 'cmd.macRun', 'cmd.macEdit', 'cmd.windowLog', 'op.macRun',
     ...['editorTitle', 'logTitle', 'errorTitle', 'textTitle', 'runTitle', 'runPrompt', 'run', 'runSelection', 'abort', 'clear', 'copy', 'showLine', 'running',
       'finished', 'aborted', 'line', 'linesDropped', 'empty', 'notPersisted', 'invalidValue', 'leaveTitle', 'leaveMessage', 'leaveStop'].map((k) => 'dlg.mac.' + k),
-    ...['macBusy', 'macUndoDuringRun', 'macFileLater', 'macNetwork', 'macBioFormats', 'macExec', 'macEvalScript', 'macExtensions', 'macDebug', 'macCallRefused',
+    ...['macBusy', 'macUndoDuringRun', 'macNetwork', 'macBioFormats', 'macExec', 'macEvalScript', 'macExtensions', 'macDebug', 'macCallRefused',
       'macPadLimit', 'macPrefsQuota', 'mac16bitRange', 'macPageTimeout', 'macRefused', 'macReasonLibrary', 'macReasonHost', 'macReasonRecover', 'macReasonUndo',
       'macDisabled', 'macNotInBrowser', 'macArrow', 'macClipboard'].map((k) => 'err.' + k),
     'warn.macUndoDropped'];
@@ -56,7 +57,6 @@ const done = (o) => Object.assign({ ok: true, aborted: false, exited: false, err
     'dlg.mac.line': 'Line {n}', 'dlg.mac.linesDropped': '… {n} lines dropped', 'dlg.mac.invalidValue': '{title}: {message} ({key})',
     'err.macBusy': 'A macro is already running.', 'err.macNetwork': 'Macros cannot use the network.', 'err.macExec': 'exec() is not available in the browser.',
     'err.macPageTimeout': 'The page did not answer ({method}).', 'err.macRefused': '{command} is not available to macros: {reason}',
-    'err.macFileLater': '{name} is not available yet in this version of the Advanced Studio: macros cannot read or write files on your computer yet.',
     'err.macCallRefused': 'call() is not available in the browser for "{target}".\nOnly a few ImageJ calls are emulated: ij.Prefs.get/set, ij.IJ.freeMemory/currentMemory/maxMemory/pad, RoiManager.getName, ThresholdAdjuster.setMode, ImageWindow.setNextLocation, ImagePlus.setDefault16bitRange.',
     'warn.macUndoDropped': 'Undo is not available for the macro\'s changes to {title}: not enough memory.'
   };
@@ -66,6 +66,8 @@ const done = (o) => Object.assign({ ok: true, aborted: false, exited: false, err
     for (const code of LANGS) assert.equal(tokens(lookup(lang[code], k)), tokens(lookup(lang.en, k)), code + ': tokens of ' + k);
   }
   for (const k of Object.keys(EN)) assert.equal(lookup(lang.en, k), EN[k], 'binding English text of ' + k);
+  // retired by FILES.md §12.3
+  for (const code of LANGS) assert.equal(lookup(lang[code], 'err.macFileLater'), undefined, code + ': err.macFileLater is retired');
   const macKeys = (code) => Object.keys(lang[code].dlg.mac).sort().join(',');
   for (const code of LANGS) assert.equal(macKeys(code), macKeys('en'), code + ': dlg.mac has the same keys');
   // every lang key literal of the page file exists in the four languages

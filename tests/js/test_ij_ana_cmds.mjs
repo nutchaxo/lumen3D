@@ -336,15 +336,15 @@ await test('Analyze Particles / Composite ROIs: Perim., Circ. and the circularit
   // ImageJ without Composite ROIs: the traced perimeter of the outline (ring: 29.657, the hole does not count)
   deq(col(rows, 'Area'), ['48', '60', '60', '57']);
   deq(col(rows, 'Perim.'), ['29.657', '27.314', '29.657', '29.657']);
-  deq(col(rows, 'Circ.'), ['0.686', '1', '0.857', '0.814']);
+  deq(col(rows, 'Circ.'), ['0.686', '1.000', '0.857', '0.814'], 'ResultsTable.addValue: a non-integer in the first 24 rows gives the column fixed decimals');
   await t.runCommand('analyzeParticles', { composite: true, display: true, clear: true });
   await settle();
   rows = resultsRows(t);
   // ParticleAnalyzer.java:915-927 "roi = roi2" precedes "roi.getLength()": the ring is 29.657 + 13.657 (its hole), the rectangle a Roi.RECTANGLE (2w + 2h = 32),
   // the L-holed rectangle 29.657 + 5.657; the disk is a single traced polygon and does not change
   deq(col(rows, 'Area'), ['48', '60', '60', '57']);
-  deq(col(rows, 'Perim.'), ['43.314', '27.314', '32', '35.314']);
-  deq(col(rows, 'Circ.'), ['0.322', '1', '0.736', '0.574']);
+  deq(col(rows, 'Perim.'), ['43.314', '27.314', '32.000', '35.314']);
+  deq(col(rows, 'Circ.'), ['0.322', '1.000', '0.736', '0.574']);
   // the circularity filter reads the same perimeter: the ring (0.322 with Composite ROIs, 0.686 without) leaves with 0.5-1
   await t.runCommand('analyzeParticles', { composite: true, circularity: '0.50-1.00', display: true, clear: true });
   await settle();

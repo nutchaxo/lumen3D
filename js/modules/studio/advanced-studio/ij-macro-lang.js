@@ -3758,7 +3758,9 @@ function* printFn(f) {
       return;
     } else if (s === '~0~') {
       if (f.writer === null) it.error('File not open');
-      yield* f.getLastString();
+      const s2 = yield* f.getLastString();
+      const w = f.writer;
+      yield* f.hostHook(() => w.print(s2.endsWith('\n') ? s2 : s2 + '\n'));
       it.inPrint = false;
       return;
     }
@@ -4908,7 +4910,7 @@ define('str', K_IJ_CALL, function* (f) {
       const r = yield* f.hostCall('IJ.' + name, []);
       return r === null || r === undefined ? null : '' + r;
     }
-    case 'redirectErrorMessages': it.getParens(); return null;
+    case 'redirectErrorMessages': it.getParens(); yield* f.hostCall('IJ.redirectErrorMessages', []); return null;
     case 'renameResults': {
       const arg1 = yield* f.getFirstString();
       let arg2 = null;
@@ -4939,7 +4941,7 @@ define('str', K_IJ_CALL, function* (f) {
     }
     default: it.error('Unrecognized IJ function name'); return null;
   }
-}, { suspends: { deleteRows: 'host', freeMemory: 'host', currentMemory: 'host', maxMemory: 'host', getToolName: 'host', renameResults: 'host', checksum: 'host', getFullVersion: 'host' } });
+}, { suspends: { deleteRows: 'host', freeMemory: 'host', currentMemory: 'host', maxMemory: 'host', getToolName: 'host', renameResults: 'host', checksum: 'host', getFullVersion: 'host', redirectErrorMessages: 'host' } });
 
 /* ---- Array.* ---- */
 /* ij.util.Tools.resampleArray: linear interpolation onto len2 points spanning the same interval. */
@@ -6939,7 +6941,9 @@ function printFn$s(f) {
       return;
     } else if (s === '~0~') {
       if (f.writer === null) it.error('File not open');
-      f.getLastString$s();
+      const s2 = f.getLastString$s();
+      const w = f.writer;
+      f.hostHook$s(() => w.print(s2.endsWith('\n') ? s2 : s2 + '\n'));
       it.inPrint = false;
       return;
     }
@@ -7456,7 +7460,7 @@ defineS('str', K_IJ_CALL, function (f) {
       const r = f.hostCall$s('IJ.' + name, []);
       return r === null || r === undefined ? null : '' + r;
     }
-    case 'redirectErrorMessages': it.getParens(); return null;
+    case 'redirectErrorMessages': it.getParens(); f.hostCall$s('IJ.redirectErrorMessages', []); return null;
     case 'renameResults': {
       const arg1 = f.getFirstString$s();
       let arg2 = null;
@@ -7487,7 +7491,7 @@ defineS('str', K_IJ_CALL, function (f) {
     }
     default: it.error('Unrecognized IJ function name'); return null;
   }
-}, { suspends: { deleteRows: 'host', freeMemory: 'host', currentMemory: 'host', maxMemory: 'host', getToolName: 'host', renameResults: 'host', checksum: 'host', getFullVersion: 'host' } });
+}, { suspends: { deleteRows: 'host', freeMemory: 'host', currentMemory: 'host', maxMemory: 'host', getToolName: 'host', renameResults: 'host', checksum: 'host', getFullVersion: 'host', redirectErrorMessages: 'host' } });
 function sortArray$s(f) {
   const it = f.interp;
   it.getLeftParen();

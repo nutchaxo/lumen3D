@@ -71,7 +71,8 @@ assert.deepEqual(pj.i18nLanguages, LANGS);
 // PLAN-wave3 §2.8: the final order — the 19 packages (7 of wave 2, 9 tool packages, the library, the stacks, the macros), the run() bridge
 // tables (ij-macro-cmds.js, DOCS/studio-advanced/macros/INTEGRATION.md §1.2), the view, the layout, the controller, the commands
 const PKGS = ['bg', 'filters', 'seg', 'multi', 'geom', 'roi', 'coloc', 'thr', 'enh', 'fft', 'sel', 'io', 'ov', 'ana', 'edit', 'fiji', 'lib', 'stk', 'macro'];
-assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => `ij-proc-${k}.js`), 'ij-macro-cmds.js', 'ij-view.js', 'ij-layout.js', 'ij-app.js',
+// the macro package's virtual file system (FILES.md §10.1) loads on the page right before ij-proc-macro.js
+assert.deepEqual(pj.scripts, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PKGS.map((k) => (k === 'macro' ? ['ij-macro-vfs.js', 'ij-proc-macro.js'] : [`ij-proc-${k}.js`])).flat(), 'ij-macro-cmds.js', 'ij-view.js', 'ij-layout.js', 'ij-app.js',
   ...PKGS.map((k) => `ij-cmds-${k}.js`)], 'plugin.json#scripts: the final order');
 for (const f of pj.scripts) assert.ok(existsSync(path.join(DIR, f)), `${f} exists`);
 same(IJApp.WORKER_SCRIPTS, ['ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', 'ij-engine.js', ...PKGS.map((k) => `ij-proc-${k}.js`)],
@@ -490,7 +491,9 @@ assert.ok(/IJWindows\.create\(\{ root: shell/.test(VIEW) && /windows,/.test(VIEW
 // ── the error codes the controller maps are codes the engine / pure modules really throw ──
 const CODE_SRC = ['ij-engine.js', 'ij-core.js', 'ij-analysis.js', 'ij-proc-shared.js', ...PROC_FILES, ...CMD_FILES].map((f) => readFileSync(path.join(DIR, f), 'utf8')).join('\n');
 // IJ_SIZE_MISMATCH is mapped by W0 for the packages that compare two images (Image Calculator, Coloc): they throw it.
-const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH', 'IJ_PICTURE_TOO_LARGE']); // the client raises its own crash code; File › Open of a picture (ij-app.js) raises the other
+// the client raises its own crash code; File › Open of a picture (ij-app.js) raises the other; pickFile / saveFile inside a command a macro
+// started raise IJ_MACRO_FILE_DIRECT (ij-app.js, FILES.md §9.4)
+const PACKAGE_THROWN = new Set(['IJ_WORKER_CRASHED', 'IJ_SIZE_MISMATCH', 'IJ_PICTURE_TOO_LARGE', 'IJ_MACRO_FILE_DIRECT']);
 for (const code of Object.keys(IJApp.ERROR_KEYS)) {
   if (!code.startsWith('IJ_') || PACKAGE_THROWN.has(code)) continue;
   assert.ok(CODE_SRC.includes(`'${code}'`), `ERROR_KEYS maps ${code}, which no engine module throws`);

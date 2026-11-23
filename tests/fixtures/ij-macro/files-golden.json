@@ -1,0 +1,1588 @@
+{
+  "imagej": "1.54p", "generator": "tools/ij_fixtures/macro/FileGolden.java", "root": "/ijm-vfs-golden/", "tz": "UTC",
+  "cases": {
+    "file/append": {
+      "log": ["[a\nb\n]", "length 4", "[first\nc\n]"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "ap.txt", "size": 4, "cmp": "bytes", "sha256": "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2"},
+        {"path": "existing.txt", "size": 8, "cmp": "bytes", "sha256": "8b2b6294119ce9d1b8c589cc74d5f453ca2b7b2105661fb1057ea39636890950"}
+      ],
+      "images": []
+    },
+    "file/append-bad-path": {
+      "log": ["before"],
+      "error": {"message": "java.io.FileNotFoundException: /ijm-vfs-golden/nodir/ap.txt (No such file or directory)", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/close-invalid": {
+      "log": ["before"],
+      "error": {"message": "Invalid file variable", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/copy": {
+      "log": ["exists 1", "same content 1", "same length 1", "mtime src 1700000000000", "mtime dst kept 1", "overwrite source line\n"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "dst.txt", "size": 12, "cmp": "bytes", "sha256": "df6b77a2cf64003fefc3285f37dfcd67bb45b1ff686f79b1c32be4864ffd02ab"},
+        {"path": "over.txt", "size": 12, "cmp": "bytes", "sha256": "df6b77a2cf64003fefc3285f37dfcd67bb45b1ff686f79b1c32be4864ffd02ab"},
+        {"path": "src.txt", "size": 12, "cmp": "bytes", "sha256": "df6b77a2cf64003fefc3285f37dfcd67bb45b1ff686f79b1c32be4864ffd02ab"}
+      ],
+      "images": []
+    },
+    "file/copy-bad-destination": {
+      "log": ["before"],
+      "error": {"message": "No such file or directory", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "src.txt", "size": 1, "cmp": "bytes", "sha256": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89"}
+      ],
+      "images": []
+    },
+    "file/copy-missing": {
+      "log": ["before"],
+      "error": {"message": "Source file does not exist", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/default-dir": {
+      "log": ["initial []", "getDefaultDir [/ijm-vfs-golden/sub/]", "with separator [/ijm-vfs-golden/sub/]", "title a.tif", "image.directory /ijm-vfs-golden/sub/", "getDirectory(current) /ijm-vfs-golden/sub/", "getDirectory(default) /ijm-vfs-golden/sub/"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "sub/", "size": 0, "cmp": "exists"},
+        {"path": "sub/a.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "a.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/sub/", "filename": "a.tif"}
+      ]
+    },
+    "file/delete-dir-empty": {
+      "log": ["made 1", "delete 1", "exists 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/delete-dir-full": {
+      "log": ["delete 0", "exists 1 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "full/", "size": 0, "cmp": "exists"},
+        {"path": "full/f.txt", "size": 1, "cmp": "bytes", "sha256": "252f10c83610ebca1a059c0bae8255eba2f95be4d1d7bcfa89d7248a82d9f111"}
+      ],
+      "images": []
+    },
+    "file/delete-file": {
+      "log": ["delete 1", "exists 0", "delete again 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.txt", "size": 1, "cmp": "bytes", "sha256": "cd0aa9856147b6c5b4ff2b7dfee5da20aa38253099ef1b4a64aced233c9afe29"}
+      ],
+      "images": []
+    },
+    "file/delete-missing": {
+      "log": ["delete 0", "delete in missing folder 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/exists": {
+      "log": ["exists 1 1 0", "isDirectory 0 1 0", "isFile 1 0 0", "trailing slash 1 1 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "sub/", "size": 0, "cmp": "exists"},
+        {"path": "sub/b.txt", "size": 1, "cmp": "bytes", "sha256": "a1fce4363854ff888cff4b8e7875d600c2682390412a8cf79b37d0b11148b0fa"}
+      ],
+      "images": []
+    },
+    "file/last-initial": {
+      "log": ["directory []", "name []", "nameWithoutExtension []", "defaultDir []"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/length-modified": {
+      "log": ["length 1000", "getLength 1000", "lastModified 1700000000000", "dateLastModified Tue Nov 14 22:13:20 UTC 2023"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "k.txt", "size": 1000, "cmp": "bytes", "sha256": "27fed049cf80e0eff71ab837c82a50327b7677ebda22305d3f353f0989488669"}
+      ],
+      "images": []
+    },
+    "file/missing-meta": {
+      "log": ["length 0", "lastModified 0", "dateLastModified Thu Jan 01 00:00:00 UTC 1970"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/mkdir": {
+      "log": ["makeDirectory 1 1", "mkdir 1", "again 1", "inside existing 1", "over a file 0 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "new/", "size": 0, "cmp": "exists"},
+        {"path": "new2/", "size": 0, "cmp": "exists"},
+        {"path": "sub/", "size": 0, "cmp": "exists"},
+        {"path": "sub/inner/", "size": 0, "cmp": "exists"},
+        {"path": "sub/s.txt", "size": 1, "cmp": "bytes", "sha256": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89"}
+      ],
+      "images": []
+    },
+    "file/mkdir-nested": {
+      "log": ["nested 0 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/names": {
+      "log": ["name a.b.tif", "nameWithoutExtension a.b", "directory /ijm-vfs-golden/sub/", "parent /ijm-vfs-golden/sub", "absolute /ijm-vfs-golden/sub/a.b.tif", "noext name [noext] without [noext]", "root name [ijm-vfs-golden] directory [//] parent [/]", "folder name [sub] directory [/ijm-vfs-golden/] parent [/ijm-vfs-golden]", "dotfile name [.hidden] without []"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/names-relative": {
+      "log": ["name [a.tif]", "nameWithoutExtension [a]", "directory []", "parent [null]"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/openasstring-crlf": {
+      "log": ["length 14", "has CR 0", "[one\ntwo\nthree\n]", "lone CR: length 6 has CR 0", "on disk 15"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "cr.txt", "size": 5, "cmp": "bytes", "sha256": "d6979e20541ecf0014f4ed8464eeaac3413a1c0e03b34ac1b08afd89eb09abcd"},
+        {"path": "crlf.txt", "size": 13, "cmp": "bytes", "sha256": "058053d87c818d699cde0f00d670bca0e1c6ad857caa9758ea6a556d7c64fcee"}
+      ],
+      "images": []
+    },
+    "file/openasstring-missing": {
+      "log": ["before"],
+      "error": {"message": "Error: file not found", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/openasstring-utf8": {
+      "log": ["length 5", "equal 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "u.txt", "size": 6, "cmp": "bytes", "sha256": "7b49b9e063bd91a4f9252b413261f5557b9c570aa61516989499f64a62dbcdd6"}
+      ],
+      "images": []
+    },
+    "file/print-not-open": {
+      "log": ["before"],
+      "error": {"message": "File not open", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/rawstring": {
+      "log": ["bin default length 5000", "small bin length 50", "txt whole length 6000", "latin1 1 length 4", "utf8 bytes read as latin1: length 5"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "big.bin", "size": 6000, "cmp": "bytes", "sha256": "460406ec4a2289eb17503450678b73b7efbeb5abd0c05e149dd32d0db6f59867"},
+        {"path": "big.txt", "size": 6000, "cmp": "bytes", "sha256": "e56d7f572910b8511d39a4dd3def275c15e3fb76d0f09a6f09a99f4639d4436c"},
+        {"path": "lat.bin", "size": 4, "cmp": "bytes", "sha256": "ca738b9cdd2a1460ac779488f9804f0e503654d7e3cb076fbf7a1da96efa0ab7"},
+        {"path": "small.bin", "size": 50, "cmp": "bytes", "sha256": "529bcfa313eaa9b629b82c5370f4f9ed338e86ab08e4904118fff8cc65021f8c"},
+        {"path": "utf.bin", "size": 5, "cmp": "bytes", "sha256": "850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e"}
+      ],
+      "images": []
+    },
+    "file/rawstring-max": {
+      "log": ["explicit 100 -> 100", "explicit 9000 -> 6000", "explicit 6000 -> 6000", "txt explicit 10 -> 10 [abcdefghij]", "txt explicit 7000 -> 6000", "explicit 0 -> 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "big.bin", "size": 6000, "cmp": "bytes", "sha256": "460406ec4a2289eb17503450678b73b7efbeb5abd0c05e149dd32d0db6f59867"},
+        {"path": "big.txt", "size": 6000, "cmp": "bytes", "sha256": "e56d7f572910b8511d39a4dd3def275c15e3fb76d0f09a6f09a99f4639d4436c"}
+      ],
+      "images": []
+    },
+    "file/rawstring-missing": {
+      "log": ["before"],
+      "error": {"message": "File not found", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/rename": {
+      "log": ["rename 1", "after 0 1", "content one\n", "rename missing 0", "rename into missing folder 0", "rename folder 1", "folder after 0 1 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "d2/", "size": 0, "cmp": "exists"},
+        {"path": "d2/x.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "r2.txt", "size": 4, "cmp": "bytes", "sha256": "2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806"}
+      ],
+      "images": []
+    },
+    "file/rename-invalid": {
+      "log": ["before"],
+      "error": {"message": "Invalid path", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/rename-invalid-nan": {
+      "log": ["before"],
+      "error": {"message": "Invalid path", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/rename-onto-existing": {
+      "log": ["rename onto existing 0", "after 1 1", "content four\n"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "r3.txt", "size": 6, "cmp": "bytes", "sha256": "f6936912184481f5edd4c304ce27c5a1a827804fc7f329f43d273b8621870776"},
+        {"path": "r4.txt", "size": 5, "cmp": "bytes", "sha256": "ab929fcd5594037960792ea0b98caf5fdaf6b60645e4ef248c28db74260f393e"}
+      ],
+      "images": []
+    },
+    "file/savestring-bad-path": {
+      "log": ["before"],
+      "error": {"message": "java.io.FileNotFoundException: /ijm-vfs-golden/nodir/s.txt (No such file or directory)", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/savestring-openasstring": {
+      "log": ["length on disk 32", "string length 33", "[line1\nline2\nlast without newline\n]", "overwrite [replaced\n] 8", "empty [] 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "empty.txt", "size": 0, "cmp": "bytes", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "s.txt", "size": 8, "cmp": "bytes", "sha256": "6c1aa50442a93e42c0eb2907cf4e017cd19547891fa190f3ea473582b0479290"}
+      ],
+      "images": []
+    },
+    "file/separator-last": {
+      "log": ["separator [/]", "directory []", "name []", "nameWithoutExtension []", "after openAsString: directory [] name []"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "sub/", "size": 0, "cmp": "exists"},
+        {"path": "sub/last.txt", "size": 0, "cmp": "bytes", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"path": "sub/other.txt", "size": 1, "cmp": "bytes", "sha256": "65c74c15a686187bb6bbf9958f494fc6b80068034a659a9ad44991b08c58f2d2"}
+      ],
+      "images": []
+    },
+    "file/unrecognized": {
+      "log": ["before"],
+      "error": {"message": "Unrecognized File function foo", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/writer": {
+      "log": ["handle ~0~", "length without CR 9", "[a<LF>b<LF>cd<LF>7<LF>]", "truncated length 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "w.txt", "size": 0, "cmp": "bytes", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+      ],
+      "images": []
+    },
+    "file/writer-bad-dir": {
+      "log": ["before"],
+      "error": {"message": "File open error \n\"/ijm-vfs-golden/nodir/x.txt (No such file or directory)\"\n", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/writer-bad-suffix": {
+      "log": ["before"],
+      "error": {"message": "File exists and suffix is not '.txt', '.java', etc.", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "x.dat", "size": 4, "cmp": "bytes", "sha256": "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"}
+      ],
+      "images": []
+    },
+    "file/writer-error-open": {
+      "log": ["before"],
+      "error": {"message": "Undefined identifier", "line": 4},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "w.txt", "size": 0, "cmp": "bytes", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+      ],
+      "images": []
+    },
+    "file/writer-new-other-suffix": {
+      "log": ["created 7"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "fresh.dat", "size": 7, "cmp": "bytes", "sha256": "f86a1c9e1f0d7df9ab978b91799a2c1e87aeccbba40ef807c04dd2bef4f87432"},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "file/writer-twice": {
+      "log": ["second open follows"],
+      "error": {"message": "Currently, only one file can be open at a time", "line": 4},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "w1.txt", "size": 0, "cmp": "bytes", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+      ],
+      "images": []
+    },
+    "file/writer-unclosed": {
+      "log": ["no close"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "unclosed.txt", "size": 27, "cmp": "bytes", "sha256": "47636ce0414306bcf9528e2842b729b1916984d3f7fcd1c63d45f27b487af4a8"}
+      ],
+      "images": []
+    },
+    "list/digits-case": {
+      "log": ["0 a1.txt", "1 a10.txt", "2 a2.txt", "3 b.txt", "4 dir10/", "5 dir2/"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a1.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "a10.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "a2.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "b.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "dir10/", "size": 0, "cmp": "exists"},
+        {"path": "dir10/x.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "dir2/", "size": 0, "cmp": "exists"},
+        {"path": "dir2/x.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"}
+      ],
+      "images": []
+    },
+    "list/empty": {
+      "log": ["empty 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "e/", "size": 0, "cmp": "exists"},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "list/missing": {
+      "log": ["missing folder 0", "a file 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"}
+      ],
+      "images": []
+    },
+    "list/sorted-hidden": {
+      "log": ["count 4", "0 a.txt", "1 b.txt", "2 sub/", "3 z.db", "sub count 1", "0 in.txt", "sub/ count 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": ".hidden", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "Thumbs.db", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "a.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "b.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "sub/", "size": 0, "cmp": "exists"},
+        {"path": "sub/in.txt", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"},
+        {"path": "z.db", "size": 1, "cmp": "bytes", "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"}
+      ],
+      "images": []
+    },
+    "macro/checksum": {
+      "log": ["md5 b1946ac92492d2347c6235b4d2611184", "sha256 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03", "md5 missing 0", "md5 empty d41d8cd98f00b204e9800998ecf8427e", "md5 string 900150983cd24fb0d6963f7d28e17f72"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "c.txt", "size": 6, "cmp": "bytes", "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"},
+        {"path": "empty.txt", "size": 0, "cmp": "bytes", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+      ],
+      "images": []
+    },
+    "macro/run-command": {
+      "log": ["run from file", "done"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "m.ijm", "size": 24, "cmp": "bytes", "sha256": "9cf2094c0ee2ef8e61459c5ffe1698521dbd8c3eca7625dc05050aa134551a36"}
+      ],
+      "images": []
+    },
+    "macro/runmacro": {
+      "log": ["arg=[hello world]", "returned [ret]", "arg=[]", "returned without arg [ret]"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "m.ijm", "size": 52, "cmp": "bytes", "sha256": "6aca69d23144a048ba72417a41dd10b748c9c63d2e112d01cb64012763f54457"}
+      ],
+      "images": []
+    },
+    "macro/runmacro-info": {
+      "log": ["inner macro.filepath [/ijm-vfs-golden/m.ijm]", "outer macro.filepath [/ijm-vfs-golden/m.ijm]"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "m.ijm", "size": 67, "cmp": "bytes", "sha256": "5eb31fde21e95167adf4d8553c3253946196642964b5530219fff2c5fcc1cf7f"}
+      ],
+      "images": []
+    },
+    "macro/runmacro-missing": {
+      "log": ["before", "not reached"],
+      "error": null,
+      "dialogs": [{"kind": "error", "title": "RunMacro", "text": "Macro or script not found:\n \n/ijm-vfs-golden/nope.ijm", "afterLog": 1}],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "open/bmp": {
+      "log": ["title g.bmp 16x16 bitDepth 8"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.bmp", "size": 1334, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "g.bmp", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "g.bmp"}
+      ]
+    },
+    "open/csv": {
+      "log": ["title t.csv", "size 3", "headings a\tb"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "t.csv", "size": 16, "cmp": "bytes", "sha256": "e036f888b40d68362dfa1b02ca021e81d13d957874bba3bfd8fdf14c02bbaba7"}
+      ],
+      "images": []
+    },
+    "open/gif-gray": {
+      "log": ["title g.gif 16x16 bitDepth 8", "pixels 0 240"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.gif", "size": 891, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "g.gif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "g.gif"}
+      ]
+    },
+    "open/jpeg": {
+      "log": ["title g.jpg 16x16 bitDepth 8"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.jpg", "size": 362, "cmp": "dims", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}}
+      ],
+      "images": [
+        {"title": "g.jpg", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}, "dir": "/ijm-vfs-golden/", "filename": "g.jpg"}
+      ]
+    },
+    "open/jpeg-rgb": {
+      "log": ["title rgb.jpg 16x16 bitDepth 8"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "rgb.jpg", "size": 658, "cmp": "dims", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}}
+      ],
+      "images": [
+        {"title": "rgb.jpg", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}, "dir": "/ijm-vfs-golden/", "filename": "rgb.jpg"}
+      ]
+    },
+    "open/last-dir-name": {
+      "log": ["tiff: name [x.tiff] without [x] dir [/ijm-vfs-golden/]", "longext: name [y.longext] without [y.longext] dir [/ijm-vfs-golden/sub/]", "abc: name [z.abc] without [z] dir [/ijm-vfs-golden/sub/]", "title z.abc", "image.directory /ijm-vfs-golden/sub/ image.filename z.abc"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "sub/", "size": 0, "cmp": "exists"},
+        {"path": "sub/y.longext", "size": 224, "cmp": "bytes", "sha256": "d4b967f0ee3fc05ccdf8254751d5e5f69c7cf6e14b6bc28582665b40e33de811"},
+        {"path": "sub/z.abc", "size": 224, "cmp": "bytes", "sha256": "d4b967f0ee3fc05ccdf8254751d5e5f69c7cf6e14b6bc28582665b40e33de811"},
+        {"path": "x.tiff", "size": 224, "cmp": "pixels", "pixels": {"w": 8, "h": 8, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "3ed9976419c10a457034c56d05eb460d03891c7450864f3994d37584fb4091e6"}}
+      ],
+      "images": [
+        {"title": "x.tiff", "pixels": {"w": 8, "h": 8, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "3ed9976419c10a457034c56d05eb460d03891c7450864f3994d37584fb4091e6"}, "dir": "/ijm-vfs-golden/", "filename": "x.tiff"},
+        {"title": "y.longext", "pixels": {"w": 8, "h": 8, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "3ed9976419c10a457034c56d05eb460d03891c7450864f3994d37584fb4091e6"}, "dir": "/ijm-vfs-golden/sub/", "filename": "y.longext"},
+        {"title": "z.abc", "pixels": {"w": 8, "h": 8, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "3ed9976419c10a457034c56d05eb460d03891c7450864f3994d37584fb4091e6"}, "dir": "/ijm-vfs-golden/sub/", "filename": "z.abc"}
+      ]
+    },
+    "open/lut": {
+      "log": ["before 255 255 255", "after 255 255 255 240 79 0", "title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "fire.lut", "size": 768, "cmp": "bytes", "sha256": "ecbe72a19eef021e68479107a74d629d88bee5b6a0253f9a29eed3324f17773f"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "open/lut-noimage": {
+      "log": ["images 1", "title fire.lut 256x32 bitDepth 8", "lut 255 255 255"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "fire.lut", "size": 768, "cmp": "bytes", "sha256": "ecbe72a19eef021e68479107a74d629d88bee5b6a0253f9a29eed3324f17773f"}
+      ],
+      "images": [
+        {"title": "fire.lut", "pixels": {"w": 256, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "c42e5ef6b7fc67ad69c29764bafb84b29aa0ec680433ef154688a5053580462b"}, "dir": "", "filename": ""}
+      ]
+    },
+    "open/missing": {
+      "log": ["before", "not reached"],
+      "error": null,
+      "dialogs": [{"kind": "error", "title": "Opener", "text": "File not found: \n/ijm-vfs-golden/missing.tif", "afterLog": 1}],
+      "tree": [],
+      "images": []
+    },
+    "open/png-16": {
+      "log": ["title s16.png 16x16 bitDepth 16", "pixels 0 61440"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "s16.png", "size": 104, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}}
+      ],
+      "images": [
+        {"title": "s16.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "s16.png"}
+      ]
+    },
+    "open/png-gray": {
+      "log": ["title g.png 16x16 bitDepth 8", "pixels 0 240"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "g.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "g.png"}
+      ]
+    },
+    "open/png-rgb": {
+      "log": ["title rgb.png 16x16 bitDepth 24", "pixel 240 240 240"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "rgb.png", "size": 124, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}}
+      ],
+      "images": [
+        {"title": "rgb.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}, "dir": "/ijm-vfs-golden/", "filename": "rgb.png"}
+      ]
+    },
+    "open/results-csv": {
+      "log": ["nResults 3", "headings  ,a,b", "a[1] 30"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "Results.csv", "size": 30, "cmp": "bytes", "sha256": "f70300ce440f0b99744acb6315d10ffffe89b0cc051e034207a707def9e8fa7b"}
+      ],
+      "images": []
+    },
+    "open/roi": {
+      "log": ["selectionType 0", "bounds 2 3 5 6", "title img 32x32", "images 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "r.roi", "size": 128, "cmp": "bytes", "sha256": "f48ea0db2313e08e77e34c00281991dab07998cac7471b35fe50ef161f13052b"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "open/roi-noimage": {
+      "log": ["images 1", "title r.roi 17x19 bitDepth 8", "selectionType 0", "bounds 2 3 5 6"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "r.roi", "size": 128, "cmp": "bytes", "sha256": "f48ea0db2313e08e77e34c00281991dab07998cac7471b35fe50ef161f13052b"}
+      ],
+      "images": [
+        {"title": "r.roi", "pixels": {"w": 17, "h": 19, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "288350030866de41660ba6fb6dc598e5f35a5dc72eea6e6876da4ab3c884282c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "open/run-open": {
+      "log": ["title a b.tif 16x16", "image.directory /ijm-vfs-golden/ image.filename a b.tif"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a b.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "a b.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "a b.tif"}
+      ]
+    },
+    "open/run-open-missing": {
+      "log": ["before"],
+      "error": {"message": "File not found: \n/ijm-vfs-golden/zz.tif", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "open/text-image": {
+      "log": ["title n.txt 3x2 bitDepth 32", "pixels 1.5 2 6.25"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "n.txt", "size": 17, "cmp": "bytes", "sha256": "a2fd0e998d9d6dc1ea766f0b2cfce504d718f12adbaee3cae782d1ea2a6b19df"}
+      ],
+      "images": [
+        {"title": "n.txt", "pixels": {"w": 3, "h": 2, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "c2cd1e916ec7b1fd45e00bfb35fc92aff6022fbaf10dbb5892c4941c148c2056"}, "dir": "", "filename": ""}
+      ]
+    },
+    "open/text-image-open": {
+      "log": ["images 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "n.txt", "size": 17, "cmp": "bytes", "sha256": "a2fd0e998d9d6dc1ea766f0b2cfce504d718f12adbaee3cae782d1ea2a6b19df"}
+      ],
+      "images": []
+    },
+    "open/tiff-32-calibrated": {
+      "log": ["pixel size 0.5 x 0.25 µm", "voxel size 0.5 0.25 1 µm", "bitDepth 32", "pixel 0.5", "title cal32.tif"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "cal32.tif", "size": 1277, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "aa8cad1f445de4b4d6bc74350e1eb1f33dee898ab85d9f9671de30c32f9fbd76"}}
+      ],
+      "images": [
+        {"title": "cal32.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "aa8cad1f445de4b4d6bc74350e1eb1f33dee898ab85d9f9671de30c32f9fbd76"}, "dir": "/ijm-vfs-golden/", "filename": "cal32.tif"}
+      ]
+    },
+    "open/tiff-8": {
+      "log": ["title a.tif", "size 16x16 bitDepth 8 slices 1", "image.directory /ijm-vfs-golden/", "image.filename a.tif", "getDirectory(image) /ijm-vfs-golden/", "File.directory /ijm-vfs-golden/", "File.name a.tif", "File.nameWithoutExtension a", "getDirectory(file) /ijm-vfs-golden/", "pixels 0 128 240"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "a.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"}
+      ]
+    },
+    "open/tiff-hyperstack": {
+      "log": ["dimensions 16 16 2 3 2", "title hs.tif", "bitDepth 16", "isHyperstack 1", "position 1 1 1", "pixel at c2 z3 t2 21680", "pixel at c1 z1 t1 20580"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "hs.tif", "size": 7995, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 2, "z": 3, "t": 2, "bitDepth": 16, "sha256": "43c4de1ff9f64461e234a53fc595cdae577666adaa36281f5480dcd31e3af0b1"}}
+      ],
+      "images": [
+        {"title": "hs.tif", "pixels": {"w": 16, "h": 16, "c": 2, "z": 3, "t": 2, "bitDepth": 16, "sha256": "43c4de1ff9f64461e234a53fc595cdae577666adaa36281f5480dcd31e3af0b1"}, "dir": "/ijm-vfs-golden/", "filename": "hs.tif"}
+      ]
+    },
+    "open/tiff-n": {
+      "log": ["title stack.tif", "slices 1 size 16x16", "pixel 80", "slices 1 pixel 120"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "stack.tif", "size": 1233, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 3, "t": 1, "bitDepth": 8, "sha256": "dca94222f1ce2dbf17a102af49d04f0f67679b2858e3f6a68d020582e537d74b"}}
+      ],
+      "images": [
+        {"title": "stack.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "77b7cf7befdb933b2b659e5cba43fcbf8cf66e996faf7bb26fb6b5669484ff58"}, "dir": "/ijm-vfs-golden/", "filename": "stack.tif"},
+        {"title": "stack.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "430207dd9170f89d0df9ac419c434200c92c49444dcdf8a20b576bb4333f0a8a"}, "dir": "/ijm-vfs-golden/", "filename": "stack.tif"}
+      ]
+    },
+    "open/tiff-n-not-tiff": {
+      "log": ["before"],
+      "error": {"message": "Opener: TIFF file required", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "g.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": []
+    },
+    "open/twice": {
+      "log": ["first a.tif id 1", "second a-1.tif", "images 2"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "a.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"},
+        {"title": "a-1.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"}
+      ]
+    },
+    "open/zip-other": {
+      "log": ["before", "not reached"],
+      "error": null,
+      "dialogs": [{"kind": "error", "title": "Opener", "text": "This ZIP archive does not contain a TIFF or DICOM file, or ROIs:\n   /ijm-vfs-golden/other.zip", "afterLog": 1}],
+      "tree": [
+        {"path": "other.zip", "size": 120, "cmp": "zipEntries", "entries": [{"name": "note.txt", "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"}]}
+      ],
+      "images": []
+    },
+    "open/zip-roiset": {
+      "log": ["count 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "rs.zip", "size": 359, "cmp": "zipEntries", "entries": [{"name": "0004-0005.roi", "sha256": "8842eebb2f13a61dd6161f8ef54f32517ce45ea069b970c98c4b79d0e6c98d89"}, {"name": "0006-0004.roi", "sha256": "ae5ebf444a51f4e60ddd57a97687a978d083ca5a1a99df579a60d9c19959d531"}]}
+      ],
+      "images": []
+    },
+    "open/zip-roiset-nonbatch": {
+      "log": ["count 2", "images 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "rs.zip", "size": 359, "cmp": "zipEntries", "entries": [{"name": "0004-0005.roi", "sha256": "8842eebb2f13a61dd6161f8ef54f32517ce45ea069b970c98c4b79d0e6c98d89"}, {"name": "0006-0004.roi", "sha256": "ae5ebf444a51f4e60ddd57a97687a978d083ca5a1a99df579a60d9c19959d531"}]}
+      ],
+      "images": []
+    },
+    "open/zip-tiff": {
+      "log": ["title zt.tif 16x16 bitDepth 8", "image.directory /ijm-vfs-golden/ image.filename zt.zip"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "zt.zip", "size": 229, "cmp": "zipEntries", "entries": [{"name": "zt.tif", "sha256": "0b4dea2f90c8ae9f9ba63b03ebba4faa40405304e3fda343875427b3f651d66e"}]}
+      ],
+      "images": [
+        {"title": "zt.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "zt.zip"}
+      ]
+    },
+    "roi/open-missing": {
+      "log": ["before", "after"],
+      "error": null,
+      "dialogs": [{"kind": "showMessage", "title": "ROI Manager", "text": "java.io.FileNotFoundException: /ijm-vfs-golden/missing.zip (No such file or directory)", "afterLog": 1}],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "roi/save-open": {
+      "log": ["count 2", "after reset 0", "after open 2", "second selectionType 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "rs.zip", "size": 359, "cmp": "zipEntries", "entries": [{"name": "0004-0005.roi", "sha256": "8842eebb2f13a61dd6161f8ef54f32517ce45ea069b970c98c4b79d0e6c98d89"}, {"name": "0006-0004.roi", "sha256": "ae5ebf444a51f4e60ddd57a97687a978d083ca5a1a99df579a60d9c19959d531"}]}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "roi/save-selected": {
+      "log": ["after open roi 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "one.roi", "size": 146, "cmp": "bytes", "sha256": "8842eebb2f13a61dd6161f8ef54f32517ce45ea069b970c98c4b79d0e6c98d89"},
+        {"path": "two.zip", "size": 359, "cmp": "zipEntries", "entries": [{"name": "0004-0005.roi", "sha256": "8842eebb2f13a61dd6161f8ef54f32517ce45ea069b970c98c4b79d0e6c98d89"}, {"name": "0006-0004.roi", "sha256": "ae5ebf444a51f4e60ddd57a97687a978d083ca5a1a99df579a60d9c19959d531"}]}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/import-lut": {
+      "log": ["lut 255 255 255 240 79 0", "title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "fire.lut", "size": 768, "cmp": "bytes", "sha256": "ecbe72a19eef021e68479107a74d629d88bee5b6a0253f9a29eed3324f17773f"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/import-raw": {
+      "log": ["title r.raw 16x16 bitDepth 8", "pixels 0 240 48"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "r.raw", "size": 256, "cmp": "bytes", "sha256": "ad1d46a4353c2412493e184074c3dfb2e7407c6a93899ff8acee9d946c96048a"}
+      ],
+      "images": [
+        {"title": "r.raw", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "r.raw"}
+      ]
+    },
+    "runcmd/import-results": {
+      "log": ["nResults 2", "Area[0] 12"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "r.csv", "size": 17, "cmp": "bytes", "sha256": "df76bf42be0718529c245b64277438f33c2930eed38fe7ebe5ca022839270579"}
+      ],
+      "images": []
+    },
+    "runcmd/import-text-file": {
+      "log": ["images 0"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "note.txt", "size": 7, "cmp": "bytes", "sha256": "037279912cb60d7be67228853b057cc642443b4ce29b8a5a5bfbb68234b0b962"}
+      ],
+      "images": []
+    },
+    "runcmd/import-text-image": {
+      "log": ["title n.txt 3x2 bitDepth 32", "pixels 1 6"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "n.txt", "size": 12, "cmp": "bytes", "sha256": "2f55dcfd243b52536b4b8ef0fbfae93ee153fc2f0355888c26bd2b709cddd4cd"}
+      ],
+      "images": [
+        {"title": "n.txt", "pixels": {"w": 3, "h": 2, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "d13cb3f33a92b5ffdc56ff56777a3217e9b5228e8c8a200d6928b73891c5fb00"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/import-xy": {
+      "log": ["selectionType 3", "bounds 2 3 10 10", "points 3 2,3 7,13"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "xy.txt", "size": 14, "cmp": "bytes", "sha256": "1a3eae2890249fd46d6bc4e8bad9fb715248f1c9d368dff227e1ab621bd1afca"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/open-path-key": {
+      "log": ["title a.tif"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "a.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"}
+      ]
+    },
+    "runcmd/run-macro-arg": {
+      "log": ["arg=[]", "done"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "m.ijm", "size": 38, "cmp": "bytes", "sha256": "0b21b0daa6bb2ee692485cf4dc7abf172df48531818e4bba0d4158a6c5191936"}
+      ],
+      "images": []
+    },
+    "runcmd/save-bad-folder": {
+      "log": ["before"],
+      "error": {"message": "File saving error (IOException):\n   \"/ijm-vfs-golden/nodir/t.tif (No such file or directory)\" \n   /ijm-vfs-golden/nodir/t.tif", "line": 3},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-bmp": {
+      "log": ["title t.bmp", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.bmp", "size": 1334, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "t.bmp", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.bmp"}
+      ]
+    },
+    "runcmd/save-command": {
+      "log": ["title a.tif", "pixel 255"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6f8cb10a56d97800bdbd1bb987e8ea895789cc8720d9854011cf3819eb674f39"}}
+      ],
+      "images": [
+        {"title": "a.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6f8cb10a56d97800bdbd1bb987e8ea895789cc8720d9854011cf3819eb674f39"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"},
+        {"title": "a-1.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6f8cb10a56d97800bdbd1bb987e8ea895789cc8720d9854011cf3819eb674f39"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"}
+      ]
+    },
+    "runcmd/save-extension-kept": {
+      "log": ["title a.dat", "title b.dat", "title c.dat", "title d.dat.tif", "title e.bin"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.dat", "size": 416, "cmp": "bytes", "sha256": "0b4dea2f90c8ae9f9ba63b03ebba4faa40405304e3fda343875427b3f651d66e"},
+        {"path": "b.dat", "size": 86, "cmp": "bytes", "sha256": "f0c236e4e19980a9b4574f52bcef6bcc5cacfe1788fbfa943884d4f59afa2cac"},
+        {"path": "c.dat", "size": 362, "cmp": "bytes", "sha256": "9e8848fdebda107bec15b5cf20d0f2ce96a526869688bec0a7b72aa04559e86c"},
+        {"path": "d.dat.zip", "size": 235, "cmp": "zipEntries", "entries": [{"name": "d.dat.tif", "sha256": "0b4dea2f90c8ae9f9ba63b03ebba4faa40405304e3fda343875427b3f651d66e"}]},
+        {"path": "e.bin", "size": 256, "cmp": "bytes", "sha256": "ad1d46a4353c2412493e184074c3dfb2e7407c6a93899ff8acee9d946c96048a"},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "e.bin", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "e.bin"}
+      ]
+    },
+    "runcmd/save-fits": {
+      "log": ["title t.fits", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.fits", "size": 5760, "cmp": "bytes", "sha256": "07d6c63668e97f32ad5928ed905c21054f94c501caf7525cda82fb3934b95d2a"}
+      ],
+      "images": [
+        {"title": "t.fits", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "t.fits"}
+      ]
+    },
+    "runcmd/save-gif": {
+      "log": ["title t.gif", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.gif", "size": 891, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "t.gif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.gif"}
+      ]
+    },
+    "runcmd/save-image-none": {
+      "log": ["before"],
+      "error": {"message": "There are no images open", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "runcmd/save-jpeg": {
+      "log": ["title t.jpg", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.jpg", "size": 362, "cmp": "dims", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}}
+      ],
+      "images": [
+        {"title": "t.jpg", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.jpg"}
+      ]
+    },
+    "runcmd/save-lut": {
+      "log": ["title img", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.lut", "size": 768, "cmp": "bytes", "sha256": "ecbe72a19eef021e68479107a74d629d88bee5b6a0253f9a29eed3324f17773f"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-overwrite": {
+      "log": ["exists 1", "pixel 99"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "t.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "4e09916d3d2db22a7b4d75a437827e09d7a9adb46cb892bfa7b5aa24933667f2"}}
+      ],
+      "images": [
+        {"title": "t.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "4e09916d3d2db22a7b4d75a437827e09d7a9adb46cb892bfa7b5aa24933667f2"}, "dir": "/ijm-vfs-golden/", "filename": "t.tif"},
+        {"title": "t-1.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "4e09916d3d2db22a7b4d75a437827e09d7a9adb46cb892bfa7b5aa24933667f2"}, "dir": "/ijm-vfs-golden/", "filename": "t.tif"}
+      ]
+    },
+    "runcmd/save-pgm": {
+      "log": ["title t.pgm", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.pgm", "size": 300, "cmp": "bytes", "sha256": "579f3f814104a534b112ede09b6277fddc749875d0d7b75a95c11be1fefe9efc"}
+      ],
+      "images": [
+        {"title": "t.pgm", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.pgm"}
+      ]
+    },
+    "runcmd/save-png": {
+      "log": ["title t.png", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "t.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.png"}
+      ]
+    },
+    "runcmd/save-png-rgb": {
+      "log": ["title t.png", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.png", "size": 124, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}}
+      ],
+      "images": [
+        {"title": "t.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}, "dir": "/ijm-vfs-golden/", "filename": "t.png"}
+      ]
+    },
+    "runcmd/save-raw": {
+      "log": ["title t.raw", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.raw", "size": 512, "cmp": "bytes", "sha256": "d36a8acdcdc387cbeb713ffe69deb4929c116c7ed86e7b93cbe15049bc8d5826"}
+      ],
+      "images": [
+        {"title": "t.raw", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "t.raw"}
+      ]
+    },
+    "runcmd/save-results": {
+      "log": ["title img", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.csv", "size": 20, "cmp": "bytes", "sha256": "2e9be3fa905aab6fd9838771f7b93a398f0223a2a1a34cb2bb1577dc754ca795"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-save-key": {
+      "log": ["title s.tif", "title s.png"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "s.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "s.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "s.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "s.png"}
+      ]
+    },
+    "runcmd/save-selection": {
+      "log": ["title img", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.roi", "size": 128, "cmp": "bytes", "sha256": "f48ea0db2313e08e77e34c00281991dab07998cac7471b35fe50ef161f13052b"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-selection-none": {
+      "log": ["before"],
+      "error": {"message": "This command requires a selection", "line": 3},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-text-image": {
+      "log": ["title img", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.txt", "size": 1536, "cmp": "bytes", "sha256": "eda37932237e61a11c14c61d5bb77786af1683b95ed85c068ad31c96c41807b2"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "aa8cad1f445de4b4d6bc74350e1eb1f33dee898ab85d9f9671de30c32f9fbd76"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-text-log": {
+      "log": ["alpha", "beta"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "log.txt", "size": 11, "cmp": "bytes", "sha256": "e49c81e2d2f84e259d40e2fb8192f3bcd198b355184845d76d8f58807d0d78ee"}
+      ],
+      "images": []
+    },
+    "runcmd/save-tiff": {
+      "log": ["title t.tif", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "t.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.tif"}
+      ]
+    },
+    "runcmd/save-tiff-16": {
+      "log": ["title t.tif", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.tif", "size": 692, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}}
+      ],
+      "images": [
+        {"title": "t.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "t.tif"}
+      ]
+    },
+    "runcmd/save-xy": {
+      "log": ["title img", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.txt", "size": 14, "cmp": "bytes", "sha256": "1a3eae2890249fd46d6bc4e8bad9fb715248f1c9d368dff227e1ab621bd1afca"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "runcmd/save-zip": {
+      "log": ["title t.tif", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.zip", "size": 227, "cmp": "zipEntries", "entries": [{"name": "t.tif", "sha256": "0b4dea2f90c8ae9f9ba63b03ebba4faa40405304e3fda343875427b3f651d66e"}]}
+      ],
+      "images": [
+        {"title": "t.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "t.tif"}
+      ]
+    },
+    "save/avi": {
+      "log": ["before", "after"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "x.avi", "size": 6144, "cmp": "bytes", "sha256": "a14f7b38bce6373d2fddb24d6c3d7219d904444448ade20e68bfb5df32a3d1fa"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 3, "t": 1, "bitDepth": 8, "sha256": "dd7b279380101aee8559227575c76fd0cbbb61fef2040b8235ed9f22c14f3854"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/bmp": {
+      "log": ["title g.bmp"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.bmp", "size": 1334, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "g.bmp", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "g.bmp"}
+      ]
+    },
+    "save/gif": {
+      "log": ["title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "g.gif", "size": 891, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/jpeg": {
+      "log": ["title img", "title img2"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "j.jpg", "size": 362, "cmp": "dims", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}},
+        {"path": "k.jpg", "size": 658, "cmp": "dims", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""},
+        {"title": "img2", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/lut": {
+      "log": ["title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "f.lut", "size": 768, "cmp": "bytes", "sha256": "ecbe72a19eef021e68479107a74d629d88bee5b6a0253f9a29eed3324f17773f"},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/noext": {
+      "log": ["title img", "exists o.tif 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "o.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "o.tif"}
+      ]
+    },
+    "save/noext-noimage": {
+      "log": ["before", "after"],
+      "error": null,
+      "dialogs": [{"kind": "error", "title": "ImageJ", "text": "The file path passed to IJ.save() method or save()\nmacro function is missing the required extension.\n \n\"/ijm-vfs-golden/o\"", "afterLog": 1}],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "save/path-with-space": {
+      "log": ["title my image.tif", "exists 1"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "my image.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "my image.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "my image.tif"}
+      ]
+    },
+    "save/png-16": {
+      "log": ["title p16.png"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "p16.png", "size": 104, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}}
+      ],
+      "images": [
+        {"title": "p16.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "p16.png"}
+      ]
+    },
+    "save/png-32": {
+      "log": ["title p32.png"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "p32.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "657cc8776d93e9df2ce669017bdb35c16576c1e90d5140854e85307007a572a6"}}
+      ],
+      "images": [
+        {"title": "p32.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "aa8cad1f445de4b4d6bc74350e1eb1f33dee898ab85d9f9671de30c32f9fbd76"}, "dir": "/ijm-vfs-golden/", "filename": "p32.png"}
+      ]
+    },
+    "save/png-8": {
+      "log": ["title p8.png"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "p8.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "p8.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "p8.png"}
+      ]
+    },
+    "save/png-rgb": {
+      "log": ["title prgb.png"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "prgb.png", "size": 124, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}}
+      ],
+      "images": [
+        {"title": "prgb.png", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 24, "sha256": "12a956bd09ccab3c124cb01c1b462c2baedcb354819d0803ff43881601547579"}, "dir": "/ijm-vfs-golden/", "filename": "prgb.png"}
+      ]
+    },
+    "save/raw": {
+      "log": ["title r.raw"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "r.raw", "size": 256, "cmp": "bytes", "sha256": "ad1d46a4353c2412493e184074c3dfb2e7407c6a93899ff8acee9d946c96048a"},
+        {"path": "r16.raw", "size": 512, "cmp": "bytes", "sha256": "d36a8acdcdc387cbeb713ffe69deb4929c116c7ed86e7b93cbe15049bc8d5826"}
+      ],
+      "images": [
+        {"title": "r.raw", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "r.raw"},
+        {"title": "r16.raw", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "r16.raw"}
+      ]
+    },
+    "save/results": {
+      "log": ["nResults 2"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "m.xls", "size": 51, "cmp": "bytes", "sha256": "0a4eed0d90275cfff7cdf6dfb33bf023e178f99ab4412abe89661ed8875a7160"},
+        {"path": "r.csv", "size": 51, "cmp": "bytes", "sha256": "1c3ad0aedda7a0bd9f716a9fa9a00d533ab8fc88fab7586db43bcd7ca1e6243e"},
+        {"path": "r.txt", "size": 51, "cmp": "bytes", "sha256": "0a4eed0d90275cfff7cdf6dfb33bf023e178f99ab4412abe89661ed8875a7160"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/save-ext": {
+      "log": ["title img", "title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "p.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "q.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "q.tif"}
+      ]
+    },
+    "save/save-overwrite": {
+      "log": ["title a.tif", "reopened pixel 200"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "25c60fc7104c1ed605a8082e7022b14583693de6b6c5851172fecb2e60ac9a2f"}}
+      ],
+      "images": [
+        {"title": "a.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "25c60fc7104c1ed605a8082e7022b14583693de6b6c5851172fecb2e60ac9a2f"}, "dir": "/ijm-vfs-golden/", "filename": "a.tif"}
+      ]
+    },
+    "save/saveas-one-arg": {
+      "log": ["title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "one.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "one.tif"}
+      ]
+    },
+    "save/selection": {
+      "log": ["title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "l.roi", "size": 128, "cmp": "bytes", "sha256": "c61d67ed3e69b119f79becbac85e184c3a07d2348610085ac553a75dd9ae9cdc"},
+        {"path": "o.roi", "size": 128, "cmp": "bytes", "sha256": "68fd4918da71420383ae7e5a78b93c659d9f5d48892d05e1e5bc516b46eaf460"},
+        {"path": "s.roi", "size": 128, "cmp": "bytes", "sha256": "f48ea0db2313e08e77e34c00281991dab07998cac7471b35fe50ef161f13052b"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/selection-none": {
+      "log": ["before"],
+      "error": null,
+      "exited": true,
+      "dialogs": [{"kind": "error", "title": "Selection...", "text": "This command requires a selection", "afterLog": 1}],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/text-image": {
+      "log": ["title img", "title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "f.txt", "size": 48, "cmp": "bytes", "sha256": "a3aff7ee6c532e6dc4ba1bcbaa36841a36baa328ba1a8b36644dc8758bf1ad5a"},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.txt", "size": 26, "cmp": "bytes", "sha256": "0579a213e38b63b8cf78bcb73bd4b40206ff796522611eb56d61dd0c1b2f3f14"},
+        {"path": "u.csv", "size": 26, "cmp": "bytes", "sha256": "bd14322c5bfbae294062a1c88b3d70094e4cd2c4adee40c12cd8833daac16488"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 4, "h": 2, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "9baff4ab2182537c1ae1c1a789ddd76b3da0b2a5e14919d78a1f6784ee86b518"}, "dir": "", "filename": ""},
+        {"title": "f", "pixels": {"w": 4, "h": 2, "c": 1, "z": 1, "t": 1, "bitDepth": 32, "sha256": "773341a8a60adc0823c34c0d19d4ec139b07721394954363a73cd961bb5a10b7"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/text-log": {
+      "log": ["log line one", "log line two"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "log.txt", "size": 26, "cmp": "bytes", "sha256": "7f464e6656986e1173b9c809359b5b110f264e8d137cabb2756573ae3c164699"}
+      ],
+      "images": []
+    },
+    "save/tiff": {
+      "log": ["title o.tif", "reopened o-1.tif 240"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "o.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}}
+      ],
+      "images": [
+        {"title": "o.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "o.tif"},
+        {"title": "o-1.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "o.tif"}
+      ]
+    },
+    "save/tiff-calibrated": {
+      "log": ["title cal.tiff", "voxel 0.5 0.25 1 µm"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "cal.tiff", "size": 757, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "cal.tiff", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "cal.tiff"},
+        {"title": "cal-1.tiff", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 16, "sha256": "9c7b408daa72d59e39e2259d1686cecad50ce5b35f2de31de69015d006f5979c"}, "dir": "/ijm-vfs-golden/", "filename": "cal.tiff"}
+      ]
+    },
+    "save/tiff-stack": {
+      "log": ["dimensions 16 16 2 3 2"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "hs.tif", "size": 7995, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 2, "z": 3, "t": 2, "bitDepth": 16, "sha256": "49c71f3972fa7a66577377c49823b0c1b60e67630c679ad5e2b3127bb2661804"}},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "hs.tif", "pixels": {"w": 16, "h": 16, "c": 2, "z": 3, "t": 2, "bitDepth": 16, "sha256": "49c71f3972fa7a66577377c49823b0c1b60e67630c679ad5e2b3127bb2661804"}, "dir": "/ijm-vfs-golden/", "filename": "hs.tif"},
+        {"title": "hs-1.tif", "pixels": {"w": 16, "h": 16, "c": 2, "z": 3, "t": 2, "bitDepth": 16, "sha256": "49c71f3972fa7a66577377c49823b0c1b60e67630c679ad5e2b3127bb2661804"}, "dir": "/ijm-vfs-golden/", "filename": "hs.tif"}
+      ]
+    },
+    "save/unsupported": {
+      "log": ["before"],
+      "error": null,
+      "exited": true,
+      "dialogs": [{"kind": "error", "title": "ImageJ", "text": "Unsupported save() or saveAs() file format: \"foo\"\n \n\"/ijm-vfs-golden/x\"", "afterLog": 1}, {"kind": "error", "title": "ImageJ", "text": "Unrecognized command: \"foo\"", "afterLog": 1}],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/updateext": {
+      "log": ["title a.1.tif", "title b.png", "title b.png", "title d.tiff", "title e.tif"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "a.1.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "b.png", "size": 86, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "c.jpg", "size": 362, "cmp": "dims", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "7577ec923d7a2f9e9fe99248f076df958d645a3882bc14fe557a0cd3d5654b05"}},
+        {"path": "d.tiff", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "e.tif", "size": 416, "cmp": "pixels", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}},
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": [
+        {"title": "e.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "e.tif"}
+      ]
+    },
+    "save/xy": {
+      "log": ["title img"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "xy.txt", "size": 15, "cmp": "bytes", "sha256": "b0b0a9d3bb553630088cc03479c1339e902552e258bf909e670e346eadf1224c"}
+      ],
+      "images": [
+        {"title": "img", "pixels": {"w": 32, "h": 32, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "6e19530cd92bf9407d381cc92f7ee3d7eed08faefd08f9dfe4780fd4c3c6c76c"}, "dir": "", "filename": ""}
+      ]
+    },
+    "save/zip": {
+      "log": ["title z.tif"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "z.zip", "size": 227, "cmp": "zipEntries", "entries": [{"name": "z.tif", "sha256": "0b4dea2f90c8ae9f9ba63b03ebba4faa40405304e3fda343875427b3f651d66e"}]}
+      ],
+      "images": [
+        {"title": "z.tif", "pixels": {"w": 16, "h": 16, "c": 1, "z": 1, "t": 1, "bitDepth": 8, "sha256": "14ccf691f5e3b0d1819a38b9cebe4f16340f70e117fe34a39bfc2c7f0c46cb90"}, "dir": "/ijm-vfs-golden/", "filename": "z.tif"}
+      ]
+    },
+    "table/import-results": {
+      "log": ["nResults 3", "headings  ,Area,Mean", "Area[2] 50"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "in.csv", "size": 42, "cmp": "bytes", "sha256": "b22b85d33e403f552b250b093f88da427969780e03d4933b1ef71022c503c5df"}
+      ],
+      "images": []
+    },
+    "table/open-missing": {
+      "log": ["before"],
+      "error": {"message": "Error opening /ijm-vfs-golden/nope.csv", "line": 2},
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"}
+      ],
+      "images": []
+    },
+    "table/save-open": {
+      "log": ["saved 23", "size 2 headings a\tb", "a1 2.5 b1 y", "title t.csv"],
+      "error": null,
+      "dialogs": [],
+      "tree": [
+        {"path": "keep.txt", "size": 1, "cmp": "bytes", "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"},
+        {"path": "t.csv", "size": 20, "cmp": "bytes", "sha256": "2580bd1ef2fde612fd2d58570dfb4ee0e3458bc7d2dab6e9931fe286f93af5bd"},
+        {"path": "t.tsv", "size": 20, "cmp": "bytes", "sha256": "b1463b5726941fb7cfe275eef78ab200ba1db0e7ad605181e9b8c088b2c59963"}
+      ],
+      "images": []
+    }
+  }
+}

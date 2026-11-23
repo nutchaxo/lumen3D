@@ -32,9 +32,13 @@
 
   /** Every lang key the worker needs (sent translated as `args.texts`). */
   const TEXT_KEYS = Object.freeze([
-    'err.macFileLater', 'err.macNetwork', 'err.macBioFormats', 'err.macExec', 'err.macEvalScript', 'err.macExtensions',
+    'err.macNetwork', 'err.macBioFormats', 'err.macExec', 'err.macEvalScript', 'err.macExtensions',
     'err.macDebug', 'err.macCallRefused', 'err.macPadLimit', 'err.macPrefsQuota', 'err.mac16bitRange', 'err.macPageTimeout',
-    'err.macNotInBrowser', 'err.macArrow', 'err.macClipboard'
+    'err.macNotInBrowser', 'err.macArrow', 'err.macClipboard', 'err.macRefused',
+    // files (FILES.md §12.1)
+    'err.macFolderNotGranted', 'err.macFolderStale', 'err.macReadOnly', 'err.macWriteRefused', 'err.macRootDelete', 'err.macPermission',
+    'err.macQuota', 'err.macNoStorage', 'err.macFileGone', 'err.macFileBusy', 'err.macFileTooLarge', 'err.macSaveFormat',
+    'err.macReasonSequence', 'dlg.mac.files.readme', 'dlg.mac.files.readmeManual', 'dlg.mac.files.readmeDelete', 'dlg.mac.files.readmeRename'
   ]);
 
   /** The closed list of page methods the worker calls (§4.1). interactive = no timeout (it waits for the operator). */
@@ -58,8 +62,19 @@
     'flush': Object.freeze({ interactive: false }),
     'image.rename': Object.freeze({ interactive: false }),
     'window.print': Object.freeze({ interactive: false }),
-    'command.list': Object.freeze({ interactive: false })
+    'command.list': Object.freeze({ interactive: false }),
+    // files (FILES.md §5.4): pickers, confirmations and permissions wait for the operator; text windows answer at once
+    'vfs.pick': Object.freeze({ interactive: true }),
+    'vfs.confirm': Object.freeze({ interactive: true }),
+    'vfs.regrant': Object.freeze({ interactive: true }),
+    'text.open': Object.freeze({ interactive: false }),
+    'window.text': Object.freeze({ interactive: false })
   });
+
+  /** The closed list of run() file operations the worker executes (FILES.md §9.2): what a CmdResult `status: 'file'` may name. */
+  const FILE_OPS = Object.freeze(['open', 'importTextImage', 'importLut', 'importResults', 'importTable', 'importTextFile', 'importXY', 'importRaw', 'save', 'saveTiff',
+    'saveJpeg', 'savePng', 'saveZip', 'saveRaw', 'saveTextImage', 'saveLut', 'saveSelection', 'saveXY', 'saveXYCoordinates',
+    'saveResults', 'saveText', 'runMacro']);
 
   /** The closed list of write-behind operations (§4.2), applied by the page in order before the method of the next request. */
   const WRITE_OPS = Object.freeze(['roi.set', 'display.set', 'display.lut', 'display.mode', 'display.visible', 'thr.set', 'thr.reset',
@@ -221,7 +236,7 @@
   }
 
   root.IJMacroProto = Object.freeze({
-    TEXT_KEYS, RPC_METHODS, WRITE_OPS, OPTION_SETTINGS,
+    TEXT_KEYS, RPC_METHODS, WRITE_OPS, OPTION_SETTINGS, FILE_OPS,
     log: Object.freeze({ MAX_LINES: LOG_MAX_LINES, apply: logApply, text: logText }),
     optionFor
   });
@@ -347,6 +362,11 @@
     }
   }
 
+  if (R && typeof R.defineCommand === 'function') {
+    if (!R.getCommand('macro.scan')) R.defineCommand('macro.scan', { pkg: 'macro', passive: true, handler: (a) => macroScan(a) });
+    if (!R.getCommand('macro.vfs')) R.defineCommand('macro.vfs', { pkg: 'macro', long: true, handler: (a, E) => macroVfs(a, E) });
+  }
+
   // An op of this package: the calibration a macro sets (setVoxelSize, Stack.setXUnit … setFrameInterval). Calibration only: the planes
   // come back as they are, which the engine records as a calibration change. ImageJ keeps every field of Calibration it is given.
   if (R && typeof R.define === 'function' && !R.get('macroCalibration')) {
@@ -381,7 +401,10 @@
   function cloneTable(t) {
     const columns = {};
     for (const h of t.headings || []) columns[h] = (t.columns && t.columns[h] ? t.columns[h] : []).slice();
-    return { name: t.name, size: t.size | 0, headings: (t.headings || []).slice(), columns, labels: t.labels ? t.labels.slice() : null, rev: t.rev | 0 };
+    const out = { name: t.name, size: t.size | 0, headings: (t.headings || []).slice(), columns, labels: t.labels ? t.labels.slice() : null, rev: t.rev | 0 };
+    if (t.showRowNumbers === true) out.showRowNumbers = true;
+    if (t.dec) out.dec = Object.assign({}, t.dec);
+    return out;
   }
 
   class Run {
@@ -410,6 +433,8 @@
       this.lineWidth = 1;
       this.tool = 'rect';
       this.workspace = { width: 1024, height: 768 };
+      this.front = null;            // the page's front window (MeasurementsWriter, TextWriter): { kind, title }
+      this.textWins = new Set();    // the text windows this run opened (open() of a text file, File › Import › Text File; F20)
       this.applyMirror(a.mirror || {}, true);
       // write-behind queue
       this.queue = [];
@@ -432,6 +457,7 @@
       this.snapshots = new Map();  // docId → { pos, planes: [copies] } (snapshot / reset)
       this.draw = { color: null, value: NaN, lineWidth: 0, x: 0, y: 0, autoUpdate: true };
       this.changed = new Set();
+      this.savedDocs = new Set();   // documents a save wrote to a file (E.markSaved): the page refreshes their unsaved flag and origin
       this.batch = false;
       this.batchDocs = [];         // ImageJ's Interpreter.imageTable: the images made in batch mode, in order
       this.keys = { alt: false, shift: false };
@@ -439,6 +465,18 @@
       this.dialog = null;          // Dialog.create … Dialog.show
       this.currentTable = null;
       this.rgbWeights = null;
+      // files (FILES.md §8.9)
+      this.vfs = null;              // the run's IJMacroVFS (opened before the macro starts)
+      this.vfsFault = null;         // why it could not be opened (raised by the first file built-in)
+      this.vfsNeeds = [];           // result.vfs.needs: machine paths with no alias
+      this.writers = new Set();     // File.open writers of this run (every interpreter)
+      this.fileFault = null;        // a background flush failure, raised by the next file built-in
+      this.fileTimer = null;
+      this.fileBusy = false;
+      this.changedPosted = new Set();
+      this.macroPaths = [];         // getInfo("macro.filepath") inside runMacro(file)
+      this.pendingNested = null;    // run("Run...", …): the macro file the run() statement runs next
+      this.redirectErrors = false;  // IJ.redirectErrorMessages()
       this.host = this.makeHost();
     }
 
@@ -474,14 +512,20 @@
         const r = m.roiManager;
         // same: the list is the one the page sent last (it goes once per change)
         const list = r.same === true && this.rm && Array.isArray(this.rm.list) ? this.rm.list : (Array.isArray(r.list) ? r.list.slice() : []);
-        this.rm = { list, selected: Array.isArray(r.selected) ? r.selected.slice() : [], showAll: !!r.showAll, labels: !!r.labels };
+        this.rm = { list, selected: Array.isArray(r.selected) ? r.selected.slice() : [], showAll: !!r.showAll, labels: !!r.labels, open: !!r.open };
       }
       if (m.tables && typeof m.tables === 'object') {
         const next = new Map();
         for (const name of Object.keys(m.tables)) {
           const t = m.tables[name];
           if (t && t.same === true) { if (this.tables.has(name)) next.set(name, this.tables.get(name)); }
-          else if (t && typeof t === 'object') next.set(name, cloneTable(Object.assign({ name }, t)));
+          else if (t && typeof t === 'object') {
+            const c = cloneTable(Object.assign({ name }, t));
+            // ResultsTable.showRowNumbers lives in the run (the page's tables do not carry it)
+            const old = this.tables.get(name);
+            if (t.showRowNumbers === undefined && old && old.showRowNumbers === true) c.showRowNumbers = true;
+            next.set(name, c);
+          }
         }
         // a table this run changed and has not sent yet keeps its local content
         if (this.dirtyTables) for (const [name, t] of this.dirtyTables) next.set(name, t);
@@ -496,12 +540,14 @@
       if (typeof m.lineWidth === 'number') this.lineWidth = m.lineWidth;
       if (typeof m.tool === 'string') this.tool = m.tool;
       if (m.workspace && typeof m.workspace === 'object') this.workspace = Object.assign({}, m.workspace);
+      if (m.front !== undefined) this.front = m.front && typeof m.front === 'object' ? { kind: String(m.front.kind), title: String(m.front.title) } : null;
       this.P = null;
     }
 
     // ---------------------------------------------------------------- write-behind
     write(op, args) {
       if (WRITE_OPS.indexOf(op) < 0) throw ijError('IJ_INTERNAL', 'write op ' + op);
+      if (op === 'table.show') this.front = { kind: 'table', title: args.name };
       if (op === 'table.replace') { this.dirtyTables.set(args.name, args.table); this.scheduleFlush(); return; }
       if (op === 'table.remove') this.dirtyTables.delete(args.name);
       if (op === 'table.rename' && this.dirtyTables.has(args.from)) {
@@ -647,12 +693,12 @@
       return {
         M,
         syncFunctions: new Set(['setOption', 'String.getResultsHeadings', 'String.setFontSize', 'IJ.deleteRows', 'IJ.freeMemory',
-          'IJ.currentMemory', 'IJ.maxMemory', 'IJ.getToolName', 'IJ.renameResults', 'Array.show']),
+          'IJ.currentMemory', 'IJ.maxMemory', 'IJ.getToolName', 'IJ.renameResults', 'Array.show', 'IJ.redirectErrorMessages']),
         call(name, args) { return hostCall(M, name, args); },
         showMessage(title, text) { return M.rpc('dialog.message', { title: String(title), text: String(text) }).then(() => undefined); },
         showError(text) { return M.rpc('error.show', { text: String(text) }).then(() => undefined); },
-        printToWindow(title, text) { return M.rpc('window.print', { title: String(title), text: String(text) }).then(() => undefined); },
-        runMacroFile(path) { throw macroError(M.tr('err.macFileLater', { name: 'runMacro("' + String(path) + '")' })); },
+        printToWindow(title, text) { M.front = { kind: 'text', title: String(title) }; return M.rpc('window.print', { title: String(title), text: String(text) }).then(() => undefined); },
+        runMacroFile(path, arg) { return macroFileSource(M, path, arg).then((src) => (src ? src.text : null)); },
         getVersion() { return '1.54p'; }
       };
     }
@@ -668,8 +714,9 @@
     const M = new Run(a, E);
     RUNS.set(a.runId, M);
     const opt = a.options && typeof a.options === 'object' ? a.options : {};
-    let groupOpen = false, poll = null, res = null, endError = null;
+    let groupOpen = false, poll = null, res = null, endError = null, files = { error: null, changedRoots: [] };
     try {
+      await openRunFiles(M, a);
       if (E.macroGroup && typeof E.macroGroup.begin === 'function') { E.macroGroup.begin({ runId: a.runId, labelKey: 'op.macRun' }); groupOpen = true; }
       if (typeof E.onCancel === 'function') E.onCancel(() => M.abort());
       // the cancel of the request also reaches a run whose engine has no onCancel hook (E.check throws once the task is cancelled)
@@ -680,6 +727,8 @@
       });
     } finally {
       if (poll) clearInterval(poll);
+      // the writers reach their files before the end of the run is published (F15), also after an error or an abort
+      try { files = await endRunFiles(M); } catch (err) { console.error('[advanced-studio] macro files', err); }
       M.ending = true;
       if (M.flushTimer) { clearTimeout(M.flushTimer); M.flushTimer = null; }
       // an abort keeps the changes made so far (ImageJ), published as part of the one undo step
@@ -697,15 +746,19 @@
     if (groupOpen) {
       try { undo = await E.macroGroup.end(a.runId); } catch (err) { console.error('[advanced-studio] macro undo group', err); }
     }
-    const changedDocs = Array.from(new Set(Array.from(M.changed).concat(undo && Array.isArray(undo.changed) ? undo.changed : [])));
+    const changedDocs = Array.from(new Set(Array.from(M.changed).concat(Array.from(M.savedDocs), undo && Array.isArray(undo.changed) ? undo.changed : [])));
     const prefsWrites = {};
     for (const [k, v] of M.prefsWrites) prefsWrites[k] = v;
     let error = res ? res.error : null;
     // an engine failure at the end of the run is technical: the page shows its own sentence for an "Internal error"
     if (!error && endError) error = { message: 'Internal error: ' + String(endError.message || endError), line: 0, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: null };
+    // a buffered write that failed after the last statement (quota, permission) is the run's error
+    const filesError = !error && !!files.error && !M.ctrl.signal.aborted;
+    if (filesError) error = { message: files.error, line: 0, lineText: null, excerpt: null, calledFrom: [], silent: false, dialogText: null };
     return {
-      ok: !!(res && res.ok) && !endError, aborted: !!(res && res.aborted) || M.ctrl.signal.aborted, exited: !!(res && res.exited),
-      error, prefsWrites, changedDocs, undo: { changed: undo && Array.isArray(undo.changed) ? undo.changed : [], dropped: undo && Array.isArray(undo.dropped) ? undo.dropped : [] }
+      ok: !!(res && res.ok) && !endError && !filesError, aborted: !!(res && res.aborted) || M.ctrl.signal.aborted, exited: !!(res && res.exited),
+      error, prefsWrites, changedDocs, undo: { changed: undo && Array.isArray(undo.changed) ? undo.changed : [], dropped: undo && Array.isArray(undo.dropped) ? undo.dropped : [] },
+      vfs: { needs: M.vfsNeeds.slice(), changedRoots: files.changedRoots || [] }
     };
   }
 
@@ -746,7 +799,8 @@
         case 'a': out.push(yield* f.getNumericArray()); break;
         case 'A': out.push(yield* f.getArray()); break;
         case 'S': out.push(yield* f.getStringArray()); break;
-        case 'x': out.push(f.isStringArg() ? { s: yield* f.getString() } : yield* it.getExpression()); break;
+        // a string ({ s }), a whole array ({ a }: roiManager("select", newArray(…)), Functions.isArrayArg) or a number
+        case 'x': out.push(f.isArrayArg() ? { a: yield* f.getNumericArray() } : f.isStringArg() ? { s: yield* f.getString() } : yield* it.getExpression()); break;
         default: throw ijError('IJ_INTERNAL', 'signature ' + sig);
       }
     }
@@ -777,7 +831,7 @@
         case 'a': out.push(f.getNumericArray$s()); break;
         case 'A': out.push(f.getArray$s()); break;
         case 'S': out.push(f.getStringArray$s()); break;
-        case 'x': out.push(f.isStringArg() ? { s: f.getString$s() } : it.getExpression$s()); break;
+        case 'x': out.push(f.isArrayArg() ? { a: f.getNumericArray$s() } : f.isStringArg() ? { s: f.getString$s() } : it.getExpression$s()); break;
         default: throw ijError('IJ_INTERNAL', 'signature ' + sig);
       }
     }
@@ -1293,12 +1347,28 @@
     for (const h of t.headings) t.columns[h].push(0);
     if (t.labels) t.labels.push(null);
   }
-  /* ResultsTable.n / d2s of a numeric cell: a whole number without decimals, else `precision` decimals (AUTO_FORMAT). */
-  function cellString(M, v) {
+  /* ResultsTable.setValue: "if ((int)value!=value && !Double.isNaN(value)) decimalPlaces[column] = (short)precision" — a column that
+   * once held a non-integer prints every cell (an unset one is 0) with `precision` decimals from then on. t.dec records the worker's
+   * own writes; a table from the page or a file carries no record and is judged from its first 24 rows (addValue: "if (counter<25)"). */
+  function markDecimal(t, h, v) {
+    if (typeof v === 'number' && v === v && d2i(v) !== v) { if (!t.dec) t.dec = {}; t.dec[h] = true; }
+  }
+  function decimalColumn(t, h) {
+    if (!t || h === undefined) return false;
+    if (t.dec && t.dec[h] === true) return true;
+    const col = t.columns && t.columns[h];
+    if (!col) return false;
+    for (let i = 0, n = Math.min(t.size, 24); i < n; i++) { const v = col[i]; if (typeof v === 'number' && v === v && d2i(v) !== v) return true; }
+    return false;
+  }
+  /* ResultsTable.getValueAsString of a numeric cell: the column's decimal places once set, else AUTO_FORMAT (a whole number without
+   * decimals, else `precision` decimals). t / h: the cell's table and column. */
+  function cellString(M, v, t, h) {
     if (typeof v === 'string') return v;
     if (v === null || v === undefined) v = 0;
     const IJAna = root.IJAna;
     const prec = M.measurements && Number.isInteger(M.measurements.decimals) ? M.measurements.decimals : 3;
+    if (IJAna && typeof IJAna.d2s === 'function' && decimalColumn(t, h)) return IJAna.d2s(v, prec);
     if (IJAna && typeof IJAna.cellString === 'function') return IJAna.cellString(v, prec);
     if (d2i(v) === v) return LANG().d2s(v, 0);
     return LANG().d2s(v, prec);
@@ -1315,6 +1385,8 @@
     const r = await M.rpc('image.select', { docId });
     M.current = r && r.current !== undefined ? r.current : docId;
     M.P = null;
+    const im = M.images.get(M.current);
+    if (im) M.front = { kind: 'image', title: im.title };
   }
   async function adopt(M, info) {
     const r = await M.rpc('image.adopt', { docId: info.docId });
@@ -1324,6 +1396,7 @@
     }
     M.current = info.docId;
     M.P = null;
+    if (!info.hidden) M.front = { kind: 'image', title: info.name };
     return r;
   }
   /* A mirror image entry for a document the worker created (replaced by the page's own at the next reply). */
@@ -1374,6 +1447,7 @@
     M.P = null;
     if (r && r.current !== undefined) M.current = r.current;
     const status = r && r.status;
+    if (status === 'file') { await runFileOp(f, M, r.file || {}, { viaMacroRun: true }); return; }
     if (status === 'ok') {
       const ip = r.inPlace;
       if (ip && typeof ip === 'object' && M.images.has(ip.docId) && M.images.has(ip.resultId)) {
@@ -1416,7 +1490,8 @@
       case 'IJ.maxMemory': return String(maxMemory(M));
       case 'IJ.getToolName': return M.tool || '';
       case 'IJ.renameResults': return renameResults(M, args);
-      case 'IJ.checksum': throw macroError(M.tr('err.macFileLater', { name: 'IJ.checksum("file")' }));
+      case 'IJ.checksum': return checksumFile(M, String(args[0]), String(args[1]));
+      case 'IJ.redirectErrorMessages': M.redirectErrors = true; return null;
       case 'Array.show': {
         const [title, names, cols] = args;
         const t = emptyTable(String(title));
@@ -1436,7 +1511,7 @@
     const t = M.tables.get('Results');
     if (!t) return '';
     let s = '';
-    for (let i = 0; i < t.size; i++) s += (i + 1) + '\t' + t.headings.map((h) => cellString(M, t.columns[h][i])).join('\t') + '\n';
+    for (let i = 0; i < t.size; i++) s += (i + 1) + '\t' + t.headings.map((h) => cellString(M, t.columns[h][i], t, h)).join('\t') + '\n';
     return s;
   }
   function deleteRows(t, first, last) {
@@ -1536,6 +1611,7 @@
     installStacks();
     installPageState();
     installCallAndRefusals();
+    installFiles();
     installed = true;
   }
 
@@ -2601,6 +2677,8 @@
       if (it.token === COMMA) { options = yield* f.getString(); it.getRightParen(); }
       const M = runOf(f);
       yield* f.hostHook(() => runCommand(f, M, name, options));
+      // run("Run...", …): Macro_Runner runs the file now, in this run (same lane, same undo group)
+      if (M.pendingNested) { const n = M.pendingNested; M.pendingNested = null; yield* runNestedFile(f, M, n.source, n.arg, n.path); }
       return null;
     }, { suspends: true });
     defAsync('do', 'doCommand', 's', (f, a, M) => runCommand(f, M, a[0], null));
@@ -2620,6 +2698,7 @@
       if (typeof x === 'object') {
         for (const im of M.images.values()) if (im.title === x.s) return 1;
         for (const name of M.tables.keys()) if (name === x.s && (name !== 'Results' || M.tables.get(name).size > 0)) return 1;
+        if (M.textWins.has(x.s)) return 1;
         return x.s === 'Log' && logText(M.logLines) !== '' ? 1 : 0;
       }
       const id = d2i(x);
@@ -2653,6 +2732,7 @@
       // IJ.selectWindow: error("Macro Error", …) then Macro.abort
       if (!r || !r.found) throw macroError('No window with the title "' + title + '" found.');
       if (M.tables.has(title)) M.currentTable = title;
+      M.front = { kind: M.tables.has(title) ? 'table' : title === 'Log' ? 'log' : 'text', title };
       return null;
     });
     IJMacro.define('do', 'close', function* (f) {
@@ -2680,6 +2760,7 @@
       if (key === 'window.titles') {
         const out = [];
         for (const name of M.tables.keys()) if (name !== 'Results' || M.tables.get(name).size > 0) out.push(name);
+        for (const name of M.textWins) if (out.indexOf(name) < 0) out.push(name);
         if (logText(M.logLines) !== '') out.push('Log');
         return f.newVariableArray(out);
       }
@@ -2739,13 +2820,14 @@
       if (a.length > 4 && d2i(a[4]) >= 1) f.interp.error(M.tr('err.macNotInBrowser', { name: 'makeRectangle(…, arcSize)' }));
       const [x, y, w, h] = a;
       // IJ.makeRectangle: "if (width<=0 || height<0) img.deleteRoi(); else img.setRoi(new Roi(x, y, width, height))"
-      setSelection(M, im.docId, w <= 0 || h < 0 ? null : { type: 'rect', x, y, w, h });
+      // new Roi(double…) keeps sub-pixel bounds (RoiEncoder writes them, option SUB_PIXEL_RESOLUTION)
+      setSelection(M, im.docId, w <= 0 || h < 0 ? null : { type: 'rect', x, y, w, h, subPixel: true });
       return null;
     });
     defSync('do', 'makeOval', 'nnnn', (f, a, M) => {
       const im = img(f, M);
       const [x, y, w, h] = a;
-      setSelection(M, im.docId, w <= 0 || h < 0 ? null : { type: 'oval', x, y, w, h });
+      setSelection(M, im.docId, w <= 0 || h < 0 ? null : { type: 'oval', x, y, w, h, subPixel: true });
       return null;
     });
     IJMacro.define('do', 'makeLine', function* (f) { return makeLineParse(f, yield* readNumberList(f)); }, { suspends: false, sync: (f) => makeLineParse(f, readNumberList$s(f)) });
@@ -3114,7 +3196,7 @@
     const textPattern = ['.txt', '.ijm', '.js', '.java', '.py', '.bs', '.csv', '.tsv'].some((e) => pattern.endsWith(e));
     if (!others && (!wild || textPattern)) {
       if (pattern === 'Results') { M.tables.set('Results', emptyTable('Results')); M.dirtyTables.delete('Results'); }
-      const windowNames = ['Log', 'ROI Manager', 'Threshold', 'B&C', 'Results'].concat(Array.from(M.tables.keys()));
+      const windowNames = ['Log', 'ROI Manager', 'Threshold', 'B&C', 'Results'].concat(Array.from(M.tables.keys()), Array.from(M.textWins));
       const done = new Set();
       for (const w of windowNames) {
         if (done.has(w)) continue;
@@ -3123,6 +3205,8 @@
         done.add(w);
         await M.rpc('window.close', { title: w });
         if (M.tables.has(w) && w !== 'Results') M.tables.delete(w);
+        M.textWins.delete(w);
+        if (M.front && M.front.kind === 'text' && M.front.title === w) M.front = null;
         if (w === 'Log') M.logLines = [];
       }
     }
@@ -3239,7 +3323,12 @@
       return metadataGet(M, im, 'label');
     }
     if (lk === 'window.contents') { f.interp.error(M.tr('err.macNotInBrowser', { name: 'getInfo("window.contents")' })); return ''; }
-    if (lk === 'image.description' || lk === 'image.filename' || lk === 'image.directory') { img(f, M); return ''; }
+    if (lk === 'image.description') { img(f, M); return ''; }
+    if (lk === 'image.filename' || lk === 'image.directory') {
+      const im = img(f, M);
+      if (!im.file) return '';
+      return lk === 'image.filename' ? String(im.file.name || '') : String(im.file.dir || '');
+    }
     if (lk === 'selection.name' || lk === 'roi.name') { const roi = selectionOf(M, img(f, M).docId); return roi && typeof roi.name === 'string' ? roi.name : ''; }
     if (lk === 'selection.color' || lk === 'roi.color') {
       const roi = selectionOf(M, img(f, M).docId);
@@ -3250,9 +3339,14 @@
     if (lk === 'font.name') return 'SansSerif';
     if (lk === 'threshold.method') return 'Default';
     if (lk === 'threshold.mode') { const m = M.thresholdWindow && M.thresholdWindow.mode; return m === 'bw' ? 'B&W' : m === 'overunder' ? 'Over/Under' : 'Red'; }
-    if (lk === 'window.type') return M.images.size ? 'Image' : '';
-    if (lk === 'window.title' || lk === 'window.name') { const im = M.images.get(M.current); return im ? im.title : ''; }
-    if (lk === 'macro.filepath') return 'null';
+    // a text window in front (F20 puts a text file in a text window where ImageJ opens an Editor): TextWindow's "Text"
+    if (lk === 'window.type') return M.front && M.front.kind === 'text' ? 'Text' : M.images.size ? 'Image' : '';
+    if (lk === 'window.title' || lk === 'window.name') {
+      if (M.front && M.front.title) return M.front.title;
+      const im = M.images.get(M.current);
+      return im ? im.title : '';
+    }
+    if (lk === 'macro.filepath') return M.macroPaths.length ? M.macroPaths[M.macroPaths.length - 1] : MOUNT.macroFile !== null ? MOUNT.macroFile : 'null';
     return Object.prototype.hasOwnProperty.call(VIRTUAL_PROPS, key) ? VIRTUAL_PROPS[key] : 'Invalid key';
   }
   /* Colors.colorToString */
@@ -3308,7 +3402,7 @@
     const t = title !== null ? tableFor(f, M, title) : resultsTable(f, M, true);
     if (row === -1) row = t.size - 1;
     if (row < 0 || row >= t.size) f.interp.error('Row (' + row + ') out of range');
-    if (t.headings.indexOf(column) >= 0) return cellString(M, t.columns[column][row]);
+    if (t.headings.indexOf(column) >= 0) return cellString(M, t.columns[column][row], t, column);
     if (column === 'Label' && t.labels && t.labels[row] !== null && t.labels[row] !== undefined) return t.labels[row];
     return 'null';
   }
@@ -3359,6 +3453,7 @@
     } else {
       const col = addColumn(t, r.column);
       col[r.row] = typeof r.value === 'object' ? r.value.s : r.value;
+      markDecimal(t, r.column, col[r.row]);
     }
     M.dirtyTables.set(t.name, t);
     M.scheduleFlush();
@@ -3388,6 +3483,12 @@
       M.write('table.show', { name });
       return null;
     };
+    const columnHeadings = (t) => (t.showRowNumbers === true ? ' \t' : '') + t.headings.join('\t');
+    const rowNumbersOf = (f, M, title, on) => {
+      const t = tableFor(f, M, title);
+      if (on) t.showRowNumbers = true; else delete t.showRowNumbers;
+      return null;
+    };
     const getCol = (f, a, M) => {
       const t = tableFor(f, M, a.length > 1 ? a[1] : null);
       if (t.headings.indexOf(a[0]) < 0) { f.interp.error('"' + a[0] + '" column not found'); return null; }
@@ -3400,7 +3501,8 @@
       reset: { raw: function* (f, M) { return create(f, M, yield* titleArg(f)); }, raw$s: (f, M) => create(f, M, titleArg$s(f)) },
       size: { raw: function* (f, M) { return tableFor(f, M, yield* titleArg(f)).size; }, raw$s: (f, M) => tableFor(f, M, titleArg$s(f)).size },
       title: { raw: function* (f, M) { return tableFor(f, M, yield* titleArg(f)).name; }, raw$s: (f, M) => tableFor(f, M, titleArg$s(f)).name },
-      headings: { raw: function* (f, M) { return tableFor(f, M, yield* titleArg(f)).headings.join('\t'); }, raw$s: (f, M) => tableFor(f, M, titleArg$s(f)).headings.join('\t') },
+      // ResultsTable.getColumnHeadings: " " + delimiter first when the table shows row numbers
+      headings: { raw: function* (f, M) { return columnHeadings(tableFor(f, M, yield* titleArg(f))); }, raw$s: (f, M) => columnHeadings(tableFor(f, M, titleArg$s(f))) },
       allHeadings: { sig: '', sync: () => DEFAULT_HEADINGS.join('\t') },
       get: { sig: 's?ns', sync: (f, a, M) => getResult(f, M, a[0], a.length > 1 ? d2i(a[1]) : -1, a.length > 2 ? a[2] : (M.currentTable || null), true) },
       getString: { sig: 's?ns', sync: (f, a, M) => getResultString(f, M, a[0], a.length > 1 ? d2i(a[1]) : -1, a.length > 2 ? a[2] : (M.currentTable || null)) },
@@ -3413,7 +3515,7 @@
         const vals = arr.map((v) => (v.getString() !== null ? v.getString() : v.getValue()));
         if (vals.length > t.size) { while (t.size < vals.length) incrementCounter(t); }
         const col = addColumn(t, a[0]);
-        for (let i = 0; i < t.size; i++) col[i] = i < vals.length ? vals[i] : 0;
+        for (let i = 0; i < t.size; i++) { col[i] = i < vals.length ? vals[i] : 0; if (i < vals.length) markDecimal(t, a[0], col[i]); }
         touchTable(M, t);
         return null;
       } },
@@ -3425,6 +3527,7 @@
         const i = t.headings.indexOf(a[0]);
         if (i < 0) { f.interp.error('"' + a[0] + '" column not found'); return null; }
         t.headings.splice(i, 1); delete t.columns[a[0]];
+        if (t.dec) delete t.dec[a[0]];
         touchTable(M, t);
         return null;
       } },
@@ -3434,6 +3537,7 @@
         if (i < 0) { f.interp.error('"' + a[0] + '" column not found'); return null; }
         if (t.headings.indexOf(a[1]) >= 0) { f.interp.error('"' + a[1] + '" column exists'); return null; }
         t.headings[i] = a[1]; t.columns[a[1]] = t.columns[a[0]]; delete t.columns[a[0]];
+        if (t.dec && t.dec[a[0]]) { t.dec[a[1]] = true; delete t.dec[a[0]]; }
         touchTable(M, t);
         return null;
       } },
@@ -3450,9 +3554,9 @@
         return null;
       } },
       rename: { sig: 's?s', sync: (f, a, M) => renameResults(M, a.length > 1 ? [a[0], a[1]] : [a[0]]) },
-      showRowNumbers: { sig: 'n?s', sync: () => null },
-      showRowIndexes: { sig: 'n?s', sync: () => null },
-      hideRowNumbers: { sig: '?s', sync: () => null },
+      showRowNumbers: { sig: 'n?s', sync: (f, a, M) => rowNumbersOf(f, M, a.length > 1 ? a[1] : null, a[0] !== 0) },
+      showRowIndexes: { sig: 'n?s', sync: (f, a, M) => rowNumbersOf(f, M, a.length > 1 ? a[1] : null, a[0] !== 0) },
+      hideRowNumbers: { sig: '?s', sync: (f, a, M) => rowNumbersOf(f, M, a.length ? a[0] : null, false) },
       saveColumnHeader: { sig: 'n?s', sync: () => null },
       setLocationAndSize: { sig: 'nnnn?s', sync: () => null },
       setLocAndSize: { sig: 'nnnn?s', sync: () => null },
@@ -3460,8 +3564,8 @@
       getSelectionEnd: { sig: '?s', sync: () => -1 },
       setSelection: { sig: 'nn?s', sync: () => null },
       applyMacro: { sig: 's?s', sync: (f, a, M) => { f.interp.error(M.tr('err.macNotInBrowser', { name: 'Table.applyMacro' })); return null; } },
-      save: { sig: 's?s', sync: (f, a, M) => { f.interp.error(M.tr('err.macFileLater', { name: 'Table.save' })); return null; } },
-      open: { sig: 's?s', sync: (f, a, M) => { f.interp.error(M.tr('err.macFileLater', { name: 'Table.open' })); return null; } },
+      save: { sig: 's?s', async: (f, a, M) => tableSave(f, M, a[0], a.length > 1 ? a[1] : null) },
+      open: { sig: 's?s', async: (f, a, M) => tableOpen(f, M, a[0], a.length > 1 ? a[1] : null) },
       showArrays: { sig: 's?AAAAAAAAA', sync: (f, a, M) => { f.interp.error(M.tr('err.macNotInBrowser', { name: 'Table.showArrays' })); return null; } }
     };
   }
@@ -3504,6 +3608,14 @@
       case 'count': case 'size': return list.length;
       case 'index': return M.rm.selected.length ? M.rm.selected[0] : -1;
       case 'select': {
+        if (arg && typeof arg === 'object' && Array.isArray(arg.a)) {
+          // Functions.setMultipleIndexes → RoiManager.setSelectedIndexes (the image's selection is left as it is)
+          const idxs = arg.a.map((v) => d2i(v));
+          for (const i of idxs) if (i < 0 || i >= list.length) throw macroError('Invalid index: ' + i);
+          M.rm.selected = idxs;
+          M.write('rm.select', { indices: idxs.slice() });
+          return NaN;
+        }
         const idx = d2i(Number(arg));
         if (idx < 0 || idx > list.length - 1) throw macroError('Index (' + idx + ') is outside of the 0-' + (list.length - 1) + ' range');
         M.rm.selected = [idx];
@@ -3574,7 +3686,9 @@
         }
         return NaN;
       }
-      case 'open': case 'save': case 'save selected': throw macroError(M.tr('err.macFileLater', { name: 'roiManager("' + a[0] + '")' }));
+      case 'open': return rmOpen(M, typeof argS === 'string' ? argS : '');
+      case 'save': return rmSave(M, typeof argS === 'string' ? argS : '', false);
+      case 'save selected': return rmSave(M, typeof argS === 'string' ? argS : '', true);
       default: throw macroError(M.tr('err.macNotInBrowser', { name: 'roiManager("' + a[0] + '")' }));
     }
   }
@@ -3663,13 +3777,18 @@
     };
     const value = (M, fld) => (M.dialog.values && Object.prototype.hasOwnProperty.call(M.dialog.values, fld.id) ? M.dialog.values[fld.id] : fld.value);
     const create = (f, a, M) => { M.dialog = { title: a[0], fields: [], cancel: true, values: null, read: { number: 0, string: 0, check: 0, choice: 0, radio: 0 } }; return null; };
-    const fileField = (name) => (f, a, M) => { need(f, M); f.interp.error(M.tr('err.macFileLater', { name })); return null; };
+    // GenericDialog.addDirectoryField / addFileField: a string field with a Browse… button (FILES.md §6.6)
+    const pathField = (pathKind) => (f, a, M) => {
+      need(f, M);
+      add(M, { type: 'path', label: a[0], value: a[1], pathKind, columns: a.length > 2 ? d2i(a[2]) : 20 }, 'string');
+      return null;
+    };
     return {
       create: { sig: 's', sync: create },
       createNonBlocking: { sig: 's', sync: create },
       addString: { sig: 'ss?n', sync: (f, a, M) => { need(f, M); add(M, { type: 'string', label: a[0], value: a[1], columns: a.length > 2 ? d2i(a[2]) : 8 }, 'string'); return null; } },
-      addDirectory: { sig: 'ss?n', sync: fileField('Dialog.addDirectory') },
-      addFile: { sig: 'ss?n', sync: fileField('Dialog.addFile') },
+      addDirectory: { sig: 'ss?n', sync: pathField('directory') },
+      addFile: { sig: 'ss?n', sync: pathField('file') },
       addImageChoice: { sig: 's?s', sync: (f, a, M) => {
         need(f, M);
         if (!M.images.size) f.interp.error('No images');
@@ -3718,7 +3837,7 @@
         return null;
       } },
       setInsets: { sig: 'nnn', sync: (f, a, M) => { need(f, M); return null; } },
-      addImage: { sig: 's', sync: fileField('Dialog.addImage') },
+      addImage: { sig: 's', sync: (f, a, M) => { need(f, M); f.interp.error(M.tr('err.macNotInBrowser', { name: 'Dialog.addImage' })); return null; } },
       addToSameRow: { sig: '', sync: (f, a, M) => { need(f, M); return null; } },
       enableYesNoCancel: { sig: 'ss', sync: (f, a, M) => { f.interp.error(M.tr('err.macNotInBrowser', { name: 'Dialog.enableYesNoCancel' })); return null; } },
       setLocation: { sig: 'nn', sync: (f, a, M) => { need(f, M); return null; } },
@@ -3727,11 +3846,13 @@
         const d = need(f, M);
         const fields = d.fields.map((x) => {
           const o = { id: x.id, type: x.type, label: x.label, value: x.value };
-          for (const k of ['decimals', 'min', 'max', 'step', 'options', 'columns', 'units']) if (x[k] !== undefined) o[k] = x[k];
+          for (const k of ['decimals', 'min', 'max', 'step', 'options', 'columns', 'units', 'pathKind']) if (x[k] !== undefined) o[k] = x[k];
           return o;
         });
         const r = await M.rpc('dialog.show', { title: d.title, fields, cancel: d.cancel });
         if (!r || r.cancelled) throw new MacroCancel('abort');
+        // a Browse… of a path field granted a folder or a file: the worker can use it at once
+        if (r && Array.isArray(r.grants) && M.vfs) for (const g of r.grants) { try { M.vfs.addGrant(g); } catch (err) { console.error('[advanced-studio] macro grant', err); } }
         d.values = (r && r.values) || {};
         for (const k of Object.keys(d.read)) d.read[k] = 0;
         return null;
@@ -3815,39 +3936,6 @@
       return callBody(f, runOf(f), target, args);
     } });
 
-    // file built-ins: a later phase of the Studio (refused with the translated message, never silently)
-    const later = (name) => (M) => M.tr('err.macFileLater', { name });
-    IJMacro.define('do', 'open', function* (f) {
-      const it = f.interp;
-      let path = '';
-      if (it.nextToken() === LP) {
-        it.getLeftParen();
-        if (it.nextToken() !== RP) path = yield* f.getString();
-        while (it.nextToken() === COMMA) { it.getComma(); yield* it.getExpression(); }
-        it.getRightParen();
-      }
-      const M = runOf(f);
-      f.interp.error(openRefusal(M, path));
-      return null;
-    }, { suspends: false, sync(f) {
-      const it = f.interp;
-      let path = '';
-      if (it.nextToken() === LP) {
-        it.getLeftParen();
-        if (it.nextToken() !== RP) path = f.getString$s();
-        while (it.nextToken() === COMMA) { it.getComma(); it.getExpression$s(); }
-        it.getRightParen();
-      }
-      f.interp.error(openRefusal(runOf(f), path));
-      return null;
-    } });
-    defRefused('do', 'save', 's', later('save'));
-    defRefused('do', 'saveAs', 's?s', later('saveAs'));
-    defRefused('str', 'getDirectory', 's', later('getDirectory'));
-    defRefused('str', 'getDir', 's', later('getDir'));
-    defRefused('arr', 'getFileList', 's', later('getFileList'));
-    IJMacro.define('str', 'File', function* (f) { const m = memberName(f); yield* skipArgs(f); f.interp.error(fileRefusal(f, m)); return ''; },
-      { suspends: false, sync(f) { const m = memberName(f); skipArgs$s(f); f.interp.error(fileRefusal(f, m)); return ''; } });
     IJMacro.define('str', 'exec', function* (f) { yield* skipArgs(f); f.interp.error(runOf(f).tr('err.macExec')); return ''; },
       { suspends: false, sync(f) { skipArgs$s(f); f.interp.error(runOf(f).tr('err.macExec')); return ''; } });
     IJMacro.define('str', 'Ext', function* (f) { memberName(f); yield* skipArgs(f); f.interp.error(runOf(f).tr('err.macExtensions')); return ''; },
@@ -3912,16 +4000,8 @@
     }
     it.getRightParen();
   }
-  function fileRefusal(f, member) {
-    return runOf(f).tr('err.macFileLater', { name: 'File.' + member });
-  }
+  // Bio-Formats files: refused by open() before any read (FILES.md §8.5)
   const BIO_EXT = /\.(ims|czi|lif|nd2|lsm|oib|oif|vsi|zvi|nd|lei|sld|scn|svs|mvd2|ome\.tiff?)$/i;
-  function openRefusal(M, path) {
-    const p = String(path || '');
-    if (/^(https?|ftp):\/\//i.test(p)) return M.tr('err.macNetwork');
-    if (BIO_EXT.test(p)) return M.tr('err.macBioFormats');
-    return M.tr('err.macFileLater', { name: p ? 'open("' + p + '")' : 'open()' });
-  }
   /* call(target, args…): the whitelist (CALL-WHITELIST.md §5). Anything else stops the macro with err.macCallRefused. */
   function callBody(f, M, target, args) {
     const r = resolveCall(target, args);
@@ -3980,9 +4060,1933 @@
     }
   }
 
+  // ════════════════════════════════════════════════════════════════════════════════════════════════
+  //  Files (DOCS/studio-advanced/macros/FILES.md): the file built-ins and the run() file commands, on the virtual file system
+  // ════════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Every path a macro writes is virtual (/<Root>/…, FILES.md §2): IJMacroVFS (ij-macro-vfs.js, loaded before this file in the
+  // worker) resolves it, enforces the per-root policy and holds the three backends. A VFS answer is a value or a Promise: an OPFS,
+  // snapshot or virtual root answers synchronously, so the built-ins below chain with mp() and only wait when a backend does.
+  // No path of the user's machine is ever printed unless the macro itself wrote it.
+
+  const VFSLIB = () => (typeof IJMacroVFS !== 'undefined' ? IJMacroVFS : (root.IJMacroVFS || null));
+  const isThen = (x) => x !== null && (typeof x === 'object' || typeof x === 'function') && typeof x.then === 'function';
+  function mp(v, fn) { return isThen(v) ? v.then(fn) : fn(v); }
+  const isVfsError = (e) => !!e && typeof e.code === 'string' && e.code.indexOf('VFS_') === 0;
+  const vfsDetails = (e) => Object.assign({}, e || {}, e && e.details && typeof e.details === 'object' ? e.details : {});
+  const HOME = '/home/';
+  const UTF8 = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+  const utf8 = (s) => UTF8.encode(String(s));
+  const utf8Text = (u8) => new TextDecoder('utf-8', { ignoreBOM: true }).decode(u8);
+  function latin1Text(u8) {
+    let s = '';
+    for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, Math.min(u8.length, i + 8192)));
+    return s;
+  }
+
+  // OpenDialog / SaveDialog statics (F13): ImageJ keeps them as long as it runs; here as long as one Studio mount.
+  // macroFile = Macro_Runner's static filePath: the last macro file run, still answered by getInfo("macro.filepath") after it ends
+  const MOUNT = { id: null, defaultDir: null, lastDir: null, lastName: null, macroFile: null };
+  function enterMount(id) {
+    if (typeof id !== 'string' || !id || id === MOUNT.id) return;
+    MOUNT.id = id; MOUNT.defaultDir = null; MOUNT.lastDir = null; MOUNT.lastName = null; MOUNT.macroFile = null;
+  }
+  /** The base of a relative path for Opener.makeFullPath (the OpenDialog default directory, else user.dir). */
+  const openerBase = () => MOUNT.defaultDir || HOME;
+
+  // ---------------------------------------------------------------- the VFS of a run (or of a macro.vfs request)
+  /* FileSaver.saveAsLut: reds[256], greens[256], blues[256] from a 768-byte RGB-interleaved IJLuts table. */
+  function lutFileBytes(t) {
+    if (root.IJLutFile && typeof root.IJLutFile.write === 'function') return root.IJLutFile.write(t);
+    const p = new Uint8Array(768);
+    for (let i = 0; i < 256; i++) { p[i] = t[i * 3]; p[256 + i] = t[i * 3 + 1]; p[512 + i] = t[i * 3 + 2]; }
+    return p;
+  }
+  function lutFilesOf() {
+    const L = root.IJLuts;
+    if (!L || typeof L.names !== 'function') return [];
+    const out = [];
+    for (const name of L.names()) {
+      let t = null;
+      try { t = L.get(name); } catch (_) { t = null; }
+      if (t && t.length === 768) out.push({ name: name + '.lut', bytes: lutFileBytes(t) });
+    }
+    return out;
+  }
+  function vfsContext(v, onFirstOverlayWrite) {
+    const nav = root.navigator;
+    return {
+      roots: Array.isArray(v.roots) ? v.roots : [],
+      aliases: Array.isArray(v.aliases) ? v.aliases : [],
+      mountId: typeof v.mountId === 'string' ? v.mountId : (MOUNT.id || ''),
+      opfs: nav && nav.storage && typeof nav.storage.getDirectory === 'function' ? () => nav.storage.getDirectory() : null,
+      lutFiles: lutFilesOf,
+      onFirstOverlayWrite: typeof onFirstOverlayWrite === 'function' ? onFirstOverlayWrite : () => {},
+      now: () => Date.now()
+    };
+  }
+  /** Opens the run's VFS before the macro starts (FILES.md §8.9). A failure is kept and raised by the first file built-in. */
+  async function openRunFiles(M, a) {
+    const V = VFSLIB();
+    if (!V || typeof V.open !== 'function') return;
+    const v = a.vfs && typeof a.vfs === 'object' ? a.vfs : {};
+    enterMount(v.mountId);
+    try {
+      M.vfs = V.open(vfsContext(v, (rootId) => {
+        try { M.E.postEvent({ event: 'macro.vfs', runId: M.runId, type: 'firstOverlayWrite', rootId }); } catch (err) { console.error('[advanced-studio] macro vfs event', err); }
+      }));
+      await M.vfs.prepare();
+    } catch (err) {
+      if (!isVfsError(err)) console.error('[advanced-studio] macro file system', err);
+      M.vfsFault = err;
+      if (M.vfs) { try { await M.vfs.close(); } catch (_) { /* nothing was opened */ } }
+      M.vfs = null;
+    }
+    M.fileTimer = setInterval(() => fileTick(M), FLUSH_MS);
+  }
+  /* The `changed` event of every overlay root this run wrote in that the page has not been told about yet. */
+  function postChanged(M) {
+    if (!M.vfs || typeof M.vfs.changedRoots !== 'function') return [];
+    let roots = [];
+    try { roots = M.vfs.changedRoots() || []; } catch (_) { roots = []; }
+    for (const rootId of roots) {
+      if (M.changedPosted.has(rootId)) continue;
+      M.changedPosted.add(rootId);
+      try { M.E.postEvent({ event: 'macro.vfs', runId: M.runId, type: 'changed', rootId }); } catch (err) { console.error('[advanced-studio] macro vfs event', err); }
+    }
+    return roots.slice();
+  }
+  /* The 250 ms tick (F15): the buffered writers reach their files and the overlay manifests are written. A failure is raised by the
+   * next file built-in (or at the end of the run). */
+  function fileTick(M) {
+    if (M.fileBusy || !M.vfs || M.ending) return;
+    M.fileBusy = true;
+    Promise.resolve()
+      .then(() => flushWriters(M, 'tick'))
+      .then(() => (M.vfs ? M.vfs.flush() : null))
+      .then(() => { postChanged(M); }, (err) => { if (!M.fileFault) M.fileFault = err; })
+      .then(() => { M.fileBusy = false; });
+  }
+  /** The end of a run (normal, error or abort): the writers are flushed, every handle closed. → { error: text | null, changedRoots }. */
+  async function endRunFiles(M) {
+    if (M.fileTimer) { clearInterval(M.fileTimer); M.fileTimer = null; }
+    let text = null;
+    const note = (err) => {
+      if (text !== null || err instanceof MacroCancel) return;
+      text = isVfsError(err) ? vfsText(M, err, err.path || '') : (err && err.macroText !== undefined ? err.macroText : null);
+      if (text === null) { console.error('[advanced-studio] macro files at the end of the run', err); text = ''; }
+    };
+    if (M.fileFault) { note(M.fileFault); M.fileFault = null; }
+    if (M.vfs) {
+      // an aborted run cannot ask the operator anything: a write that needs a confirmation is not made
+      try { await flushWriters(M, M.ctrl.signal.aborted); } catch (err) { note(err); }
+      for (const w of M.writers) { w.chunks = []; w.bytes = 0; }
+    }
+    const changedRoots = postChanged(M);
+    if (M.vfs) {
+      try { await M.vfs.close(); } catch (err) { note(err); }
+    }
+    return { error: text === '' ? null : text, changedRoots };
+  }
+
+  // ---------------------------------------------------------------- buffered writers (File.open + print(f, …))
+  /* An in-place Chromium folder copies the whole file into a new swap file at each append (createWritable keepExistingData): there a
+   * tick flushes a writer only once it holds SLOW_FLUSH_BYTES or its last flush is SLOW_FLUSH_MS old (FILES.md F15). */
+  const SLOW_FLUSH_BYTES = 1048576, SLOW_FLUSH_MS = 5000;
+  function makeWriter(M, vpath, shown) {
+    let slow = false;
+    try { slow = !!(M.vfs && typeof M.vfs.slowAppend === 'function' && M.vfs.slowAppend(vpath)); } catch (_) { slow = false; }
+    const w = {
+      vpath, shown, chunks: [], bytes: 0, slow, flushedAt: now(),
+      // the language's print(f, s) calls this synchronously (FILES.md §16 L1): it never suspends
+      print(text) { const b = utf8(text); if (b.length) { w.chunks.push(b); w.bytes += b.length; } }
+    };
+    M.writers.add(w);
+    return w;
+  }
+  /* background: no operator question (a tick, or the end of an aborted run): a write that needs one waits for the next file
+   * built-in. 'tick': the 250 ms tick, which also lets a slow append target wait (SLOW_FLUSH_*). */
+  function flushWriters(M, background) {
+    let chain = null;
+    for (const w of M.writers) {
+      if (!w.chunks.length) continue;
+      if (background === 'tick' && w.slow && w.bytes < SLOW_FLUSH_BYTES && now() - w.flushedAt < SLOW_FLUSH_MS) continue;
+      const step = () => {
+        if (!w.chunks.length) return null;
+        const data = w.chunks, n = w.bytes;
+        w.chunks = []; w.bytes = 0; w.flushedAt = now();
+        const put = () => M.vfs.write(w.vpath, data, { append: true });
+        const back = (err) => { w.chunks = data.concat(w.chunks); w.bytes += n; throw err; };
+        // a tick cannot ask the operator: a write that needs a confirmation waits, whole, for the next foreground flush
+        const onError = (err) => {
+          if (background && err && err.code === 'VFS_ASK') { w.chunks = data.concat(w.chunks); w.bytes += n; return null; }
+          return back(err);
+        };
+        let r;
+        try { r = background ? put() : fsDo(M, put); } catch (err) { return onError(err); }
+        return isThen(r) ? r.then(null, onError) : r;
+      };
+      chain = chain ? mp(chain, step) : step();
+    }
+    return chain;
+  }
+  function dropWriter(M, w) { M.writers.delete(w); }
+
+  // ---------------------------------------------------------------- errors (FILES.md §8.1, F12)
+  function formatBytes(n) {
+    const V = VFSLIB();
+    if (V && typeof V.formatBytes === 'function') return V.formatBytes(n);
+    return String(n) + ' B';
+  }
+  /* The run stopped on a machine path: the page offers the folder in its Files section (result.vfs.needs). */
+  function noteNeed(M, d) {
+    const literal = typeof d.literal === 'string' ? d.literal : '';
+    if (!literal || M.vfsNeeds.some((x) => x.literal === literal)) return;
+    M.vfsNeeds.push({ kind: 'alias', literal, prefixes: Array.isArray(d.prefixes) ? d.prefixes.slice() : [] });
+  }
+  /** The macro error a VfsError stands for, or null for a condition the Java call reports itself (a return value or its own text). */
+  function vfsText(M, e, shown) {
+    const d = vfsDetails(e);
+    const p = shown || (typeof d.path === 'string' ? d.path : '');
+    switch (e.code) {
+      case 'VFS_NOT_GRANTED': noteNeed(M, d); return M.tr('err.macFolderNotGranted', { path: d.literal || p });
+      case 'VFS_STALE': return M.tr('err.macFolderStale', { name: d.root || '' });
+      case 'VFS_READ_ONLY': return M.tr('err.macReadOnly', { path: p });
+      case 'VFS_PERMISSION': return M.tr('err.macPermission', { name: d.root || '' });
+      case 'VFS_QUOTA': return M.tr('err.macQuota', { written: formatBytes(d.written || 0), free: formatBytes(d.free || 0) });
+      case 'VFS_NO_STORAGE': return M.tr('err.macNoStorage', { path: p });
+      case 'VFS_GONE': return M.tr('err.macFileGone', { path: p });
+      case 'VFS_BUSY': return M.tr('err.macFileBusy', { path: p });
+      case 'VFS_TOO_LARGE': return M.tr('err.macFileTooLarge', { path: p });
+      case 'VFS_ROOT_DELETE': return M.tr('err.macRootDelete', { path: p });
+      default: return null;
+    }
+  }
+  /** Rethrows `e` as what the macro sees: a macro error for the conditions of §8.1, the VfsError itself for the caller's Java rule. */
+  function fsFail(M, e, shown) {
+    if (e instanceof MacroCancel || (e && e.macroText !== undefined)) throw e;
+    if (isVfsError(e)) {
+      const t = vfsText(M, e, shown);
+      if (t !== null) throw macroError(t);
+    }
+    throw e;
+  }
+  /* Java's I/O exception text on the platform the macro sees (F5): "<path> (No such file or directory)" … */
+  function javaIoText(code, p) {
+    const why = code === 'VFS_IS_A_DIR' ? 'Is a directory'
+      : (code === 'VFS_BAD_NAME' || code === 'VFS_BAD_PATH') ? 'Invalid argument'
+      : (code === 'VFS_NOT_FOUND' || code === 'VFS_NOT_A_DIR') ? 'No such file or directory' : 'Permission denied';
+    return p + ' (' + why + ')';
+  }
+  /* A failure that is not a VfsError (a defect of a backend, a codec) is logged and shown as Java would show an I/O failure. */
+  function asJavaCode(e) {
+    if (isVfsError(e)) return e.code;
+    console.error('[advanced-studio] macro file operation', e);
+    return 'VFS_IO';
+  }
+
+  /** One VFS operation under the root's policy (§7.2) and permission (§3.5): VFS_ASK waits for vfs.confirm, VFS_PERMISSION for
+   *  vfs.regrant, then the operation runs again. Any other failure is the caller's. */
+  function fsDo(M, op, tries) {
+    const n = tries || 0;
+    const retry = (e) => {
+      if (e && e.code === 'VFS_ASK') return confirmWrite(M, vfsDetails(e)).then(() => fsDo(M, op, n));
+      if (e && e.code === 'VFS_PERMISSION' && n < 2) return regrantRoot(M, vfsDetails(e)).then(() => fsDo(M, op, n + 1));
+      throw e;
+    };
+    let r;
+    try { r = op(); } catch (e) { return retry(e); }
+    return isThen(r) ? r.then(null, retry) : r;
+  }
+  function confirmWrite(M, d) {
+    const args = { rootId: d.rootId, root: d.root, action: d.action, path: d.path };
+    if (d.to !== undefined) args.to = d.to;
+    return M.rpc('vfs.confirm', args).then((r) => {
+      const c = r && r.choice;
+      if (c === 'allow') { M.vfs.allow(d.rootId); return; }
+      if (c === 'abort') throw new MacroCancel('abort');
+      throw macroError(M.tr('err.macWriteRefused', { path: d.path }));
+    });
+  }
+  function regrantRoot(M, d) {
+    return M.rpc('vfs.regrant', { rootId: d.rootId, root: d.root, mode: d.mode === 'readwrite' ? 'readwrite' : 'read' }).then((r) => {
+      if (r && r.ok === true && r.grant) { M.vfs.addGrant(r.grant); return; }
+      throw macroError(M.tr('err.macPermission', { name: d.root || '' }));
+    });
+  }
+  /**
+   * attempt(M, shown, op, onJava): op() under fsDo; a VfsError of §8.1 becomes its macro error, any other failure goes to
+   * onJava(code) (the Java call's own answer: a return value, or a throw of its text). Value or Promise.
+   */
+  function attempt(M, shown, op, onJava) {
+    const fail = (e) => {
+      if (e instanceof MacroCancel || (e && e.macroText !== undefined)) throw e;
+      if (isVfsError(e) && vfsText(M, e, shown) !== null) return fsFail(M, e, shown);
+      if (onJava) return onJava(asJavaCode(e), e);
+      return fsFail(M, e, shown);
+    };
+    let r;
+    try { r = fsDo(M, op); } catch (e) { return fail(e); }
+    return isThen(r) ? r.then(null, fail) : r;
+  }
+
+  /** The run's VFS; a failure kept from the start or from a background flush is raised here (§8.9). */
+  function vfsOf(M, shown) {
+    const raise = (e) => {
+      const t = isVfsError(e) ? vfsText(M, e, (e.path || shown)) : null;
+      if (t !== null) throw macroError(t);
+      if (e && e.macroText !== undefined) throw e;
+      throw macroError(javaIoText(asJavaCode(e), e && typeof e.path === 'string' ? e.path : shown));
+    };
+    if (M.fileFault) { const e = M.fileFault; M.fileFault = null; raise(e); }
+    if (M.vfs) return M.vfs;
+    if (M.vfsFault) raise(M.vfsFault);
+    throw macroError(M.tr('err.macNoStorage', { path: shown }));
+  }
+  /* IJMacroVFS itself (it loads with the language: absent only where the macro package is half-loaded, as in some tests). */
+  function needLib(M, s) {
+    const V = VFSLIB();
+    if (V) return V;
+    if (/:\/\/|file:\//.test(String(s))) throw macroError(M.tr('err.macNetwork'));
+    throw macroError(M.tr('err.macNoStorage', { path: String(s) }));
+  }
+  function norm(s) {
+    const V = VFSLIB();
+    return V ? V.normalizeSeparators(s) : String(s).replace(/\\/g, '/');
+  }
+  /** resolve(path) after §2.1, with the URL refusal first (§7.3). Throws a VfsError (BAD_PATH, NOT_GRANTED) or a macro error. */
+  function resolveIn(M, path, base) {
+    const s = norm(path);
+    const V = VFSLIB();
+    if (V && V.isUrl(s)) throw macroError(M.tr('err.macNetwork'));
+    return vfsOf(M, s).resolve(s, { base });
+  }
+  /* stat of a resolved path; `/` (the list of roots) is a directory. */
+  function statOf(M, r) {
+    if (r.isTop) return { kind: 'dir', size: 0, mtime: 0 };
+    return M.vfs.stat(r.vpath);
+  }
+  /* The whole content of a file (read with length -1), refused (VFS_TOO_LARGE) before anything is allocated when it would not fit
+   * `factor` times in the engine's free memory (an image file is decoded beside its bytes); a file up to READ_FLOOR always reads. */
+  const READ_FLOOR = 16 * 1048576;
+  function readAll(M, vpath, factor) {
+    const o = { offset: 0, length: -1 };
+    const free = M.E && typeof M.E.freeBytes === 'function' ? Number(M.E.freeBytes()) : NaN;
+    if (free === free) o.max = Math.max(READ_FLOOR, Math.floor(free / (factor > 1 ? factor : 1)));
+    return M.vfs.read(vpath, o);
+  }
+
+  /** IJ.error(title, msg) reached from a built-in (F12): the message box then the macro stops quietly; with
+   *  IJ.redirectErrorMessages() the message goes to the Log and an Open / Reader error does not stop the macro (IJ.error 1.54p). */
+  function errorBox(M, title, msg, ctx) {
+    if (ctx && ctx.viaMacroRun) return Promise.reject(macroError(msg));
+    if (M.redirectErrors) {
+      M.redirectErrors = false;
+      M.log(title + ': ' + msg);
+      if (title.indexOf('Open') >= 0 || title.indexOf('Reader') >= 0) return Promise.resolve(null);
+      return Promise.reject(new MacroCancel('abort'));
+    }
+    return M.rpc('dialog.message', { title, text: msg }).then(() => { throw new MacroCancel('abort'); });
+  }
+  /** IJ.error(msg): the box titled "ImageJ", and the macro goes on (F12). */
+  function errorBoxContinue(M, msg) {
+    if (M.redirectErrors) { M.redirectErrors = false; M.log('ImageJ: ' + msg); return Promise.resolve(null); }
+    return M.rpc('dialog.message', { title: 'ImageJ', text: msg }).then(() => null);
+  }
+
+  // ---------------------------------------------------------------- pickers (F11, FILES.md §6)
+  /* SaveDialog.setExtension's split: the page shows defaultName + ext. */
+  function splitDefault(name, ext) {
+    let n = String(name || 'Untitled');
+    const dot = n.lastIndexOf('.');
+    if (dot > 0 && ext) n = n.substring(0, dot);
+    return n;
+  }
+  /**
+   * pick(M, kind, prompt, source, o) → the chosen vpath ('directory' ends with '/'). Cancel = Macro.abort (every 1.54p dialog).
+   * An OpenDialog and a SaveDialog set lastDir / lastName (getDirectory / getFileName) and the default directory; a DirectoryChooser
+   * nothing.
+   */
+  function pick(M, kind, prompt, source, o) {
+    const args = { kind, prompt: String(prompt), source };
+    if (o && o.defaultName !== undefined) args.defaultName = o.defaultName;
+    if (o && o.ext !== undefined) args.ext = o.ext;
+    return M.rpc('vfs.pick', args).then((r) => {
+      if (!r || r.cancelled || typeof r.vpath !== 'string' || !r.vpath) throw new MacroCancel('abort');
+      if (r.grant && M.vfs) M.vfs.addGrant(r.grant);
+      const V = VFSLIB();
+      const vpath = V ? V.normalizeSeparators(r.vpath) : r.vpath;
+      if (kind !== 'directory') {
+        const slash = vpath.lastIndexOf('/');
+        const dir = vpath.substring(0, slash + 1), name = vpath.substring(slash + 1);
+        MOUNT.defaultDir = dir;
+        MOUNT.lastDir = dir; MOUNT.lastName = name;
+      }
+      return vpath;
+    });
+  }
+  /** OpenDialog.lookupPathVariable / SaveDialog.isMacro: a path option with no '.' that names a string variable is its value. */
+  function lookupPathVariable(f, path) {
+    if (path === null || path === undefined || path.indexOf('.') !== -1) return path;
+    const name = path.charAt(0) === '&' ? path.substring(1) : path;
+    const v = f && f.interp ? findVariable(f.interp, name) : null;
+    const s = v && v.getArray() === null ? v.getString() : null;
+    return s !== null && s !== undefined ? s : path;
+  }
+
+  // ---------------------------------------------------------------- Java File on a string (pure, §2.4)
+  const jName = (s) => VFSLIB().javaName(norm(s));
+  const jParent = (s) => VFSLIB().javaParent(norm(s));
+  /* Date.toString(): "EEE MMM dd HH:mm:ss zzz yyyy" in the local zone. */
+  function javaDate(ms) {
+    const d = new Date(ms);
+    const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const p2 = (n) => (n < 10 ? '0' : '') + n;
+    let zone = 'UTC';
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(d);
+      const z = parts.find((x) => x.type === 'timeZoneName');
+      if (z) zone = z.value;
+    } catch (_) { zone = 'UTC'; }
+    const m = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(zone);
+    if (m) zone = 'GMT' + m[1] + p2(+m[2]) + ':' + (m[3] || '00');
+    return DAYS[d.getDay()] + ' ' + MONTHS[d.getMonth()] + ' ' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' +
+      p2(d.getSeconds()) + ' ' + zone + ' ' + d.getFullYear();
+  }
+
+  // ---------------------------------------------------------------- File.* (Functions.doFile 1.54p, its order kept)
+  const WRITER_SUFFIXES = ['.txt', '.java', '.xls', '.csv', '.tsv', '.ijm', '.html', '.htm'];
+  /* the members that may wait for a backend or the operator (the others never suspend) */
+  const FILE_SUSPENDS = Object.freeze({ open: true, openAsString: true, openAsRawString: true, openDialog: true, close: true, rename: true,
+    copy: true, append: true, saveString: true, getLength: true, length: true, exists: true, isDirectory: true, isFile: true,
+    makeDirectory: true, mkdir: true, lastModified: true, dateLastModified: true, delete: true });
+
+  function fileMemberName(it) {
+    it.getToken();
+    if (it.token !== DOT) it.error("'.' expected");
+    it.getToken();
+    if (!(it.token === WORD || it.token === K.STRING_FUNCTION || it.token === K.NUMERIC_FUNCTION || it.token === K.PREDEFINED_FUNCTION))
+      it.error('Function name expected: ');
+    return it.tokenString;
+  }
+  /* The members that need no file system: the same body for the generator and the fast path. */
+  function filePure(f, M, name, arg) {
+    const V = VFSLIB();
+    const s = norm(arg);
+    switch (name) {
+      case 'getNameWithoutExtension': return V.getNameWithoutExtension(s);
+      case 'getName': return V.javaName(s);
+      case 'getDirectory': { const p = V.javaParent(s); return p !== null ? p + '/' : ''; }
+      case 'getAbsolutePath': return V.javaAbsolute(s);
+      case 'getParent': return V.javaParent(s);
+      default: return undefined;
+    }
+  }
+  const FILE_PURE_ARG = new Set(['getNameWithoutExtension', 'getName', 'getDirectory', 'getAbsolutePath', 'getParent']);
+
+  function* fileGen(f) {
+    const it = f.interp;
+    const M = runOf(f);
+    const name = fileMemberName(it);
+    const V = VFSLIB();
+    if (!V) { it.error(M.tr('err.macNotInBrowser', { name: 'File.' + name })); return ''; }
+    switch (name) {
+      case 'open': {
+        if (f.writer !== null) { it.error('Currently, only one file can be open at a time'); return ''; }
+        const path = yield* f.getFirstString();
+        let defaultName = null;
+        if (it.nextToken() === RP) it.getRightParen(); else defaultName = yield* f.getLastString();
+        return yield* f.hostHook(() => fileOpenWriter(f, M, path, defaultName));
+      }
+      case 'openAsString': { const p = yield* f.getStringArg(); return yield* f.hostHook(() => openAsString(f, M, p)); }
+      case 'openAsRawString': {
+        const p = yield* f.getFirstString();
+        let max = 5000, specified = false;
+        if (it.nextToken() === COMMA) { max = d2i(yield* f.getNextArg()); specified = true; }
+        it.getRightParen();
+        return yield* f.hostHook(() => openAsRawString(f, M, p, max, specified));
+      }
+      case 'openUrlAsString': yield* f.getStringArg(); it.error(M.tr('err.macNetwork')); return '';
+      case 'openDialog': {
+        const title = yield* f.getStringArg();
+        return yield* f.hostHook(() => pick(M, 'file', title, 'openDialog'));
+      }
+      case 'close': {
+        const s = yield* f.getStringArg();
+        if (s !== '~0~') it.error('Invalid file variable');
+        return yield* f.hostHook(() => closeWriter(f, M));
+      }
+      case 'separator': it.getParens(); return '/';
+      case 'directory': it.getParens(); return MOUNT.lastDir !== null ? MOUNT.lastDir : '';
+      case 'name': it.getParens(); return MOUNT.lastName !== null ? MOUNT.lastName : '';
+      case 'nameWithoutExtension': it.getParens(); return MOUNT.lastName === null ? '' : V.nameWithoutExtension(MOUNT.lastName);
+      case 'rename': {
+        const a = yield* f.getFirstString();
+        const b = yield* f.getLastString();
+        checkPath(it, a); checkPath(it, b);
+        return yield* f.hostHook(() => fileRename(M, a, b));
+      }
+      case 'copy': {
+        const a = yield* f.getFirstString();
+        const b = yield* f.getLastString();
+        return yield* f.hostHook(() => fileCopy(M, a, b));
+      }
+      case 'append': case 'saveString': {
+        const s = yield* f.getFirstString();
+        const p = yield* f.getLastString();
+        return yield* f.hostHook(() => writeString(M, name === 'append' ? s + '\n' : s, p, name === 'append'));
+      }
+      case 'openSequence': {
+        yield* f.getFirstString();
+        if (it.nextToken() === COMMA) yield* f.getNextString();
+        it.getRightParen();
+        it.error(M.tr('err.macRefused', { command: 'File.openSequence', reason: M.tr('err.macReasonSequence') }));
+        return '';
+      }
+      default:
+    }
+    if (name.startsWith('setDefaultDir')) { MOUNT.defaultDir = V.addSeparator(norm(yield* f.getStringArg())); return null; }
+    if (name.startsWith('getDefaultDir')) return MOUNT.defaultDir !== null ? MOUNT.defaultDir : '';
+    const arg = yield* f.getStringArg();
+    if (FILE_PURE_ARG.has(name)) return filePure(f, M, name, arg);
+    switch (name) {
+      case 'getLength': case 'length': case 'exists': case 'isDirectory': case 'isFile': case 'lastModified': case 'dateLastModified':
+        return yield* f.hostHook(() => fileStat(M, name, arg));
+      case 'makeDirectory': case 'mkdir': return yield* f.hostHook(() => fileMkdir(M, arg));
+      case 'delete': return yield* f.hostHook(() => fileDelete(M, arg));
+      default: it.error('Unrecognized File function ' + name); return null;
+    }
+  }
+  function fileSync(f) {
+    const it = f.interp;
+    const M = runOf(f);
+    const name = fileMemberName(it);
+    const V = VFSLIB();
+    if (!V) { it.error(M.tr('err.macNotInBrowser', { name: 'File.' + name })); return ''; }
+    if (FILE_SUSPENDS[name]) throw ijError('IJ_INTERNAL', 'a waiting File member ran in the fast path');
+    switch (name) {
+      case 'openUrlAsString': f.getStringArg$s(); it.error(M.tr('err.macNetwork')); return '';
+      case 'separator': it.getParens(); return '/';
+      case 'directory': it.getParens(); return MOUNT.lastDir !== null ? MOUNT.lastDir : '';
+      case 'name': it.getParens(); return MOUNT.lastName !== null ? MOUNT.lastName : '';
+      case 'nameWithoutExtension': it.getParens(); return MOUNT.lastName === null ? '' : V.nameWithoutExtension(MOUNT.lastName);
+      case 'openSequence': {
+        f.getFirstString$s();
+        if (it.nextToken() === COMMA) f.getNextString$s();
+        it.getRightParen();
+        it.error(M.tr('err.macRefused', { command: 'File.openSequence', reason: M.tr('err.macReasonSequence') }));
+        return '';
+      }
+      default:
+    }
+    if (name.startsWith('setDefaultDir')) { MOUNT.defaultDir = V.addSeparator(norm(f.getStringArg$s())); return null; }
+    if (name.startsWith('getDefaultDir')) return MOUNT.defaultDir !== null ? MOUNT.defaultDir : '';
+    const arg = f.getStringArg$s();
+    if (FILE_PURE_ARG.has(name)) return filePure(f, M, name, arg);
+    it.error('Unrecognized File function ' + name);
+    return null;
+  }
+  /* Functions.checkPath: new File(s).getPath() equal to "0" or "NaN" (a number passed where a path was meant). */
+  function checkPath(it, s) {
+    const p = norm(s).replace(/\/+/g, '/').replace(/(.)\/$/, '$1');
+    if (p === '0' || p === 'NaN') it.error('Invalid path');
+  }
+
+  function fileStat(M, member, arg) {
+    const shown = norm(arg);
+    const answer = (st) => {
+      switch (member) {
+        case 'exists': return st ? '1' : '0';
+        case 'isDirectory': return st && st.kind === 'dir' ? '1' : '0';
+        case 'isFile': return st && st.kind === 'file' ? '1' : '0';
+        case 'getLength': case 'length': return st && st.kind === 'file' ? String(st.size) : '0';
+        case 'lastModified': return st ? String(Math.trunc(st.mtime)) : '0';
+        default: return javaDate(st ? st.mtime : 0);
+      }
+    };
+    return attempt(M, shown, () => mp(statOf(M, resolveIn(M, arg, HOME)), answer), () => answer(null));
+  }
+  function fileMkdir(M, arg) {
+    const shown = norm(arg);
+    return attempt(M, shown, () => mp(M.vfs.mkdir(resolveIn(M, arg, HOME).vpath), () => null), () => null);
+  }
+  function fileDelete(M, arg) {
+    const shown = norm(arg);
+    return attempt(M, shown, () => {
+      const r = resolveIn(M, arg, HOME);
+      if (r.isTop) return '0';
+      return mp(M.vfs.remove(r.vpath), (b) => (b ? '1' : '0'));
+    }, () => '0');
+  }
+
+  /* Functions.openFile: one PrintWriter per interpreter (f.writer), created / truncated now, flushed per F15. */
+  function fileOpenWriter(f, M, path, defaultName) {
+    const create = (p) => {
+      const shown = norm(p);
+      return attempt(M, shown, () => {
+        const r = resolveIn(M, p, HOME);
+        return mp(M.vfs.write(r.vpath, []), () => r.vpath);
+      }, (code) => { throw macroError('File open error \n"' + javaIoText(code, shown) + '"\n'); });
+    };
+    let target;
+    if (path === '' || defaultName !== null) {
+      const title = defaultName !== null ? path : 'openFile';
+      const dn = defaultName !== null ? defaultName : 'log.txt';
+      target = pick(M, 'save', title, 'fileOpen', { defaultName: splitDefault(dn, '.txt'), ext: '.txt' }).then(create);
+    } else {
+      const shown = norm(path);
+      target = mp(attempt(M, shown, () => mp(statOf(M, resolveIn(M, path, HOME)), (st) => !!st), () => false), (exists) => {
+        if (exists && !WRITER_SUFFIXES.some((x) => path.endsWith(x))) throw macroError("File exists and suffix is not '.txt', '.java', etc.");
+        return create(path);
+      });
+    }
+    return mp(target, (vpath) => { f.writer = makeWriter(M, vpath, path === '' ? vpath : norm(path)); return '~0~'; });
+  }
+  function closeWriter(f, M) {
+    const w = f.writer;
+    if (!w) return null;
+    f.writer = null;
+    const r = flushWriters(M, false);
+    const done = () => { dropWriter(M, w); return null; };
+    return isThen(r) ? r.then(done, (e) => { dropWriter(M, w); return fsFail(M, e, w.shown); }) : done();
+  }
+  /* Functions.doFile rename: File.renameTo (same root only, never over an existing name) → "1" / "0". */
+  function fileRename(M, a, b) {
+    const shown = norm(a);
+    return attempt(M, shown, () => {
+      const ra = resolveIn(M, a, HOME), rb = resolveIn(M, b, HOME);
+      return mp(M.vfs.rename(ra.vpath, rb.vpath), (ok) => (ok ? '1' : '0'));
+    }, () => '0');
+  }
+  /* Tools.copyFile: "Source file does not exist", else the I/O exception's message. */
+  function fileCopy(M, a, b) {
+    const sa = norm(a), sb = norm(b);
+    return attempt(M, sb, () => {
+      const ra = resolveIn(M, a, HOME), rb = resolveIn(M, b, HOME);
+      return mp(statOf(M, ra), (st) => {
+        if (!st) throw macroError('Source file does not exist');
+        if (st.kind === 'dir') throw macroError(javaIoText('VFS_IS_A_DIR', sa));
+        return mp(M.vfs.copy(ra.vpath, rb.vpath), () => null);
+      });
+    }, (code) => {
+      // File.createNewFile under a missing folder: the JVM's message carries no path
+      if (code === 'VFS_NOT_FOUND' || code === 'VFS_NOT_A_DIR') throw macroError('No such file or directory');
+      throw macroError(javaIoText(code, sb));
+    });
+  }
+  /* IJ.saveString / IJ.append (IJ.write): a SaveDialog for '', the error is ""+e. */
+  function writeString(M, text, path, append) {
+    const go = (p) => {
+      const shown = norm(p);
+      return attempt(M, shown, () => mp(M.vfs.write(resolveIn(M, p, HOME).vpath, utf8(text), { append }), () => null),
+        (code) => { throw macroError('java.io.FileNotFoundException: ' + javaIoText(code, shown)); });
+    };
+    if (path === '') return pick(M, 'save', append ? 'Append String...' : 'Save String...', append ? 'append' : 'saveString', { defaultName: 'Untitled', ext: '.txt' }).then(go);
+    return go(path);
+  }
+  /* IJ.openAsString: BufferedReader.readLine + "\n" per line (UTF-8, a BOM kept). */
+  function linesOf(u8) {
+    const T = root.IJTextIo;
+    if (T && typeof T.openAsStringText === 'function') return T.openAsStringText(u8);
+    const text = utf8Text(u8);
+    if (text === '') return '';
+    const lines = text.split(/\r\n|\r|\n/);
+    if (lines[lines.length - 1] === '') lines.pop();
+    return lines.map((l) => l + '\n').join('');
+  }
+  /** IJ.openAsString(path) as Functions.openAsString uses it: "Error: …" strings become a macro error. */
+  function openAsStringRaw(M, path, source) {
+    const go = (p) => {
+      const shown = norm(p);
+      return attempt(M, shown, () => {
+        const r = resolveIn(M, p, HOME);
+        return mp(statOf(M, r), (st) => {
+          if (!st) return 'Error: file not found';
+          if (st.kind === 'dir') return 'Error: ' + javaIoText('VFS_IS_A_DIR', shown);
+          return mp(readAll(M, r.vpath), linesOf);
+        });
+      }, (code) => 'Error: ' + javaIoText(code, shown));
+    };
+    if (path === '') return pick(M, 'file', 'Open Text File', source || 'openAsString').then(go);
+    return go(path);
+  }
+  function openAsString(f, M, path) {
+    return mp(openAsStringRaw(M, path), (str) => {
+      if (str.startsWith('Error: ')) throw macroError(str);
+      return str;
+    });
+  }
+  function openAsRawString(f, M, path, max0, specified) {
+    const go = (p) => {
+      const shown = norm(p);
+      const ioError = (msg) => { throw macroError('File open error \n"' + msg + '"\n'); };
+      return attempt(M, shown, () => {
+        const r = resolveIn(M, p, HOME);
+        return mp(statOf(M, r), (st) => {
+          if (!st) throw macroError('File not found');
+          if (st.kind === 'dir') return ioError(javaIoText('VFS_IS_A_DIR', shown));
+          let max = max0;
+          const len = st.size;
+          if (max > len || (p.endsWith('.txt') && !specified)) max = len;
+          if (max < 0) return ioError(String(max));
+          if (max === 0) return '';
+          return mp(M.vfs.read(r.vpath, { offset: 0, length: max }), latin1Text);
+        });
+      }, (code) => ioError(javaIoText(code, shown)));
+    };
+    if (path === '') return pick(M, 'file', 'Open As String', 'openAsRawString').then(go);
+    return go(path);
+  }
+
+  // ---------------------------------------------------------------- getDirectory / getDir (IJ.getDirectory 1.54p)
+  const DIR_KEYWORDS = Object.freeze({ plugins: '/imagej/plugins/', macros: '/macros/', luts: '/luts/', home: '/home/', downloads: '/Downloads/',
+    startup: '/imagej/', imagej: '/imagej/', preferences: '/home/.imagej/', temp: '/tmp/', cwd: '/home/' });
+  function getDirectoryOf(M, title) {
+    const V = VFSLIB();
+    const t2 = String(title).toLowerCase();
+    const sep = (d) => { const r = d === null || d === undefined ? null : (V ? V.addSeparator(d) : d); return r === null ? '' : r; };
+    if (Object.prototype.hasOwnProperty.call(DIR_KEYWORDS, t2)) return DIR_KEYWORDS[t2];
+    if (t2 === 'current' || t2 === 'default') return sep(MOUNT.defaultDir);
+    if (t2 === 'image') { const im = M.images.get(M.current); return sep(im && im.file && im.file.dir ? im.file.dir : null); }
+    if (t2 === 'file') return sep(MOUNT.lastDir);
+    vfsOf(M, '');
+    // DirectoryChooser: the default directory is put back after the dialog; Cancel = Macro.abort
+    return pick(M, 'directory', title, 'getDirectory').then((vp) => sep(vp));
+  }
+  /** IJMacro.analyze / the fast path: a getDirectory() whose argument is a literal keyword never waits. */
+  function getDirectorySuspends(pgm, j) {
+    const code = pgm.code, MASK = K.TOK_MASK, SHIFT = K.TOK_SHIFT;
+    if ((code[j + 1] & MASK) !== LP || (code[j + 2] & MASK) !== K.STRING_CONSTANT || (code[j + 3] & MASK) !== RP) return true;
+    const s = String(pgm.table[code[j + 2] >> SHIFT].str).toLowerCase();
+    return !(Object.prototype.hasOwnProperty.call(DIR_KEYWORDS, s) || s === 'current' || s === 'default' || s === 'image' || s === 'file');
+  }
+
+  // ---------------------------------------------------------------- getFileList (Functions.getFileList 1.54p, F5)
+  function fileListOf(M, dir) {
+    const shown = norm(dir);
+    return attempt(M, shown, () => {
+      const r = resolveIn(M, dir, HOME);
+      return mp(M.vfs.list(r.vpath), (list) => {
+        if (!list) return [];
+        const kinds = new Map();
+        for (const e of list) if (e && typeof e.name === 'string') kinds.set(e.name, e.kind);
+        const names = Array.from(kinds.keys()).sort();
+        const out = [];
+        for (const n of names) {
+          if (n.startsWith('.') || n === 'Thumbs.db') continue;
+          out.push(kinds.get(n) === 'dir' ? n + '/' : n);
+        }
+        return out;
+      });
+    }, () => []);
+  }
+
+  // ---------------------------------------------------------------- open() (Functions.open → IJ.open → Opener 1.54p)
+  /** Opener.getFileType 1.54p on the first 132 bytes (zero-padded: what FileInputStream.read leaves) and the file name. */
+  function fileTypeOf(head, fileName) {
+    if (!head) return 'UNKNOWN';
+    const buf = new Uint8Array(132);
+    buf.set(head.subarray(0, Math.min(132, head.length)));
+    const b0 = buf[0], b1 = buf[1], b2 = buf[2], b3 = buf[3];
+    const dicm = buf[128] === 68 && buf[129] === 73 && buf[130] === 67 && buf[131] === 77;
+    let name = fileName;
+    if (name.endsWith('.msr') || name.endsWith('.MSR')) return 'UNKNOWN';
+    if (dicm && ((b0 === 73 && b1 === 73) || (b0 === 77 && b1 === 77))) return 'TIFF_AND_DICOM';
+    if (name.endsWith('.lsm')) return 'UNKNOWN';
+    // an OME-TIFF is Bio-Formats' (FILES.md §8.5.1)
+    if (name.indexOf('.ome.tif') >= 0) return 'UNKNOWN';
+    if (b0 === 73 && b1 === 73 && b2 === 42 && b3 === 0) return 'TIFF';
+    if (b0 === 77 && b1 === 77 && b2 === 0 && b3 === 42) return 'TIFF';
+    if (b0 === 255 && b1 === 216 && b2 === 255) return 'JPEG';
+    if (b0 === 71 && b1 === 73 && b2 === 70 && b3 === 56) return 'GIF';
+    name = name.toLowerCase();
+    if (dicm || name.endsWith('.dcm')) return 'DICOM';
+    if ((b0 === 8 || b0 === 2) && b1 === 0 && b3 === 0 && !name.endsWith('.spe') && name !== 'fid') return 'DICOM';
+    if (b0 === 80 && (b1 === 49 || b1 === 52 || b1 === 50 || b1 === 53 || b1 === 51 || b1 === 54) && (b2 === 10 || b2 === 13 || b2 === 32 || b2 === 9)) return 'PGM';
+    if (name.endsWith('.lut')) return 'LUT';
+    if (b0 === 137 && b1 === 80 && b2 === 78 && b3 === 71) return 'PNG';
+    if (name.endsWith('.zip')) return 'ZIP';
+    if ((b0 === 83 && b1 === 73 && b2 === 77 && b3 === 80) || name.endsWith('.fts.gz') || name.endsWith('.fits.gz')) return 'FITS';
+    if (name.endsWith('.java') || name.endsWith('.txt') || name.endsWith('.ijm') || name.endsWith('.js') || name.endsWith('.bsh') ||
+      name.endsWith('.py') || name.endsWith('.html')) return 'JAVA_OR_TEXT';
+    if (b0 === 73 && b1 === 111) return 'ROI';
+    if ((b0 === 111 && b1 === 106 && b2 === 106 && b3 === 0) || name.endsWith('.ojj')) return 'OJJ';
+    if (name.endsWith('.xls') || name.endsWith('.csv') || name.endsWith('.tsv')) return 'TABLE';
+    if (name.endsWith('.avi')) return 'AVI';
+    let isText = true;
+    for (let i = 0; i < 10; i++) {
+      const c = buf[i];
+      if ((c < 32 && c !== 9 && c !== 10 && c !== 13) || c > 126) { isText = false; break; }
+    }
+    if (isText) return 'TEXT';
+    if ((b0 === 66 && b1 === 77) || name.endsWith('.dib')) return 'BMP';
+    if (name.endsWith('.raw')) return 'RAW';
+    return 'UNKNOWN';
+  }
+  const dirOfVpath = (vp) => vp.substring(0, vp.lastIndexOf('/') + 1);
+  const nameOfVpath = (vp) => vp.substring(vp.lastIndexOf('/') + 1);
+  function originOf(r, name, format) {
+    return { rootId: r.rootId, root: r.root, rel: r.rel, dir: dirOfVpath(r.vpath), name, format };
+  }
+  /* WindowManager.getUniqueName 1.54p over the displayed images (batch-mode images are never shown, never compared). */
+  function uniqueTitle(M, name) {
+    const shown = (t) => { for (const im of M.images.values()) if (!im.hidden && im.title === t) return true; return false; };
+    if (!shown(name)) return name;
+    let name2 = name, ext = '';
+    let len = name2.length;
+    const lastDot = name2.lastIndexOf('.');
+    if (lastDot !== -1 && len - lastDot < 6 && lastDot !== len - 1) { ext = name2.substring(lastDot, len); name2 = name2.substring(0, lastDot); }
+    const lastDash = name2.lastIndexOf('-');
+    len = name2.length;
+    if (lastDash !== -1 && len - lastDash < 4 && lastDash < len - 1 && /[1-9]/.test(name2.charAt(lastDash + 1))) name2 = name2.substring(0, lastDash);
+    for (let i = 1; i <= 99; i++) { const n3 = name2 + '-' + i + ext; if (!shown(n3)) return n3; }
+    return name;
+  }
+  /** A decoded file becomes a document of the run (F19): the file name as title, its origin (null: an image made from a ROI or a LUT
+   *  file, which ImageJ gives no FileInfo) for getInfo / File › Save. */
+  async function showOpened(M, image, origin, title, unique) {
+    await M.commitAll();
+    const t = M.batch || unique === false ? title : uniqueTitle(M, title);
+    image.name = t;
+    const info = M.E.createDoc(image, { hidden: M.batch, clean: true, provenance: origin ? { opened: true, file: origin } : { opened: true } });
+    if (M.batch) M.batchDocs.push(info.docId);
+    await adopt(M, info);
+    const im = M.images.get(info.docId);
+    if (im) { im.title = t; im.file = origin ? { dir: origin.dir, name: origin.name, format: origin.format } : null; }
+    M.front = { kind: 'image', title: t };
+    return info.docId;
+  }
+  /* The n-th plane (1-based, ImageJ stack order) of a decoded stack as a single image (Opener.openTiff(path, n)). */
+  function planeOf(image, n) {
+    const nZ = image.nZ || 1, nT = image.nT || 1, nC = image.rgb ? 1 : image.channels.length;
+    const total = nC * nZ * nT;
+    if (!(n >= 1 && n <= total)) throw ijError('IJ_BAD_ARGS', 'plane');
+    const k = n - 1;
+    const c = image.rgb ? 0 : k % nC, z = Math.floor(k / nC) % nZ, t = Math.floor(k / (nC * nZ));
+    const pi = t * nZ + z;
+    const chans = image.rgb ? image.channels : [image.channels[c]];
+    return Object.assign({}, image, { nZ: 1, nT: 1, hyperstack: false, mode: undefined, labels: undefined,
+      channels: chans.map((ch) => Object.assign({}, ch, { planes: [ch.planes[pi]] })) });
+  }
+  /** E.decodeImage (FILES.md §10.2), with the core TIFF reader when the engine has no decoder for a TIFF. */
+  async function decodeFile(M, bytes, o) {
+    if (typeof M.E.decodeImage === 'function') return M.E.decodeImage(bytes, o);
+    if (o.kind === 'tiff' && root.IJTiff && typeof root.IJTiff.read === 'function') {
+      const image = await root.IJTiff.read(bytes, o.name);
+      return o.plane ? planeOf(image, o.plane) : image;
+    }
+    throw ijError('IJ_IO_DECODE', 'no decoder');
+  }
+  /* A decoder failure as ImageJ shows it: too large = the browser's limit, no decoder = not in the browser, else the Opener's box. */
+  function decodeFailure(M, err, full, name, ctx) {
+    const code = err && err.code;
+    if (code === 'IJ_IO_TOO_LARGE' || code === 'IJ_PICTURE_TOO_LARGE' || code === 'IJ_BUDGET' || code === 'IJ_TOO_LARGE' || code === 'IJ_OVER_BUDGET')
+      throw macroError(M.tr('err.macFileTooLarge', { path: full }));
+    // Opener.openTiff(path, n) with n outside the stack: the Opener's box
+    if (code === 'IJ_IO_PLANE' && err.details && typeof err.details.ijText === 'string') return errorBox(M, 'Opener', err.details.ijText, ctx);
+    if (code === 'IJ_IO_DECODE' || code === 'IJ_IO_ENCODE') throw macroError(M.tr('err.macNotInBrowser', { name: 'open("' + name + '")' }));
+    if (err && err.macroText !== undefined) throw err;
+    if (err instanceof MacroCancel) throw err;
+    console.error('[advanced-studio] macro open', err);
+    return errorBox(M, 'Opener', 'Unsupported format or file not found:\n' + full, ctx);
+  }
+  /* o.plane: IJ.open(path, n), shown by ImagePlus.show without WindowManager.checkForDuplicateName (no unique title);
+   * o.noOrigin: TextReader's image has no FileInfo directory (getInfo("image.directory") is ""). */
+  async function openImageFile(M, r, name, kind, format, ctx, o) {
+    const opt = o || {};
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath, 2), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+    let image;
+    try { image = await decodeFile(M, bytes, { name, kind, plane: opt.plane || undefined }); } catch (err) { return decodeFailure(M, err, r.vpath, name, ctx); }
+    return showOpened(M, image, opt.noOrigin ? null : originOf(r, name, format), name, opt.plane ? false : undefined);
+  }
+  /** Opener.open(path) 1.54p. ctx = { viaMacroRun } (F12). */
+  async function openerOpen(f, M, raw, ctx) {
+    const s = norm(raw);
+    const V = needLib(M, s);
+    if (V.isUrl(s)) throw macroError(M.tr('err.macNetwork'));
+    if (s.endsWith('.jar') || s.endsWith('.class')) throw macroError(M.tr('err.macNotInBrowser', { name: 'open("' + s + '")' }));
+    if (BIO_EXT.test(s)) throw macroError(M.tr('err.macBioFormats'));
+    let r;
+    try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+    const full = r.vpath;
+    const name = V.javaName(full);
+    MOUNT.lastDir = dirOfVpath(full);
+    MOUNT.lastName = name;
+    const probe = await attempt(M, full, () => mp(statOf(M, r), (st) => {
+      if (st && st.kind === 'dir') return { st, head: null };
+      if (!st) return { st: null, head: null };
+      return mp(M.vfs.read(full, { offset: 0, length: Math.min(132, st.size) }), (head) => ({ st, head }));
+    }), () => ({ st: null, head: null }));
+    if (probe.st && probe.st.kind === 'dir') throw macroError(M.tr('err.macRefused', { command: 'open("' + s + '")', reason: M.tr('err.macReasonSequence') }));
+    if (!probe.st) {
+      // Opener.open, case UNKNOWN of a missing file: the full path, or its name when longer than 64 characters
+      let p = full;
+      if (p.length > 64) p = name;
+      return errorBox(M, 'Opener', 'File not found:' + (p.length <= 64 ? ' \n' + p : ''), ctx);
+    }
+    const type = s.endsWith('.txt') ? 'JAVA_OR_TEXT' : fileTypeOf(probe.head, name);
+    switch (type) {
+      case 'TIFF': return openImageFile(M, r, name, 'tiff', 'tiff', ctx);
+      case 'JPEG': return openImageFile(M, r, name, 'picture', 'jpeg', ctx);
+      case 'GIF': return openImageFile(M, r, name, 'picture', 'gif', ctx);
+      case 'PNG': return openImageFile(M, r, name, 'picture', 'png', ctx);
+      case 'BMP': return openImageFile(M, r, name, 'picture', 'bmp', ctx);
+      case 'ZIP': return openZipFile(M, r, name, ctx);
+      case 'LUT': return openLutFile(M, r, name, ctx);
+      case 'ROI': return openRoiFile(M, r, name, ctx);
+      case 'TABLE': return openTableFile(M, r, name, { title: name.startsWith('Results.') ? 'Results' : name, box: 'Open Table' }, ctx);
+      case 'JAVA_OR_TEXT': case 'TEXT': return openTextWindow(M, r, name);
+      case 'UNKNOWN': return errorBox(M, 'Opener', 'Unsupported format or file not found:\n' + full, ctx);
+      default: throw macroError(M.tr('err.macNotInBrowser', { name: 'open("' + name + '")' }));
+    }
+  }
+  /* F20: an Editor file (.txt .ijm .java …) goes to a Studio text window titled with its name, never into the Macro Editor. */
+  async function openTextWindow(M, r, name) {
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+    await M.rpc('text.open', { title: name, text: linesOf(bytes) });
+    M.front = { kind: 'text', title: name };
+    M.textWins.add(name);
+    return null;
+  }
+  /* ZipInputStream.getNextEntry: the name in the first local file header (null: no entry). */
+  function firstZipName(bytes) {
+    if (bytes.length < 30) return null;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (dv.getUint32(0, true) !== 0x04034b50) return bytes.length >= 22 && dv.getUint32(0, true) === 0x06054b50 ? null : undefined;
+    const flags = dv.getUint16(6, true), n = dv.getUint16(26, true);
+    if (30 + n > bytes.length) return undefined;
+    const raw = bytes.subarray(30, 30 + n);
+    return (flags & 0x0800) ? utf8Text(raw) : latin1Text(raw);
+  }
+  /* The room an archive's inflated entries may take: the engine's free memory (no limit without an engine that says). */
+  function zipRoom(M) {
+    const free = M.E && typeof M.E.freeBytes === 'function' ? Number(M.E.freeBytes()) : NaN;
+    return free === free ? free : undefined;
+  }
+  function zipEntries(M, bytes, only) {
+    const C = root.IJRoiCodec;
+    if (!C || typeof C.zipRead !== 'function') throw ijError('IJ_MODULE_MISSING', 'zip');
+    return C.zipRead(bytes, { inflateRaw: C.inflateRaw, only, maxTotal: zipRoom(M) });
+  }
+  /** Opener.openZip 1.54p: the first entry decides (a ROI set, a TIFF, else the Opener's message). */
+  async function openZipFile(M, r, name, ctx) {
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath, 2), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+    const firstName = firstZipName(bytes);
+    if (firstName === null) return null;
+    if (firstName === undefined) return errorBox(M, 'Opener', 'java.util.zip.ZipException: invalid zip file', ctx);
+    if (firstName.endsWith('.roi')) {
+      // In a macro RoiManager.getInstance() is never null (Interpreter.getBatchModeRoiManager), so Opener.openZip takes its other
+      // branch: IJ.runMacro('roiManager("Open", getArgument())') in a new interpreter that shares the static batch mode and opens the
+      // set into that interpreter's own batch-mode ROI Manager, dropped when it ends (jar: no Log line, roiManager("count") unchanged).
+      if (M.batch) return null;
+      return rmOpenZip(M, r.vpath, bytes);
+    }
+    if (!firstName.endsWith('.tif')) return errorBox(M, 'Opener', 'This ZIP archive does not contain a TIFF or DICOM file, or ROIs:\n   ' + r.vpath, ctx);
+    let entries;
+    // ZipInputStream: Opener.openZip reads the first entry alone
+    try { entries = await zipEntries(M, bytes, (n) => n === firstName); } catch (err) {
+      if (err && err.code === 'IJ_IO_TOO_LARGE') throw macroError(M.tr('err.macFileTooLarge', { path: r.vpath }));
+      return errorBox(M, 'Opener', 'java.util.zip.ZipException: invalid zip file', ctx);
+    }
+    const first = entries[0];
+    if (!first) return errorBox(M, 'Opener', 'java.util.zip.ZipException: invalid zip file', ctx);
+    let image;
+    try { image = await decodeFile(M, first.bytes, { name: first.name, kind: 'tiff' }); } catch (err) { return decodeFailure(M, err, r.vpath, name, ctx); }
+    // the image is titled with the entry, its FileInfo names the archive (Opener.openZip)
+    return showOpened(M, image, originOf(r, name, 'zip'), first.name);
+  }
+  /** LutLoader 1.54p: the table goes onto the current image (every channel of a composite in Grayscale mode, which turns to Color),
+   *  or a 256 × 32 ramp titled with the file name when no image is open. */
+  async function openLutFile(M, r, name, ctx) {
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+    let table;
+    try {
+      if (!root.IJLutFile || typeof root.IJLutFile.parse !== 'function') throw ijError('IJ_MODULE_MISSING', 'LUT');
+      table = root.IJLutFile.parse(bytes).table;
+    } catch (err) {
+      if (err && err.code === 'IJ_MODULE_MISSING') throw macroError(M.tr('err.macNotInBrowser', { name: 'open("' + name + '")' }));
+      return errorBox(M, 'LUT Reader', 'This is not an ImageJ or NIH Image LUT, a 768 byte \nraw LUT, or a LUT in text format.\n \n' + r.vpath, ctx);
+    }
+    const lutName = name.replace(/\.[^.]*$/, '') || name;
+    // the run's own copy of the display follows at once (getLut right after open reads it), as setLut does
+    const apply = (target, c) => {
+      if (!target.display) target.display = [];
+      target.display[c] = Object.assign({}, target.display[c] || {}, { lut: Array.from(table), invert: false });
+      M.write('display.lut', { docId: target.docId, c, name: lutName, table });
+    };
+    const im = M.images.get(M.current);
+    if (im) {
+      if (im.rgb) return errorBoxContinue(M, 'LUTs cannot be assiged to RGB Images.');
+      const pos = M.E.getPosition(im.docId);
+      if (im.nC > 1 && im.mode === 'gray') {
+        M.write('display.mode', { docId: im.docId, mode: 'color' });
+        im.mode = 'color';
+        for (let c = 0; c < im.nC; c++) apply(im, c);
+      } else apply(im, pos.c);
+      M.P = null;
+      return null;
+    }
+    const ramp = new Uint8Array(256 * 32);
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 256; x++) ramp[y * 256 + x] = x;
+    const docId = await showOpened(M, { width: 256, height: 32, bitDepth: 8, nZ: 1, nT: 1, rgb: false, hyperstack: false,
+      calibration: { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' },
+      channels: [{ name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false }, planes: [ramp] }] }, null, name);
+    const made = M.images.get(docId);
+    if (made) apply(made, 0); else M.write('display.lut', { docId, c: 0, name: lutName, table });
+    M.P = null;
+    return null;
+  }
+  /** RoiReader 1.54p: onto the current image, or a blank 8-bit image named after the file when none is open or it is too small. */
+  async function openRoiFile(M, r, name, ctx) {
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+    let d;
+    try { d = root.IJRoiCodec.decodeEntry(bytes, { fileName: name }); } catch (err) {
+      console.error('[advanced-studio] macro roi', err);
+      return errorBox(M, 'ROI Reader', 'java.io.IOException: invalid ROI file', ctx);
+    }
+    const b = roiBounds(d.roi);
+    let im = M.images.get(M.current);
+    if (!im || im.width < b.x + b.w || im.height < b.y + b.h) {
+      const w = Math.max(1, b.x + b.w + 10), h = Math.max(1, b.y + b.h + 10);
+      const docId = await showOpened(M, { width: w, height: h, bitDepth: 8, nZ: 1, nT: 1, rgb: false, hyperstack: false,
+        calibration: { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' },
+        channels: [{ name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false }, planes: [new Uint8Array(w * h)] }] }, null, name);
+      im = M.images.get(docId);
+    }
+    const roi = Object.assign({}, d.roi);
+    if (typeof d.name === 'string' && d.name) roi.name = d.name;
+    setSelection(M, im.docId, roi);
+    return null;
+  }
+  /* ResultsTable.open on the bytes (IJTextIo.readTable): → the table, or throws an Error whose message is ImageJ's text. */
+  function readTableBytes(bytes, name, path) {
+    const T = root.IJTextIo;
+    if (!T || typeof T.readTable !== 'function') throw ijError('IJ_MODULE_MISSING', 'table reader');
+    try { return T.readTable(bytes, { name, path }); } catch (err) {
+      if (err && typeof err.ijText === 'string') throw macroError(err.ijText);
+      throw err;
+    }
+  }
+  function showTable(M, t, title, rowNumbers) {
+    const table = { name: title, size: t.size | 0, headings: (t.headings || []).slice(), columns: {}, labels: t.labels ? t.labels.slice() : null, rev: 0 };
+    if (rowNumbers || t.showRowNumbers === true) table.showRowNumbers = true;
+    for (const h of table.headings) table.columns[h] = (t.columns[h] || []).slice();
+    M.tables.set(title, table);
+    if (title !== 'Results') M.currentTable = title;
+    touchTable(M, table);
+    M.write('table.show', { name: title });
+    M.front = { kind: 'table', title };
+    return null;
+  }
+  /** Opener.openTable / openResultsTable: o = { title, box (the IJ.error title), rowNumbers }. */
+  async function openTableFile(M, r, name, o, ctx) {
+    const st = await attempt(M, r.vpath, () => statOf(M, r), () => null);
+    if (!st || st.kind !== 'file') return errorBox(M, o.box, 'Error opening ' + r.vpath, ctx);
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+    let t;
+    try { t = readTableBytes(bytes, name, r.vpath); } catch (err) {
+      if (err && err.macroText !== undefined) return errorBox(M, o.box, err.macroText, ctx);
+      throw err;
+    }
+    return showTable(M, t, o.title, !!o.rowNumbers);
+  }
+
+  /** open([path[, n | options]]) — Functions.open 1.54p. */
+  async function openBuiltin(f, M, path, n) {
+    needLib(M, path === null ? '' : path);
+    if (path === null) {
+      const vp = await pick(M, 'file', 'Open', 'open');
+      await openerOpen(f, M, vp, { viaMacroRun: false });
+      M.P = null;
+      return null;
+    }
+    const s = norm(path);
+    if (n === n && n !== null) {
+      await openTiffPlane(f, M, path === '' ? null : path, d2i(n));
+    } else await openerOpen(f, M, path === '' ? await pick(M, 'file', 'Open', 'open') : path, { viaMacroRun: false });
+    // a machine path reached its file through an alias: File.directory / File.name keep the virtual path the Opener resolved
+    if (path !== '' && !VFSLIB().isMachinePath(s)) {
+      const V = VFSLIB();
+      const parent = V.javaParent(s);
+      MOUNT.lastDir = (parent === null ? 'null' : parent) + '/';
+      MOUNT.lastName = V.javaName(s);
+    }
+    M.P = null;
+    return null;
+  }
+  /* IJ.open(path, n): Opener.openImage(path, n) — a TIFF only ("Opener: TIFF file required" is the macro error of Functions.open). */
+  async function openTiffPlane(f, M, path0, n) {
+    const raw = path0 === null ? await pick(M, 'file', 'Open', 'open') : path0;
+    const s = norm(raw);
+    if (needLib(M, s).isUrl(s)) throw macroError(M.tr('err.macNetwork'));
+    let r;
+    try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+    const name = VFSLIB().javaName(r.vpath);
+    MOUNT.lastDir = dirOfVpath(r.vpath);
+    MOUNT.lastName = name;
+    const head = await attempt(M, r.vpath, () => mp(statOf(M, r), (st) => (st && st.kind === 'file' ? M.vfs.read(r.vpath, { offset: 0, length: Math.min(132, st.size) }) : null)), () => null);
+    if (fileTypeOf(head, name) !== 'TIFF') throw macroError('Opener: TIFF file required');
+    return openImageFile(M, r, name, 'tiff', 'tiff', { viaMacroRun: true }, { plane: n });
+  }
+
+  // ---------------------------------------------------------------- writers (FileSaver, Writer, RoiWriter, XYWriter, MeasurementsWriter, TextWriter)
+  /* ImageJ's IJ.noImage / PlugInFilterRunner checks, as a box from a built-in or a macro error from run() (F12). */
+  function needImage(M, ctx) {
+    const im = M.images.get(M.current);
+    if (!im) return errorBox(M, 'No Image', 'There are no images open', ctx).then(() => null);
+    return Promise.resolve(im);
+  }
+  /* A dialog in macro mode (SaveDialog.isMacro, OpenDialog.decodePath) then getDirectory / getFileName: File.directory / File.name
+   * become the option's own directory and name (Opener.getDir / getName: the text up to the last '/', '' when there is none);
+   * the default directory is left alone. A machine path keeps the virtual path its alias resolves to (never shown to a macro). */
+  function noteDialogPath(M, p) {
+    const V = VFSLIB();
+    const s = norm(p);
+    if (V && V.isMachinePath(s)) {
+      let r;
+      try { r = resolveIn(M, s, HOME); } catch (_) { return; }
+      MOUNT.lastDir = dirOfVpath(r.vpath); MOUNT.lastName = nameOfVpath(r.vpath);
+      return;
+    }
+    const i = s.lastIndexOf('/');
+    if (i > 0) { MOUNT.lastDir = s.substring(0, i + 1); MOUNT.lastName = s.substring(i + 1); } else { MOUNT.lastDir = ''; MOUNT.lastName = s; }
+  }
+  /** The file a writer's SaveDialog names: the run() option (with OpenDialog's variable rule), else the picker (§6.3). */
+  function savePathFor(f, M, req, title, defaultName, ext, source) {
+    let p = req && req.pathText !== undefined && req.pathText !== null ? lookupPathVariable(f, String(req.pathText)) : null;
+    if (p !== null) { noteDialogPath(M, p); return Promise.resolve(p); }
+    return pick(M, 'save', title, source || 'command', { defaultName: splitDefault(defaultName, ext), ext });
+  }
+  function openPathFor(f, M, req, title, source) {
+    let p = req && req.pathText !== undefined && req.pathText !== null && req.pathText !== '' ? lookupPathVariable(f, String(req.pathText)) : null;
+    if (p !== null) { noteDialogPath(M, p); return Promise.resolve(p); }
+    return pick(M, 'file', title, source || 'command');
+  }
+  /** Writes `bytes` to `raw` (relative = user.dir) under the policy; a Java failure is the writer's box `title`. */
+  function writeTo(M, raw, bytes, title, ctx) {
+    const shown = norm(raw);
+    return attempt(M, shown, () => {
+      const r = resolveIn(M, raw, HOME);
+      return mp(M.vfs.write(r.vpath, bytes), () => r);
+    }, (code) => errorBox(M, title, 'File saving error (IOException):\n   "' + javaIoText(code, shown) + '" \n   ' + shown, ctx).then(() => null));
+  }
+  async function encodeDoc(M, im, o) {
+    await M.commitAll();
+    await M.syncWrites();
+    if (typeof M.E.encodeImage !== 'function') throw macroError(M.tr('err.macNotInBrowser', { name: 'saveAs("' + o.format + '")' }));
+    try { return await M.E.encodeImage(im.docId, o); } catch (err) {
+      if (err && (err.code === 'IJ_IO_ENCODE' || err.code === 'IJ_IO_DECODE')) throw macroError(M.tr('err.macSaveFormat', { format: o.format }));
+      if (err && (err.code === 'IJ_IO_TOO_LARGE' || err.code === 'IJ_BUDGET' || err.code === 'IJ_OVER_BUDGET' || err.code === 'IJ_PICTURE_TOO_LARGE')) throw macroError(M.tr('err.macFileTooLarge', { path: im.title }));
+      if (err && err.code === 'IJ_MODULE_MISSING') throw macroError(M.tr('err.macNotInBrowser', { name: 'saveAs("' + o.format + '")' }));
+      if (err instanceof MacroCancel || (err && err.macroText !== undefined)) throw err;
+      // a technical failure: the cause goes to the console, the macro shows the run's "Internal error"
+      console.error('[advanced-studio] macro encode', err);
+      throw macroError('Internal error: ' + String((err && err.code) || 'IJ_INTERNAL'));
+    }
+  }
+  /** FileSaver.saveAsTiff(path) + updateImagePlus: the image takes the file's name and becomes "saved". */
+  async function saveTiffTo(M, im, raw, ctx) {
+    const enc = await encodeDoc(M, im, { format: 'tiff' });
+    const r = await writeTo(M, raw, enc.bytes, 'FileSaver.saveAsTiff', ctx);
+    if (!r) return null;
+    await savedAs(M, im, r, nameOfVpath(r.vpath), 'tiff', enc.rev);
+    return r;
+  }
+  /* FileSaver.updateImp: the image is titled with the saved name, is no longer "changed", and its FileInfo names the file. */
+  async function savedAs(M, im, r, name, format, rev) {
+    const origin = Object.assign(originOf(r, name, format), { dir: dirOfVpath(r.vpath) });
+    if (typeof M.E.markSaved === 'function') { try { await M.E.markSaved(im.docId, { rev, file: origin }); } catch (err) { console.error('[advanced-studio] macro markSaved', err); } }
+    im.file = { dir: origin.dir, name, format };
+    M.savedDocs.add(im.docId);
+    if (im.title !== name) { im.title = name; await M.rpc('image.rename', { docId: im.docId, title: name }); }
+  }
+  /** o.updates: the FileInfo format the writer records (FileSaver.saveAsPng / Jpeg / Zip / Raw call updateImp), absent = none
+   *  (saveAsText, saveAsLut); o.entryName (ZIP) is the name the image takes. */
+  async function saveEncoded(M, im, raw, o, title, ctx) {
+    const enc = await encodeDoc(M, im, o);
+    const r = await writeTo(M, raw, enc.bytes, title, ctx);
+    if (r && o.updates) await savedAs(M, im, r, o.format === 'zip' && o.entryName ? o.entryName : nameOfVpath(r.vpath), o.updates, enc.rev);
+    return r;
+  }
+  /* The effective table of the channel on screen (FileSaver.saveAsLut): its LUT, inverted when the display is. */
+  function displayTableOf(M, im) {
+    const pos = M.E.getPosition(im.docId);
+    const d = (im.display && im.display[im.rgb ? 0 : pos.c]) || { lut: 'Grays', invert: false };
+    let t = null;
+    try { t = root.IJLuts.get(d.lut || 'Grays'); } catch (_) { t = null; }
+    if (!t || t.length !== 768) t = root.IJLuts.get('Grays');
+    if (!d.invert) return t;
+    const r = new Uint8Array(768);
+    for (let i = 0; i < 256; i++) { const j = 255 - i; r[i * 3] = t[j * 3]; r[i * 3 + 1] = t[j * 3 + 1]; r[i * 3 + 2] = t[j * 3 + 2]; }
+    return r;
+  }
+  function concatPages(pages) {
+    let n = 0;
+    for (const p of pages) n += p.length;
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const p of pages) { out.set(p, at); at += p.length; }
+    return out;
+  }
+  /* A registry compute op of package io run on the current plane (its text output in pages). */
+  async function computeText(M, im, opName, params, roi) {
+    const spec = R.get(opName);
+    if (!spec || typeof spec.run !== 'function') throw macroError(M.tr('err.macNotInBrowser', { name: opName }));
+    await M.commitAll();
+    const pos = M.E.getPosition(im.docId);
+    const view = M.E.readDoc(im.docId, { z: pos.z, t: pos.t });
+    const res = await spec.run(view, params, roi || null, { channel: im.rgb ? 0 : pos.c, tick: () => {}, check: () => {} });
+    return res;
+  }
+  const precisionOf = (M) => (M.measurements && Number.isInteger(M.measurements.decimals) ? M.measurements.decimals : 3);
+  function settingOf(M, key, dflt) {
+    const v = M.settings ? M.settings[key] : undefined;
+    return v === undefined || v === null ? dflt : v;
+  }
+  /** TextPanel.saveAs / ResultsTable.saveAs text of a table (IJTextIo.tableText with the Input/Output options). */
+  function tableBytes(M, t, path, forceNumbers, what) {
+    const T = root.IJTextIo;
+    if (!T || typeof T.tableText !== 'function') throw macroError(M.tr('err.macNotInBrowser', { name: what || 'saveAs("results")' }));
+    const csv = /\.csv$/i.test(path);
+    const text = T.tableText(t, { sep: csv ? ',' : '\t', headers: settingOf(M, 'ana.saveHeaders', true) !== false,
+      rowNumbers: forceNumbers === undefined ? settingOf(M, 'ana.saveRowNumbers', true) !== false : forceNumbers, precision: precisionOf(M),
+      decimalColumn: (h) => decimalColumn(t, h) });
+    return utf8(text);
+  }
+
+  /* The run() file operations (FILES.md §9.5), closed list FILE_OPS. op(f, M, req, ctx) → Promise. */
+  const FILE_OP_IMPL = {
+    async open(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open', 'command');
+      return openerOpen(f, M, p, ctx);
+    },
+    async importTextImage(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open Text Image...', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      const name = VFSLIB().javaName(r.vpath);
+      const st = await attempt(M, r.vpath, () => statOf(M, r), () => null);
+      if (!st || st.kind !== 'file') return errorBox(M, 'Text Reader', 'File not found:\n' + r.vpath, ctx);
+      return openImageFile(M, r, name, 'text', 'text', ctx, { noOrigin: true });
+    },
+    async importLut(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open LUT...', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      return openLutFile(M, r, VFSLIB().javaName(r.vpath), ctx);
+    },
+    async importResults(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open Table', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      return openTableFile(M, r, VFSLIB().javaName(r.vpath), { title: 'Results', box: 'Open Results', rowNumbers: true }, ctx);
+    },
+    async importTable(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open Table...', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      const name = VFSLIB().javaName(r.vpath);
+      return openTableFile(M, r, name, { title: name.startsWith('Results.') ? 'Results' : name, box: 'Open Table' }, ctx);
+    },
+    /* TextFileReader: the file in a text window (a Studio text window, F20). */
+    async importTextFile(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open Text File...', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      const st = await attempt(M, r.vpath, () => statOf(M, r), () => null);
+      if (!st || st.kind !== 'file') return errorBox(M, 'TextWindow', 'File not found:\n' + r.vpath, ctx);
+      return openTextWindow(M, r, VFSLIB().javaName(r.vpath));
+    },
+    /* XY_Reader 1.54p: a two-column text file as a polygon (mean segment > 10 px) or freehand selection, on the current image or on a
+     * blank 8-bit image named after the file when there is none or it is too small. */
+    async importXY(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open Text Image...', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      const name = VFSLIB().javaName(r.vpath);
+      const st = await attempt(M, r.vpath, () => statOf(M, r), () => null);
+      if (!st || st.kind !== 'file') return errorBox(M, 'Text Reader', 'File not found:\n' + r.vpath, ctx);
+      const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+      let im0;
+      try { im0 = root.IJTextIo.parseTextImage(utf8Text(bytes)); } catch (err) {
+        if (err && err.code && /^IJ_IO_TEXT/.test(err.code)) { await M.rpc('dialog.message', { title: 'XY Reader', text: 'Two column text file required' }); return null; }
+        throw err;
+      }
+      if (im0.width !== 2 || im0.height < 3) { await M.rpc('dialog.message', { title: 'XY Reader', text: 'Two column text file required' }); return null; }
+      const n = im0.height;
+      const xs = new Array(n), ys = new Array(n);
+      let allIntegers = true, length = 0;
+      for (let i = 0; i < n; i++) {
+        xs[i] = im0.data[i * 2]; ys[i] = im0.data[i * 2 + 1];
+        if (d2i(xs[i]) !== xs[i] || d2i(ys[i]) !== ys[i]) allIntegers = false;
+        if (i > 0) { const dx = xs[i] - xs[i - 1], dy = ys[i] - ys[i - 1]; length += Math.sqrt(dx * dx + dy * dy); }
+      }
+      // Roi.toIntR: (int)Math.floor(v + 0.5); float coordinates are kept as floats (PolygonRoi(float[], float[], …))
+      const pts = Array.from({ length: n }, (_, i) => (allIntegers ? [Math.floor(xs[i] + 0.5), Math.floor(ys[i] + 0.5)] : [Math.fround(xs[i]), Math.fround(ys[i])]));
+      const roi = { type: length / n > 10 ? 'polygon' : 'freehand', points: pts };
+      const b = roiBounds(roi);
+      let im = M.images.get(M.current) || null;
+      if (!im || im.width < b.x + b.w || im.height < b.y + b.h) {
+        const w = Math.abs(b.x) + b.w + 10, h = Math.abs(b.y) + b.h + 10;
+        const docId = await showOpened(M, { width: w, height: h, bitDepth: 8, nZ: 1, nT: 1, rgb: false, hyperstack: false,
+          calibration: { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' },
+          channels: [{ name: 'C1', color: '#ffffff', display: { min: 0, max: 255, lut: 'Grays', invert: false }, planes: [new Uint8Array(w * h)] }] }, null, name);
+        im = M.images.get(docId);
+      }
+      setSelection(M, im.docId, roi);
+      return null;
+    },
+    /* File › Import › Raw (Raw + ImportDialog + FileOpener / ImageReader 1.54p). */
+    async importRaw(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Open Raw...', 'command');
+      const s = norm(p);
+      let r;
+      try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+      const name = VFSLIB().javaName(r.vpath);
+      const st = await attempt(M, r.vpath, () => statOf(M, r), () => null);
+      const v = req.values || {};
+      const o = rawImportSettings(name, st && st.kind === 'file' ? st.size : null, v);
+      if (o.error) throw macroError(o.error);
+      if (v.openAll || v.virtual) throw macroError(M.tr('err.macRefused', { command: 'Raw...', reason: M.tr('err.macReasonSequence') }));
+      if (!st || st.kind !== 'file') return errorBox(M, 'File>Import>Raw', 'File not found: ' + r.vpath, ctx);
+      const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, r.vpath)); });
+      let image;
+      try { image = rawImage(bytes, o, name); } catch (err) {
+        if (err && err.code === 'IJ_UNSUPPORTED') throw macroError(M.tr('err.macNotInBrowser', { name: 'Raw... (' + o.type + (o.white && o.type !== '8-bit' ? ', white is zero' : '') + ')' }));
+        throw err;
+      }
+      return showOpened(M, image, originOf(r, name, 'raw'), name);
+    },
+    /* Commands.save → FileSaver.save: a TIFF opened from a granted folder and still titled with its file name is replaced in place. */
+    async save(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      const o = im.file;
+      if (o && o.format === 'tiff' && o.dir && im.title === o.name && (req.pathText === null || req.pathText === undefined)) {
+        const path = o.dir + o.name;
+        const exists = await attempt(M, path, () => mp(statOf(M, resolveIn(M, path, HOME)), (st) => !!st), () => false);
+        if (exists) return saveTiffTo(M, im, path, ctx);
+      }
+      const p = await savePathFor(f, M, req, 'Save as TIFF', im.title, '.tif');
+      return saveTiffTo(M, im, p, ctx);
+    },
+    async saveTiff(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      return saveTiffTo(M, im, await savePathFor(f, M, req, 'Save as TIFF', im.title, '.tif'), ctx);
+    },
+    async saveJpeg(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      const p = await savePathFor(f, M, req, 'Save as JPEG', im.title, '.jpg');
+      return saveEncoded(M, im, p, { format: 'jpeg', quality: Number(settingOf(M, 'io.jpegQuality', 85)), updates: 'jpeg' }, 'FileSaver.saveAsJpeg', ctx);
+    },
+    async savePng(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      return saveEncoded(M, im, await savePathFor(f, M, req, 'Save as PNG...', im.title, '.png'), { format: 'png', updates: 'png' }, 'FileSaver.saveAsPng', ctx);
+    },
+    async saveZip(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      let p = await savePathFor(f, M, req, 'Save as TIFF/ZIP', im.title, '.zip');
+      // FileSaver.saveAsZip: ".zip" added to the path, the entry (and the image) named after the file with ".tif"
+      if (!p.endsWith('.zip')) p += '.zip';
+      let entry = nameOfVpath(norm(p));
+      if (entry.endsWith('.zip')) entry = entry.substring(0, entry.length - 4);
+      if (!entry.endsWith('.tif')) entry += '.tif';
+      return saveEncoded(M, im, p, { format: 'zip', entryName: entry, updates: 'tiff' }, 'FileSaver.saveAsZip', ctx);
+    },
+    async saveRaw(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      return saveEncoded(M, im, await savePathFor(f, M, req, 'Save as Raw', im.title, '.raw'), { format: 'raw', updates: 'raw' }, 'FileSaver.saveAsRaw', ctx);
+    },
+    /* FileSaver.saveAsText: TextEncoder at Analyzer.getPrecision(), comma-delimited for a .csv path. */
+    async saveTextImage(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      const p = await savePathFor(f, M, req, 'Save as Text', im.title, '.txt');
+      const res = await computeText(M, im, 'textImage', { precision: precisionOf(M), delimiter: /\.csv$/i.test(p) ? ',' : '\t' });
+      return writeTo(M, p, concatPages(res.pages || []), 'FileSaver.saveAsText', ctx);
+    },
+    async saveLut(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      if (im.rgb) return errorBox(M, 'FileSaver', 'RGB Images do not have a LUT.', ctx);
+      const p = await savePathFor(f, M, req, 'Save as LUT', im.title, '.lut');
+      return writeTo(M, p, lutFileBytes(displayTableOf(M, im)), 'FileSaver.saveAsLut', ctx);
+    },
+    /* RoiWriter: the selection as a .roi (RoiEncoder), the default name the ROI's own. */
+    async saveSelection(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      const roi = selectionOf(M, im.docId);
+      if (!roi) return errorBox(M, req.name || 'Selection...', 'This command requires a selection', ctx);
+      const p = await savePathFor(f, M, req, 'Save Selection...', typeof roi.name === 'string' && roi.name ? roi.name : im.title, '.roi');
+      const bytes = root.IJRoiCodec.encode(roi, { name: roi.name });
+      return attempt(M, norm(p), () => mp(M.vfs.write(resolveIn(M, p, HOME).vpath, bytes), () => null),
+        (code) => errorBox(M, 'ROI Writer', javaIoText(code, norm(p)), ctx).then(() => null));
+    },
+    /* XYWriter: the vertices of the selection, one per line. */
+    async saveXY(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      const roi = selectionOf(M, im.docId);
+      if (!roi) return errorBox(M, req.name || 'XY Coordinates...', 'This command requires a selection', ctx);
+      const p = await savePathFor(f, M, req, 'Save Coordinates as Text...', im.title, '.txt');
+      const text = root.IJTextIo.xyWriterText(roi, im.calibration);
+      return attempt(M, norm(p), () => mp(M.vfs.write(resolveIn(M, p, HOME).vpath, utf8(text)), () => null),
+        (code) => errorBox(M, 'XYWriter', 'Unable to save coordinates:\n   ' + javaIoText(code, norm(p)), ctx).then(() => null));
+    },
+    /* XYCoordinates (Analyze › Tools › Save XY Coordinates): the dialog values come from the options, defaults as its showDialog. */
+    async saveXYCoordinates(f, M, req, ctx) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      const roi = selectionOf(M, im.docId);
+      const v = req.values || {};
+      const area = roi && root.IJRoi && root.IJRoi.isArea(roi);
+      let params;
+      if (area) params = { mode: 'selection', precision: precisionOf(M) };
+      else {
+        let bg = typeof v.background === 'number' ? v.background : null;
+        if (bg === null) { const probe = await computeText(M, im, 'xyCoordinates', { mode: 'probe' }); bg = probe.background; }
+        params = { mode: 'points', background: bg, invertY: !!v.invert, precision: precisionOf(M) };
+      }
+      const p = await savePathFor(f, M, req, 'Save Coordinates as Text...', im.title, area ? '.csv' : '.txt');
+      const res = await computeText(M, im, 'xyCoordinates', params, area ? roi : null);
+      return attempt(M, norm(p), () => mp(M.vfs.write(resolveIn(M, p, HOME).vpath, concatPages(res.pages || [])), () => null),
+        (code) => errorBox(M, 'Save XY Coordinates', 'Error saving coordinates:\n   ' + javaIoText(code, norm(p)), ctx).then(() => null));
+    },
+    /* MeasurementsWriter: the front table window (not the Log), else the Results table. */
+    async saveResults(f, M, req, ctx) {
+      const fr = M.front;
+      const name = fr && fr.kind === 'table' && fr.title !== 'Log' && M.tables.has(fr.title) ? fr.title : 'Results';
+      const t = M.tables.get(name);
+      if (!t || (name === 'Results' && t.size === 0)) return null;
+      const ext = String(settingOf(M, 'ana.ext', '.csv'));
+      const p = await savePathFor(f, M, req, 'Save as Text', name, ext);
+      return writeTo(M, p, tableBytes(M, t, p), 'Save as Text', ctx);
+    },
+    /* TextWriter: the front text window (the Log, a table, a text window) through TextPanel.saveAs. */
+    async saveText(f, M, req, ctx) {
+      const fr = M.front;
+      if (!fr || fr.kind === 'image') {
+        return errorBox(M, 'Save As Text', 'This command requires a TextWindow, such\nas the "Log" window, or an Editor window. Use\nFile>Save>Text Image to save an image as text.', ctx);
+      }
+      const p = await savePathFor(f, M, req, 'Save as Text', fr.title, '.txt');
+      let bytes;
+      if (fr.kind === 'log') bytes = utf8(logText(M.logLines));
+      else if (fr.kind === 'table' && M.tables.has(fr.title)) bytes = tableBytes(M, M.tables.get(fr.title), p);
+      else {
+        const r = await M.rpc('window.text', { title: fr.title });
+        if (!r || !r.found) {
+          return errorBox(M, 'Save As Text', 'This command requires a TextWindow, such\nas the "Log" window, or an Editor window. Use\nFile>Save>Text Image to save an image as text.', ctx);
+        }
+        bytes = utf8(String(r.text || ''));
+      }
+      return writeTo(M, p, bytes, 'Save as Text', ctx);
+    },
+    /* Macro_Runner.run: no path = its OpenDialog. */
+    async runMacro(f, M, req, ctx) {
+      const p = await openPathFor(f, M, req, 'Run Macro or Script...', 'runMacro');
+      const src = await macroFileSource(M, p, null);
+      if (src === null) return null;
+      M.pendingNested = { source: src.text, arg: '', path: src.vpath };
+      return null;
+    }
+  };
+  // ---------------------------------------------------------------- File › Import › Raw (ImportDialog + ImageReader 1.54p)
+  const RAW_TYPES = ['8-bit', '16-bit Signed', '16-bit Unsigned', '32-bit Signed', '32-bit Unsigned', '32-bit Real', '64-bit Real',
+    '24-bit RGB', '24-bit RGB Planar', '24-bit BGR', '24-bit Integer', '32-bit ARGB', '32-bit ABGR', '1-bit Bitmap'];
+  /* ImportDialog.showDialog in macro mode: 512 × 512, offset / gap 0, one image, then getDimensionsFromName (+ guessFormat on the file
+   * size), then the options. The type keeps ImportDialog's static choice (Prefs raw.type, 0) unless the name or the options set it. */
+  function rawImportSettings(name, fileSize, v) {
+    const o = { type: RAW_TYPES[0], width: 512, height: 512, offset: 0, n: 1, gap: 0, white: false, little: false };
+    if (/.*[0-9]+x[0-9]+.*/.test(name)) {
+      const us = name.lastIndexOf('_');
+      const name2 = (us >= 0 ? name.substring(us) : name).replace(/[^0-9]/g, ' ');
+      const nums = name2.trim().split(/\s+/).filter(Boolean);
+      const w = nums.length >= 2 ? parseInt(nums[0], 10) : 0, h = nums.length >= 2 ? parseInt(nums[1], 10) : 0;
+      if (w >= 1 && h >= 1) {
+        o.width = w; o.height = h; o.n = 1;
+        if (nums.length > 2) { const d = parseInt(nums[2], 10); if (d > 0) o.n = d; }
+        if (fileSize !== null) {
+          const size = o.width * o.height * o.n;
+          if (fileSize === 4 * size) o.type = '32-bit Real';
+          else if (fileSize === 2 * size) o.type = '16-bit Unsigned';
+          else if (fileSize === 3 * size) o.type = '24-bit RGB';
+          else if (fileSize === size) o.type = '8-bit';
+          if (name.endsWith('be.raw')) o.little = false;
+          else if (name.endsWith('le.raw')) o.little = true;
+        }
+      }
+    }
+    if (typeof v.image === 'string') o.type = v.image;
+    const int = (x) => (typeof x === 'number' && x === x ? Math.trunc(x) : null);
+    if (int(v.width) !== null) o.width = int(v.width);
+    if (int(v.height) !== null) o.height = int(v.height);
+    if (int(v.offset) !== null) o.offset = int(v.offset);
+    if (int(v.number) !== null) o.n = int(v.number);
+    if (int(v.gap) !== null) o.gap = int(v.gap);
+    if (typeof v.white === 'boolean') o.white = v.white;
+    if (typeof v.littleEndian === 'boolean') o.little = v.littleEndian;
+    if (!(o.width > 0 && o.height > 0)) o.error = 'Width or height <= 0';
+    if (o.n < 1) o.n = 1;
+    return o;
+  }
+  /* ImageReader: the planes of the file, missing bytes read as zeros; 16-bit signed + 32768 (GRAY16_SIGNED), 32/64-bit as float. */
+  function rawImage(bytes, o, name) {
+    const W = o.width, H = o.height, N = W * H;
+    const SIZES = { '8-bit': 1, '16-bit Signed': 2, '16-bit Unsigned': 2, '32-bit Signed': 4, '32-bit Unsigned': 4, '32-bit Real': 4, '64-bit Real': 8,
+      '24-bit RGB': 3, '24-bit RGB Planar': 3, '24-bit BGR': 3 };
+    const bpp = SIZES[o.type];
+    if (!bpp || (o.white && o.type !== '8-bit')) throw ijError('IJ_UNSUPPORTED', 'raw type');
+    const imageBytes = N * bpp;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const le = !!o.little;
+    const rgb = o.type.indexOf('24-bit') === 0;
+    const bitDepth = rgb || o.type === '8-bit' ? 8 : o.type.indexOf('16-bit') === 0 ? 16 : 32;
+    const planes = rgb ? [[], [], []] : [[]];
+    for (let k = 0; k < o.n; k++) {
+      const base = o.offset + k * (imageBytes + o.gap);
+      const avail = (i, w) => base + i + w <= bytes.length;
+      if (rgb) {
+        const R = new Uint8Array(N), G = new Uint8Array(N), B = new Uint8Array(N);
+        for (let i = 0; i < N; i++) {
+          if (o.type === '24-bit RGB Planar') {
+            if (avail(i, 1)) R[i] = bytes[base + i];
+            if (avail(N + i, 1)) G[i] = bytes[base + N + i];
+            if (avail(2 * N + i, 1)) B[i] = bytes[base + 2 * N + i];
+          } else if (avail(i * 3, 3)) {
+            const a = bytes[base + i * 3], b = bytes[base + i * 3 + 1], c = bytes[base + i * 3 + 2];
+            if (o.type === '24-bit BGR') { R[i] = c; G[i] = b; B[i] = a; } else { R[i] = a; G[i] = b; B[i] = c; }
+          }
+        }
+        planes[0].push(R); planes[1].push(G); planes[2].push(B);
+        continue;
+      }
+      let out;
+      if (o.type === '8-bit') { out = new Uint8Array(N); for (let i = 0; i < N; i++) if (avail(i, 1)) out[i] = bytes[base + i]; }
+      else if (o.type === '16-bit Unsigned') { out = new Uint16Array(N); for (let i = 0; i < N; i++) if (avail(i * 2, 2)) out[i] = dv.getUint16(base + i * 2, le); }
+      else if (o.type === '16-bit Signed') { out = new Uint16Array(N); for (let i = 0; i < N; i++) out[i] = avail(i * 2, 2) ? dv.getInt16(base + i * 2, le) + 32768 : 32768; }
+      else {
+        out = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+          if (!avail(i * bpp, bpp)) continue;
+          const at = base + i * bpp;
+          out[i] = o.type === '32-bit Signed' ? dv.getInt32(at, le) : o.type === '32-bit Unsigned' ? dv.getUint32(at, le)
+            : o.type === '32-bit Real' ? dv.getFloat32(at, le) : dv.getFloat64(at, le);
+        }
+      }
+      planes[0].push(out);
+    }
+    // the display range of the middle image (ImportDialog.openImage: setSlice(n/2) + resetMinAndMax)
+    const mid = planes[0][o.n > 1 ? Math.floor(o.n / 2) - 1 : 0];
+    let min = 0, max = 255;
+    if (!rgb && bitDepth !== 8) {
+      min = Infinity; max = -Infinity;
+      for (let i = 0; i < mid.length; i++) { const x = mid[i]; if (x === x && x !== Infinity && x !== -Infinity) { if (x < min) min = x; if (x > max) max = x; } }
+      if (min === Infinity) { min = 0; max = 0; }
+    }
+    const cal = { pixelWidth: 1, pixelHeight: 1, pixelDepth: 1, unit: 'pixel' };
+    const chan = (nm, color, pl, lut) => ({ name: nm, color, display: { min, max, lut, invert: !!(o.white && bitDepth === 8 && !rgb) }, planes: pl });
+    return rgb
+      ? { name, width: W, height: H, bitDepth: 8, nZ: o.n, nT: 1, rgb: true, hyperstack: false, calibration: cal,
+        channels: [chan('Red', '#ff0000', planes[0], 'Red'), chan('Green', '#00ff00', planes[1], 'Green'), chan('Blue', '#0000ff', planes[2], 'Blue')] }
+      : { name, width: W, height: H, bitDepth, nZ: o.n, nT: 1, rgb: false, hyperstack: false, calibration: cal, channels: [chan('C1', '#ffffff', planes[0], 'Grays')] };
+  }
+
+  /** A `status: 'file'` reply of run() (FILES.md §9.3). */
+  async function runFileOp(f, M, file, ctx) {
+    const op = file && typeof file.op === 'string' ? file.op : '';
+    if (FILE_OPS.indexOf(op) < 0 || !Object.prototype.hasOwnProperty.call(FILE_OP_IMPL, op)) throw ijError('IJ_INTERNAL', 'file op ' + op);
+    if (typeof file.error === 'string' && file.error) throw macroError(file.error);
+    return FILE_OP_IMPL[op](f, M, file, ctx);
+  }
+
+  // ---------------------------------------------------------------- save(path) / saveAs(format[, path]) (IJ.save / IJ.saveAs 1.54p)
+  function updateExt(path, ext) {
+    if (path === null) return null;
+    const V = VFSLIB();
+    return V.updateExtension(path, ext);
+  }
+  async function saveBuiltin(f, M, path) {
+    needLib(M, path);
+    const im = M.images.get(M.current) || null;
+    let p = path;
+    let dot = p.lastIndexOf('.');
+    if (dot === -1 && im) { p += '.tif'; dot = p.lastIndexOf('.'); }
+    if (dot !== -1) {
+      const title = im ? im.title : null;
+      await saveAsBuiltin(f, M, p.substring(dot + 1), p);
+      if (title !== null && im && im.title !== title) { im.title = title; await M.rpc('image.rename', { docId: im.docId, title }); }
+      return null;
+    }
+    return errorBoxContinue(M, 'The file path passed to IJ.save() method or save()\nmacro function is missing the required extension.\n \n"' + p + '"');
+  }
+  async function saveAsBuiltin(f, M, format0, path0) {
+    needLib(M, path0 === null ? '' : path0);
+    let path = path0 !== null && path0.length === 0 ? null : path0;
+    const format = String(format0).toLowerCase();
+    const ctx = { viaMacroRun: false };
+    const run = (op) => runFileOp(f, M, { op, pathText: path, values: {}, name: format0, options: path === null ? null : 'save=' + path }, ctx);
+    if (format.indexOf('tif') !== -1) {
+      const im = await needImage(M, ctx);
+      if (!im) return null;
+      if (path === null) return saveTiffTo(M, im, await pick(M, 'save', 'Save as TIFF', 'save', { defaultName: splitDefault(im.title, '.tif'), ext: '.tif' }), ctx);
+      if (!path.endsWith('.tiff')) path = updateExt(path, '.tif');
+      return saveTiffTo(M, im, path, ctx);
+    }
+    if (format.indexOf('jpeg') !== -1 || format.indexOf('jpg') !== -1) { path = updateExt(path, '.jpg'); return run('saveJpeg'); }
+    if (format.indexOf('gif') !== -1) throw macroError(M.tr('err.macSaveFormat', { format: 'gif' }));
+    if (format.indexOf('text image') !== -1) {
+      path = updateExt(path, path !== null && (path.endsWith('.csv') || path.endsWith('.CSV')) ? '.csv' : '.txt');
+      return run('saveTextImage');
+    }
+    if (format.indexOf('text') !== -1 || format.indexOf('txt') !== -1) {
+      if (path !== null && !path.endsWith('.xls') && !path.endsWith('.csv') && !path.endsWith('.tsv')) path = updateExt(path, '.txt');
+      return run('saveText');
+    }
+    if (format.indexOf('zip') !== -1) { path = updateExt(path, '.zip'); return run('saveZip'); }
+    if (format.indexOf('raw') !== -1) return run('saveRaw');
+    for (const x of ['avi', 'bmp', 'fits']) if (format.indexOf(x) !== -1) throw macroError(M.tr('err.macSaveFormat', { format: x }));
+    if (format.indexOf('png') !== -1) { path = updateExt(path, '.png'); return run('savePng'); }
+    if (format.indexOf('pgm') !== -1) throw macroError(M.tr('err.macSaveFormat', { format: 'pgm' }));
+    if (format.indexOf('lut') !== -1) { path = updateExt(path, '.lut'); return run('saveLut'); }
+    if (format.indexOf('results') !== -1 || format.indexOf('measurements') !== -1 || format.indexOf('table') !== -1) return run('saveResults');
+    if (format.indexOf('selection') !== -1 || format.indexOf('roi') !== -1) { path = updateExt(path, '.roi'); return run('saveSelection'); }
+    if (format.indexOf('xy') !== -1 || format.indexOf('coordinates') !== -1) { path = updateExt(path, '.txt'); return run('saveXY'); }
+    await errorBoxContinue(M, 'Unsupported save() or saveAs() file format: "' + format + '"\n \n"' + path + '"');
+    // IJ.run(imp, format, "save=…") from a built-in: the Executer's "Unrecognized command" box, then the macro stops (jar: quiet exit)
+    try {
+      return await runCommand(f, M, format, path === null ? null : (path.indexOf(' ') >= 0 ? 'save=[' + path + ']' : 'save=' + path));
+    } catch (err) {
+      if (err && typeof err.macroText === 'string' && err.macroText.startsWith('Unrecognized command: ')) {
+        await M.rpc('dialog.message', { title: 'ImageJ', text: err.macroText });
+        throw new MacroCancel('abort');
+      }
+      throw err;
+    }
+  }
+
+  // ---------------------------------------------------------------- runMacro(path[, arg]) (Macro_Runner.runMacroFile 1.54p)
+  /** → { text, vpath } of the macro file (ISO-8859-1), or a rejection after RunMacro's box (dialog + abort). */
+  async function macroFileSource(M, name0, arg) {
+    void arg;
+    const name = String(name0);
+    if (name.startsWith('ij.jar:')) throw macroError(M.tr('err.macNotInBrowser', { name: 'runMacro("' + name + '")' }));
+    const V = needLib(M, name);
+    const s = norm(name);
+    if (V.isUrl(s)) throw macroError(M.tr('err.macNetwork'));
+    const fullPath = s.startsWith('/') || s.indexOf(':/') === 1;
+    const exists = (p) => attempt(M, p, () => mp(statOf(M, resolveIn(M, p, HOME)), (st) => !!st), () => false);
+    let path = fullPath ? s : '/macros/' + s;
+    const hasExtension = V.javaName(path).indexOf('.') >= 0;
+    let found = hasExtension ? await exists(path) : false;
+    if (!found && !fullPath && !hasExtension) {
+      if (await exists(path + '.txt')) { path += '.txt'; found = true; }
+      else if (await exists(path + '.ijm')) { path += '.ijm'; found = true; }
+    }
+    if (!found) found = await exists(path);
+    if (!found && !fullPath) {
+      const path2 = '/home/' + s;
+      if (!hasExtension) {
+        if (await exists(path2 + '.txt')) { path = path2 + '.txt'; found = true; }
+        else if (await exists(path2 + '.ijm')) { path = path2 + '.ijm'; found = true; }
+      }
+      if (!found && await exists(path2)) { path = path2; found = true; }
+    }
+    if (!found) { await errorBox(M, 'RunMacro', 'Macro or script not found:\n \n' + path, null); return null; }
+    const r = resolveIn(M, path, HOME);
+    const bytes = await attempt(M, path, () => readAll(M, r.vpath), (code) => { throw macroError(javaIoText(code, path)); });
+    MOUNT.lastDir = dirOfVpath(r.vpath);
+    MOUNT.lastName = nameOfVpath(r.vpath);
+    if (name.endsWith('.js') || name.endsWith('.bsh') || name.endsWith('.py')) throw macroError(M.tr('err.macEvalScript'));
+    return { text: latin1Text(bytes), vpath: r.vpath };
+  }
+  /* The nested interpreter of runMacro(file) (Macro_Runner.runMacro): same run, same lane, same undo group; macro.filepath answers the file. */
+  function* runNestedFile(f, M, text, arg, vpath) {
+    M.macroPaths.push(vpath);
+    MOUNT.macroFile = vpath;
+    try { return yield* runNested(f, text, arg === null || arg === undefined ? '' : arg); } finally { M.macroPaths.pop(); }
+  }
+
+  // ---------------------------------------------------------------- ROI Manager files (RoiManager.runCommand / open / save 1.54p)
+  function rmError(M, msg) {
+    return M.rpc('dialog.message', { title: 'ROI Manager', text: msg }).then(() => { throw new MacroCancel('abort'); });
+  }
+  function rmEntryOf(M, d, label) {
+    const roi = Object.assign({}, d.roi);
+    const e = { name: label, docId: M.current, roi };
+    if (d.stroke !== undefined && d.stroke !== null) e.stroke = d.stroke;
+    if (d.fill !== undefined && d.fill !== null) e.fill = d.fill;
+    if (typeof d.width === 'number') e.width = d.width;
+    if (d.position) e.position = d.position;
+    return e;
+  }
+  async function rmOpenZip(M, vpath, bytes) {
+    const C = root.IJRoiCodec;
+    let list;
+    try { list = await C.decodeSet(bytes, { inflateRaw: C.inflateRaw, maxTotal: zipRoom(M) }); } catch (err) {
+      if (err && err.code === 'IJ_IO_ZIP_NO_ROI') return rmError(M, 'This ZIP archive does not contain ".roi" files: ' + vpath);
+      if (err && err.code === 'IJ_IO_TOO_LARGE') throw macroError(M.tr('err.macFileTooLarge', { path: vpath }));
+      console.error('[advanced-studio] macro roi set', err);
+      return rmError(M, 'java.util.zip.ZipException: invalid zip file');
+    }
+    for (const d of list) M.rm.list.push(rmEntryOf(M, d, d.label));
+    rmSync(M);
+    return NaN;
+  }
+  async function rmOpen(M, path0) {
+    const p = path0 === '' ? await pick(M, 'file', 'Open Selection(s)...', 'command') : path0;
+    const s = norm(p);
+    let r;
+    try { r = resolveIn(M, s, openerBase()); } catch (e) { return fsFail(M, e, s); }
+    if (s.endsWith('.zip')) {
+      const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), (code) => rmError(M, 'java.io.FileNotFoundException: ' + javaIoText(code, r.vpath)).then(() => null));
+      if (!bytes) return NaN;
+      return rmOpenZip(M, r.vpath, bytes);
+    }
+    const bytes = await attempt(M, r.vpath, () => readAll(M, r.vpath), () => null);
+    let d = null;
+    if (bytes) { try { d = root.IJRoiCodec.decodeEntry(bytes, { fileName: nameOfVpath(r.vpath) }); } catch (_) { d = null; } }
+    // "Unable to open ROI at <path>": RoiManager.open keeps it as errorMessage, with no message box
+    if (!d) return NaN;
+    let name = typeof d.name === 'string' && d.name ? d.name : nameOfVpath(r.vpath);
+    if (name.endsWith('.roi')) name = name.substring(0, name.length - 4);
+    M.rm.list.push(rmEntryOf(M, d, name));
+    rmSync(M);
+    return NaN;
+  }
+  async function rmSave(M, path0, selected) {
+    const list = M.rm.list;
+    const indexes = () => (M.rm.selected.length ? M.rm.selected.slice() : list.map((_, i) => i));
+    if (path0 !== null && path0.endsWith('.roi')) {
+      const idx = indexes();
+      if (!idx.length) return rmError(M, 'The list is empty');
+      const e = list[idx[0]];
+      const bytes = root.IJRoiCodec.encode(e.roi, { name: e.name, stroke: e.stroke, fill: e.fill, width: e.width, position: e.position });
+      await attempt(M, norm(path0), () => mp(M.vfs.write(resolveIn(M, path0, HOME).vpath, bytes), () => null),
+        (code) => errorBox(M, 'ROI Manager', javaIoText(code, norm(path0)), null));
+      return NaN;
+    }
+    if (path0 !== '' && !path0.endsWith('.zip')) return rmError(M, "Name must end with '.zip'");
+    if (!list.length) return rmError(M, 'The list is empty');
+    const idx = selected ? indexes() : list.map((_, i) => i);
+    let p = path0;
+    if (p === '') {
+      p = await pick(M, 'save', 'Save ROIs...', 'command', { defaultName: 'RoiSet', ext: '.zip' });
+      if (!(p.endsWith('.zip') || p.endsWith('.ZIP'))) p += '.zip';
+    }
+    const bytes = root.IJRoiCodec.encodeSet(idx.map((i) => list[i]).map((e) => ({ roi: e.roi, name: e.name, stroke: e.stroke, fill: e.fill, width: e.width, position: e.position })));
+    await attempt(M, norm(p), () => mp(M.vfs.write(resolveIn(M, p, HOME).vpath, bytes), () => null),
+      (code) => rmError(M, 'java.io.FileNotFoundException: ' + javaIoText(code, norm(p))));
+    return NaN;
+  }
+
+  // ---------------------------------------------------------------- IJ.checksum("MD5 file" | "SHA-256 file", path) (Tools.getHash)
+  const HASH_CHUNK = 16 * 1048576;
+  async function checksumFile(M, method, path) {
+    const V = VFSLIB();
+    if (!V || !V.hash || !M.vfs) return '0';
+    let handle = null;
+    try {
+      const r = resolveIn(M, path, HOME);
+      const h = method === 'MD5' ? V.hash.md5() : V.hash.sha256();
+      handle = await M.vfs.openRead(r.vpath);
+      for (let at = 0; at < handle.size; at += HASH_CHUNK) h.update(await handle.read(at, Math.min(HASH_CHUNK, handle.size - at)));
+      return h.hex();
+    } catch (err) {
+      if (err instanceof MacroCancel) throw err;
+      if (err && err.macroText !== undefined && !isVfsError(err)) throw err;
+      return '0';
+    } finally {
+      if (handle) { try { await handle.close(); } catch (_) { /* a read handle holds nothing to save */ } }
+    }
+  }
+
+  // ---------------------------------------------------------------- macro.scan (FILES.md §6.1): the picker calls of a macro, before it runs
+  function macroScan(a) {
+    const IJMacro = LANG();
+    const V = VFSLIB();
+    if (!IJMacro || typeof IJMacro.tokenize !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJMacro');
+    if (!a || typeof a.source !== 'string') throw ijError('IJ_BAD_ARGS', 'macro.scan');
+    const out = { folders: [], files: [], machinePaths: [] };
+    let pgm;
+    try { pgm = IJMacro.tokenize(a.source); } catch (_) { return out; }
+    const KK = IJMacro.K, MASK = KK.TOK_MASK, SHIFT = KK.TOK_SHIFT;
+    const code = pgm.code;
+    const tok = (i) => (i < code.length ? code[i] & MASK : KK.EOF);
+    const str = (i) => { const s = pgm.table[code[i] >> SHIFT]; return s && typeof s.str === 'string' ? s.str : ''; };
+    const isName = (t) => t === KK.WORD || t === KK.STRING_FUNCTION || t === KK.NUMERIC_FUNCTION || t === KK.PREDEFINED_FUNCTION ||
+      t === KK.ARRAY_FUNCTION || t === KK.VARIABLE_FUNCTION;
+    const literalArg = (i) => (tok(i) === 40 && tok(i + 1) === KK.STRING_CONSTANT ? str(i + 1) : null);
+    const aliases = Array.isArray(a.aliases) ? a.aliases : [];
+    const covered = (dir) => aliases.some((al) => al && typeof al.literal === 'string' &&
+      (al.ci ? dir.toLowerCase().startsWith(al.literal.toLowerCase()) : dir.startsWith(al.literal)));
+    const seen = new Set();
+    for (let i = 0; i < code.length; i++) {
+      const t = tok(i);
+      if (t === KK.EOF) break;
+      const line = pgm.lineNumbers[i];
+      if (t === KK.STRING_FUNCTION && (str(i) === 'getDirectory' || str(i) === 'getDir')) {
+        const p = literalArg(i + 1);
+        if (p !== null && tok(i + 3) === 41) {
+          const lc = p.toLowerCase();
+          if (!(Object.prototype.hasOwnProperty.call(DIR_KEYWORDS, lc) || lc === 'current' || lc === 'default' || lc === 'image' || lc === 'file'))
+            out.folders.push({ prompt: p, line });
+        }
+      } else if (t === KK.STRING_FUNCTION && (str(i) === 'File' || str(i) === 'Dialog') && tok(i + 1) === 46 && isName(tok(i + 2))) {
+        const member = str(i + 2), p = literalArg(i + 3);
+        if (p !== null) {
+          if (str(i) === 'File' && member === 'openDialog') out.files.push({ prompt: p, line });
+          else if (str(i) === 'Dialog' && member === 'addDirectory') out.folders.push({ prompt: p, line });
+          else if (str(i) === 'Dialog' && member === 'addFile') out.files.push({ prompt: p, line });
+        }
+      } else if (t === KK.STRING_CONSTANT && V && out.machinePaths.length < 20) {
+        const s = V.normalizeSeparators(str(i));
+        if (V.isMachinePath(s)) {
+          const dir = s.endsWith('/') ? s : s.substring(0, s.lastIndexOf('/') + 1);
+          if (dir && !seen.has(dir) && !covered(dir)) { seen.add(dir); out.machinePaths.push(dir); }
+        }
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- macro.vfs (FILES.md §5.2): delivery and storage, never during a run
+  const VFS_UI_ERRORS = { VFS_QUOTA: 'IJ_MACRO_VFS_QUOTA', VFS_BUSY: 'IJ_MACRO_VFS_BUSY', VFS_NO_STORAGE: 'IJ_MACRO_VFS_NO_STORAGE' };
+  async function macroVfs(a, E) {
+    const V = VFSLIB();
+    if (!V || typeof V.open !== 'function') throw ijError('IJ_MODULE_MISSING', 'IJMacroVFS');
+    if (!a || typeof a.op !== 'string') throw ijError('IJ_BAD_ARGS', 'macro.vfs');
+    if (RUNS.size) throw ijError('IJ_MACRO_BUSY', 'a macro is running');
+    const ops = ['changes', 'deliver', 'discard', 'usage', 'clearTmp'];
+    if (ops.indexOf(a.op) < 0) throw ijError('IJ_BAD_ARGS', 'macro.vfs op');
+    const needsRoot = a.op === 'changes' || a.op === 'deliver' || a.op === 'discard';
+    if (needsRoot && typeof a.rootId !== 'string') throw ijError('IJ_BAD_ARGS', 'rootId');
+    enterMount(a.mountId);
+    const vfs = V.open(vfsContext(a, null));
+    try {
+      await vfs.prepare();
+      switch (a.op) {
+        case 'changes': return await vfs.changes(a.rootId);
+        case 'deliver': return await vfs.deliver(a.rootId, { texts: a.texts && typeof a.texts === 'object' ? a.texts : {}, maxLinks: 3,
+          onProgress: (fr) => { try { E.tick(fr, 'op.macZip'); } catch (err) { if (err && err.code === 'IJ_CANCELLED') throw err; } } });
+        case 'discard': await vfs.discard(a.rootId); return {};
+        case 'usage': return await vfs.usage();
+        case 'clearTmp': await vfs.clearTmp(); return {};
+        default: return {};
+      }
+    } catch (err) {
+      if (isVfsError(err) && VFS_UI_ERRORS[err.code]) throw ijError(VFS_UI_ERRORS[err.code], err.code);
+      throw err;
+    } finally {
+      try { await vfs.close(); } catch (err) { console.error('[advanced-studio] macro vfs close', err); }
+    }
+  }
+
+  // ---------------------------------------------------------------- installation of the file built-ins
+  function installFiles() {
+    const IJMacro = LANG();
+    IJMacro.define('str', 'File', fileGen, { suspends: FILE_SUSPENDS, sync: fileSync });
+    for (const name of ['getDirectory', 'getDir']) {
+      IJMacro.define('str', name, function* (f) {
+        const t = yield* f.getStringArg();
+        const M = runOf(f);
+        return yield* f.hostHook(() => getDirectoryOf(M, t));
+      }, { suspends: (pgm, j) => getDirectorySuspends(pgm, j), sync(f) {
+        const t = f.getStringArg$s();
+        const r = getDirectoryOf(runOf(f), t);
+        if (isThen(r)) throw ijError('IJ_INTERNAL', 'a directory chooser ran in the fast path');
+        return r;
+      } });
+    }
+    IJMacro.define('arr', 'getFileList', function* (f) {
+      const dir = yield* f.getStringArg();
+      const M = runOf(f);
+      const list = yield* f.hostHook(() => fileListOf(M, dir));
+      return f.newVariableArray(Array.isArray(list) ? list : []);
+    }, { suspends: true });
+    IJMacro.define('do', 'open', function* (f) {
+      const it = f.interp;
+      it.getLeftParen();
+      let path = null, n = NaN;
+      if (it.nextToken() === RP) it.getRightParen();
+      else {
+        path = yield* f.getString();
+        if (it.nextToken() === COMMA) {
+          it.getComma();
+          if (f.isStringArg()) yield* f.getString(); else n = yield* it.getExpression();
+        }
+        it.getRightParen();
+      }
+      const M = runOf(f);
+      yield* f.hostHook(() => openBuiltin(f, M, path, n));
+      return null;
+    }, { suspends: true });
+    defAsync('do', 'save', 's', (f, a, M) => saveBuiltin(f, M, a[0]));
+    IJMacro.define('do', 'saveAs', function* (f) {
+      const it = f.interp;
+      const format = yield* f.getFirstString();
+      let path = null, oneArg = false;
+      if (it.nextToken() === COMMA) path = yield* f.getLastString();
+      else { it.getRightParen(); oneArg = true; }
+      const M = runOf(f);
+      // Functions.saveAs: one argument holding a separator is a path (a Windows "\" counts once normalised, F3)
+      if (oneArg && norm(format).indexOf('/') >= 0) yield* f.hostHook(() => saveBuiltin(f, M, format));
+      else yield* f.hostHook(() => saveAsBuiltin(f, M, format, path));
+      return null;
+    }, { suspends: true });
+    IJMacro.define('str', 'runMacro', function* (f) {
+      const it = f.interp;
+      it.getLeftParen();
+      const name = yield* f.getString();
+      let arg = null;
+      if (it.nextToken() === COMMA) { it.getComma(); arg = yield* f.getString(); }
+      it.getRightParen();
+      const M = runOf(f);
+      const src = yield* f.hostHook(() => macroFileSource(M, name, arg));
+      if (src === null || src === undefined) return null;
+      return yield* runNestedFile(f, M, src.text, arg, src.vpath);
+    }, { suspends: true });
+  }
+
+  // ---------------------------------------------------------------- Table.open / Table.save (Functions.openTable / saveTable 1.54p)
+  async function tableOpen(f, M, path, title0) {
+    const title = title0 !== null ? title0 : jName(path);
+    const str = await openAsStringRaw(M, path, 'command');
+    if (str.startsWith('Error:')) throw macroError('Error opening ' + norm(path));
+    const t = readTableBytes(str, title, norm(path));
+    return showTable(M, t, title, false);
+  }
+  async function tableSave(f, M, path0, title) {
+    const t = tableFor(f, M, title);
+    // ResultsTable.saveAs: new SaveDialog("Save Table", "Table", Prefs.defaultResultsExtension())
+    const p = path0 === '' ? await pick(M, 'save', 'Save Table', 'command', { defaultName: 'Table', ext: String(settingOf(M, 'ana.ext', '.csv')) }) : path0;
+    const shown = norm(p);
+    await attempt(M, shown, () => {
+      const r = resolveIn(M, p, HOME);
+      // ResultsTable.saveAs: the table's own showRowNumbers, off when Prefs.dontSaveRowNumbers
+      const numbers = t.name === 'Results' ? undefined : t.showRowNumbers === true && settingOf(M, 'ana.saveRowNumbers', true) !== false;
+      return mp(M.vfs.write(r.vpath, tableBytes(M, t, p, numbers, 'Table.save')), () => null);
+    }, (code) => { throw macroError(javaIoText(code, shown)); });
+    return null;
+  }
+
   // Test hooks (pure helpers and the run registry): not part of the contract.
   root.IJMacroRuntime = Object.freeze({
-    resolveCall, freeMemoryText, optionFor, logApply, logText, parseJavaDouble,
+    resolveCall, freeMemoryText, optionFor, logApply, logText, parseJavaDouble, fileTypeOf, javaDate, macroScan,
+    uniqueTitleOf: (titles, name) => uniqueTitle({ images: new Map(titles.map((t, i) => [i, { title: t, hidden: false }])) }, name),
+    mount: () => Object.assign({}, MOUNT),
     runs: () => Array.from(RUNS.keys()),
     run: (runId) => RUNS.get(runId) || null,
     setRpcTimeout(ms) { const old = RPC_TIMEOUT_MS; RPC_TIMEOUT_MS = ms > 0 ? ms : 30000; return old; }

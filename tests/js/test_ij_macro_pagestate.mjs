@@ -61,8 +61,9 @@ const reset = async () => {
   let r = await t.run('newImage("s", "8-bit black", 20, 20, 1); makeRectangle(1, 2, 3, 4); makeOval(2, 2, 5, 5); makeLine(1, 1, 5, 5, 3); makeLine(0, 0, 3, 3, 6, 0); makePolygon(1, 1, 8, 1, 4, 6); makePoint(2.5, 3); makeSelection("angle", newArray(1, 5, 9), newArray(5, 1, 5)); makeSelection("traced", newArray(1, 5, 5), newArray(1, 1, 5)); print(selectionType());');
   assert.deepEqual(okRun(r, 'shapes'), ['4']);
   const rois = r.writes.filter((w) => w[0] === 'roi.set').map((w) => w[1].roi);
-  assert.deepEqual(J(rois[0]), { type: 'rect', x: 1, y: 2, w: 3, h: 4 });
-  assert.deepEqual(J(rois[1]), { type: 'oval', x: 2, y: 2, w: 5, h: 5 });
+  // makeRectangle / makeOval build Roi(double…) / OvalRoi(double…): sub-pixel bounds (RoiEncoder writes them)
+  assert.deepEqual(J(rois[0]), { type: 'rect', x: 1, y: 2, w: 3, h: 4, subPixel: true });
+  assert.deepEqual(J(rois[1]), { type: 'oval', x: 2, y: 2, w: 5, h: 5, subPixel: true });
   assert.deepEqual(J(rois[2]), { type: 'line', x1: 1, y1: 1, x2: 5, y2: 5, width: 3 });
   assert.deepEqual(J(rois[3]), { type: 'polyline', points: [[0, 0], [3, 3], [6, 0]] });
   assert.deepEqual(J(rois[4]), { type: 'polygon', points: [[1, 1], [8, 1], [4, 6]] });
@@ -99,8 +100,9 @@ const reset = async () => {
   assert.deepEqual(okRun(r, 'delete'), ['1', '0']);
   r = await t.run('roiManager("select", 3);');
   assert.equal(r.result.error.message, 'Index (3) is outside of the 0--1 range');
-  r = await t.run('roiManager("open", "/a.zip");');
-  assert.match(r.result.error.message, /^roiManager\("open"\) is not available yet/);
+  // a ROI set of a folder that was never granted (FILES.md §8.1); the file built-ins themselves: test_ij_macro_files_runtime.mjs
+  r = await t.run('roiManager("open", "/q/a.zip");');
+  assert.match(r.result.error.message, /^(Folder not granted: \/q\/|This browser gives the page no storage)/);
   r = await t.run('makeRectangle(0,0,0,0); roiManager("add");');
   assert.equal(r.result.error.message, 'The active image does not have a selection.');
   delete t.page.answers.run;
@@ -117,8 +119,8 @@ const reset = async () => {
   assert.deepEqual(J(t.page.tables.T.columns.w), [3]);
   r = await t.run('x = Table.get("nope", 0, "Missing");');
   assert.equal(r.result.error.message, '"Missing" table not found');
-  r = await t.run('Table.save("/x.csv");');
-  assert.match(r.result.error.message, /^Table\.save is not available yet/);
+  r = await t.run('Table.save("/q/x.csv");');
+  assert.match(r.result.error.message, /^(Folder not granted: \/q\/|This browser gives the page no storage)/);
   r = await t.run('Array.show("arr", newArray(1, 2, 3));');
   okRun(r, 'Array.show');
   assert.deepEqual(J(t.page.tables.arr.columns.Value), [1, 2, 3]);

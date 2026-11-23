@@ -179,10 +179,12 @@
  *   roiManager entries and annotation items take `position`: { c, z, t } (1-based, 0 = any) or { n } (a plain stack's slice); the view draws them
  *       only on that plane. events: 'doc' kind 'position' when the plane changes.
  *
- * Macros (DOCS/studio-advanced/macros/INTEGRATION.md §2): package `macro` (its worker file ij-proc-macro.js is loaded after ij-macro-lang.js,
- * PACKAGE_PRE) alone receives `api.macro` (start / abort / running / signal / pause / runCommand / mirror / ijId / docOf / selectImage /
- * closeImages / showImages / adopt / results / tables / thresholds / thresholdMode / settings / measurements / colors / roiManagerShow /
- * setVisible / status / progress) and may call its `passive` worker commands. While a run holds the lane (S.lane) the menus are off unless it
+ * Macros (DOCS/studio-advanced/macros/INTEGRATION.md §2): package `macro` (its worker file ij-proc-macro.js is loaded after ij-macro-lang.js and
+ * ij-macro-vfs.js, PACKAGE_PRE) alone receives `api.macro` (start / abort / running / signal / pause / runCommand / mirror / ijId / docOf /
+ * selectImage / closeImages / showImages / adopt / results / tables / thresholds / thresholdMode / settings / measurements / colors /
+ * roiManagerShow / setVisible / status / noteFront / progress) and may call its `passive` worker commands. Files (FILES.md): start({ vfs })
+ * hands the granted folders to the worker by structured clone; a run() file command answers { status: 'file', file } for the worker to run;
+ * pickFile / saveFile refuse inside a command a macro started (IJ_MACRO_FILE_DIRECT). While a run holds the lane (S.lane) the menus are off unless it
  * waits for the operator; a command it starts (runMacroCommand) runs with `source: 'macro'`, its dialogs answered from the options string
  * (IJMacroCmds.headlessAnswer) or shown with the lane paused, its errors recorded instead of shown, and an `ask` that passes `macro:` gets
  * ImageJ's macro-mode answer. Each image keeps its threshold (S.thresholds; the Threshold window reads and writes it).
@@ -314,7 +316,7 @@ const IJApp = (() => {
   const PACKAGE_NAMES = WORKER_SCRIPTS.map((f) => PACKAGE_FILE_RX.exec(f)).filter((m) => m && m[1] !== 'shared').map((m) => m[1]);
   // Files the worker loads right before a package file, in the same try/catch (a failure of either withdraws the package): the macro
   // language is part of package `macro`, never a mandatory script.
-  const PACKAGE_PRE = Object.freeze({ macro: Object.freeze(['ij-macro-lang.js']) });
+  const PACKAGE_PRE = Object.freeze({ macro: Object.freeze(['ij-macro-lang.js', 'ij-macro-vfs.js']) });
   const ESTIMATE_MIN_FRACTION = 1 / 64; // an image under budget/64 never needs the estimate round trip
   const PERSIST_MS = 1200;
   // The events api.on knows ('ext:<name>' = what a worker command posted), the settings with their defaults, the prefix each
@@ -328,7 +330,10 @@ const IJApp = (() => {
     fft: 'fft', sel: 'sel', io: 'io', ov: 'ov', ana: 'ana', edit: 'edit', fiji: 'fiji', lib: 'lib', macro: 'mac' };
   // The preferences a macro may read and write (setOption, call("ij.Prefs…") equivalents; INTEGRATION.md §4.4).
   const MACRO_SETTING_KEYS = Object.freeze(['thr.blackBackground', 'thr.padEdges', 'thr.edmOutput', 'thr.count', 'conv.scale', 'conv.weighted',
-    'conv.fullRange16', 'misc.divZero', 'appearance.interpolate', 'appearance.useNames']);
+    'conv.fullRange16', 'misc.divZero', 'appearance.interpolate', 'appearance.useNames', 'ana.saveHeaders', 'ana.saveRowNumbers', 'ana.ext', 'io.jpegQuality']);
+  // Of those, the ones a macro only reads (the writers of its file commands: ResultsTable.saveAs, JpegWriter), with the value the operator's
+  // own commands fall back to when the preference was never set (Edit › Options › Input/Output defaults)
+  const MACRO_READONLY_SETTINGS = Object.freeze({ 'ana.saveHeaders': true, 'ana.saveRowNumbers': true, 'ana.ext': '.csv', 'io.jpegQuality': 85 });
   // ij.gui.Toolbar / Colors.java: java.awt.Color constants (orange = 255,200,0; pink = 255,175,175; grays 128 / 192 / 64)
   const COLOR_NAMES = { red: [255, 0, 0], green: [0, 255, 0], blue: [0, 0, 255], magenta: [255, 0, 255], cyan: [0, 255, 255], yellow: [255, 255, 0],
     orange: [255, 200, 0], black: [0, 0, 0], white: [255, 255, 255], gray: [128, 128, 128], lightgray: [192, 192, 192], darkgray: [64, 64, 64],
@@ -685,7 +690,8 @@ const IJApp = (() => {
     tableSeq: 0,              // revision counter of the tables (what a mirror sends)
     resultsSeen: null,        // { arr, len, rev } of S.results last given a revision
     ijIds: new Map(),         // docId → ImageJ id (-1, -2, … in order of first registration; never reused in a mount)
-    ijSeq: 0
+    ijSeq: 0,
+    front: null               // the front non-image window ({ kind: 'table' | 'log' | 'text', title, win? }) until an image is activated
   };
 
   // ───────────────────────────── extension registry ─────────────────────────────
@@ -1094,6 +1100,10 @@ const IJApp = (() => {
     const cmd = S.lane && S.lane.cmd;
     if (!cmd) { console.error('[advanced-studio]', err); return; }
     if (err && (err.name === 'AbortError' || err.code === 'IJ_CANCELLED' || err.cancelled)) { cmd.cancelled = true; return; }
+    if (err && err.code === 'IJ_MACRO_FILE_DIRECT') {
+      if (!cmd.error) cmd.error = Object.assign(new Error('file direct'), { code: 'IJ_MACRO_OPTIONS', macroText: tr('err.macFileDirect', { command: cmd.name }) });
+      return;
+    }
     if (!cmd.error) cmd.error = err || Object.assign(new Error('failed'), { code: 'IJ_INTERNAL' });
     // a macro's own options error is the macro's message, not a fault of the page
     if (!err || err.code !== 'IJ_MACRO_OPTIONS') console.error('[advanced-studio]', err);
@@ -1561,6 +1571,7 @@ const IJApp = (() => {
     if (!S.docs.has(docId)) return;
     const changed = S.activeId !== docId;
     S.activeId = docId;
+    S.front = null;
     hideEmpty();
     syncWindowMenu();
     refreshUi();
@@ -2086,6 +2097,7 @@ const IJApp = (() => {
    * Returns false when the operator cancelled.
    */
   async function saveFile(suggested, mime, ext, desc, produce) {
+    if (S.lane && S.lane.cmd) throw fileDirectError();
     let handle = null;
     if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
       try {
@@ -2210,11 +2222,22 @@ const IJApp = (() => {
    * One cell as ImageJ prints it (ResultsTable.getValueAsString): a number with the table's precision (a whole number without decimals);
    * a cell nobody filled is 0, or NaN with "NaN empty cells" (ResultsTable.setNaNEmptyCells); text as it is.
    */
-  function cellText(r, c) {
+  function cellText(r, c, rows) {
     const v = r[c];
-    if (v === undefined || v === null) return c === 'Label' ? '' : (S.measurements.includes('nanEmpty') ? 'NaN' : '0');
-    if (typeof v === 'number') return typeof IJAna !== 'undefined' ? IJAna.cellString(v, anaPrecision()) : num(v, 4);
+    if ((v === undefined || v === null) && (c === 'Label' || S.measurements.includes('nanEmpty'))) return c === 'Label' ? '' : 'NaN';
+    if (typeof IJAna === 'undefined') return v === undefined || v === null ? '0' : (typeof v === 'number' ? num(v, 4) : String(v));
+    if (v === undefined || v === null) return decimalColumn(rows || S.results, c) ? IJAna.d2s(0, anaPrecision()) : '0';
+    if (typeof v === 'number') return decimalColumn(rows || S.results, c) ? IJAna.d2s(v, anaPrecision()) : IJAna.cellString(v, anaPrecision());
     return String(v);
+  }
+  /* ResultsTable: "if ((int)value!=value && !Double.isNaN(value)) decimalPlaces[column] = (short)precision", decided as rows are added
+   * (addValue: "if (counter<25)"): a column with a non-integer in its first 24 rows prints every cell with the precision. */
+  function decimalColumn(rows, c) {
+    for (let i = 0, n = Math.min(rows.length, 24); i < n; i++) {
+      const v = rows[i] && rows[i][c];
+      if (typeof v === 'number' && v === v && Math.abs(v) < 2147483648 && Math.trunc(v) !== v) return true;
+    }
+    return false;
   }
   /**
    * The table as text. mode 'save' = File › Save As (Edit › Options › Input/Output: "Save_column headers", "Save_row numbers"),
@@ -4184,6 +4207,12 @@ const IJApp = (() => {
     const titles = { bc: 'cmd.adjustBC', channels: 'cmd.colorChannels', threshold: 'cmd.adjustThreshold', results: 'win.results', roiManager: 'cmd.toolsRoiManager', summary: 'part.summaryTitle', sync: 'cmd.toolsSyncWindows' };
     if ((id === 'bc' || id === 'channels' || id === 'threshold') && !activeInfo()) return;
     floatingWindow(id, titles[id], TOOL_WINDOWS[id]);
+    if (id === 'results') noteFront('table', 'Results', null);
+  }
+  /** The window in front for ImageJ's writers that save "the front window" (TextWriter, MeasurementsWriter): a table window or a text
+   *  window the macro page reports; an image activated afterwards takes the front back (afterActivate). */
+  function noteFront(kind, title, win) {
+    S.front = { kind, title: String(title), win: win || null };
   }
 
   let toolTimer = 0;
@@ -4743,7 +4772,7 @@ const IJApp = (() => {
       table.textContent = '';
       table.appendChild(h('thead', null, h('tr', null, cols.map((c) => h('th', { text: c })))));
       const tb = h('tbody');
-      for (const r of S.summaryRows) tb.appendChild(h('tr', null, cols.map((c) => h('td', { text: cellText(r, c) }))));
+      for (const r of S.summaryRows) tb.appendChild(h('tr', null, cols.map((c) => h('td', { text: cellText(r, c, S.summaryRows) }))));
       table.appendChild(tb);
     }
     const el = h('div', { class: 'ij-panel ij-summary' }, h('div', { class: 'ij-table-wrap' }, table),
@@ -5193,7 +5222,9 @@ const IJApp = (() => {
       data.length > cap ? h('p', { class: 'ij-banner', text: tr('res.capped', { shown: cap, total: data.length }) }) : null,
       row(btn(tr('res.copy'), () => copyText(tableText(cols, data, '\t'))),
         btn(tr('res.save'), async () => { try { await saveFile(safeName(title, '.csv'), 'text/csv', '.csv', 'CSV', async () => new Blob([tableText(cols, data, ',')], { type: 'text/csv' })); } catch (err) { await reportError(err); } })));
-    const tableWin = S.shell.windows.floating({ id: 'table-' + (++S.openCounter), title, content, onClose: () => syncWindowMenu() });
+    const tableWin = S.shell.windows.floating({ id: 'table-' + (++S.openCounter), title, content,
+      onClose: () => { if (S.front && S.front.win === tableWin) S.front = null; syncWindowMenu(); } });
+    noteFront('table', title, tableWin);
     syncWindowMenu();
     return tableWin;
   }
@@ -5354,7 +5385,7 @@ const IJApp = (() => {
       para('about.intro'), para('about.source'), para('about.depth'),
       h('h4', { text: tr('about.familiesTitle') }), h('ul', null, families),
       h('h4', { text: tr('about.missingTitle') }), para('about.missing'),
-      para('about.deviations'), para('about.storage'), para('about.tables'),
+      para('about.deviations'), para('about.storage'), para('dlg.mac.files.evictNote'), para('about.tables'),
       h('h4', { text: tr('about.thisTitle') }), para('about.resultsWindow'), para('about.pixelSource'),
       h('h4', { text: tr('about.limitsTitle') }), h('ul', { class: 'ij-about-limits' }, limits)
     ]));
@@ -6157,8 +6188,9 @@ const IJApp = (() => {
     const MC = typeof IJMacroCmds !== 'undefined' ? IJMacroCmds : null;
     const e = MC && Object.prototype.hasOwnProperty.call(MC.MACRO_COMMANDS, c.id) ? MC.MACRO_COMMANDS[c.id] : null;
     if (!e) return tr('err.macNotInBrowser', { name: tr(c.labelKey) });
+    // a file command runs in the worker on the macro's virtual file system (FILES.md §9): never through the page
+    if (e.cls === 'F' || e.file) return tr('err.macFileDirect', { command: e.name });
     if (e.cls !== 'E') return null;
-    if (e.later) return tr('err.macFileLater', { name: e.name });
     return tr('err.macRefused', { command: e.name, reason: tr(e.refuse) });
   }
   const lastCommandExt = () => (S.lastCommand ? { id: S.lastCommand } : null);
@@ -6344,7 +6376,11 @@ const IJApp = (() => {
   }
 
   // ── files, clipboard, picture, profile ──
+  /** A command a macro started never opens a picker (no user gesture) nor downloads: a macro's files go through the worker's virtual file
+   *  system (FILES.md F9); every Studio command that reads or writes a user file is a file request of the macro table instead. */
+  function fileDirectError() { return Object.assign(new Error('file direct'), { code: 'IJ_MACRO_FILE_DIRECT' }); }
   function pickFileExt(o) {
+    if (S.lane && S.lane.cmd) return Promise.reject(fileDirectError());
     const opt = o || {};
     return new Promise((resolve) => {
       const input = h('input', { type: 'file' });
@@ -6611,13 +6647,17 @@ const IJApp = (() => {
     const u = S.winUpdaters.get('threshold');
     if (u) u('setMode', mode);
   }
+  function macroSettingGet(key) {
+    const v = settingGet(key);
+    return (v === undefined || v === null) && Object.prototype.hasOwnProperty.call(MACRO_READONLY_SETTINGS, key) ? MACRO_READONLY_SETTINGS[key] : v;
+  }
   const macroSettingsApi = Object.freeze({
     get(key) {
       if (MACRO_SETTING_KEYS.indexOf(key) < 0) throw forbidden('macro settings: ' + String(key));
-      return settingGet(key);
+      return macroSettingGet(key);
     },
     set(key, value) {
-      if (MACRO_SETTING_KEYS.indexOf(key) < 0) throw forbidden('macro settings: ' + String(key));
+      if (MACRO_SETTING_KEYS.indexOf(key) < 0 || Object.prototype.hasOwnProperty.call(MACRO_READONLY_SETTINGS, key)) throw forbidden('macro settings: ' + String(key));
       writeSetting(key, value);
     }
   });
@@ -6674,11 +6714,24 @@ const IJApp = (() => {
       nC, nZ: sd.nZ, nT: sd.nT, hyperstack: !!info.hyperstack, rgb: !!info.rgb, hidden: S.hidden.has(id), ephemeral: !!info.ephemeral,
       changes: isDirty(id), mode: d ? d.mode : (info.mode || 'composite'), active: S.activeCh.get(id) || 0, pos: positionOf(id),
       visible: d ? d.visible.slice() : (info.visible || []).slice(),
+      file: fileOriginOf(info),
       calibration: { pixelWidth: num0(cal.pixelWidth, 1), pixelHeight: num0(cal.pixelHeight, 1), pixelDepth: num0(cal.pixelDepth, 1), unit: typeof cal.unit === 'string' && cal.unit ? cal.unit : 'pixel',
         xOrigin: num0(cal.xOrigin, 0), yOrigin: num0(cal.yOrigin, 0), zOrigin: num0(cal.zOrigin, 0), frameInterval: num0(cal.frameInterval, 0), fps: num0(cal.fps, 0),
         timeUnit: typeof cal.timeUnit === 'string' && cal.timeUnit ? cal.timeUnit : 'sec' },
       display: (d ? d.channels : (info.channels || []).map((c) => c.display || {})).map((c) => ({ min: c.min, max: c.max, lut: typeof c.lut === 'string' ? c.lut : null, invert: !!c.invert }))
     };
+  }
+  /** The file an image was opened from or saved to (FILES.md §10.2: virtual strings only), as a macro reads it (getInfo("image.directory")…). */
+  function fileOriginOf(info) {
+    const f = info && (info.file || (info.provenance && info.provenance.file));
+    if (!f || typeof f !== 'object' || typeof f.dir !== 'string' || typeof f.name !== 'string') return null;
+    return { dir: f.dir, name: f.name, format: typeof f.format === 'string' ? f.format : null };
+  }
+  /** The front window of the page for a macro: a table / text window reported since the last image activation, else the active image. */
+  function macroFront() {
+    if (S.front) return { kind: S.front.kind, title: S.front.title };
+    const info = S.activeId !== null && S.activeId !== undefined ? S.docs.get(S.activeId) : null;
+    return info ? { kind: 'image', title: info.name } : null;
   }
   /** An identity of the ROI Manager's content: each entry, its selection object and its fields (selections are replaced, never edited in place). */
   const rmIds = new WeakMap();
@@ -6718,7 +6771,7 @@ const IJApp = (() => {
     // the ROI Manager's list goes once per change, as the tables do: `same: true` = the list this lane last received (a list of thousands of
     // polygons cloned into every reply stalled the page at each request)
     const rmKey = roiManagerKey();
-    const rm = { selected: roiManagerApi.selected(), showAll: !!S.showAll, labels: !!roiLabels };
+    const rm = { selected: roiManagerApi.selected(), showAll: !!S.showAll, labels: !!roiLabels, open: S.wins.has('roiManager') };
     if (lane && lane.sentRm === rmKey) rm.same = true;
     else { rm.list = roiManagerApi.list(); if (lane) lane.sentRm = rmKey; }
     return {
@@ -6726,10 +6779,11 @@ const IJApp = (() => {
       roiManager: rm,
       tables, thresholds,
       thresholdWindow: S.wins.has('threshold') && S.threshold ? { docId: S.threshold.docId, channel: S.threshold.channel, mode: S.thrMode } : null,
-      settings: MACRO_SETTING_KEYS.reduce((o, k) => { o[k] = settingGet(k); return o; }, {}),
+      settings: MACRO_SETTING_KEYS.reduce((o, k) => { o[k] = macroSettingGet(k); return o; }, {}),
       measurements: measurementsApi.get(), colors: colorsApi.get(),
       lineWidth: S.lineWidth, tool: S.tool,
-      workspace: { width: ext ? ext.w : 0, height: ext ? ext.h : 0 }
+      workspace: { width: ext ? ext.w : 0, height: ext ? ext.h : 0 },
+      front: macroFront()
     };
   }
 
@@ -6808,6 +6862,9 @@ const IJApp = (() => {
         prefs: opt.prefs && typeof opt.prefs === 'object' ? opt.prefs : {},
         options: Object.assign({ fastPath: true, syncLoops: false, syncRecursion: false }, opt.options && typeof opt.options === 'object' ? opt.options : {})
       };
+      // the granted folders travel as they are (FILES.md §5.1): directory handles and File objects survive only a structured clone, so the
+      // object is handed to postMessage untouched (no JSON, no copy that drops what it does not know)
+      if (opt.vfs && typeof opt.vfs === 'object') args.vfs = opt.vfs;
       const p = call('macro.run', args, [], { long: true });
       lane.reqId = p.reqId;
       result = await p;
@@ -6891,6 +6948,14 @@ const IJApp = (() => {
         const p = r.refuse.params || {};
         return out('refused', tr(r.refuse.key, Object.assign({}, p, p.reasonKey ? { reason: tr(p.reasonKey) } : null)));
       }
+      // a file command (FILES.md §9.3): handed straight back, the worker runs it on the macro's virtual file system with its own codecs
+      // (no enabled test, no Studio command, no lane command: the op checks its image itself, as ImageJ's writers do)
+      const spec = r.file || (r.entry && r.entry.file) || null;
+      if (spec) {
+        if (typeof MC.fileRequest !== 'function') return out('refused', tr('err.macNotInBrowser', { name: nm }));
+        const cur = opt.current !== undefined && opt.current !== null && S.docs.has(opt.current) ? opt.current : (S.activeId === undefined ? null : S.activeId);
+        return Object.assign(out('file', ''), { current: cur, file: Object.assign(MC.fileRequest(spec, opts, { vars: opt.vars && typeof opt.vars === 'object' ? opt.vars : {} }), { name: nm, options: opts }) });
+      }
       const c = COMMANDS.find((x) => x.id === r.id);
       if (!c || c.dynamic) return out('unrecognized', 'Unrecognized command: "' + nm + '"');
       if (c.pkg && S.failedPackages.has(c.pkg)) return out('disabled', tr('warn.packageFailed', { pkg: c.pkg }));
@@ -6902,6 +6967,7 @@ const IJApp = (() => {
       let enabled = false;
       try { enabled = !!c.enabled(st); } catch (_) { enabled = false; }
       if (!enabled) {
+        if (r.entry && r.entry.noopWhenDisabled === 'always') return out('ok', '');
         if (!st.doc) return out('disabled', MC.NO_IMAGE_TEXT);
         if (r.entry && r.entry.noopWhenDisabled === true) return out('ok', '');
         return out('disabled', (r.entry && r.entry.disabledText) || tr('err.macDisabled', { command: nm }));
@@ -6989,6 +7055,14 @@ const IJApp = (() => {
       setDocDisplayMode(docId, { visible: visible.map((v) => !!v) });
     },
     status: (text) => setStatus(text === undefined || text === null ? '' : String(text)),
+    // how many times the Studio was opened afresh in this page: the macro page renews its mount id when it changes
+    mountSeq: () => S.mountSeq | 0,
+    // the macro page's Log / text windows come to the front (FILES.md §5.5 mirror.front): kind 'log' | 'text' | 'table'
+    noteFront(kind, title) {
+      if (kind !== 'log' && kind !== 'text' && kind !== 'table') throw extError('noteFront: kind');
+      if (typeof title !== 'string' || !title) throw extError('noteFront: title');
+      noteFront(kind, title, null);
+    },
     progress(fraction) {
       if (!S.lane) return;
       S.lane.fraction = typeof fraction === 'number' && Number.isFinite(fraction) ? clamp(fraction, 0, 1) : null;
@@ -7189,6 +7263,8 @@ const IJApp = (() => {
     root.appendChild(S.appEl);
     S.mounted = true;
     S.firstCommitDone = false;
+    // a fresh Studio open (not the way back from the Simple view): the macros' /tmp/ and dialog statics start again (FILES.md F13, F14)
+    S.mountSeq = (S.mountSeq | 0) + 1;
     try {
       startWorker();
       S.menuList = buildMenuList();
@@ -7366,7 +7442,7 @@ const IJApp = (() => {
     // the extension state belongs to the session that is gone (listeners are dropped here, not when the Simple view merely hides the page)
     S.listeners.clear(); S.annot.clear(); S.annotDims.clear(); S.hidden.clear(); S.pending = null; S.lastCommand = null; S.extData = {}; S.luts.clear();
     S.sync = { cursor: true, imageCoords: true, scaling: false, docs: new Set() }; S.syncing = false; S.metaWarned = false; S.lastActiveEmitted = null; S.engineUsed = 0;
-    S.thresholds.clear(); S.thrOverlays.clear(); S.macroTables.clear(); S.macroTableWins.clear(); S.ijIds.clear(); S.ijSeq = 0; S.resultsSeen = null; S.persistDue = false; S.lane = null;
+    S.thresholds.clear(); S.thrOverlays.clear(); S.macroTables.clear(); S.macroTableWins.clear(); S.ijIds.clear(); S.ijSeq = 0; S.resultsSeen = null; S.persistDue = false; S.lane = null; S.front = null;
     S.leaving = null; S.busy = false; S.unprotected.clear(); S.held.clear(); S.warnBudget = ''; S.warnLow = false;
   }
 

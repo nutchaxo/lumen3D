@@ -766,3 +766,97 @@
 .ij-mac-tab:hover { color: var(--ij-text); background: var(--bg-hover); }
 .ij-mac-tab:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: -2px; }
 .ij-mac-tab.ij-mac-tab-active { border-color: var(--ij-border); border-bottom-color: var(--ij-panel); background: var(--ij-panel); color: var(--ij-text); }
+
+/* ── Macro files (FILES.md): the pause strip of the Macro Editor and its Files section ── */
+.ij-mac-pause {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--ij-accent);
+  border-radius: 4px;
+  background: var(--color-accent-subtle, var(--ij-chrome));
+  color: var(--ij-text);
+}
+.ij-mac-pause[hidden] { display: none; }
+.ij-mac-pause-text { margin: 0; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ij-mac-pause-hint { margin: 0; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-pause-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ij-mac-pause-field { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--ij-muted); }
+.ij-mac-pause-input,
+.ij-mac-files-select {
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--ij-panel));
+  color: var(--ij-text);
+  font: var(--ij-font);
+}
+.ij-mac-pause-input { flex: 1 1 200px; font-family: var(--ij-mono); }
+.ij-mac-pause-input:focus-visible,
+.ij-mac-files-select:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 0; border-color: var(--ij-accent); }
+
+.ij-mac-files {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  max-height: 45%;
+  min-height: 0;
+  border-top: 1px solid var(--ij-border);
+  padding-top: 4px;
+}
+.ij-mac-files-toggle {
+  align-self: flex-start;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ij-text);
+  font: var(--ij-font);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ij-mac-files-toggle::before { content: '\25BE'; display: inline-block; width: 1.2em; color: var(--ij-muted); }
+.ij-mac-files-toggle[aria-expanded='false']::before { content: '\25B8'; }
+.ij-mac-files-toggle:hover { color: var(--ij-accent-text); }
+.ij-mac-files-toggle:focus-visible { outline: 2px solid var(--ij-accent); outline-offset: 1px; }
+.ij-mac-files-body { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: auto; padding: 2px 2px 4px; }
+.ij-mac-files-body[hidden] { display: none; }
+.ij-mac-files-note { margin: 0; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-files-note.ij-mac-files-warn,
+.ij-mac-files-state.ij-mac-files-warn { color: var(--ij-warn-text); }
+.ij-mac-files-sub { margin: 4px 0 0; color: var(--ij-text); font-weight: 600; }
+.ij-mac-files-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-mac-files-drop {
+  flex: 1 1 160px;
+  padding: 6px 10px;
+  border: 1px dashed var(--ij-border);
+  border-radius: 4px;
+  color: var(--ij-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.ij-mac-files-drop.ij-mac-files-drop-over { border-color: var(--ij-accent); color: var(--ij-text); background: var(--color-accent-subtle, var(--bg-hover)); }
+.ij-mac-files-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.ij-mac-files-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ij-mac-files-row.ij-mac-files-root {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 6px 8px;
+  border: 1px solid var(--ij-border);
+  border-radius: 4px;
+  background: var(--ij-panel);
+}
+.ij-mac-files-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.ij-mac-files-name,
+.ij-mac-files-path { font-family: var(--ij-mono); font-size: 11px; color: var(--ij-text); overflow-wrap: anywhere; }
+.ij-mac-files-name { font-weight: 700; }
+.ij-mac-files-meta,
+.ij-mac-files-state { color: var(--ij-muted); font-size: 11px; }
+.ij-mac-files-controls,
+.ij-mac-files-changes { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ij-mac-files-field { display: inline-flex; align-items: center; gap: 4px; color: var(--ij-muted); font-size: 11px; }
+.ij-mac-files-need { padding: 4px 0; }
+.ij-btn.ij-mac-files-link { border-color: var(--ij-accent); color: var(--ij-accent-text); }
+.ij-mac-files-queue { display: flex; flex-direction: column; gap: 4px; }
+.ij-mac-files-storage { margin: 0; color: var(--ij-muted); font-size: 11px; text-align: right; }

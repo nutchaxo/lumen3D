@@ -16,7 +16,10 @@ const deq = (a, b, m) => (m === undefined ? assert.deepEqual(J(a), J(b)) : asser
 const done = (o) => Object.assign({ ok: true, aborted: false, exited: false, error: null, prefsWrites: {}, changedDocs: [], undo: { changed: [], dropped: [] } }, o || {});
 const CONTRACT_RPC = ['run', 'dialog.show', 'dialog.message', 'dialog.messageCancel', 'dialog.waitForUser', 'dialog.number', 'dialog.string', 'dialog.boolean',
   'error.show', 'image.select', 'image.close', 'image.show', 'image.adopt', 'window.select', 'window.close', 'clipboard.copy', 'flush', 'image.rename',
-  'window.print', 'command.list'];
+  'window.print', 'command.list',
+  // FILES.md §5.4
+  'vfs.pick', 'vfs.confirm', 'vfs.regrant', 'text.open', 'window.text'];
+const FILES_RPC = ['vfs.pick', 'vfs.confirm', 'vfs.regrant', 'text.open', 'window.text'];
 const CONTRACT_WRITES = ['roi.set', 'display.set', 'display.lut', 'display.mode', 'display.visible', 'thr.set', 'thr.reset', 'thr.mode', 'table.replace',
   'table.remove', 'table.rename', 'table.show', 'rm.set', 'rm.select', 'rm.show', 'setting.set', 'measurements.set', 'colors.set', 'tool.set', 'status.show',
   'progress.show'];
@@ -43,9 +46,17 @@ const CONTRACT_WRITES = ['roi.set', 'display.set', 'display.lut', 'display.mode'
       proto = vm.runInContext('typeof IJMacroProto !== "undefined" ? IJMacroProto : null', ctx);
     } catch (err) { console.log('SKIP IJMacroProto cross-check: ij-proc-macro.js does not load on its own yet (' + (err && err.code ? err.code : 'error') + ')'); }
     if (proto) {
-      deq(Object.keys(proto.RPC_METHODS).sort(), CONTRACT_RPC.slice().sort(), 'IJMacroProto.RPC_METHODS = the page handlers');
+      // RUNTIME adds the M6 methods in parallel with this file: until they are on disk the M5 list is compared alone
+      const hasFiles = FILES_RPC.some((m) => Object.prototype.hasOwnProperty.call(proto.RPC_METHODS, m));
+      const expected = hasFiles ? CONTRACT_RPC : CONTRACT_RPC.filter((m) => FILES_RPC.indexOf(m) < 0);
+      if (!hasFiles) console.log('SKIP IJMacroProto cross-check of the FILES.md §5.4 methods: ij-proc-macro.js does not define them yet');
+      deq(Object.keys(proto.RPC_METHODS).sort(), expected.slice().sort(), 'IJMacroProto.RPC_METHODS = the page handlers');
       deq(proto.WRITE_OPS.slice().sort(), CONTRACT_WRITES.slice().sort(), 'IJMacroProto.WRITE_OPS = the page handlers');
-      for (const m of CONTRACT_RPC) assert.equal(typeof proto.RPC_METHODS[m].interactive, 'boolean', m + '.interactive');
+      for (const m of expected) assert.equal(typeof proto.RPC_METHODS[m].interactive, 'boolean', m + '.interactive');
+      if (hasFiles) {
+        for (const m of ['vfs.pick', 'vfs.confirm', 'vfs.regrant']) assert.equal(proto.RPC_METHODS[m].interactive, true, m + ' is interactive');
+        for (const m of ['text.open', 'window.text']) assert.equal(proto.RPC_METHODS[m].interactive, false, m + ' is not interactive');
+      }
       // every text key the worker needs is a lang key of the four languages (the page sends them translated)
       const { lang, lookup, LANGS } = await import('./ij_macro_page_fakes.mjs');
       for (const k of proto.TEXT_KEYS) for (const code of LANGS) assert.equal(typeof lookup(lang[code], k), 'string', code + ': TEXT_KEYS ' + k);

@@ -33,10 +33,11 @@ await test('mirror: every image (opening order, hidden ones too) with the fields
     channels: [{ data: new Uint16Array(8), name: 'A' }] }, { hidden: true });
   t.api(null).setRoi({ type: 'rect', x: 1, y: 2, w: 3, h: 4 }, { docId: id });
   const m = api.macro.mirror();
-  deq(Object.keys(m).sort(), ['colors', 'current', 'images', 'lineWidth', 'measurements', 'roiManager', 'selections', 'settings', 'tables', 'thresholdWindow', 'thresholds', 'tool', 'workspace'].sort());
+  deq(Object.keys(m).sort(), ['colors', 'current', 'front', 'images', 'lineWidth', 'measurements', 'roiManager', 'selections', 'settings', 'tables', 'thresholdWindow', 'thresholds', 'tool', 'workspace'].sort());
   deq(m.images.map((i) => i.docId), [id, h], 'opening order, the hidden image included');
   const im = m.images[0];
-  deq(Object.keys(im).sort(), ['active', 'bitDepth', 'calibration', 'changes', 'display', 'docId', 'ephemeral', 'height', 'hidden', 'hyperstack', 'id', 'mode', 'nC', 'nT', 'nZ', 'pos', 'rgb', 'title', 'visible', 'width'].sort());
+  deq(Object.keys(im).sort(), ['active', 'bitDepth', 'calibration', 'changes', 'display', 'docId', 'ephemeral', 'file', 'height', 'hidden', 'hyperstack', 'id', 'mode', 'nC', 'nT', 'nZ', 'pos', 'rgb', 'title', 'visible', 'width'].sort());
+  assert.equal(im.file, null, 'an image no file was opened into or saved from (FILES.md §5.5)');
   assert.equal(im.id, -1, 'the first image met is ImageJ id -1');
   assert.equal(m.images[1].id, -2);
   assert.equal(api.macro.ijId(h), -2);
@@ -56,7 +57,8 @@ await test('mirror: every image (opening order, hidden ones too) with the fields
   deq(J(m.measurements), { groups: ['area', 'mean', 'minMax'], decimals: 3 });
   deq(J(m.colors), { foreground: [255, 255, 255], background: [0, 0, 0], selection: [255, 255, 0] });
   deq(J(m.workspace), { width: 1000, height: 700 });
-  deq(J(m.roiManager), { list: [], selected: [], showAll: false, labels: false });
+  deq(J(m.roiManager), { list: [], selected: [], showAll: false, labels: false, open: false });
+  deq(J(m.front), { kind: 'image', title: m.images[0].title }, 'the active image is the front window');
   assert.equal(m.thresholdWindow, null);
   deq(Object.keys(m.tables), ['Results']);
   deq(J(m.tables.Results), { name: 'Results', size: 0, headings: [], columns: {}, labels: null, rev: m.tables.Results.rev });

@@ -1,0 +1,12 @@
+s = File.openAsRawString("{ROOT}big.bin", 100);
+print("explicit 100 -> " + lengthOf(s));
+s = File.openAsRawString("{ROOT}big.bin", 9000);
+print("explicit 9000 -> " + lengthOf(s));
+s = File.openAsRawString("{ROOT}big.bin", 6000);
+print("explicit 6000 -> " + lengthOf(s));
+s = File.openAsRawString("{ROOT}big.txt", 10);
+print("txt explicit 10 -> " + lengthOf(s) + " [" + s + "]");
+s = File.openAsRawString("{ROOT}big.txt", 7000);
+print("txt explicit 7000 -> " + lengthOf(s));
+s = File.openAsRawString("{ROOT}big.bin", 0);
+print("explicit 0 -> " + lengthOf(s));

@@ -1,5 +1,5 @@
 // Macros never use the network and never reach the site's datasets (INTEGRATION.md §8, user decision U6):
-//   • the three macro files (ij-proc-macro.js, ij-macro-cmds.js, ij-cmds-macro.js — the last two may still be absent) contain no
+//   • the macro files (ij-proc-macro.js, ij-macro-vfs.js, ij-macro-cmds.js, ij-cmds-macro.js — absent ones are skipped) contain no
 //     fetch / XMLHttpRequest / sendBeacon / WebSocket / EventSource / importScripts / new Worker / window.open / location / E.fetch /
 //     eval / new Function / WebAssembly (comments stripped first);
 //   • a runtime spy: every built-in family of the runtime corpus (tests/fixtures/ij-macro/runtime), the call() whitelist, the refusals and
@@ -34,7 +34,7 @@ function stripComments(src) {
 const FORBIDDEN = [/\bfetch\s*\(/, /\bXMLHttpRequest\b/, /\bsendBeacon\b/, /\bWebSocket\b/, /\bEventSource\b/, /\bimportScripts\b/, /\bnew\s+Worker\b/,
   /\bwindow\.open\b/, /\blocation\b/, /\bE\.fetch\b/, /\beval\s*\(/, /\bnew\s+Function\b/, /\bWebAssembly\b/];
 let checked = 0;
-for (const f of ['ij-proc-macro.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js']) {
+for (const f of ['ij-proc-macro.js', 'ij-macro-vfs.js', 'ij-macro-cmds.js', 'ij-cmds-macro.js']) {
   const p = path.join(DIR, f);
   if (!fs.existsSync(p)) { console.log('SKIP static check of ' + f + ': absent'); continue; }
   const code = stripComments(fs.readFileSync(p, 'utf8'));

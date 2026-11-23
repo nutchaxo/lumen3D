@@ -1,7 +1,7 @@
 {
   "id": "advanced-studio",
   "name": "Advanced Studio",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "platformCompat": ">=1.88.0",
   "dataTypes": [
     "3d",
@@ -44,6 +44,7 @@
     "ij-proc-fiji.js",
     "ij-proc-lib.js",
     "ij-proc-stk.js",
+    "ij-macro-vfs.js",
     "ij-proc-macro.js",
     "ij-macro-cmds.js",
     "ij-view.js",

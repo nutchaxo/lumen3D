@@ -1,0 +1,11 @@
+run("Clear Results");
+newImage("img", "8-bit ramp", 16, 16, 1);
+makeRectangle(0, 0, 8, 8);
+run("Set Measurements...", "area mean min redirect=None decimal=3");
+run("Measure");
+makeRectangle(8, 8, 8, 8);
+run("Measure");
+print("nResults " + nResults);
+saveAs("Results", "{ROOT}r.csv");
+saveAs("Results", "{ROOT}r.txt");
+saveAs("Measurements", "{ROOT}m.xls");

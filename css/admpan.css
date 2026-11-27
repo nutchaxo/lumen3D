@@ -147,6 +147,26 @@ html, body {
 .ori-side-option { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.35; cursor: pointer; }
 .ori-side-option input { accent-color: var(--adm-accent); flex: none; margin: 2px 0 0; }
 
+/* ── Visible time range (Datasets tab) ───────────────────────────
+   One track for the whole acquisition, the visible window lit between two handles.
+   Positions are written as inline left/width percentages by tab-datasets.js. */
+.tr-track {
+  position: relative; height: 40px; margin: 10px 8px 4px; touch-action: none; cursor: pointer;
+  background: var(--adm-card-hover); border: 1px solid var(--adm-border); border-radius: 8px;
+}
+.tr-window {
+  position: absolute; top: 0; bottom: 0; background: var(--adm-border-active); opacity: 0.35;
+  pointer-events: none;
+}
+.tr-handle {
+  position: absolute; top: -5px; width: 10px; height: 48px; transform: translateX(-50%);
+  background: var(--adm-accent); border: 2px solid var(--adm-surface); border-radius: 5px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35); cursor: ew-resize; z-index: 1;
+}
+.tr-handle:focus-visible { outline: 2px solid var(--adm-text); outline-offset: 2px; }
+.tr-handle.is-dragging { background: var(--adm-border-active); }
+.tr-track.is-disabled { opacity: 0.5; pointer-events: none; }
+
 /* ── Dataset gallery (operator-attached images) ───────────────── */
 .gal-file { display: none; }
 .gal-drop {

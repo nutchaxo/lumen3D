@@ -29,9 +29,12 @@ The .ims is read straight from the Imaris HDF5 pyramid (ResolutionLevel L), so
 only the chosen (small) level is touched — never the full-resolution level 0.
 
 A timelapse ('live') keeps every frame in its .ims and its web archive; the TIFF and
-the MIPs are ONE frame of it — the first unless --timepoint says otherwise — and the
-README says which. One frame keeps the TIFF the size of a fixed stack's; the .ims beside
-it is the complete acquisition.
+the MIPs are ONE frame of it — the first one a visitor can reach (the start of the
+dataset's visible time range, else frame 0) unless --timepoint says otherwise — and the
+README says which. A TIFF that shows a frame the visible range hides (the operator
+narrowed it after the build) is rebuilt on the next run. One frame keeps the TIFF the
+size of a fixed stack's; the .ims and the web archive beside it are the complete
+acquisition, whatever the visible range.
 
 Idempotent: existing artefacts are skipped unless --force. --refresh-web is what
 the preprocessing pipeline passes right after it publishes a dataset: the archive and
@@ -401,6 +404,55 @@ def write_imagej_tiff(path, vol, vox, metadata):
             raise TiffTooLarge(str(w.message))
 
 
+def visible_time_range(meta):
+    """(start, end) of metadata.timeRange, 0-based inclusive, or None for the whole
+    series. Same reading rule as js/core/time-range.js: anything malformed (not integers,
+    negative, start > end, past the last frame) means no window."""
+    raw = (meta or {}).get("timeRange")
+    t = (meta or {}).get("dimensions", {}).get("t")
+    if not isinstance(raw, dict) or not isinstance(t, int) or t < 2:
+        return None
+    s, e = raw.get("start"), raw.get("end")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (s, e)):
+        return None
+    if s < 0 or e < s or e > t - 1 or (s == 0 and e == t - 1):
+        return None
+    return (s, e)
+
+
+def resolve_timepoint(meta, requested):
+    """The frame of a timelapse the TIFF and MIPs show. An explicit --timepoint wins;
+    otherwise the first frame a visitor can reach (the whole series: frame 0)."""
+    if requested is not None:
+        return requested
+    window = visible_time_range(meta)
+    return window[0] if window else 0
+
+
+def recorded_tiff_frame(tiff_path):
+    """The timepoint a TIFF of this tool was built from (its Info block says
+    'timepoint N of 0..M'), or None for a file without one or one that cannot be read."""
+    try:
+        import tifffile
+        with tifffile.TiffFile(str(tiff_path)) as tf:
+            info = (tf.imagej_metadata or {}).get("Info") or ""
+    except Exception:
+        return None
+    m = re.search(r"timepoint (\d+) of 0\.\.\d+", str(info))
+    return int(m.group(1)) if m else None
+
+
+def frame_outside_window(tiff_path, meta):
+    """True when the TIFF on disk shows a frame the visible time range hides, so it is
+    rebuilt on the frame a visitor can reach. A frame inside the window is left alone
+    (an operator's own --timepoint choice survives)."""
+    window = visible_time_range(meta)
+    if window is None or not tiff_path.exists():
+        return False
+    frame = recorded_tiff_frame(tiff_path)
+    return frame is not None and not window[0] <= frame <= window[1]
+
+
 def _timepoint_count(f) -> int:
     res0 = f["DataSet"]["ResolutionLevel 0"]
     return sum(1 for k in res0.keys() if k.startswith("TimePoint")) or 1
@@ -655,6 +707,7 @@ def _readme_volume(ds, ims_src, timepoint=0):
                      f"gamma={c.get('gamma','?')}")
     n_tp = dims.get("t") if isinstance(dims.get("t"), int) else 1
     one_frame = f" — timepoint {timepoint} of 0..{n_tp - 1} only" if n_tp > 1 else ""
+    window = visible_time_range(meta)
     lines += [
         "",
         "Files in this folder:",
@@ -668,6 +721,9 @@ def _readme_volume(ds, ims_src, timepoint=0):
     ]
     if n_tp > 1:
         lines.append(f"  The .ims holds all {n_tp} timepoints.")
+    if window:
+        lines.append(f"  The site shows timepoints {window[0]}..{window[1]} only; the "
+                     "archive and the .ims still hold the whole acquisition.")
     return lines
 
 
@@ -720,6 +776,17 @@ def process(ds, args):
         print("  [.ims] the source differs from the one download/ was built from — "
               "rebuilding the .ims, TIFF and MIPs")
 
+    # The frame of a timelapse the TIFF and MIPs show: the first one the site offers
+    # unless --timepoint says otherwise. A TIFF built before the operator narrowed the
+    # visible range may show a frame no visitor can reach: rebuild it (and its MIPs).
+    timepoint = resolve_timepoint(ds["meta"], getattr(args, "timepoint", None))
+    stale_frame = (getattr(args, "timepoint", None) is None and not args.no_tiff
+                   and frame_outside_window(tiff_out, ds["meta"]))
+    if stale_frame:
+        print(f"  [tiff] it shows a timepoint outside the visible time range — "
+              f"rebuilding the TIFF and MIPs on timepoint {timepoint}")
+    rebuild = args.force or from_new_source or stale_frame
+
     # 2. original .ims (hard link)
     if not args.no_ims and ims_src is not None:
         try:
@@ -734,7 +801,7 @@ def process(ds, args):
             safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name)).strip("_") or f"C{ci+1}"
             return dl / f"{folder}_C{ci+1}_{safe}_MIP.png"
         try:
-            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, args.force or from_new_source, args.dry_run, args.timepoint)}")
+            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, rebuild, args.dry_run, timepoint)}")
         except Exception as exc:
             print(f"  [tiff/mip] FAILED: {exc}")
         # Drop the superseded OME-TIFF only once its replacement is on disk —
@@ -746,7 +813,7 @@ def process(ds, args):
 
     # 5. README
     try:
-        print(f"  [readme] {write_readme(dl / 'README.txt', ds, ims_src, args.force or refresh, args.dry_run, args.timepoint)}")
+        print(f"  [readme] {write_readme(dl / 'README.txt', ds, ims_src, args.force or refresh or stale_frame, args.dry_run, timepoint)}")
     except Exception as exc:
         print(f"  [readme] FAILED: {exc}")
 
@@ -757,8 +824,9 @@ def main():
     ap.add_argument("--datasets", help="case-insensitive substring filter on folder name")
     ap.add_argument("--dataset", help="exactly one dataset, as '<type>/<folder>'")
     ap.add_argument("--ims", help="the dataset's source .ims (default: searched in the raw dirs)")
-    ap.add_argument("--timepoint", type=int, default=0,
-                    help="frame of a timelapse the TIFF and MIPs show (default 0)")
+    ap.add_argument("--timepoint", type=int, default=None,
+                    help="frame of a timelapse the TIFF and MIPs show (default: the first "
+                         "frame of the visible time range, else 0)")
     ap.add_argument("--types", default=",".join(DATASET_TYPES),
                     help="comma list: 3d,2d,live (a 2d dataset gets the "
                          "web archive only — its original TIFF and README come from the importer)")

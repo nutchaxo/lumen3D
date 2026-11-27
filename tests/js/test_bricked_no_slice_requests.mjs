@@ -68,6 +68,7 @@ const SLICED = {
       let _preloadTimer = null, _preloadIdle = false;
       let _preloadedTimepoints = new Set(), loadedTimepoints = new Set([0]);
       let datasetMeta = env.meta, _brickManifest = env.manifest;
+      const _timeRange = { start: 0, end: (Number(env.meta?.dimensions?.t) || 1) - 1, count: Number(env.meta?.dimensions?.t) || 1, active: false };
       const window = { requestIdleCallback: (cb) => { env.log.idle++; cb(); return 1; } };
       const VolumeViewer = {
         preloadVolume: (base, meta, frame) => { env.log.slicePreloads.push(frame); return Promise.resolve({ successfulLoads: 0 }); }

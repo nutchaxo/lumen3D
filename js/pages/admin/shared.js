@@ -21,7 +21,8 @@
 // deferred module, so the bindings exist by now.
 const _I18n  = (typeof I18n  !== 'undefined') ? I18n  : null;
 const _Utils = (typeof Utils !== 'undefined') ? Utils : null;
-export { _I18n as I18n, _Utils as Utils };
+const _TimeRange = (typeof TimeRange !== 'undefined') ? TimeRange : null;
+export { _I18n as I18n, _Utils as Utils, _TimeRange as TimeRange };
 
 export const API_AUTH      = 'api/auth.php';
 export const API_DATASETS  = 'api/datasets.php';

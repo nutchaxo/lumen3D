@@ -13,7 +13,7 @@ It was designed and built by **Morgan CLIMENT**, originally for the **IRIBHM** (
 
 The platform bridges raw scientific data and seamless web exploration through a **Python preprocessing pipeline** (Imaris `.ims` → brick-packed LOD pyramids, 3D **and 4D**) and a **vanilla-JS / Three.js client** with a custom WebGL2 ray-marcher and sparse 3D atlas streaming. It is **offline-capable** (all JS libraries self-hosted, no CDN) and ships with a **signed self-updater**, a **signed plugin marketplace** and in-place **data updates** that upgrade published datasets to newer storage formats.
 
-> **Current versions** — Web platform `1.82.1` · Preprocessing tool `0.23.1`.
+> **Current versions** — Web platform `1.82.1` · Preprocessing tool `0.23.2`.
 > The web version is defined solely by the newest `changelog/changelog_X.Y.Z.md` (there is **no** source `__version__` constant for the platform); the preprocessing tool tracks its own `__version__` in `preprocess/run_preprocess.py`.
 
 ---
@@ -187,7 +187,7 @@ graph TD
 │   ├── 2d_importer.py         # Standalone: one ImageJ/Leica TIFF → one DATA_WEB/2d/<name>/ dataset
 │   ├── run_preprocess.py      # Unified runner (orchestrates 1 → 5, --format 4|5, routes 4D to live/, download bundles)
 │   ├── requirements.txt       # Python dependencies (h5py, numpy, scipy, Pillow, tqdm)
-│   └── changelog/             # Preprocessing tool versions (0.11.x → 0.23.1)
+│   └── changelog/             # Preprocessing tool versions (0.11.x → 0.23.2)
 ├── SCRIPTS/                   # Imaris tracking-analysis scripts (shipped in the Pipeline pack)
 ├── tools/                     # build_release.py, build_pipeline_bundle.py, convert_dataset.py (local format-5
 │                              #   conversion), bench_brick_codecs.py, publish_plugin.py, gen_signing_key.py,

@@ -2427,6 +2427,7 @@ CURATED_KEYS = (
     "name", "description", "stage", "stageNumeric", "embryo", "line", "staining",
     "reporter", "hidden", "gallery", "tags", "notes", "created",
     "orientation", "orientationAxes", "upsideDown", "defaultView", "exposure",
+    "timeRange",
     "linkedTrackingId", "relatedIds",
 )
 GALLERY_DIRNAME = "gallery"

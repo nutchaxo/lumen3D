@@ -67,6 +67,7 @@ function makeEnv({ registration, stabilized, timepoint = 3 }) {
     let _registration = ${registration ? JSON.stringify(registration) : 'null'};
     let _stabilizeVolume = ${Boolean(stabilized)};
     let _currentTimepoint = ${timepoint};
+    const _timeRange = { start: 0, end: 29, count: 30, total: 30, active: false };
     let _volumeMeasurements = [], _volumeMeasureDraft = [], _channelState = [];
     const datasetId = 'live/TEST', isLive = true, _isIframe = true;
     const _tt = (k, fb) => fb, _t = (k, fb) => fb, _perf = () => null;

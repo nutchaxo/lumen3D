@@ -87,17 +87,34 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
   const ctx = vm.createContext({});
   const out = [];
   ctx.out = out;
-  vm.runInContext(`
-    const datasetMeta = { dimensions: { t: 10 } };
-    const _basePath = 'b';
-    const Timeline = { setFrame: () => {} };
-    function _requestTimepoint(b, f, o) { out.push([f, o]); }
-    globalThis.handle = (data) => { ${block[1]} };
-  `, ctx);
-  ctx.handle({ value: 40, total: 0 });
-  ctx.handle({ value: -3, total: 0 });
-  ctx.handle({ value: 99, total: 100, fraction: 1 });
+  const handlerFor = (range) => {
+    const c = vm.createContext({ out });
+    vm.runInContext(`
+      ${read('js/core/time-range.js')}
+      const datasetMeta = { dimensions: { t: 10 } };
+      const _timeRange = TimeRange.normalize(${JSON.stringify(range)}, 10);
+      const _basePath = 'b';
+      const Timeline = { setFrame: () => {} };
+      function _requestTimepoint(b, f, o) { out.push([f, o]); }
+      globalThis.handle = (data) => { ${block[1]} };
+    `, c);
+    return c.handle;
+  };
+  const handle = handlerFor(null);
+  handle({ value: 40, total: 0 });
+  handle({ value: -3, total: 0 });
+  handle({ value: 99, total: 100, fraction: 1 });
   assert.deepEqual(plain(out), [[9, 'sync'], [0, 'sync'], [9, 'sync']], 'a sibling frame is clamped to [0, t − 1]');
+
+  // A visible window (frames 2..5 of 10): the sibling's frame lands inside it, and a
+  // sibling of the same length is followed by elapsed fraction of what each shows.
+  out.length = 0;
+  const windowed = handlerFor({ start: 2, end: 5 });
+  windowed({ value: 9, total: 10, fraction: 1 });       // same length, last frame → the window's last
+  windowed({ value: 0, total: 10, fraction: 0 });       // → the window's first
+  windowed({ value: 7, total: 0 });                     // no fraction: the index is clamped into the window
+  windowed({ value: 1, total: 0 });
+  assert.deepEqual(plain(out), [[5, 'sync'], [2, 'sync'], [5, 'sync'], [2, 'sync']], 'a windowed series stays inside its window');
   console.log('SYNC_TIME frame clamped: OK');
 }
 

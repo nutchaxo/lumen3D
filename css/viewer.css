@@ -1394,7 +1394,7 @@ body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
 
 /* ── Timeline (LiveImaging) ──────────────────────────────── */
 .viewer-timeline {
-  height: 80px;
+  height: 120px;
   background: var(--bg-surface);
   border-top: 1px solid var(--border-subtle);
   display: flex;
@@ -1407,7 +1407,29 @@ body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
 .play-controls {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
+}
+
+/* The play button is the timeline's main control: sized to be aimed at without care. */
+.viewer-timeline .play-controls .btn-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-full);
+}
+
+.viewer-timeline .play-controls .btn-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Fixed width + tabular figures: "000 / 119" must not push the track around while the
+   playhead runs. */
+.timeline-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+  min-width: 9ch;
+  text-align: center;
 }
 
 /* Playback-rate toggle — one button cycling the preset rates, so the timeline bar
@@ -1436,9 +1458,9 @@ body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
 }
 
 .scrubber-track {
-  height: 24px;
+  height: 48px;
   background: var(--bg-body);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   position: relative;
   cursor: pointer;
@@ -1468,7 +1490,7 @@ body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
 .scrubber-buffer {
   position: absolute;
   inset: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   overflow: hidden;
   pointer-events: none;
 }
@@ -1491,19 +1513,29 @@ body.viewer-iframe .zstack-browser:not(.zstack-hidden) {
   left: 0;
   bottom: 0;
   background: var(--color-primary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   width: 0%;
 }
 
 .scrubber-handle {
   position: absolute;
   top: 50%;
-  width: 4px;
-  height: 32px;
+  width: 8px;
+  height: 64px;
   background: white;
   transform: translate(-50%, -50%);
-  border-radius: 2px;
-  box-shadow: var(--shadow-sm);
+  border-radius: 4px;
+  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* A panel of the Compare page (or any short window) cannot spare 120 px of height. */
+@media (max-height: 720px) {
+  .viewer-timeline { height: 88px; }
+  .viewer-timeline .play-controls .btn-icon { width: 40px; height: 40px; }
+  .viewer-timeline .play-controls .btn-icon svg { width: 20px; height: 20px; }
+  .timeline-time { font-size: var(--text-base); }
+  .scrubber-track { height: 34px; }
+  .scrubber-handle { width: 6px; height: 46px; }
 }
 
 /* ── Loader ──────────────────────────────────────────────── */

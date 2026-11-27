@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.23.1"
+__version__ = "0.23.2"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -110,6 +110,7 @@ CURATED_KEYS = (
     "name", "description", "stage", "stageNumeric", "embryo", "line", "staining",
     "reporter", "hidden", "gallery", "tags", "notes", "created",
     "orientation", "orientationAxes", "upsideDown", "defaultView", "exposure",
+    "timeRange",
     "linkedTrackingId", "relatedIds",
 )
 

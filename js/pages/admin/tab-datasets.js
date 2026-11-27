@@ -12,7 +12,7 @@
 'use strict';
 
 import {
-  API_DATASETS, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, deepClone, refreshIcons,
+  API_DATASETS, Utils, TimeRange, t, escHtml, apiFetch, apiFetchStatus, toast, el, deepClone, refreshIcons,
 } from './shared.js';
 import { setUnsaved, registerDirtyGuard, setDatasetOpener, setOpenDatasetGetter, bindTabSave } from './bus.js';
 import * as Upload from './upload-manager.js';
@@ -114,6 +114,15 @@ function refDom() {
     btnSetPreview: el('btn-set-preview'),
     btnDefineOrientation: el('btn-define-orientation'),
     fSampleSide: el('f-sample-side'),
+    timeSection: el('sec-time-range'),
+    timeTrack: el('f-time-track'),
+    timeWindow: el('f-time-window'),
+    timeStartHandle: el('f-time-start-handle'),
+    timeEndHandle: el('f-time-end-handle'),
+    fTimeStart: el('f-time-start'),
+    fTimeEnd: el('f-time-end'),
+    timeSummary: el('f-time-summary'),
+    btnTimeReset: el('btn-time-reset'),
     orientationStatus: el('orientation-status'),
     orientationAxesList: el('orientation-axes-list'),
     fDefaultView: el('f-default-view'),
@@ -145,6 +154,11 @@ const quatOf = (q) => {
   return (a && a.length === 4 && a.every((v) => Number.isFinite(Number(v)))) ? a.map((v) => num4(v)) : null;
 };
 
+/** The stored form of a dataset's visible time range: {start,end}, or null for the whole series. */
+function timeRangeOf(meta) {
+  return TimeRange.toStored(TimeRange.normalize(meta?.timeRange, meta?.dimensions?.t));
+}
+
 /** The editable state of a dataset, reduced to something two versions compare by. */
 function fingerprint(meta) {
   if (!meta) return '';
@@ -165,6 +179,7 @@ function fingerprint(meta) {
     ]),
     orientation: quatOf(meta.orientation),
     upsideDown: !!meta.upsideDown,
+    timeRange: meta.type === 'live' ? timeRangeOf(meta) : null,
     orientation2d: meta.orientation2d
       ? [num4(meta.orientation2d.rotationDeg), !!meta.orientation2d.flipH] : null,
     // Fixed axis order on both sides: the stored object keeps whatever key order the
@@ -569,6 +584,8 @@ function setFormEnabled(on) {
     .forEach((e) => { if (e) e.disabled = !on; });
   DOM.orientationAxesList?.querySelectorAll('input').forEach((e) => { e.disabled = !on; });
   DOM.fSampleSide?.querySelectorAll('input').forEach((e) => { e.disabled = !on; });
+  [DOM.fTimeStart, DOM.fTimeEnd, DOM.btnTimeReset].forEach((e) => { if (e) e.disabled = !on; });
+  DOM.timeTrack?.classList.toggle('is-disabled', !on);
   // Visibility belongs to publication — never offered for a staged dataset.
   if (DOM.fVisible) DOM.fVisible.disabled = !on || !!_draft?.staging;
   applyPreviewGate();
@@ -675,6 +692,8 @@ async function selectDataset(id) {
   // Always posted as a boolean: the backends MERGE the payload, so switching the
   // sample back to "right side up" must be an explicit false, not an absent key.
   meta.upsideDown = meta.upsideDown === true;
+  // Same rule for the time window: clearing it must reach the file as an explicit null.
+  if (meta.type === 'live') meta.timeRange = timeRangeOf(meta);
   _draft = deepClone(meta);
   _original = deepClone(meta);
   clearDirty();
@@ -822,6 +841,7 @@ function populateForm() {
   _isCalibratingOrientation = false;
   paintOrientationControls(false);
   renderSampleSide();
+  renderTimeRange();
   renderOrientationAxes();
   renderDefaultView();
   renderGallery();
@@ -868,6 +888,157 @@ function pushSampleSide() {
   try {
     win.postMessage({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: !!_draft.upsideDown }, window.location.origin);
   } catch (_) { /* cross-origin guard */ }
+}
+
+// ── Visible time range ─────────────────────────────────────────
+// A window over the timeline of a timelapse, stored as metadata.timeRange {start,end}
+// (0-based, inclusive, the indices the viewer's own counter prints). It never cuts
+// the acquisition: the bricks, dimensions.t and the download/ folder stay whole.
+
+/** The window being edited, whole series when none is stored. */
+function currentTimeRange() {
+  return TimeRange.normalize(_draft?.timeRange, _draft?.dimensions?.t);
+}
+
+function renderTimeRange() {
+  const live = _draft?.type === 'live';
+  if (DOM.timeSection) DOM.timeSection.style.display = live ? '' : 'none';
+  if (!live || !DOM.timeTrack) return;
+  const r = currentTimeRange();
+  const span = Math.max(1, r.total - 1);
+  const pct = (f) => `${(f / span) * 100}%`;
+  DOM.timeStartHandle.style.left = pct(r.start);
+  DOM.timeEndHandle.style.left = pct(r.end);
+  DOM.timeWindow.style.left = pct(r.start);
+  DOM.timeWindow.style.width = `${((r.end - r.start) / span) * 100}%`;
+  [[DOM.timeStartHandle, r.start], [DOM.timeEndHandle, r.end]].forEach(([h, v]) => {
+    h.setAttribute('aria-valuemin', '0');
+    h.setAttribute('aria-valuemax', String(r.total - 1));
+    h.setAttribute('aria-valuenow', String(v));
+  });
+  [[DOM.fTimeStart, r.start], [DOM.fTimeEnd, r.end]].forEach(([input, v]) => {
+    input.max = String(r.total - 1);
+    // Never rewrite a field the operator is typing in (an empty box mid-edit).
+    if (document.activeElement !== input) input.value = String(v);
+  });
+  DOM.timeSummary.textContent = r.active
+    ? t('admin.timeRangeSummary', 'Images {start} → {end} · {count} points de temps visibles sur {total}',
+      { start: r.start, end: r.end, count: r.count, total: r.total })
+    : t('admin.timeRangeFull', 'Toute la série est visible ({total} points de temps)', { total: r.total });
+  if (DOM.btnTimeReset) DOM.btnTimeReset.style.display = r.active ? '' : 'none';
+}
+
+/**
+ * Move the window. `moved` names the edge the operator touched: it is the frame the
+ * preview shows, so the operator sees what a visitor will land on. An edge cannot cross
+ * the other one — a one-frame window is allowed, an inverted one is not.
+ */
+function setTimeRange(start, end, moved) {
+  if (!_draft || _draft.type !== 'live') return;
+  const total = TimeRange.normalize(null, _draft.dimensions?.t).total;
+  const clampIdx = (v) => Math.max(0, Math.min(total - 1, Math.round(Number(v))));
+  let s = Number.isFinite(Number(start)) ? clampIdx(start) : currentTimeRange().start;
+  let e = Number.isFinite(Number(end)) ? clampIdx(end) : currentTimeRange().end;
+  if (moved === 'start' && s > e) s = e;
+  if (moved === 'end' && e < s) e = s;
+  if (s > e) [s, e] = [e, s];
+  _draft.timeRange = TimeRange.toStored(TimeRange.normalize({ start: s, end: e }, total));
+  renderTimeRange();
+  syncDirty();
+  if (moved) pushTimepoint(moved === 'start' ? s : e);
+}
+
+/** Show a frame in the preview (admin preview only: the viewer ignores it elsewhere). */
+function pushTimepoint(frame) {
+  const win = DOM.previewFrame?.contentWindow;
+  if (!win) return;
+  try {
+    win.postMessage({ type: 'SET_TIMEPOINT', value: frame }, window.location.origin);
+  } catch (_) { /* cross-origin guard */ }
+}
+
+function bindTimeRange() {
+  const track = DOM.timeTrack;
+  if (!track) return;
+  const total = () => TimeRange.normalize(null, _draft?.dimensions?.t).total;
+  const frameAtX = (clientX) => {
+    const rect = track.getBoundingClientRect();
+    const p = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    return Math.round(p * (total() - 1));
+  };
+  const apply = (which, frame) => {
+    const r = currentTimeRange();
+    if (which === 'start') setTimeRange(frame, r.end, 'start'); else setTimeRange(r.start, frame, 'end');
+  };
+
+  let drag = null;   // { which, pointerId, handle }
+  const begin = (which, e) => {
+    if (e.button > 0 || !_draft) return;
+    e.preventDefault();
+    const handle = which === 'start' ? DOM.timeStartHandle : DOM.timeEndHandle;
+    drag = { which, pointerId: e.pointerId, handle };
+    handle.classList.add('is-dragging');
+    try { track.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+  };
+  const nearest = (frame) => {
+    const r = currentTimeRange();
+    return Math.abs(frame - r.start) <= Math.abs(frame - r.end) ? 'start' : 'end';
+  };
+  DOM.timeStartHandle.addEventListener('pointerdown', (e) => { e.stopPropagation(); begin('start', e); });
+  DOM.timeEndHandle.addEventListener('pointerdown', (e) => { e.stopPropagation(); begin('end', e); });
+  // A press on the bare track grabs the nearer edge and moves it there — on a tie the
+  // side the press is on decides, so two edges stacked on one frame stay separable.
+  track.addEventListener('pointerdown', (e) => {
+    if (!_draft) return;
+    const frame = frameAtX(e.clientX);
+    const r = currentTimeRange();
+    const which = r.start === r.end ? (frame < r.start ? 'start' : 'end') : nearest(frame);
+    begin(which, e);
+    if (drag) apply(which, frame);
+  });
+  track.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    apply(drag.which, frameAtX(e.clientX));
+  });
+  const end = (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    drag.handle.classList.remove('is-dragging');
+    try { track.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+    drag = null;
+  };
+  track.addEventListener('pointerup', end);
+  track.addEventListener('pointercancel', end);
+
+  // ARIA slider keys, per handle.
+  [['start', DOM.timeStartHandle], ['end', DOM.timeEndHandle]].forEach(([which, handle]) => {
+    handle.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || !_draft) return;
+      const r = currentTimeRange();
+      const cur = which === 'start' ? r.start : r.end;
+      const next = {
+        ArrowLeft: cur - 1, ArrowDown: cur - 1, ArrowRight: cur + 1, ArrowUp: cur + 1,
+        PageDown: cur - 10, PageUp: cur + 10, Home: 0, End: total() - 1,
+      }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      apply(which, next);
+    });
+  });
+
+  // Typed values: applied once the box holds a whole number, normalised on blur.
+  [['start', DOM.fTimeStart], ['end', DOM.fTimeEnd]].forEach(([which, input]) => {
+    input.addEventListener('input', () => {
+      if (input.value.trim() === '' || !Number.isInteger(Number(input.value))) return;
+      apply(which, Number(input.value));
+    });
+    input.addEventListener('change', () => { renderTimeRange(); });
+  });
+
+  DOM.btnTimeReset?.addEventListener('click', () => {
+    const n = total();
+    setTimeRange(0, n - 1, null);
+    pushTimepoint(0);
+  });
 }
 
 // ── Orientation editor ─────────────────────────────────────────
@@ -1595,6 +1766,8 @@ function wire() {
     syncDirty();
     pushSampleSide();
   });
+
+  bindTimeRange();
 
   if (DOM.fDefaultView) DOM.fDefaultView.addEventListener('change', () => {
     const value = DOM.fDefaultView.value;

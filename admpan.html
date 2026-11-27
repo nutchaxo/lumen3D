@@ -502,6 +502,34 @@
                 </div>
               </div>
 
+              <!-- Section: visible time range (timelapses only — tab-datasets.js toggleVolumeSections).
+                   Stored as metadata.timeRange {start,end}; a view window, never a cut of the data. -->
+              <div class="config-section" id="sec-time-range" style="display:none">
+                <div class="config-section-title" data-i18n="admin.secTimeRange">Plage temporelle visible</div>
+                <div class="config-field" style="margin-top:12px;">
+                  <span class="vis-hint" data-i18n="admin.timeRangeHint">Choisissez le premier et le dernier point de temps qu’un visiteur peut atteindre.</span>
+                  <div class="tr-track" id="f-time-track" data-i18n-aria="admin.timeRangeTrack" aria-label="Plage visible de la timeline">
+                    <div class="tr-window" id="f-time-window"></div>
+                    <div class="tr-handle" id="f-time-start-handle" role="slider" tabindex="0" data-i18n-aria="admin.timeRangeStart" aria-label="Première image visible"></div>
+                    <div class="tr-handle" id="f-time-end-handle" role="slider" tabindex="0" data-i18n-aria="admin.timeRangeEnd" aria-label="Dernière image visible"></div>
+                  </div>
+                  <div class="config-row" style="margin-top:10px;">
+                    <div class="config-field">
+                      <label class="config-label" for="f-time-start" data-i18n="admin.timeRangeStart">Première image visible</label>
+                      <input class="config-input" type="number" id="f-time-start" min="0" step="1">
+                    </div>
+                    <div class="config-field">
+                      <label class="config-label" for="f-time-end" data-i18n="admin.timeRangeEnd">Dernière image visible</label>
+                      <input class="config-input" type="number" id="f-time-end" min="0" step="1">
+                    </div>
+                  </div>
+                  <span class="vis-hint" id="f-time-summary" aria-live="polite"></span>
+                  <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-time-reset" style="width:100%;justify-content:center;gap:6px;margin-top:8px" data-i18n="admin.timeRangeReset">
+                    Afficher toute la série
+                  </button>
+                </div>
+              </div>
+
               <!-- Section: Orientation -->
               <div class="config-section">
                 <div class="config-section-title" data-i18n="admin.secOrientation">Orientation 3D</div>
@@ -695,6 +723,7 @@
      are available in the shared global lexical scope. -->
 <script src="js/core/font-loader.js"></script>
 <script src="js/core/utils.js"></script>
+<script src="js/core/time-range.js"></script>
 <script src="js/core/ui-actions.js"></script>
 <script src="js/core/instance-config.js"></script>
 <script src="js/core/i18n.js"></script>

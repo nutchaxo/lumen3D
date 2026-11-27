@@ -87,7 +87,13 @@ const ViewerApp = (() => {
   let datasetId;
   let datasetMeta;
   let isLive = false;
-  
+  // The window of a timelapse a visitor can reach (metadata.timeRange; TimeRange.normalize
+  // shape). Frames stay ABSOLUTE everywhere — only the timeline, the loops and the
+  // prefetch are bounded by it; the bricks, dimensions.t and every download keep the whole
+  // series. The admin preview always gets the whole series: that is where the window is set.
+  let _timeRange = null;
+  let _adminPreview = false;
+
   // Data cache for LiveImaging buffer
   // We don't implement full buffering here due to browser limits,
   // but we load timepoints on demand and cache them.
@@ -316,6 +322,8 @@ const ViewerApp = (() => {
     }
 
     isLive = datasetMeta.type === 'live';
+    _adminPreview = isAdmin;
+    _timeRange = isLive ? TimeRange.normalize(isAdmin ? null : datasetMeta.timeRange, datasetMeta.dimensions?.t) : null;
     _perf()?.setContext({
       scope: 'viewer',
       datasetId,
@@ -627,6 +635,7 @@ const ViewerApp = (() => {
         _playbackFps = _loadPlaybackFps();
         Timeline.init('timeline-panel', {
           totalFrames: totalFrames,
+          range: _timeRange.active ? { start: _timeRange.start, end: _timeRange.end } : null,
           showSpeed: false,
           showSmooth: false,
           stepped: false,
@@ -645,7 +654,7 @@ const ViewerApp = (() => {
           _requestTimepoint(basePath, Math.round(state.frame));
         });
         // Load first frame
-        volumeP = _loadTimepoint(basePath, 0);
+        volumeP = _loadTimepoint(basePath, _timeRange.start);
       }
     } else {
       // Load single volume
@@ -6507,8 +6516,8 @@ const ViewerApp = (() => {
     }
 
     // 7. Timelapses reopen on their first timepoint.
-    if (isLive && typeof Timeline !== 'undefined' && _currentTimepoint) {
-      Timeline.setFrame(0);
+    if (isLive && typeof Timeline !== 'undefined' && Number.isFinite(_currentTimepoint) && _currentTimepoint !== _timeRange.start) {
+      Timeline.setFrame(_timeRange.start);
     }
 
     // 8. The URL goes back to the bare dataset link — rebaseline() drops the hash
@@ -6768,7 +6777,9 @@ const ViewerApp = (() => {
       Timeline.setSpeed?.(viewerState.playbackFps);
     }
 
-    const restoredFrame = isLive && Number.isFinite(viewerState.timepoint) ? viewerState.timepoint : null;
+    // A saved view can name a frame outside the window (made by someone who saw more, or
+    // before the window was set): it lands on the nearest frame the timeline offers.
+    const restoredFrame = isLive && Number.isFinite(viewerState.timepoint) ? TimeRange.clamp(_timeRange, viewerState.timepoint) : null;
     if (restoredFrame !== null && restoredFrame !== _currentTimepoint) {
       // Another frame: its load (Timeline → _requestTimepoint) runs at the restored quality.
       if (qualityChanged) _applyQualityMode(restoredQuality);
@@ -7091,7 +7102,7 @@ const ViewerApp = (() => {
     if (!isLive || _isIframe || !_basePath || document.hidden || _nativePassHolds > 0) return;
     // Bricked datasets only: the slice path has no way to load without displaying.
     if (!_brickManifest) return;
-    const total = Number(datasetMeta?.dimensions?.t) || 0;
+    const total = _timeRange.count;
     if (total < 2) return;
 
     const gen = ++_pfGeneration;
@@ -7100,7 +7111,8 @@ const ViewerApp = (() => {
       const quality = _qualityMode;
       for (let step = 1; step <= total; step++) {
         if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode || _nativePassHolds > 0) break;
-        const t = ((_currentTimepoint || 0) + step) % total;
+        // Cyclic over the window the timeline offers, never over the whole series.
+        const t = _timeRange.start + ((TimeRange.clamp(_timeRange, _currentTimepoint || 0) - _timeRange.start + step) % total);
         if (VolumeViewer.hasCachedVolume?.(_basePath, quality, t)) continue;
 
         // Stop once the series fills the window it is allowed to occupy. Without this
@@ -7144,13 +7156,15 @@ const ViewerApp = (() => {
    *  evicted, and it never reset when the quality changed. */
   function _refreshBuffer() {
     if (!isLive || !_basePath) return;
-    const total = Number(datasetMeta?.dimensions?.t) || 0;
+    const total = _timeRange.count;
     VolumeViewer.setPlayheadHint?.(_basePath, _qualityMode, _currentTimepoint || 0, total);
     const resident = VolumeViewer.getCachedTimepoints?.(_basePath, _qualityMode);
     if (!resident) return;
     Timeline.updateBuffer(resident);
     const capacity = VolumeViewer.getBufferCapacity?.(_basePath, _qualityMode) || 0;
-    _setBufferStatus(resident.size, total, capacity);
+    let inWindow = 0;
+    for (const f of resident) if (f >= _timeRange.start && f <= _timeRange.end) inWindow++;
+    _setBufferStatus(inWindow, total, capacity);
   }
 
   /** Its own element: _setQualityStatus is rewritten on every single frame load, so a
@@ -7776,8 +7790,9 @@ const ViewerApp = (() => {
       // sender, which then re-derives its own frame from it — a longer timelapse could
       // only rest on the frames the shorter one can represent.
       if (_isIframe && _isInitialized && opts.origin !== 'sync') {
-        const total = Number(datasetMeta?.dimensions?.t) || 0;
-        _postToHost({ type: 'SYNC_TIME', value: t, total, fraction: total > 1 ? t / (total - 1) : 0 });
+        // `total` and `fraction` describe the window the visitor sees: panels of
+        // different lengths (or windows) align by elapsed fraction of what each shows.
+        _postToHost({ type: 'SYNC_TIME', value: t, total: _timeRange.count, fraction: TimeRange.fractionOf(_timeRange, t) });
       }
     }
 
@@ -7824,9 +7839,8 @@ const ViewerApp = (() => {
   function _scheduleAdjacentPreload(basePath, t) {
     if (!isLive || _isIframe || !Number.isFinite(t)) return;
     _cancelAdjacentPreload();
-    const total = datasetMeta.dimensions?.t || 0;
     const candidates = [t + 1, t - 1, t + 2]
-      .filter(frame => frame >= 0 && frame < total)
+      .filter(frame => frame >= _timeRange.start && frame <= _timeRange.end)
       .filter(frame => !_preloadedTimepoints.has(frame) && !loadedTimepoints.has(frame));
     if (!candidates.length) return;
 
@@ -8375,16 +8389,17 @@ const ViewerApp = (() => {
         _suppressSlicerSync = false;
       }
     } else if (data.type === 'SYNC_TIME' && isLive) {
-      // Timelapses of different lengths align by elapsed fraction, not by index.
-      const mine = Number(datasetMeta?.dimensions?.t) || 0;
+      // Timelapses of different lengths — or windows — align by elapsed fraction of
+      // what each shows, not by index.
+      const mine = _timeRange.count;
       const theirs = Number(data.total) || 0;
-      const frame = (mine > 1 && theirs > 1 && theirs !== mine && Number.isFinite(Number(data.fraction)))
-        ? Math.round(Number(data.fraction) * (mine - 1))
-        : Number(data.value);
+      const byFraction = mine > 1 && theirs > 1 && Number.isFinite(Number(data.fraction))
+        && (theirs !== mine || _timeRange.active);
+      const frame = byFraction ? TimeRange.frameAt(_timeRange, Number(data.fraction)) : Number(data.value);
       // The frame a sibling is on: moved to silently, and its arrival is not posted back.
       if (Number.isFinite(frame) && _basePath && typeof Timeline !== 'undefined') {
-        // A frame this series has (a sibling's index is not checked against our length).
-        const own = mine > 0 ? Math.max(0, Math.min(mine - 1, Math.round(frame))) : Math.max(0, Math.round(frame));
+        // A frame this series offers (a sibling's index is not checked against our window).
+        const own = Math.round(TimeRange.clamp(_timeRange, frame));
         Timeline.setFrame(own, true, false);
         _requestTimepoint(_basePath, own, 'sync');
       }
@@ -8467,6 +8482,11 @@ const ViewerApp = (() => {
       // flat with the face the flag names as the top toward the camera — what the
       // z-stack browser will show — so the operator picks the side by looking.
       VolumeViewer.setSampleUpsideDown?.(data.value === true, { preview: true });
+    } else if (data.type === 'SET_TIMEPOINT' && isLive && _adminPreview) {
+      // The admin editor's time-range tool shows the operator the frame under a handle.
+      // Through the Timeline so the scrubber, the load queue and the buffer all follow.
+      const frame = Math.round(Number(data.value));
+      if (Number.isFinite(frame) && typeof Timeline !== 'undefined') Timeline.setFrame(frame, true, true);
     } else if (data.type === 'SET_ORIENTATION_BASE') {
       // The admin editor saved (or threw away) a calibration under this preview:
       // the anatomical camera sync and the axis-aligned views read Q_base from

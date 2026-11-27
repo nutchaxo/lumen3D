@@ -4,6 +4,11 @@
 
 const Timeline = (() => {
   let _totalFrames = 0;
+  // The window of the series the scrubber offers (inclusive, ABSOLUTE frame indices).
+  // Frames stay absolute for every consumer; only the track, the clamps, the loop and
+  // the keys are relative to this window. Whole series unless a `range` option narrows it.
+  let _start = 0;
+  let _end = 0;
   let _currentFrame = 0;
   let _isPlaying = false;
   let _playTimer = null;
@@ -63,6 +68,14 @@ const Timeline = (() => {
     // speed 5, smooth 0.
     const tf = Number(_options.totalFrames);
     _totalFrames = (Number.isFinite(tf) && tf > 0) ? Math.floor(tf) : 1;
+    _start = 0;
+    _end = _totalFrames - 1;
+    const rs = Number(_options.range?.start);
+    const re = Number(_options.range?.end);
+    if (Number.isInteger(rs) && Number.isInteger(re) && rs >= 0 && re <= _end && rs <= re) {
+      _start = rs;
+      _end = re;
+    }
     _options.speedValue = Number.isFinite(Number(_options.speedValue)) ? Number(_options.speedValue) : 5;
     _options.smoothValue = Number.isFinite(Number(_options.smoothValue)) ? Number(_options.smoothValue) : 0;
     // Same rule for the toggle: a rate of 0 or NaN would freeze the playhead in a
@@ -74,7 +87,7 @@ const Timeline = (() => {
     const fps = Number(_options.speedFps);
     _options.speedFps = (Number.isFinite(fps) && fps > 0) ? fps : DEFAULT_FPS;
     _onChangeCallback = onChange;
-    _currentFrame = 0;
+    _currentFrame = _start;
     _isPlaying = false;
     _stalled = false;
 
@@ -83,7 +96,7 @@ const Timeline = (() => {
     _bindLanguage();
     _syncSpeedButton();
     _updateTicks();
-    _updateUI(0, false);
+    _updateUI(_start, false);
   }
 
   // §8: I18n is a global LEXICAL binding — reachable by its bare name from any
@@ -129,7 +142,7 @@ const Timeline = (() => {
           <button type="button" class="btn btn-ghost btn-sm timeline-speed" id="timeline-btn-speed">
             <i data-lucide="gauge"></i><span class="timeline-speed-value"></span>
           </button>` : ''}
-          <span style="font-family:var(--font-mono); font-size:var(--text-sm);" id="timeline-time-display">000 / 000</span>
+          <span class="timeline-time" id="timeline-time-display">000 / 000</span>
         </div>
         <div class="scrubber-container flex-1 mx-4">
           <div class="scrubber-track ${_options.stepped ? 'scrubber-stepped' : ''}" id="timeline-scrubber-track" role="slider" tabindex="0" aria-orientation="horizontal" aria-valuemin="0">
@@ -271,22 +284,23 @@ const Timeline = (() => {
   function _updateTicks() {
     if (!_options.stepped) return;
     const smoothing = getSmoothing();
-    const steps = Math.max(1, (_totalFrames - 1) * (smoothing + 1));
+    const steps = Math.max(1, (_end - _start) * (smoothing + 1));
     scrubberTrack.style.setProperty('--tick-size', `${100 / steps}%`);
   }
 
   function _updateUI(f, notify = true) {
-    const pct = (_totalFrames > 1) ? (f / (_totalFrames - 1)) * 100 : 0;
+    const pct = (_end > _start) ? ((f - _start) / (_end - _start)) * 100 : 0;
     scrubberHandle.style.left = `${pct}%`;
     scrubberFill.style.width = `${pct}%`;
-    
+
     const label = getSmoothing() > 0 ? f.toFixed(1) : String(Math.round(f)).padStart(3, '0');
-    timeDisplay.textContent = `${label} / ${String(_totalFrames - 1).padStart(3, '0')}`;
+    timeDisplay.textContent = `${label} / ${String(_end).padStart(3, '0')}`;
 
     // The slider speaks the same indices the display shows (first frame 0), so a
     // screen-reader user and a sighted one name a timepoint alike.
-    const last = Math.max(0, _totalFrames - 1);
+    const last = _end;
     const spoken = getSmoothing() > 0 ? f.toFixed(1) : String(Math.round(f));
+    _setAria(scrubberTrack, 'aria-valuemin', _start);
     _setAria(scrubberTrack, 'aria-valuemax', last);
     _setAria(scrubberTrack, 'aria-valuenow', spoken);
     _setAria(scrubberTrack, 'aria-valuetext', `${spoken} / ${last}`);
@@ -297,7 +311,7 @@ const Timeline = (() => {
   }
 
   function setFrame(f, forceInteger = false, notify = true) {
-    const clamped = Math.max(0, Math.min(_totalFrames - 1, f));
+    const clamped = Math.max(_start, Math.min(_end, f));
     const snapped = snapFrame(clamped, forceInteger);
     
     // Preserve fractional time accumulation during playback
@@ -345,12 +359,12 @@ const Timeline = (() => {
 
       _currentFrame += _playbackFps() * (dt / 1000);
 
-      if (_currentFrame >= _totalFrames - 1) {
-        _currentFrame = 0; // loop
+      if (_currentFrame >= _end) {
+        _currentFrame = _start; // loop
       }
       // The playhead moves every animation frame but the shown frame does not: tell the
       // consumer only when the (snapped) frame it would display actually changed.
-      const shown = snapFrame(Math.max(0, Math.min(_totalFrames - 1, _currentFrame)));
+      const shown = snapFrame(Math.max(_start, Math.min(_end, _currentFrame)));
       const changed = shown !== _lastTickFrame;
       _lastTickFrame = shown;
       setFrame(_currentFrame, false, changed);
@@ -389,14 +403,13 @@ const Timeline = (() => {
   // else (the 3D canvas, a Compare host, the sidebar's own sliders).
   const PAGE_STEP = 10;
   function _keyTarget(key, frame) {
-    const last = _totalFrames - 1;
     switch (key) {
       case 'ArrowLeft': case 'ArrowDown': return frame - 1;
       case 'ArrowRight': case 'ArrowUp': return frame + 1;
       case 'PageDown': return frame - PAGE_STEP;
       case 'PageUp': return frame + PAGE_STEP;
-      case 'Home': return 0;
-      case 'End': return last;
+      case 'Home': return _start;
+      case 'End': return _end;
       default: return null;
     }
   }
@@ -422,7 +435,7 @@ const Timeline = (() => {
     const _scrubTo = (clientX) => {
       const rect = scrubberTrack.getBoundingClientRect();
       const pct = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
-      setFrame(pct * (_totalFrames - 1), false, true);
+      setFrame(_start + pct * (_end - _start), false, true);
     };
 
     scrubberTrack.addEventListener('pointerdown', (e) => {
@@ -505,7 +518,7 @@ const Timeline = (() => {
 
   function _paintSegments(ranges) {
     if (!scrubberBuffer) return;
-    const denom = Math.max(1, _totalFrames - 1);
+    const denom = Math.max(1, _end - _start);
     ranges.forEach((r, i) => {
       let el = _bufSegPool[i];
       if (!el) {
@@ -516,8 +529,8 @@ const Timeline = (() => {
       }
       // Frame i owns [i-0.5, i+0.5] so the playhead, which sits at i/(N-1), stays
       // inside the segment that represents it.
-      const left = Math.max(0, (r[0] - 0.5) / denom) * 100;
-      const right = Math.min(1, (r[1] + 0.5) / denom) * 100;
+      const left = Math.max(0, (r[0] - _start - 0.5) / denom) * 100;
+      const right = Math.min(1, (r[1] - _start + 0.5) / denom) * 100;
       el.style.left = `${left}%`;
       el.style.width = `${Math.max(0, right - left)}%`;
       el.style.display = '';
@@ -530,11 +543,11 @@ const Timeline = (() => {
   function updateBuffer(buffered) {
     if (!scrubberBuffer) return;
     if (typeof buffered === 'number') {
-      _paintSegments(buffered > 0 ? [[0, Math.max(0, buffered - 1)]] : []);
+      _paintSegments(buffered > 0 ? [[_start, Math.min(_end, _start + buffered - 1)]] : []);
       return;
     }
     if (!buffered) { _paintSegments([]); return; }
-    const frames = [...buffered].filter(Number.isFinite).sort((a, b) => a - b);
+    const frames = [...buffered].filter(f => Number.isFinite(f) && f >= _start && f <= _end).sort((a, b) => a - b);
     _paintSegments(_coalesce(frames));
   }
 
@@ -544,5 +557,9 @@ const Timeline = (() => {
     return snapFrame(_currentFrame, false);
   }
 
-  return { init, updateBuffer, clearBuffer, setFrame, play, pause, getFrame, setStalled, getSpeed, setSpeed };
+  function getRange() {
+    return { start: _start, end: _end };
+  }
+
+  return { init, updateBuffer, clearBuffer, setFrame, play, pause, getFrame, getRange, setStalled, getSpeed, setSpeed };
 })();
